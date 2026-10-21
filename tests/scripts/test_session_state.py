@@ -241,3 +241,43 @@ def test_state_dir_override(repo, monkeypatch):
     monkeypatch.setenv("SUPERLITE_STATE_DIR", str(wa / ".superlite"))
     assert write(main, A, wa / "src" / "a.py").returncode == 2
     assert write(main, A, main / "src" / "a.py").returncode == 0
+
+
+# ------------------------------------------------------------------ tools
+
+def test_lint_stable_writes_at_the_worktree_root_and_binds(repo):
+    from test_routing import mech_plan
+    main, wa, _ = repo
+    p = mech_plan(wa / "docs" / "superpowers" / "plans", 2)
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", CLAUDE_CODE_SESSION_ID=A)
+    r = subprocess.run([sys.executable, str(SCRIPTS / "plan_tools.py"), "lint", "--stable", "--plan", str(p)],
+                       capture_output=True, text=True, cwd=main, env=env, timeout=120)
+    assert (wa / ".superlite" / "stable.json").is_file(), r.stdout + r.stderr
+    assert not (wa / "docs" / "superpowers" / "plans" / ".superlite").exists()
+    assert state.bound(A) == wa.resolve() / ".superlite"
+
+
+def test_hotspots_takes_several_files(tmp_path):
+    log = tmp_path / "i.jsonl"
+    for f in ("a.swift", "b.swift", "c.swift"):
+        assert run(SCRIPTS / "incident.py", "add", "--file", f, "--line", 1, "--context", "x", "--kind", "flaky",
+                   "--log", log, cwd=tmp_path).returncode == 0
+    r = run(SCRIPTS / "incident.py", "hotspots", "--files", "a.swift", "b.swift", "--log", log, cwd=tmp_path)
+    assert r.returncode == 0, r.err
+    assert "a.swift" in r.out and "b.swift" in r.out and "c.swift" not in r.out
+    r = run(SCRIPTS / "incident.py", "hotspots", "--files", "a.swift,c.swift", "--log", log, cwd=tmp_path)
+    assert "a.swift" in r.out and "c.swift" in r.out and "b.swift" not in r.out
+
+
+def test_build_prime_numbers_unnumbered_sections_in_order(tmp_path):
+    spec = tmp_path / "x.review.md"
+    spec.write_text("# Review\n\n## Goal\n\ngoal text\n\n## What changes\n\nchanges text\n\n### Detail\n\nd\n\n## Risks\n\nrisk text\n")
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\n")
+    out = tmp_path / "prime.md"
+    r = run(SCRIPTS / "build_prime.py", "--plan", plan, "--spec", spec, "--sections", "1,3", "--out", out, cwd=tmp_path)
+    assert r.returncode == 0, r.err
+    text = out.read_text()
+    assert "goal text" in text and "risk text" in text and "changes text" not in text
+    r = run(SCRIPTS / "build_prime.py", "--plan", plan, "--spec", spec, "--sections", "7", "--out", out, cwd=tmp_path)
+    assert r.returncode != 0 and "Goal" in r.err and "Risks" in r.err  # the error lists what exists

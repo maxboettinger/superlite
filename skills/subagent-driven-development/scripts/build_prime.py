@@ -105,12 +105,32 @@ def split_sections(spec):  # O(L + H^2): the inner scan is quadratic for nested 
     return lines, out  # O(1)
 
 
+def top_sections(secs):  # O(H)
+    """Indexes of the top section level, below a lone title heading: the sections a number counts when none is numbered."""
+    levels = sorted({lvl for lvl, _, _, _ in secs})  # O(H)
+    if not levels:  # O(1)
+        return []  # O(1)
+    top = levels[0]  # O(1)
+    if len(levels) > 1 and sum(lvl == top for lvl, _, _, _ in secs) == 1:  # a single `# Title` | O(H)
+        top = levels[1]  # O(1)
+    return [i for i, (lvl, _, _, _) in enumerate(secs) if lvl == top]  # O(H)
+
+
 def select_sections(spec, wanted):  # O(L + H^2 + S*H*w + K^2 + out)
     lines, secs = split_sections(spec)  # O(L + H^2)
     chosen = {}  # O(1)
+    numbered = any(_heading_key(text) for _, text, _, _ in secs)  # O(H*w)
+    ordinal = top_sections(secs)  # O(H)
     for token in wanted:  # O(S) iterations
         want = token.lstrip("§").lower()  # O(w)
         hit = None  # O(1)
+        if not numbered and want.isdigit():  # an unnumbered spec (a review plan): N is the N-th top section | O(w)
+            n = int(want)  # O(1)
+            hit = ordinal[n - 1] if 1 <= n <= len(ordinal) else None  # O(1)
+            if hit is None:  # O(1)
+                die(f"spec section not found: {token}; sections: " + "; ".join(f"{k}. {secs[i][1]}" for k, i in enumerate(ordinal, 1)))  # O(H)
+            chosen[hit] = True  # O(1)
+            continue  # O(1)
         for idx, (lvl, text, _, _) in enumerate(secs):  # O(H) iterations per token
             if _heading_key(text) == want or (  # O(w) regex
                     not re.fullmatch(r"\d+(?:\.\d+)*", want)  # O(w) regex
@@ -118,7 +138,7 @@ def select_sections(spec, wanted):  # O(L + H^2 + S*H*w + K^2 + out)
                 hit = idx  # O(1)
                 break  # O(1)
         if hit is None:  # O(1)
-            die(f"spec section not found: {token}")  # O(1)
+            die(f"spec section not found: {token}; sections: " + "; ".join(text for _, text, _, _ in secs))  # O(H*w)
         chosen[hit] = True  # O(1)
     picked = sorted(chosen)  # O(K log K)
     # drop sections nested inside another chosen one (already included)

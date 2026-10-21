@@ -1301,13 +1301,9 @@ def stable_partition(plan: Plan, issues: list, warnings: list[str]):  # O(n + is
     return stable, fix, plan_issues  # O(1)
 
 
-def stable_root(plan_path: str) -> Path:  # O(1) directory that holds .superlite/
-    root = Path(plan_path).resolve().parent  # O(1)
-    if root.name == ".superlite":  # O(1)
-        return root.parent  # O(1)
-    if root.name == "plans" and root.parent.name == "docs":  # O(1)
-        return root.parent.parent  # O(1)
-    return root  # O(1)
+def stable_root(plan_path: str) -> Path:  # O(d) directory that holds .superlite/: the plan's git toplevel (state.plan_dir)
+    import state  # O(1)
+    return state.plan_dir(plan_path).parent  # O(d)
 
 
 def dispatched_tasks(sl_dir: Path) -> set[str]:  # O(c + pool)
@@ -1345,7 +1341,9 @@ def cmd_lint_stable(args) -> int:  # O(lint + n*k*s)
     plan = Plan.load(args.plan)  # O(C+L)
     issues, warnings = lint_plan(plan, args)  # O(lint)
     stable, fix, plan_issues = stable_partition(plan, issues, warnings)  # O(n + e*n)
-    sl_dir = stable_root(args.plan) / ".superlite"  # O(1)
+    sl_dir = stable_root(args.plan) / ".superlite"  # O(d)
+    import state  # O(1)
+    state.bind(sl_dir)  # the run starts here: the session's hooks now find this folder | O(b)
     out = sl_dir / "stable.json"  # O(1)
     interfaces = {t: task_interface(plan.by_id[t]) for t in stable if t in plan.by_id}  # O(n*k*s)
     old: dict = {}  # O(1)
