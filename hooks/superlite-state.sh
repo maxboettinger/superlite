@@ -3,25 +3,35 @@
 #   1. $SUPERLITE_STATE_DIR;
 #   2. the session's binding: ${SUPERLITE_HOME:-$HOME/.superlite}/sessions/<session_id from the hook input>, whose
 #      first line is the bound .superlite path (written by `sl orchestrator set|approve|bind` and `lint --stable`);
-#      used while that folder exists;
+#      used while that folder exists and its `session` file names no other session;
 #   3. legacy: <CLAUDE_PROJECT_DIR, else the input's cwd, else $PWD>/.superlite, unless its `session` file names
-#      another session: another session's run never gates this one.
-# superlite_state: reads $input (the raw hook JSON); sets SL_SD (the .superlite folder) and SL_PROJ (its parent).
-# Bash builtins only (no process is spawned).
+#      another live session (one whose binding points at that folder): another session's run never gates this one.
+# superlite_state: reads $input (the raw hook JSON); sets SL_SD (the .superlite folder) and SL_PROJ (its parent);
+# returns 1 when the launch folder belongs to another session. Bash builtins only (no process is spawned).
+
+# _sl_line FILE: first line of FILE, CR dropped, into SL_LINE (empty when unreadable).
+_sl_line() {
+  SL_LINE=""
+  [ -f "$1" ] || return 0
+  IFS= read -r SL_LINE < "$1" || true
+  SL_LINE="${SL_LINE%$'\r'}"
+}
 
 superlite_state() {
-  local re sid="" line f
+  local re sid="" o sessions="${SUPERLITE_HOME:-$HOME/.superlite}/sessions"
   SL_SD=""; SL_PROJ=""
   if [ -n "${SUPERLITE_STATE_DIR:-}" ]; then
     SL_SD="${SUPERLITE_STATE_DIR//\\//}"
+    case "$SL_SD" in /*|[A-Za-z]:/*) ;; *) SL_SD="$PWD/$SL_SD" ;; esac
   else
     re='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'
     [[ $input =~ $re ]] && sid="${BASH_REMATCH[1]}"
     if [ -n "$sid" ]; then
-      f="${SUPERLITE_HOME:-$HOME/.superlite}/sessions/$sid"
-      if [ -f "$f" ]; then
-        line=""; IFS= read -r line < "$f"; line="${line%$'\r'}"
-        [ -n "$line" ] && [ -d "$line" ] && SL_SD="$line"
+      _sl_line "$sessions/$sid"
+      if [ -n "$SL_LINE" ] && [ -d "$SL_LINE" ]; then
+        SL_SD="$SL_LINE"
+        _sl_line "$SL_SD/session"
+        [ -z "$SL_LINE" ] || [ "$SL_LINE" = "$sid" ] || SL_SD=""   # taken over by another session
       fi
     fi
     if [ -z "$SL_SD" ]; then
@@ -31,10 +41,13 @@ superlite_state() {
         [[ $input =~ $re ]] && SL_PROJ="${BASH_REMATCH[1]//\\\\//}"
       fi
       [ -n "$SL_PROJ" ] || SL_PROJ="$PWD"
+      while [[ $SL_PROJ == */ && $SL_PROJ != / ]]; do SL_PROJ="${SL_PROJ%/}"; done
       SL_SD="$SL_PROJ/.superlite"
-      if [ -n "$sid" ] && [ -f "$SL_SD/session" ]; then
-        line=""; IFS= read -r line < "$SL_SD/session"; line="${line%$'\r'}"
-        if [ -n "$line" ] && [ "$line" != "$sid" ]; then SL_SD=""; SL_PROJ=""; return 1; fi
+      _sl_line "$SL_SD/session"; o="$SL_LINE"
+      if [ -n "$sid" ] && [ -n "$o" ] && [ "$o" != "$sid" ] && [[ $o =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then
+        _sl_line "$sessions/$o"
+        SL_LINE="${SL_LINE%/}"
+        if [ "$SL_LINE" = "$SL_SD" ]; then SL_SD=""; SL_PROJ=""; return 1; fi   # another live session's folder
       fi
       return 0
     fi

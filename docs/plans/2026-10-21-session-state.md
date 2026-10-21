@@ -51,7 +51,14 @@ The `rm .superlite` denial names `sl orchestrator end`.
 --sections N` on a spec without numbered headings picks the N-th section at the top section level, and an
 unknown token lists the available sections. (`incident add --kind verified` already works on main.)
 
-Out of scope (follow-up): a Swift profile (run_tests command, per-lane DerivedData, probe adapter).
+**After review.** A folder another live session owns is never taken (`bind` refuses, `--force` takes over); `set`
+without a plan then uses the session's private folder `~/.superlite/sessions/<id>.d`, and the next bind moves a pending
+gate (orchestrator.json, human-replies.jsonl) to the plan's folder, so `set human` before a worktree plan stays gated.
+`end` refuses another session's folder and a removed `--plan`, and archives the run's logs too. Paths stay logical
+(symlinks kept). The SessionStart hook exports the hook's id as `SUPERLITE_SESSION_ID`. The guard parses each writer
+call's target instead of trusting any literal in the command.
+
+Out of scope (follow-up, PIX-838): a Swift profile (run_tests command, per-lane DerivedData, probe adapter).
 
 ## Plan
 

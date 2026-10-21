@@ -181,11 +181,13 @@ def test_end_archives_the_run_and_releases_the_session(repo):
     runs = list((sd / "runs").iterdir())
     assert len(runs) == 1
     assert sorted(p.name for p in runs[0].iterdir()) == sorted(
-        ["stable.json", "prime.md", "prime-haiku.md", "pool.json", "human-replies.jsonl", "orchestrator.json"])
-    assert (sd / "progress.md").exists()  # the ledger stays
+        ["stable.json", "prime.md", "prime-haiku.md", "pool.json", "human-replies.jsonl", "orchestrator.json", "progress.md"])
+    assert not (sd / "progress.md").exists()  # the next run starts with a fresh ledger
     assert state.owner(sd) is None and state.bound(A) is None
     assert write(wa, A, wa / "src" / "a.py").returncode == 0  # the guard is off
-    r = sl(main, A, "end", "--plan", wa / "docs" / "superpowers" / "plans" / "p.md")
+    plan = wa / "docs" / "superpowers" / "plans" / "p.md"
+    plan.write_text("# p\n")
+    r = sl(main, A, "end", "--plan", plan)
     assert r.returncode == 0 and "nothing to end" in r.stdout
 
 
@@ -281,3 +283,199 @@ def test_build_prime_numbers_unnumbered_sections_in_order(tmp_path):
     assert "goal text" in text and "risk text" in text and "changes text" not in text
     r = run(SCRIPTS / "build_prime.py", "--plan", plan, "--spec", spec, "--sections", "7", "--out", out, cwd=tmp_path)
     assert r.returncode != 0 and "Goal" in r.err and "Risks" in r.err  # the error lists what exists
+
+
+# ------------------------------------------------------------------ review findings (fix wave)
+
+def guard_bash(launch, sid, cmd):
+    return hook(GUARD, launch, sid, {"tool_name": "Bash", "tool_input": {"command": cmd}})
+
+
+def test_set_without_plan_never_takes_another_sessions_folder(repo):
+    """C1: the skills run `sl orchestrator set` before any plan exists, both sessions from the launch directory."""
+    main, _, _ = repo
+    assert sl(main, A, "set", "human").returncode == 0
+    r = sl(main, B, "set", "ai")
+    assert r.returncode == 0, r.stderr
+    assert "awaiting approval" in sl(main, A, "status").stdout  # A keeps its own gate
+    assert "AI" in sl(main, B, "status").stdout
+    assert state.owner(main / ".superlite") == A
+    assert state.bound(B) == state.private_dir(B)
+    assert guard_bash(main, A, "sl dispatch --plan p.md").returncode == 2
+    assert guard_bash(main, B, "sl dispatch --plan p.md").returncode == 0
+
+
+def test_pending_gate_follows_the_session_to_its_worktree(repo):
+    """C2: set human before the plan, then lint --stable on the worktree's plan: still gated, and approvable there."""
+    from test_routing import mech_plan
+    main, wa, _ = repo
+    assert sl(main, A, "set", "human").returncode == 0
+    p = mech_plan(wa / "docs" / "superpowers" / "plans", 2)
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", CLAUDE_CODE_SESSION_ID=A)
+    r = subprocess.run([sys.executable, str(SCRIPTS / "plan_tools.py"), "lint", "--stable", "--plan", str(p)],
+                       capture_output=True, text=True, cwd=main, env=env, timeout=120)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert not (wa / ".superlite" / "stable.json").exists()
+    assert json.loads((wa / ".superlite" / "orchestrator.json").read_text())["mode"] == "human"
+    assert not (main / ".superlite" / "orchestrator.json").exists()
+    assert guard_bash(main, A, f"cd {wa} && sl dispatch --plan p.md").returncode == 2
+    f = review(wa)
+    assert prompt(main, A, "approve").returncode == 0
+    assert sl(main, A, "approve", "--review", f).returncode == 0
+
+
+def test_end_refuses_another_sessions_folder_and_a_missing_plan(repo):
+    """C3: A ends after removing its worktree; the path walks up to main, which B's run owns."""
+    main, wa, _ = repo
+    assert sl(main, B, "set", "human").returncode == 0
+    (main / ".superlite" / "stable.json").write_text("{}")
+    r = sl(main, A, "end", "--plan", main / "docs" / "plans" / "gone.md")
+    assert r.returncode == 2 and "end before removing the worktree" in r.stderr
+    (main / "docs" / "plans").mkdir(parents=True)
+    (main / "docs" / "plans" / "p.md").write_text("# p\n")
+    r = sl(main, A, "end", "--plan", main / "docs" / "plans" / "p.md")
+    assert r.returncode == 2 and "belongs to session" in r.stderr
+    assert (main / ".superlite" / "orchestrator.json").exists() and (main / ".superlite" / "stable.json").exists()
+
+
+def test_bind_force_takes_over(repo):
+    main, _, _ = repo
+    assert sl(main, A, "set", "human").returncode == 0
+    r = sl(main, B, "bind", "--plan", main / "plan.md")
+    assert r.returncode == 2 and "belongs to session" in r.stderr
+    assert sl(main, B, "bind", "--force", "--plan", main / "plan.md").returncode == 0
+    assert state.owner(main / ".superlite") == B
+    assert state.bound(A) is None  # A no longer resolves to it
+
+
+def test_symlinked_project_path_is_still_guarded(repo, tmp_path):
+    """M1: Claude passes the logical path; the binding keeps it, not the resolved one."""
+    main, wa, _ = repo
+    link = tmp_path / "link"
+    link.symlink_to(main)
+    lwa = link / ".claude" / "worktrees" / "wa"
+    assert sl(link, A, "set", "ai", "--plan", lwa / "docs" / "superpowers" / "plans" / "p.md").returncode == 0
+    (wa / ".superlite" / "pool.json").write_text("{}")
+    assert state.bound(A) == lwa / ".superlite"
+    assert write(link, A, lwa / "src" / "a.py").returncode == 2
+
+
+def test_stale_owner_does_not_lock_out_a_new_session(repo):
+    """M2: after /clear the old id's binding is gone; the new session uses the folder (and its gate)."""
+    main, _, _ = repo
+    assert sl(main, A, "set", "human").returncode == 0
+    (state.home() / "sessions" / A).unlink()
+    assert write(main, B, main / "src" / "a.py").returncode == 2
+    assert prompt(main, B, "approve").returncode == 0
+    assert (main / ".superlite" / "human-replies.jsonl").exists()
+
+
+def test_session_start_exports_the_hook_session_id(tmp_path):
+    env_file = tmp_path / "env.sh"
+    env = dict(os.environ, CLAUDE_ENV_FILE=str(env_file), CLAUDE_PLUGIN_ROOT=str(ROOT))
+    r = subprocess.run([BASH, str(ROOT / "hooks" / "session-start")], input=json.dumps({"session_id": A, "source": "clear"}),
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert env_file.read_text() == f"export SUPERLITE_SESSION_ID={A}\n"
+
+
+def test_superlite_session_id_wins(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", A)
+    monkeypatch.setenv("SUPERLITE_SESSION_ID", B)
+    assert state.session_id() == B
+
+
+def test_next_tasks_reads_stable_json_at_the_worktree_root(repo):
+    """M3: dispatch must see the stable set lint wrote at the toplevel."""
+    sys.path.insert(0, str(SCRIPTS))
+    import next_tasks
+    _, wa, _ = repo
+    (wa / ".superlite").mkdir()
+    (wa / ".superlite" / "stable.json").write_text(json.dumps({"stable": ["T1"], "fix": []}))
+    got = next_tasks.stable_filter(str(wa / "docs" / "superpowers" / "plans" / "p.md"))
+    assert got is not None and "T1" in got
+
+
+def test_monorepo_plan_resolves_next_to_its_docs(repo):
+    main, _, _ = repo
+    assert state.plan_dir(main / "app" / "docs" / "plans" / "p.md") == main / "app" / ".superlite"
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 - <<'EOF'\nfrom pathlib import Path\nPath('.superlite/notes.md').write_text('n')\nfor f in Path('src').glob('*'):\n    f.write_text('x')\nEOF",
+    "python3 -c \"t='a'; open(f'src/{t}.py','w').write('x'); print('.superlite/stable.json')\"",
+    "python3 -c \"import os; open(os.path.join('src','main'),'w'); open('docs/plans/x.md','w')\"",
+    "python3 -c \"import sys; open(sys.argv[1],'w').write('x')\" src/a.py && cat 'docs/plans/x.md'",
+    "python3 -c \"from pathlib import Path; Path('src/a.py').with_suffix('.md').write_text('x'); open('docs/plans/x.md','w')\"",
+])
+def test_interpreter_writes_with_unknown_or_project_targets_block(repo, cmd):
+    """M4: an allowed literal elsewhere in the command no longer approves the whole script."""
+    main, wa, _ = repo
+    assert sl(main, A, "set", "ai", "--plan", wa / "docs" / "superpowers" / "plans" / "p.md").returncode == 0
+    (wa / ".superlite" / "pool.json").write_text("{}")
+    assert guard_bash(main, A, f"cd {wa} && {cmd}").returncode == 2, cmd
+
+
+def test_traversal_out_of_docs_is_project_code(repo):
+    main, wa, _ = repo
+    assert sl(main, A, "set", "ai", "--plan", wa / "docs" / "superpowers" / "plans" / "p.md").returncode == 0
+    (wa / ".superlite" / "pool.json").write_text("{}")
+    assert write(main, A, "docs/superpowers/plans/../../../src/a.py").returncode == 2
+
+
+def test_read_only_home_does_not_break_set(repo, tmp_path):
+    """M5: a sandbox that denies writes to the home folder must not stop the run."""
+    main, _, _ = repo
+    home = tmp_path / "ro_home"
+    home.mkdir()
+    home.chmod(0o500)
+    try:
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", CLAUDE_CODE_SESSION_ID=A, SUPERLITE_HOME=str(home))
+        r = subprocess.run([sys.executable, str(ORCH), "set", "ai"], capture_output=True, text=True, cwd=main, env=env)
+        assert r.returncode == 0, r.stderr
+        assert "session binding not written" in r.stderr
+        assert (main / ".superlite" / "orchestrator.json").exists()
+    finally:
+        home.chmod(0o700)
+
+
+def test_relative_state_dir_override_is_absolute_in_hooks(repo):
+    main, wa, _ = repo
+    (wa / ".superlite").mkdir()
+    (wa / ".superlite" / "orchestrator.json").write_text('{"mode": "human", "approved": false}')
+    raw = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(wa / "src" / "a.py")}})
+    env = dict(os.environ, SUPERLITE_STATE_DIR=".superlite")
+    r = subprocess.run([BASH, str(GUARD)], input=raw, capture_output=True, text=True, env=env, cwd=wa)
+    assert r.returncode == 2
+
+
+PARITY = r'''input="$1"; . "$2"; superlite_state; printf '%s' "$SL_SD"'''
+
+
+@pytest.mark.parametrize("case", ["none", "bound", "bound-missing", "taken-over", "crlf", "owned-live", "owned-stale"])
+def test_bash_and_python_resolve_the_same_folder(repo, monkeypatch, case):
+    main, wa, wb = repo
+    sessions = state.home() / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    msd = main / ".superlite"
+    if case in ("bound", "taken-over", "crlf"):
+        (wa / ".superlite").mkdir()
+        (sessions / A).write_text(f"{wa / '.superlite'}" + ("\r\n" if case == "crlf" else "\n"))
+        if case == "taken-over":
+            (wa / ".superlite" / "session").write_text(B + "\n")
+    if case == "bound-missing":
+        (sessions / A).write_text(f"{wb / '.superlite'}\n")
+    if case in ("owned-live", "owned-stale"):
+        msd.mkdir()
+        (msd / "session").write_text(B + "\n")
+        if case == "owned-live":
+            (sessions / B).write_text(f"{msd}\n")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", A)
+    monkeypatch.chdir(main)
+    py = state.resolve()
+    py = None if py == state.private_dir(A) else state._abs(py)  # the hooks have no private folder before a bind
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(main))
+    r = subprocess.run([BASH, "-c", PARITY, "_", json.dumps({"session_id": A}), str(ROOT / "hooks" / "superlite-state.sh")],
+                       capture_output=True, text=True, env=env)
+    sh = Path(r.stdout) if r.stdout else None
+    assert sh == py, (case, sh, py)

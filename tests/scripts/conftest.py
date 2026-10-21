@@ -7,5 +7,5 @@ import pytest
 def _isolated_superlite_home(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "_sl_home"))
     monkeypatch.setenv("SUPERLITE_AUTOCOMMIT", "1")  # most tests assert real commits; test_autocommit.py turns it off
-    for var in ("CLAUDE_CODE_SESSION_ID", "SUPERLITE_STATE_DIR", "CLAUDE_PROJECT_DIR"):
+    for var in ("CLAUDE_CODE_SESSION_ID", "SUPERLITE_SESSION_ID", "SUPERLITE_STATE_DIR", "CLAUDE_PROJECT_DIR", "CLAUDE_ENV_FILE"):
         monkeypatch.delenv(var, raising=False)

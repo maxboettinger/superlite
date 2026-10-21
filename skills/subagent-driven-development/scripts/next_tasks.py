@@ -266,12 +266,9 @@ def owns_match(path, owns):  # O(f * len)
 def stable_filter(plan):  # O(S) read, or None when the plan has no stable.json
     """Stable task ids from .superlite/stable.json for this plan, or None if the file is absent
     or unreadable (then every non-draft task is offered, as before)."""
-    d = Path(plan).resolve().parent  # O(1)
-    if d.name == "plans" and d.parent.name == "docs":  # O(1)
-        d = d.parent.parent / ".superlite"  # O(1)
-    elif d.name != ".superlite":  # O(1)
-        d = d / ".superlite"  # O(1)
-    f = d / "stable.json"  # O(1)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+    import state  # O(1)
+    f = state.plan_dir(plan) / "stable.json"  # where lint --stable wrote it | O(d)
     if not f.is_file():  # O(1)
         return None  # O(1)
     try:  # O(1)

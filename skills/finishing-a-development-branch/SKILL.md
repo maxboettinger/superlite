@@ -47,9 +47,9 @@ No further menus or typed confirmations. Act on the answer.
 
 ## 6. Worktree cleanup
 
-Only if the work ran in a worktree you created and the branch was merged: `git worktree remove <path>`. For push-and-PR or keep, leave it in place.
+For a superlite build, first end the run in every case, while the worktree still exists: `bash <skill-dir>/../subagent-driven-development/scripts/sl orchestrator end --plan <absolute plan path>` (archives the run markers and logs; the coordinator guard stops).
 
-For a superlite build, end the run in every case: `bash <skill-dir>/../subagent-driven-development/scripts/sl orchestrator end --plan <plan>` (archives the run markers; the coordinator guard stops).
+Only if the work ran in a worktree you created and the branch was merged: `git worktree remove <path>`. For push-and-PR or keep, leave it in place.
 
 ## Never
 

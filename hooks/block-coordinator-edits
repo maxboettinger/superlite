@@ -12,7 +12,8 @@
 #     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md and
 #     .superlite/**. `sl orchestrator end` closes the run.
 # The .superlite folder is the session's own (hooks/superlite-state.sh): its binding, else the launch
-# directory's unless another session owns that one. Interpreter writes are judged by their path literals.
+# directory's unless another session owns that one. Interpreter writes are judged by each writer call's own
+# target (a literal, Path('...'), or a name assigned one); a writer whose target is unknown blocks.
 # Bash/PowerShell write detection is best-effort; when unsure, allow. Sessions without a .superlite
 # directory are never touched. Bash builtins only (no external process is spawned: each spawn costs
 # ~250 ms on Windows), cheap exits first. Exit 2 blocks (message on stderr); anything else,
@@ -83,6 +84,8 @@ project_code() {
   case "$rel" in ''|.|..|../*) return 1 ;; esac
   pl="${rel,,}"
   case "$pl" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
+  { [ "$human" = 1 ] || [ "$active" = 1 ]; } || return 1
+  case "/$rel/" in */../*|*/./*) return 0 ;; esac   # docs/../src/a.py is not under docs/
   if [ "$human" = 1 ]; then
     case "$rel" in docs/plans/*.review.md|docs/*/plans/*.review.md|.superlite/*) return 1 ;; esac
     return 0
@@ -91,6 +94,21 @@ project_code() {
   case "$rel" in
     docs/plans/*|docs/*/plans/*|docs/*.md|SPEC*.md|*/SPEC*.md|.superlite/*) return 1 ;;
   esac
+  return 0
+}
+
+# writer_target EXPR: the literal path an interpreter writer's target expression names, into TGT (empty if unknown):
+# 'p' or "p", Path('p'), or a name assigned one of those somewhere in the command.
+writer_target() {
+  local e="$1" re sq="'" dq='"'
+  e="${e#"${e%%[![:space:]]*}"}"; e="${e%"${e##*[![:space:]]}"}"
+  TGT=""
+  re="^(Path\\([[:space:]]*)?[$sq$dq]([^$sq$dq]+)[$sq$dq][[:space:]]*\\)?\$"
+  if [[ $e =~ $re ]]; then TGT="${BASH_REMATCH[2]}"; return 0; fi
+  re='^[A-Za-z_][A-Za-z_0-9]*$'
+  [[ $e =~ $re ]] || return 0
+  re="(^|[^A-Za-z_0-9.])$e[[:space:]]*=[[:space:]]*(Path\\([[:space:]]*)?[$sq$dq]([^$sq$dq]+)[$sq$dq]"
+  [[ $cmd =~ $re ]] && TGT="${BASH_REMATCH[3]}"
   return 0
 }
 
@@ -118,15 +136,44 @@ elif [ -z "$hit" ]; then
     if [ "$mentions" = 1 ]; then
       hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; prot=1
     else
-      re_lit="['\"]([A-Za-z0-9_./~-]+)['\"]"
-      rest="$cmd"; nlit=0
-      while [[ $rest =~ $re_lit ]]; do
-        t="${BASH_REMATCH[1]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"
-        case "$t" in */*|*.[A-Za-z0-9]*) ;; *) continue ;; esac
-        nlit=$((nlit + 1))
-        project_code "$t" && { hit="$t"; break; }
+      # Each writer call's own target: a literal, Path('...'), or a name assigned one of those in the command.
+      # Every open( must read as a plain read or a parsed write; every other writer call must be parsed.
+      sq="'"; dq='"'; q="[$sq$dq]"; arg="([^,()]*|Path\([^()]*\))"
+      re_open='(^|[^A-Za-z0-9_])open\('
+      re_ow="^$arg,[[:space:]]*(mode=)?$q[wax]"
+      re_or="^$arg(,[[:space:]]*((mode=)?${q}r[bt]?$q|encoding=[^()]*))?\)"
+      re_mr="^[[:space:]]*(\)|(mode=)?${q}r)"
+      re_mw="^[[:space:]]*(mode=)?$q[wax]"
+      re_w2="(Path\([^()]*\)|[A-Za-z_][A-Za-z_0-9]*)\.(write_text|write_bytes)\("
+      re_w3="(Path\([^()]*\)|[A-Za-z_][A-Za-z_0-9]*)\.open\([[:space:]]*(mode=)?$q[wax]"
+      re_w4="(writeFileSync|writeFile|appendFileSync|appendFile)\(([^,()]*),"
+      re_other='\.(write_text|write_bytes)\(|writeFileSync\(|writeFile\(|appendFileSync\(|appendFile\(|fs\.write(Sync)?\('
+      unknown=0; want=0; got=0
+      rest="$cmd"
+      while [ -z "$hit" ] && [ "$unknown" = 0 ] && [[ $rest =~ $re_open ]]; do
+        prev="${BASH_REMATCH[1]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"
+        if [ "$prev" = . ]; then                         # obj.open(...): Path.open, os.open, ...
+          if [[ $rest =~ $re_mr ]]; then :; elif [[ $rest =~ $re_mw ]]; then want=$((want + 1)); else unknown=1; fi
+        elif [[ $rest =~ $re_ow ]]; then
+          writer_target "${BASH_REMATCH[1]}"
+          if [ -z "$TGT" ]; then unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
+        elif ! [[ $rest =~ $re_or ]]; then unknown=1
+        fi
       done
-      if [ "$nlit" = 0 ]; then hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; fi
+      rest="$cmd"
+      while [[ $rest =~ $re_other ]]; do want=$((want + 1)); rest="${rest#*"${BASH_REMATCH[0]}"}"; done
+      for re_w in "$re_w2" "$re_w3" "$re_w4"; do
+        rest="$cmd"
+        while [ -z "$hit" ] && [ "$unknown" = 0 ] && [[ $rest =~ $re_w ]]; do
+          m="${BASH_REMATCH[0]}"
+          if [ "$re_w" = "$re_w4" ]; then e="${BASH_REMATCH[2]}"; else e="${BASH_REMATCH[1]}"; fi
+          rest="${rest#*"$m"}"; got=$((got + 1))
+          writer_target "$e"
+          if [ -z "$TGT" ]; then unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
+        done
+      done
+      # A writer whose target is unknown (a variable, an f-string, a method chain, fs.write on a descriptor) blocks.
+      if [ -z "$hit" ] && { [ "$unknown" = 1 ] || [ "$got" -lt "$want" ]; }; then hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; fi
     fi
   fi
   if [ -z "$hit" ]; then

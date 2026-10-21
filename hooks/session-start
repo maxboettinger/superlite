@@ -5,6 +5,15 @@
 
 set -euo pipefail  # O(1)
 
+# The hook's session id goes to Bash as SUPERLITE_SESSION_ID (CLAUDE_ENV_FILE is sourced before each Bash command),
+# so `sl` binds state under the same id the hooks read, also after /clear starts a new session.
+input=""  # O(1)
+[ -t 0 ] || IFS= read -r -d '' input || true  # O(input) builtin; returns 1 at EOF
+re_sid='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'  # O(1)
+if [ -n "${CLAUDE_ENV_FILE:-}" ] && [[ $input =~ $re_sid ]]; then  # O(input)
+  printf 'export SUPERLITE_SESSION_ID=%s\n' "${BASH_REMATCH[1]}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true  # O(1)
+fi  # O(1)
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"  # O(1) + subshell
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"  # O(1) + subshell
 
