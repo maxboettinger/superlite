@@ -40,10 +40,9 @@ norm() {
   NORM="$p"
 }
 
-proj="${CLAUDE_PROJECT_DIR:-}"
-if [ -z "$proj" ]; then jstr cwd; proj="${REPLY//\\\\//}"; fi
-[ -n "$proj" ] || proj="$PWD"
-sd="$proj/.superlite"
+. "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
+superlite_state || exit 0
+sd="$SL_SD"; proj="$SL_PROJ"
 [ -d "$sd" ] || exit 0
 
 active=0

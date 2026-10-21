@@ -4,8 +4,15 @@
     orchestrator.py set human|ai [--by NAME] [--ruling TEXT]
     orchestrator.py approve [--by NAME] [--review PATH]
     orchestrator.py status [--plan P]
+    orchestrator.py bind [--plan P]
+    orchestrator.py end [--plan P]
 
-State: `.superlite/orchestrator.json` {mode, approved, by, time}. In human mode `plan_tools lint --stable`, `dispatch`,
+State: `.superlite/orchestrator.json` {mode, approved, by, time}, in the folder `state.resolve` finds: the plan's git toplevel
+with --plan (the review plan's with `approve --review` and no --plan), else $SUPERLITE_STATE_DIR, the session's binding, ./.superlite.
+`set`, `approve` and `bind` bind the session (CLAUDE_CODE_SESSION_ID) to that folder, so the hooks find the same state
+whatever directory the session was launched from. `end` closes a run: it moves the run markers (stable.json, prime.md,
+prime-haiku.md, pool.json) and the gate files (orchestrator.json, human-replies.jsonl) into `.superlite/runs/<time>/` and
+releases the session's binding, so the coordinator guard stops. In human mode `plan_tools lint --stable`, `dispatch`,
 `wave0` and `build_prime` refuse to run (exit 4, one line) until `approve` has been recorded; `schedule --insert` and
 `prune` stay allowed so the plan can be shown whole with its Gantt. In AI mode nothing is gated. With no file nothing is
 gated (existing runs behave as before). `--ruling` on `set ai` also appends a `Ruling:` line to `.superlite/progress.md`
@@ -23,8 +30,12 @@ import argparse  # O(1)
 import hashlib  # O(1)
 import json  # O(1)
 import sys  # O(1)
+import time  # O(1)
 from datetime import datetime  # O(1)
 from pathlib import Path  # O(1)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+import state  # noqa: E402 | O(1)
 
 FILE = "orchestrator.json"  # O(1)
 REPLIES = "human-replies.jsonl"  # written only by the UserPromptSubmit hook | O(1)
@@ -33,23 +44,13 @@ NO_REPLY = ("BLOCKED: no human approval reply since the review plan was written;
 NO_REVIEW = "BLOCKED: write the review plan first, then approve --review <path>"  # O(1)
 EXIT_BLOCKED = 4  # exit 3 already means "no Python" for sl | O(1)
 BLOCK = ("BLOCKED: human orchestrator selected, show the plan, ask for approval, then run sl orchestrator approve")  # O(1)
+RUN_FILES = ("stable.json", "prime.md", "prime-haiku.md", "pool.json", FILE, REPLIES)  # what `end` archives | O(1)
+NO_SESSION = "orchestrator: no session id (CLAUDE_CODE_SESSION_ID); set SUPERLITE_STATE_DIR instead"  # O(1)
 
 
-def sl_dir(plan_or_dir=None) -> Path:  # O(1)
-    """The `.superlite` folder: the argument itself when it is one, else next to a plan (the plan's repo root), else ./.superlite."""
-    if plan_or_dir is None:  # O(1)
-        return Path(".superlite")  # O(1)
-    p = Path(plan_or_dir).resolve()  # O(1)
-    if p.name == ".superlite":  # O(1)
-        return p  # O(1)
-    if p.is_dir():  # O(1)
-        return p / ".superlite" if p.name != ".superlite" else p  # O(1)
-    root = p.parent  # O(1)
-    if root.name == ".superlite":  # O(1)
-        return root  # O(1)
-    if root.name == "plans" and root.parent.name == "docs":  # O(1)
-        return root.parent.parent / ".superlite"  # O(1)
-    return root / ".superlite"  # O(1)
+def sl_dir(plan_or_dir=None) -> Path:  # O(d)
+    """The `.superlite` folder: the argument itself when it is one, else the plan's git toplevel (see state.resolve)."""
+    return state.resolve(plan_or_dir)  # O(d)
 
 
 def read_state(plan_or_dir=None):  # O(file)
@@ -133,6 +134,21 @@ def now() -> str:  # O(1)
     return datetime.now().isoformat(timespec="seconds")  # O(1)
 
 
+def end(sd: Path) -> str:  # O(files)
+    """Archive the run's markers and gate files into sd/runs/<time>/ and release the session; one line."""
+    present = [f for f in RUN_FILES if (sd / f).is_file()]  # O(1)
+    state.unbind(sd)  # O(1)
+    if not present:  # O(1)
+        return f"orchestrator: nothing to end in {sd}"  # O(1)
+    dest = sd / "runs" / time.strftime("%Y%m%d-%H%M%S")  # O(1)
+    while dest.exists():  # two ends in one second | O(1) amortized
+        dest = dest.with_name(dest.name + "-1")  # O(1)
+    dest.mkdir(parents=True)  # O(1)
+    for f in present:  # O(files)
+        (sd / f).replace(dest / f)  # O(1)
+    return f"orchestrator: run ended; {len(present)} files moved to {dest}"  # O(1)
+
+
 def main(argv=None):  # O(1)
     ap = argparse.ArgumentParser(description=__doc__.split(chr(10))[0])  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
@@ -145,18 +161,32 @@ def main(argv=None):  # O(1)
     a_.add_argument("--review", help="the approved review plan (docs/plans/<date>-<topic>.review.md): path and sha256 are recorded")  # O(1)
     st = sub.add_parser("status")  # O(1)
     st.add_argument("--review", help="review plan path: status says whether a reply newer than it approves")  # O(1)
-    for p in (s, a_, st):  # O(1)
-        p.add_argument("--plan", help="plan path (locates .superlite); default ./.superlite")  # O(1)
+    b_ = sub.add_parser("bind")  # O(1)
+    e_ = sub.add_parser("end")  # O(1)
+    for p in (s, a_, st, b_, e_):  # O(1)
+        p.add_argument("--plan", help="plan path (locates .superlite at its git toplevel); default: the session's binding, else ./.superlite")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    review = getattr(a, "review", None)  # O(1)
+    sd = state.plan_dir(review) if a.cmd == "approve" and review and not a.plan else sl_dir(a.plan)  # O(d)
+    if a.cmd == "end":  # O(1)
+        print(end(sd))  # O(files)
+        return 0  # O(1)
+    if a.cmd == "bind":  # O(1)
+        if not state.bind(sd):  # O(b)
+            print(NO_SESSION, file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        print(f"orchestrator: session bound to {sd.resolve()}")  # O(1)
+        return 0  # O(1)
     if a.cmd == "set":  # O(1)
-        write_state(a.plan, {"mode": a.mode, "approved": a.mode == "ai", "by": a.by, "time": now()})  # O(1)
+        write_state(sd, {"mode": a.mode, "approved": a.mode == "ai", "by": a.by, "time": now()})  # O(1)
+        state.bind(sd)  # O(b)
         if a.mode == "ai" and a.ruling:  # O(1)
-            f = sl_dir(a.plan) / "progress.md"  # O(1)
+            f = sd / "progress.md"  # O(1)
             with f.open("a", encoding="utf-8") as fh:  # O(1)
                 fh.write(f"Ruling: {a.ruling}" + chr(10))  # O(1)
-        print(summary_line(a.plan))  # O(1)
+        print(summary_line(sd))  # O(1)
         return 0  # O(1)
-    cur = read_state(a.plan)  # O(file)
+    cur = read_state(sd)  # O(file)
     if a.cmd == "approve":  # O(1)
         if not cur or cur["mode"] != "human":  # O(1)
             print("orchestrator: approve applies to human mode only; run: sl orchestrator set human", file=sys.stderr)  # O(1)
@@ -169,13 +199,14 @@ def main(argv=None):  # O(1)
             if not rp.is_file():  # O(1)
                 print(f"orchestrator: review plan not found: {a.review}", file=sys.stderr)  # O(1)
                 return 2  # O(1)
-            if not approving_reply(a.plan, rp.stat().st_mtime * 1000):  # a real human reply, written by the hook, after the plan | O(replies)
+            if not approving_reply(sd, rp.stat().st_mtime * 1000):  # a real human reply, written by the hook, after the plan | O(replies)
                 print(NO_REPLY, file=sys.stderr)  # O(1)
                 return 3  # O(1)
             cur.update(review_path=a.review.replace(chr(92), "/"), review_sha256=hashlib.sha256(rp.read_bytes()).hexdigest())  # O(size)
         cur.update(approved=True, approved_by=a.by, approved_time=now())  # O(1)
-        write_state(a.plan, cur)  # O(1)
-    print(summary_line(a.plan, getattr(a, "review", None)))  # O(1)
+        write_state(sd, cur)  # O(1)
+        state.bind(sd)  # O(b)
+    print(summary_line(sd, review))  # O(1)
     return 0  # O(1)
 
 
