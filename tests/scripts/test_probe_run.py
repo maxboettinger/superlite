@@ -206,6 +206,9 @@ def test_shrinks_and_writes_regression_test(tmp_path):
     assert subprocess.run(pytest_cmd, cwd=proj, capture_output=True).returncode != 0
     parser = proj / "src" / "parser.py"
     parser.write_text(parser.read_text().replace("GUARD = False", "GUARD = True").replace("LIMIT = 300", "LIMIT = None"))
+    # Same size, often the same mtime second: a cached .pyc would still hold the broken module.
+    for cache in proj.rglob("__pycache__"):
+        shutil.rmtree(cache, ignore_errors=True)
     after = subprocess.run(pytest_cmd, cwd=proj, capture_output=True, text=True)
     assert after.returncode == 0, after.stdout + after.stderr
 
