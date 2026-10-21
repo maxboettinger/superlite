@@ -52,7 +52,7 @@ The `rm .superlite` denial names `sl orchestrator end`.
 unknown token lists the available sections. (`incident add --kind verified` already works on main.)
 
 **After review.** A folder another live session owns is never taken (`bind` refuses, `--force` takes over); `set`
-without a plan then uses the session's private folder `~/.superlite/sessions/<id>.d`, and the next bind moves a pending
+without a plan then uses the session's private folder `~/.superlite/sessions/<id>.d/.superlite`, and the next bind moves a pending
 gate (orchestrator.json, human-replies.jsonl) to the plan's folder, so `set human` before a worktree plan stays gated.
 `end` refuses another session's folder and a removed `--plan`, and archives the run's logs too. Paths stay logical
 (symlinks kept). The SessionStart hook exports the hook's id as `SUPERLITE_SESSION_ID`. The guard parses each writer

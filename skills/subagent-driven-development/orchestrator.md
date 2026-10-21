@@ -32,7 +32,7 @@ unattended signal (all mean AI). When no human can answer (a headless `claude -p
   `CLAUDE_CODE_SESSION_ID`) to the plan's `.superlite`; `set`, `approve` and `lint --stable` bind too, and a gate still pending in the
   session's previous folder moves along. The hooks then use that folder whatever directory the session was launched from. A folder
   another live session owns is refused (exit 2) unless `--force`; `set` without `--plan` then uses the session's private folder
-  `~/.superlite/sessions/<id>.d` until a plan binds (see `docs/hooks.md`).
+  `~/.superlite/sessions/<id>.d/.superlite` until a plan binds (see `docs/hooks.md`).
 - `end [--plan P]` closes the run: moves the run markers, `orchestrator.json`, `human-replies.jsonl`, `progress.md` and the run's logs
   into `.superlite/runs/<time>/` and releases the binding, so the coordinator guard stops. It refuses another session's folder and a
   `--plan` that no longer exists. Run it before removing the worktree.

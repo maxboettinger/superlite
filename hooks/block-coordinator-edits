@@ -98,17 +98,28 @@ project_code() {
 }
 
 # writer_target EXPR: the literal path an interpreter writer's target expression names, into TGT (empty if unknown):
-# 'p' or "p", Path('p'), or a name assigned one of those somewhere in the command.
+# 'p' or "p", Path('p'), or a name assigned only such literals in the command (the first denied one when several;
+# unknown when any assignment of the name, or a `for name in`, is not a literal).
 writer_target() {
-  local e="$1" re sq="'" dq='"'
+  local e="$1" re rest t n=0 lit=0 sq="'" dq='"'
   e="${e#"${e%%[![:space:]]*}"}"; e="${e%"${e##*[![:space:]]}"}"
   TGT=""
   re="^(Path\\([[:space:]]*)?[$sq$dq]([^$sq$dq]+)[$sq$dq][[:space:]]*\\)?\$"
   if [[ $e =~ $re ]]; then TGT="${BASH_REMATCH[2]}"; return 0; fi
   re='^[A-Za-z_][A-Za-z_0-9]*$'
   [[ $e =~ $re ]] || return 0
+  re="(^|[^A-Za-z_0-9])for[[:space:]]+$e[[:space:]]+in([^A-Za-z_0-9]|\$)"
+  [[ $cmd =~ $re ]] && return 0
+  re="(^|[^A-Za-z_0-9.])$e[[:space:]]*=[^=]"
+  rest="$cmd"
+  while [[ $rest =~ $re ]]; do n=$((n + 1)); rest="${rest#*"${BASH_REMATCH[0]}"}"; done
   re="(^|[^A-Za-z_0-9.])$e[[:space:]]*=[[:space:]]*(Path\\([[:space:]]*)?[$sq$dq]([^$sq$dq]+)[$sq$dq]"
-  [[ $cmd =~ $re ]] && TGT="${BASH_REMATCH[3]}"
+  rest="$cmd"
+  while [[ $rest =~ $re ]]; do
+    lit=$((lit + 1)); t="${BASH_REMATCH[3]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"
+    if [ -z "$TGT" ]; then TGT="$t"; elif project_code "$t"; then TGT="$t"; fi
+  done
+  [ "$n" = "$lit" ] || TGT=""
   return 0
 }
 
@@ -141,7 +152,7 @@ elif [ -z "$hit" ]; then
       sq="'"; dq='"'; q="[$sq$dq]"; arg="([^,()]*|Path\([^()]*\))"
       re_open='(^|[^A-Za-z0-9_])open\('
       re_ow="^$arg,[[:space:]]*(mode=)?$q[wax]"
-      re_or="^$arg(,[[:space:]]*((mode=)?${q}r[bt]?$q|encoding=[^()]*))?\)"
+      re_or="^$arg(,[[:space:]]*((mode=)?${q}r[bt]?$q|(encoding|errors|newline|buffering)=[^,()]*))*\)"
       re_mr="^[[:space:]]*(\)|(mode=)?${q}r)"
       re_mw="^[[:space:]]*(mode=)?$q[wax]"
       re_w2="(Path\([^()]*\)|[A-Za-z_][A-Za-z_0-9]*)\.(write_text|write_bytes)\("
@@ -173,6 +184,7 @@ elif [ -z "$hit" ]; then
         done
       done
       # A writer whose target is unknown (a variable, an f-string, a method chain, fs.write on a descriptor) blocks.
+      # Out of reach: file APIs without a writer call (os.replace, shutil.copy, ...).
       if [ -z "$hit" ] && { [ "$unknown" = 1 ] || [ "$got" -lt "$want" ]; }; then hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; fi
     fi
   fi

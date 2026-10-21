@@ -479,3 +479,86 @@ def test_bash_and_python_resolve_the_same_folder(repo, monkeypatch, case):
                        capture_output=True, text=True, env=env)
     sh = Path(r.stdout) if r.stdout else None
     assert sh == py, (case, sh, py)
+
+
+# ------------------------------------------------------------------ re-review findings
+
+def test_second_session_human_gate_without_plan_is_enforced(repo):
+    """N1: B's `set human` lands in its private folder; the hooks must read it and judge paths against main."""
+    from test_routing import mech_plan
+    main, _, wb = repo
+    assert sl(main, A, "set", "ai").returncode == 0
+    assert sl(main, B, "set", "human").returncode == 0
+    assert (state.private_dir(B) / "orchestrator.json").is_file()
+    assert write(main, B, main / "src" / "a.py").returncode == 2
+    assert write(main, B, "src/a.py").returncode == 2
+    agent = hook(GUARD, main, B, {"tool_name": "Agent", "tool_input": {"subagent_type": "superlite:implementer"}})
+    assert agent.returncode == 2
+    assert write(main, A, main / "src" / "a.py").returncode == 0  # A is AI and has no run
+    assert prompt(main, B, "approve").returncode == 0
+    assert (state.private_dir(B) / "human-replies.jsonl").is_file()
+    p = mech_plan(wb / "docs" / "superpowers" / "plans", 2)
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", CLAUDE_CODE_SESSION_ID=B)
+    r = subprocess.run([sys.executable, str(SCRIPTS / "plan_tools.py"), "lint", "--stable", "--plan", str(p)],
+                       capture_output=True, text=True, cwd=main, env=env, timeout=120)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert (wb / ".superlite" / "orchestrator.json").is_file() and (wb / ".superlite" / "human-replies.jsonl").is_file()
+
+
+def test_clear_hands_the_binding_to_the_new_session_id(repo):
+    """R1: /clear keeps the Claude process (CLAUDE_PID) and starts a new id; the gate stays with the conversation."""
+    main, _, _ = repo
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", CLAUDE_CODE_SESSION_ID=A, CLAUDE_PID="4242")
+    assert subprocess.run([sys.executable, str(ORCH), "set", "human"], cwd=main, env=env, capture_output=True).returncode == 0
+    a2 = "aaaa-2222"
+    r = subprocess.run([BASH, str(ROOT / "hooks" / "session-start")],
+                       input=json.dumps({"session_id": a2, "source": "clear"}), capture_output=True, text=True,
+                       env=dict(os.environ, CLAUDE_PID="4242", CLAUDE_PLUGIN_ROOT=str(ROOT)))
+    assert r.returncode == 0, r.stderr
+    assert state.owner(main / ".superlite") == a2 and state.bound(a2) == main / ".superlite"
+    assert not (state.home() / "sessions" / A).exists()
+    assert write(main, a2, main / "src" / "a.py").returncode == 2
+    assert prompt(main, a2, "approve").returncode == 0
+    assert (main / ".superlite" / "human-replies.jsonl").is_file()
+
+
+def test_clear_in_another_process_hands_nothing_over(repo):
+    main, _, _ = repo
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", CLAUDE_CODE_SESSION_ID=A, CLAUDE_PID="4242")
+    assert subprocess.run([sys.executable, str(ORCH), "set", "human"], cwd=main, env=env, capture_output=True).returncode == 0
+    subprocess.run([BASH, str(ROOT / "hooks" / "session-start")], input=json.dumps({"session_id": B, "source": "clear"}),
+                   capture_output=True, text=True, env=dict(os.environ, CLAUDE_PID="999", CLAUDE_PLUGIN_ROOT=str(ROOT)))
+    assert state.owner(main / ".superlite") == A
+
+
+def test_symlinked_launch_dir_without_plan(repo, tmp_path):
+    """R2: `set` without --plan keeps the logical $PWD, as Claude passes paths."""
+    main, _, _ = repo
+    link = tmp_path / "link"
+    link.symlink_to(main)
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", CLAUDE_CODE_SESSION_ID=A, PWD=str(link))
+    assert subprocess.run([sys.executable, str(ORCH), "set", "ai"], cwd=link, env=env, capture_output=True).returncode == 0
+    assert state.bound(A) == link / ".superlite"
+    (main / ".superlite" / "pool.json").write_text("{}")
+    assert write(link, A, link / "src" / "a.py").returncode == 2
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 -c \"f = '.superlite/notes.md'; open(f,'w').write('x'); f = 'src/config.py'; open(f,'w').write('y')\"",
+    "python3 -c \"f = '.superlite/n.md'\nfor f in ['src/a.py']:\n    open(f,'w')\"",
+])
+def test_reassigned_names_are_judged_by_every_value(repo, cmd):
+    """R4: the second assignment is project code."""
+    main, wa, _ = repo
+    assert sl(main, A, "set", "ai", "--plan", wa / "docs" / "superpowers" / "plans" / "p.md").returncode == 0
+    (wa / ".superlite" / "pool.json").write_text("{}")
+    assert guard_bash(main, A, f"cd {wa} && {cmd}").returncode == 2, cmd
+
+
+def test_reads_with_keyword_arguments_pass(repo):
+    main, wa, _ = repo
+    assert sl(main, A, "set", "ai", "--plan", wa / "docs" / "superpowers" / "plans" / "p.md").returncode == 0
+    (wa / ".superlite" / "pool.json").write_text("{}")
+    cmd = ("python3 -c \"d = open('src/a.py', encoding='utf-8', errors='replace').read(); "
+           "open('.superlite/notes.md','w').write(d)\"")
+    assert guard_bash(main, A, f"cd {wa} && {cmd}").returncode == 0

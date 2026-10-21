@@ -10,8 +10,28 @@ set -euo pipefail  # O(1)
 input=""  # O(1)
 [ -t 0 ] || IFS= read -r -d '' input || true  # O(input) builtin; returns 1 at EOF
 re_sid='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'  # O(1)
-if [ -n "${CLAUDE_ENV_FILE:-}" ] && [[ $input =~ $re_sid ]]; then  # O(input)
-  printf 'export SUPERLITE_SESSION_ID=%s\n' "${BASH_REMATCH[1]}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true  # O(1)
+sid=""  # O(1)
+[[ $input =~ $re_sid ]] && sid="${BASH_REMATCH[1]}"  # O(input)
+if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "$sid" ]; then  # O(1)
+  printf 'export SUPERLITE_SESSION_ID=%s\n' "$sid" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true  # O(1)
+fi  # O(1)
+# /clear starts a new session id in the same Claude process: hand that process's binding (line 2 = CLAUDE_PID, written
+# by sl) and folder ownership to the new id, so a pending gate and its replies stay with the conversation.
+re_clear='"source"[[:space:]]*:[[:space:]]*"clear"'  # O(1)
+if [ -n "$sid" ] && [[ $input =~ $re_clear ]] && [[ ${CLAUDE_PID:-} =~ ^[0-9]+$ ]]; then  # O(input)
+  sessions="${SUPERLITE_HOME:-$HOME/.superlite}/sessions"  # O(1)
+  for f in "$sessions"/*; do  # O(b) bindings
+    [ -f "$f" ] || continue  # O(1)
+    old="${f##*/}"; [ "$old" != "$sid" ] || continue  # O(1)
+    bpath=""; bpid=""; { IFS= read -r bpath || true; IFS= read -r bpid || true; } < "$f"  # O(1)
+    bpath="${bpath%$'\r'}"; bpid="${bpid%$'\r'}"  # O(1)
+    [ "$bpid" = "$CLAUDE_PID" ] && [ -d "$bpath" ] || continue  # O(1)
+    owner=""; [ ! -f "$bpath/session" ] || { IFS= read -r owner < "$bpath/session" || true; }  # O(1)
+    [ "${owner%$'\r'}" = "$old" ] || continue  # O(1)
+    printf '%s\n' "$sid" > "$bpath/session" 2>/dev/null || continue  # O(1)
+    printf '%s\n%s\n' "$bpath" "$bpid" > "$sessions/$sid" 2>/dev/null || true  # O(1)
+    rm -f "$f"  # O(1)
+  done  # O(1)
 fi  # O(1)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"  # O(1) + subshell

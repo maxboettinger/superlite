@@ -8,15 +8,17 @@ Resolution, the same order as the hooks (hooks/superlite-state.sh):
   2. the session's binding: $SUPERLITE_HOME/sessions/<session id> (default ~/.superlite/sessions/) holds the absolute
      path of the bound .superlite folder; used while that folder exists and no other session owns it;
   3. ./.superlite, unless another live session owns it; then the session's private folder
-     $SUPERLITE_HOME/sessions/<session id>.d (state set before any plan, moved to the plan's folder on the next bind).
+     $SUPERLITE_HOME/sessions/<session id>.d/.superlite (state set before any plan, moved to the plan's folder on the
+     next bind; the hooks judge paths against the launch directory meanwhile).
 The session id is $SUPERLITE_SESSION_ID (the SessionStart hook writes the hook's id there, so it follows /clear), else
 CLAUDE_CODE_SESSION_ID. A plan (or review plan) given explicitly resolves to the .superlite next to its nearest `docs`
 ancestor below the git toplevel, else at the toplevel, so docs/superpowers/plans/x.md in a worktree maps to
 <worktree>/.superlite; outside git the old rule holds. `bind` writes the binding and `.superlite/session` (the owning
 id), moves a pending gate (orchestrator.json, human-replies.jsonl) from the session's previous folder, and refuses a
 folder another live session owns (`force` takes it over). An owner is live while its binding points at the folder.
-Paths stay as given (absolute, symlinks not resolved), as the hooks see them. Bindings older than 14 days are pruned
-on each bind. Library: git_root, plan_dir, session_id, bound, resolve, bind, unbind, owner, live_owner. Stdlib only.
+Paths stay as given (absolute, symlinks not resolved, a relative path joined to $PWD), as the hooks see them. A
+binding also records $CLAUDE_PID, so the SessionStart hook moves it to the new id after /clear (same process). Bindings
+older than 14 days are pruned on each bind. Library: git_root, plan_dir, session_id, bound, resolve, bind, unbind, owner, live_owner. Stdlib only.
 """
 # Complexity notation:
 #   d = depth of a path (parents walked), b = bindings in $SUPERLITE_HOME/sessions
@@ -51,8 +53,17 @@ def session_id():  # O(1)
 
 
 def _abs(path) -> Path:  # O(d)
-    """Absolute, `..` collapsed, symlinks kept: the form Claude Code and the hooks pass around."""
-    return Path(os.path.abspath(path))  # O(d)
+    """Absolute, `..` collapsed, symlinks kept: the form Claude Code and the hooks pass around. A relative path joins
+    the logical $PWD (os.getcwd() is the physical one) while both name the same folder."""
+    p = os.fspath(path)  # O(1)
+    pwd = os.environ.get("PWD", "")  # O(1)
+    if not os.path.isabs(p) and pwd and os.path.isabs(pwd):  # O(1)
+        try:  # O(1)
+            if os.path.samefile(pwd, os.getcwd()):  # O(1)
+                return Path(os.path.normpath(os.path.join(pwd, p)))  # O(d)
+        except OSError:  # O(1)
+            pass  # O(1)
+    return Path(os.path.abspath(p))  # O(d)
 
 
 def git_root(path):  # O(d)
@@ -95,12 +106,13 @@ def _binding(sid) -> Path:  # O(1)
 
 def private_dir(sid) -> Path:  # O(1)
     """The session's own folder, for state set before any plan while ./.superlite belongs to another session."""
-    return home() / "sessions" / f"{sid}.d"  # O(1)
+    return home() / "sessions" / f"{sid}.d" / ".superlite"  # O(1)
 
 
 def _target(sid):  # O(1)
     try:  # O(1)
-        target = Path(_binding(sid).read_text(encoding="utf-8").strip())  # O(1)
+        lines = _binding(sid).read_text(encoding="utf-8").splitlines()  # O(1)
+        target = Path(lines[0].strip()) if lines else Path()  # O(1)
     except OSError:  # O(1)
         return None  # O(1)
     return target if target.is_absolute() else None  # O(1)
@@ -195,7 +207,8 @@ def bind(sd, sid=None, force=False):  # O(b + d)
         f = _binding(sid)  # O(1)
         f.parent.mkdir(parents=True, exist_ok=True)  # O(1)
         _prune(time.time())  # O(b)
-        f.write_text(sd.as_posix() + "\n", encoding="utf-8")  # forward slashes: the hooks read it in bash | O(1)
+        pid = os.environ.get("CLAUDE_PID", "")  # line 2: the Claude process, so /clear can hand the binding on | O(1)
+        f.write_text(sd.as_posix() + "\n" + (pid + "\n" if pid.isdigit() else ""), encoding="utf-8")  # forward slashes for bash | O(1)
     except OSError as e:  # a read-only home must not stop the run | O(1)
         print(f"superlite: session binding not written ({e}); hooks fall back to the launch directory", file=sys.stderr)  # O(1)
         return None  # O(1)
