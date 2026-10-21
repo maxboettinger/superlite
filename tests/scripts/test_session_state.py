@@ -562,3 +562,14 @@ def test_reads_with_keyword_arguments_pass(repo):
     cmd = ("python3 -c \"d = open('src/a.py', encoding='utf-8', errors='replace').read(); "
            "open('.superlite/notes.md','w').write(d)\"")
     assert guard_bash(main, A, f"cd {wa} && {cmd}").returncode == 0
+
+
+def test_clear_with_two_sessions_in_one_process_hands_nothing_over(repo):
+    main, wa, _ = repo
+    for sid, d in ((A, main), (B, wa)):
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", CLAUDE_CODE_SESSION_ID=sid, CLAUDE_PID="4242")
+        args = ["set", "human"] if sid == A else ["set", "human", "--plan", str(wa / "docs" / "superpowers" / "plans" / "p.md")]
+        assert subprocess.run([sys.executable, str(ORCH), *args], cwd=main, env=env, capture_output=True).returncode == 0
+    subprocess.run([BASH, str(ROOT / "hooks" / "session-start")], input=json.dumps({"session_id": "cccc-3", "source": "clear"}),
+                   capture_output=True, text=True, env=dict(os.environ, CLAUDE_PID="4242", CLAUDE_PLUGIN_ROOT=str(ROOT)))
+    assert state.owner(main / ".superlite") == A and state.owner(wa / ".superlite") == B
