@@ -165,3 +165,32 @@ def test_typical_allowed_call_is_fast(proj):
     for hook_raw in (raw, json.dumps({"tool_name": "Edit", "tool_input": {"file_path": "x"}, "agent_id": "a"})):
         t = best([BASH, str(HOOK)], hook_raw)
         assert t < max(0.6, base + 0.35), (t, base)
+
+
+# PIX-837: interpreter writes are judged by their target, not by the interpreter.
+@pytest.mark.parametrize("cmd", [
+    "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('docs/superpowers/plans/p.md')\np.write_text(p.read_text().replace('a', 'b'))\nEOF",
+    "python3 -c \"import json; d=json.load(open('.superlite/pool.json')); open('.superlite/pool.json','w').write(json.dumps(d))\"",
+    "python3 -c \"open('docs/superpowers/plans/p.incidents.jsonl','a').write('x')\"",
+    "node -e \"require('fs').writeFileSync('/tmp/out.json','x')\"",
+])
+def test_allows_interpreter_writes_to_allowed_targets(proj, cmd):
+    assert bash(proj, cmd).returncode == 0, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 -c \"open('.superlite/pool.json','w'); open('src/a.py','w').write('x')\"",
+    "python3 - <<'EOF'\nimport sys\nopen(sys.argv[1], 'w').write('x')\nEOF",
+])
+def test_blocks_interpreter_writes_with_project_or_unknown_targets(proj, cmd):
+    assert bash(proj, cmd).returncode == 2, cmd
+
+
+def test_allows_nested_plans_folders(proj):
+    for p in ("docs/superpowers/plans/p.progress.md", "docs/superpowers/plans/p.incidents.jsonl"):
+        assert run(proj, "Write", {"file_path": p}).returncode == 0, p
+
+
+def test_removing_the_state_folder_points_to_orchestrator_end(proj):
+    r = bash(proj, "rm -rf .superlite")
+    assert r.returncode == 2 and "sl orchestrator end" in r.stderr

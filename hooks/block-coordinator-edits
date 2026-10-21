@@ -5,11 +5,14 @@
 #     and .superlite/human-replies.jsonl (written only by hooks/record-human-reply) are never written
 #     by the model.
 #  2. HUMAN-UNAPPROVED (.superlite/orchestrator.json has mode human and approved false): nothing
-#     builds until the human approves the plan. Allowed writes: docs/plans/*.review.md and
+#     builds until the human approves the plan. Allowed writes: docs/plans/*.review.md, docs/*/plans/*.review.md and
 #     .superlite/** (minus the protected files); Agent calls of superlite:* and general-purpose and
 #     sl dispatch/assign/wave0/commit_task/finish/build_prime/run_tests are denied.
 #  3. Active run (.superlite/stable.json, prime.md or pool.json exists): project code is not written
-#     by the coordinator; allowed targets are docs/plans/**, SPEC*.md, docs/**/*.md and .superlite/**.
+#     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md and
+#     .superlite/**. `sl orchestrator end` closes the run.
+# The .superlite folder is the session's own (hooks/superlite-state.sh): its binding, else the launch
+# directory's unless another session owns that one. Interpreter writes are judged by their path literals.
 # Bash/PowerShell write detection is best-effort; when unsure, allow. Sessions without a .superlite
 # directory are never touched. Bash builtins only (no external process is spawned: each spawn costs
 # ~250 ms on Windows), cheap exits first. Exit 2 blocks (message on stderr); anything else,
@@ -81,12 +84,12 @@ project_code() {
   pl="${rel,,}"
   case "$pl" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
   if [ "$human" = 1 ]; then
-    case "$rel" in docs/plans/*.review.md|.superlite/*) return 1 ;; esac
+    case "$rel" in docs/plans/*.review.md|docs/*/plans/*.review.md|.superlite/*) return 1 ;; esac
     return 0
   fi
   [ "$active" = 1 ] || return 1
   case "$rel" in
-    docs/plans/*|docs/*.md|SPEC*.md|*/SPEC*.md|.superlite/*) return 1 ;;
+    docs/plans/*|docs/*/plans/*|docs/*.md|SPEC*.md|*/SPEC*.md|.superlite/*) return 1 ;;
   esac
   return 0
 }
@@ -106,12 +109,25 @@ elif [ -z "$hit" ]; then
   # sl tools that start a build are denied until the plan is approved.
   re_sl='(sl|\$SL|\$\{SL\}|scripts/sl)"?[[:space:]]+(dispatch|assign|wave0|commit_task|finish|build_prime|run_tests)([[:space:]]|$)'
   if [ "$human" = 1 ] && [[ $cmd =~ $re_sl ]]; then hit="sl ${BASH_REMATCH[2]}"; fi
-  # Inline interpreter writers (checked on the full text, heredoc bodies included).
+  # Inline interpreter writers (checked on the full text, heredoc bodies included), judged by target: the
+  # path-like quoted literals in the command are classified like any write; any denied one blocks, and a
+  # writer with no path literal at all (a variable target) blocks while the guard is enforcing.
   re_interp='(^|[^[:alnum:]_])(python[0-9.]*|node|ruby|php)([[:space:]]|$)'
   re_writer="open\([^)]*,[[:space:]]*['\"][wax]b?\+?['\"]|\.(write_text|write_bytes)\(|writeFileSync|writeFile\(|appendFile(Sync)?\(|fs\.write"
   if [ -z "$hit" ] && { [ "$enforce" = 1 ] || [ "$mentions" = 1 ]; } && [[ $lc =~ $re_interp && $cmd =~ $re_writer ]]; then
-    hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"
-    [ "$mentions" = 1 ] && prot=1
+    if [ "$mentions" = 1 ]; then
+      hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; prot=1
+    else
+      re_lit="['\"]([A-Za-z0-9_./~-]+)['\"]"
+      rest="$cmd"; nlit=0
+      while [[ $rest =~ $re_lit ]]; do
+        t="${BASH_REMATCH[1]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"
+        case "$t" in */*|*.[A-Za-z0-9]*) ;; *) continue ;; esac
+        nlit=$((nlit + 1))
+        project_code "$t" && { hit="$t"; break; }
+      done
+      if [ "$nlit" = 0 ]; then hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; fi
+    fi
   fi
   if [ -z "$hit" ]; then
     # Drop heredoc bodies and quoted strings, then split into simple commands.
@@ -176,6 +192,7 @@ else
     'Blocked: the superlite coordinator must not write project code. Dispatch it instead:' \
     '- Fix: give a fixer a finding id F-<Tn>-<n> and the note path .superlite/fixes/<id>.md, tiered per skills/subagent-driven-development/fixing.md: known cause, one module -> fixer-sonnet; cross-module -> fixer-sonnet-high; unknown cause -> fixer-opus.' \
     '- Wave 0 skeleton/stub/config files belong to an implementer-haiku task.' \
-    '- New code belongs to an implementer task. You may write only docs/plans/**, SPEC*.md, docs/**/*.md and .superlite/**.' >&2
+    '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md and .superlite/**.' \
+    '- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete .superlite by hand.' >&2
 fi
 exit 2
