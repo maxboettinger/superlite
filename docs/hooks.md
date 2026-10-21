@@ -2,9 +2,12 @@
 
 `hooks/hooks.json` registers these. The run hooks are active only while a run marker exists (`.superlite/stable.json`, `prime.md` or `pool.json`, written by the first lint). They fail open on bad input.
 
+**Which `.superlite`.** Each session has its own (`hooks/superlite-state.sh`, the same order as `scripts/state.py`): `$SUPERLITE_STATE_DIR`; else the session's binding `~/.superlite/sessions/<session_id>`, written by `sl orchestrator set|approve|bind` and `lint --stable`; else `<CLAUDE_PROJECT_DIR or cwd>/.superlite`, unless its `session` file names another session. So sessions launched from one checkout and building in separate worktrees never share a gate, a reply log or run markers. `sl orchestrator end` archives the run markers; the run hooks stop.
+
 - `session-start`: injects `using-superlite` at startup, clear and compact.
 - `block-unsafe-kill`: always on for Bash and PowerShell; blocks killing processes by name or pattern (`taskkill /IM`, `pkill`, `killall`, `Stop-Process -Name`). Kill by PID is allowed.
-- `block-coordinator-edits`: during a run, blocks the coordinator (calls without `agent_id`) from writing project code. It may write `docs/plans/**`, `SPEC*.md`, `docs/**/*.md` and `.superlite/**`. Subagents always pass.
+- `block-coordinator-edits`: during a run, blocks the coordinator (calls without `agent_id`) from writing project code. It may write `docs/plans/**`, `docs/*/plans/**`, `SPEC*.md`, `docs/**/*.md` and `.superlite/**`; inline interpreter writes (`python -c`, heredocs, `node -e`) are judged by their quoted path targets. Subagents always pass.
+- `record-human-reply`: while the session's state is human and unapproved, appends each human prompt to `.superlite/human-replies.jsonl` (the evidence `sl orchestrator approve` checks).
 - `rewrite-test-runs`: during a run, rewrites the coordinator's raw test commands (pytest, npm test, go test, cargo test, dotnet test, ...) into a background `sl run_tests --full`, and logs a `rule-rewrite` incident.
 - `capture-agent-launch`: during a run, appends a `launch` record (agent id, type, model, description) to `.superlite/metrics.jsonl` after each `Agent` call.
 - `capture-agent-stop`: during a run, appends a `stop` record (agent id, type, transcript path, last message) to `.superlite/metrics.jsonl` when a subagent stops.

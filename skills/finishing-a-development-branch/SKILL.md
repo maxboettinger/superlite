@@ -49,6 +49,8 @@ No further menus or typed confirmations. Act on the answer.
 
 Only if the work ran in a worktree you created and the branch was merged: `git worktree remove <path>`. For push-and-PR or keep, leave it in place.
 
+For a superlite build, end the run in every case: `bash <skill-dir>/../subagent-driven-development/scripts/sl orchestrator end --plan <plan>` (archives the run markers; the coordinator guard stops).
+
 ## Never
 
 - Push or merge without the human's answer.

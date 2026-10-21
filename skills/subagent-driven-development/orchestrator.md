@@ -28,6 +28,10 @@ unattended signal (all mean AI). When no human can answer (a headless `claude -p
   file's modification time, else exit 3 `BLOCKED: no human approval reply since the review plan was written; show the plan, ask the human to
   reply approve, end your turn`. The path and sha256 go to `orchestrator.json` (`review_path`, `review_sha256`). AI mode never needs `approve`.
   `status [--review PATH]` and `finish` print the review plan path and whether an approving reply exists.
+- `bind [--plan P]` binds this session (`CLAUDE_CODE_SESSION_ID`) to the plan's `.superlite`; `set`, `approve` and `lint --stable` bind
+  too. The hooks then use that folder whatever directory the session was launched from (one state per session; see `docs/hooks.md`).
+- `end [--plan P]` closes the run: moves `stable.json`, `prime.md`, `prime-haiku.md`, `pool.json`, `orchestrator.json` and
+  `human-replies.jsonl` into `.superlite/runs/<time>/` and releases the binding, so the coordinator guard stops. Run it after finishing.
 - `status` prints one line: `orchestrator: human, awaiting approval` / `human, approved <time> by <name>` / `AI` / `not set (ungated)`.
 - Gate: in human mode without an approval `plan_tools lint --stable`, `dispatch`, `wave0` and `build_prime` exit 4 with
   `BLOCKED: human orchestrator selected, show the plan, ask for approval, then run sl orchestrator approve`.
