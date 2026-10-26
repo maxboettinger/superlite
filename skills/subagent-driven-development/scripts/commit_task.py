@@ -29,7 +29,9 @@ Scope rules: `tests/regression/` (where probe_run writes `test_probe_*.py`) is o
 by whichever task is committing, so the task or review that fixes a defect commits
 the regression test it caused. `.superlite/` is never staged and never blocks; add it
 to the repo's `.git/info/exclude` at setup (`setup_exclude()` here does it, and
-commit_task also does it on every run). Stdlib only.
+commit_task also does it on every run). Unowned files under the plan's own folder (the
+directory of --plan: sibling spec, review) never block and are never staged; owned ones commit.
+Stdlib only.
 """
 
 # Complexity notation:
@@ -109,13 +111,25 @@ def ignored(path):  # O(len path)
     return any(f"/{part}" in p for part in IGNORED_PARTS) or path.endswith(".pyc")  # O(len path)
 
 
-def changed_files():  # O(m log m) + process spawn
+def plan_folder(plan):  # O(len path) + process spawn
+    """The plan's directory relative to the repo root, `dir/` with forward slashes; "" at the root or outside the repo."""
+    r = git("rev-parse", "--show-toplevel", check=False)  # O(1) + process spawn
+    if r.returncode != 0 or not r.stdout.strip():  # O(1)
+        return ""  # O(1)
+    try:  # O(1)
+        rel = Path(plan).resolve().parent.relative_to(Path(r.stdout.strip()).resolve()).as_posix()  # O(len path)
+    except ValueError:  # plan outside the repo | O(1)
+        return ""  # O(1)
+    return "" if rel == "." else rel + "/"  # O(1)
+
+
+def changed_files(skip_prefix=""):  # O(m log m) + process spawn
     r = git("status", "--porcelain", "-z", "--untracked-files=all", "--no-renames")  # O(m) output + process spawn
     files = []  # O(1)
     for entry in r.stdout.split("\0"):  # O(m) iterations
         if len(entry) > 3:  # O(1)
             path = entry[3:].replace("\\", "/")  # O(len path)
-            if not ignored(path):  # O(1)
+            if not ignored(path) and not (skip_prefix and path.startswith(skip_prefix)):  # O(len path)
                 files.append(path)  # O(1)
     return sorted(set(files))  # O(m log m)
 
@@ -311,7 +325,10 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
              if o not in SHARED_OWNS]
 
     mine, out_of_scope = [], []  # O(1)
+    skip = plan_folder(a.plan)  # O(1) + process spawn
     for f in changed_files():  # O(m) iterations; changed_files is O(m log m) + git spawn
+        if skip and f.startswith(skip) and not nt.owns_match(f, owns):  # plan folder: only owned paths count | O(f)
+            continue  # O(1)
         if f in own_files and not nt.owns_match(f, owns):  # O(f)
             continue  # O(1)
         if tid == "T0" and nt.owns_match(f, other):  # Wave 0 globs never take another task's file | O(f)
