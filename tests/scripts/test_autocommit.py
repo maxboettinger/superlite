@@ -267,3 +267,37 @@ def test_finish_says_nothing_was_committed(tmp_path):
     assert "sl autocommit clean" in r.stdout
     r = run("finish", cwd=repo, env={**ENV, "SUPERLITE_AUTOCOMMIT": "1"})
     assert "NOTHING WAS COMMITTED" not in r.stdout
+
+
+def test_apply_replays_unborn_base_and_odd_paths(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "commit.gpgsign", "false")
+    sys.path.insert(0, str(SCRIPTS))
+    import autocommit
+    cwd = os.getcwd()
+    os.chdir(repo)
+    try:
+        write(repo, "my dir/a b.py", "x\n")
+        write(repo, "caf\u00e9[1].py", "y\n")
+        files = ["my dir/a b.py", "caf\u00e9[1].py"]
+        sha = autocommit.checkpoint("T1", "odd", files, "plan.md")
+        # base unborn, HEAD born meanwhile without touching the files: replay works
+        write(repo, "README.md", "r\n")
+        git(repo, "add", "README.md")
+        git(repo, "commit", "-q", "-m", "manual")
+        head = git(repo, "rev-parse", "HEAD")
+        assert autocommit.moved_overlap("", head, set(files)) == []
+        tree = autocommit.replay_tree(head, {"sha": sha, "files": files})
+        names = git(repo, "-c", "core.quotepath=off", "ls-tree", "-r", "--name-only", tree).split("\n")
+        assert sorted(names) == sorted(files + ["README.md"])
+        # a commit that added a checkpointed file while base was unborn is an overlap
+        git(repo, "add", "my dir/a b.py")
+        git(repo, "commit", "-q", "-m", "user a")
+        head = git(repo, "rev-parse", "HEAD")
+        assert autocommit.moved_overlap("", head, set(files)) == ["my dir/a b.py"]
+    finally:
+        os.chdir(cwd)

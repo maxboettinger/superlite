@@ -22,6 +22,7 @@ CONFIG = ".superlite/autocommit.json"
 STATE = ".superlite/checkpoints.json"
 TEMP_INDEX = ".superlite/checkpoint.index"
 REF_ROOT = "refs/superlite"
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 TRUE, FALSE = ("1", "true", "yes", "on"), ("0", "false", "no", "off")
 
 
@@ -119,9 +120,10 @@ def dirty_outside(files):
 
 def moved_overlap(base, head, files):
     """Checkpointed files touched by the commits in base..head, sorted; [] when HEAD did not move."""
-    if base == head or not base or not files:
+    if base == head or not head or not files:
         return []
-    r = git("diff", "--name-only", "-z", base, head, "--", *sorted(files))
+    base = base or EMPTY_TREE  # unborn at the start: every file in HEAD now is new since then
+    r = git("diff", "--name-only", "-z", base, head, "--", *sorted(files), env={"GIT_LITERAL_PATHSPECS": "1"})
     return sorted(p for p in r.stdout.split("\0") if p)
 
 
@@ -132,9 +134,10 @@ def replay_tree(parent, entry):
     Path(idx).unlink(missing_ok=True)
     env = {"GIT_INDEX_FILE": idx}
     try:
-        git("read-tree", parent, env=env)
+        git("read-tree", parent, env=env) if parent else git("read-tree", "--empty", env=env)
+        lit = {"GIT_LITERAL_PATHSPECS": "1"}
         for f in entry["files"]:
-            line = git("ls-tree", entry["sha"], "--", f).stdout.strip()
+            line = git("ls-tree", "-z", entry["sha"], "--", f, env=lit).stdout.strip("\0")
             if line:
                 meta, path = line.split("\t", 1)
                 mode, kind, blob = meta.split()
