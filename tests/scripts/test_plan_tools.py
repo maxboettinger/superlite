@@ -189,6 +189,14 @@ def test_taskgraph_rejects_unknown_task_id():
     assert "T9" in cp.err
 
 
+def test_lint_and_schedule_accept_letter_prefixed_task_ids(tmp_path):
+    p = make_plan(tmp_path, [{"id": "S1", "time": 2}, {"id": "S2", "time": 2}, {"id": "UI3", "time": 2}],
+                  edges=[("S1", "S2"), ("S2", "UI3")])
+    cp = pt("lint", "--plan", p)
+    assert "no task headings" not in cp.out and "unknown task id" not in cp.both, cp.both
+    assert sched(p)["critical_path"] == ["S1", "S2", "UI3"]
+
+
 def test_taskgraph_ignores_headings_inside_code_fences(tmp_path):
     p = make_plan(tmp_path, [{"id": "T1"}])
     p.write_text(p.read_text(encoding="utf-8") + "\n````markdown\n### T99 template only\n**Owns:** x.py\n````\n",
@@ -343,8 +351,17 @@ def test_lint_flags_bad_graph_and_diagram(tmp_path):
 def test_lint_size_caps(tmp_path):
     p = make_plan(tmp_path, [{"id": "T1", "time": 2, "ctx": 85}])
     cp = pt("lint", "--plan", p, "--max-chars", 100)
-    assert "over the 100 cap" in cp.out
+    assert "NOTE: plan is" in cp.out and "over the 100 cap" in cp.out
+    assert "ISSUE: plan is" not in cp.out
     assert "T1: Est. context 85k is over the 80k ceiling" in cp.out
+
+
+def test_lint_char_cap_is_a_note_with_header_override(tmp_path):
+    big = make_plan(tmp_path, [{"id": "T1", "time": 2}], header="**Max chars:** 100", name="big.md")
+    cp = pt("lint", "--plan", big)
+    assert cp.returncode == 0 and "NOTE: plan is" in cp.out and "over the 100 cap" in cp.out
+    ok = make_plan(tmp_path, [{"id": "T1", "time": 2}], header="**Max chars:** 40,000", name="ok.md")
+    assert "over the" not in pt("lint", "--plan", ok).out
 
 
 def test_lint_spec_sections_without_task(tmp_path):
@@ -353,6 +370,19 @@ def test_lint_spec_sections_without_task(tmp_path):
     assert "SPEC section '11. Printing' has no task" in cp.out
     assert "SPEC section '1. Formula evaluation' has no task" in cp.out
     assert "Workbook" not in cp.out and "10. Errors" not in cp.out  # covered by title and by SPEC §10
+
+
+def test_lint_spec_covers_field_and_non_task_sections(tmp_path):
+    spec = tmp_path / "spec.md"
+    spec.write_text("# S\n\n## 1. Intent\nx\n\n## 2. Decisions\nx\n\n## 3. Engine\n\n### 3.1 Parse\nx\n\n### 3.2 Eval\nx\n\n"
+                    "## 4. Validation\nx\n\n## 5. Out of scope\nx\n\n## 6. Export\nx\n\n## 13. Import\nx\n", encoding="utf-8")
+    p = make_plan(tmp_path, [{"id": "T1", "time": 2}, {"id": "T2", "time": 2}])
+    p.write_text(p.read_text(encoding="utf-8").replace("**Owns:** src/pkg/t1.py", "**Covers:** 3, 1\n**Owns:** src/pkg/t1.py", 1),
+                 encoding="utf-8")
+    out = pt("lint", "--plan", p, "--spec", spec).out
+    assert "Intent" not in out and "Decisions" not in out and "Validation" not in out and "Out of scope" not in out
+    assert "3. Engine" not in out and "3.1 Parse" not in out and "3.2 Eval" not in out  # Covers: 3 includes 3.x
+    assert "SPEC section '6. Export' has no task" in out and "SPEC section '13. Import' has no task" in out  # 1 is not 13
 
 
 # ------------------------------------------------------------ dispatcher
@@ -585,3 +615,20 @@ def test_lint_context_ceiling_uses_predicted_when_features_present(tmp_path):
     cp = pt("lint", "--plan", p)
     assert "ceiling" not in cp.out and "NOTE: T1 states Est. context 85k" in cp.out
     assert "T1: Est. context 85k is over the 80k ceiling" in pt("lint", "--plan", p, "--stated").out
+
+
+def test_letter_prefixed_heading_without_owns_is_prose_not_a_task(tmp_path):
+    p = make_plan(tmp_path, [{"id": "T1", "time": 2}, {"id": "S1", "time": 2}], edges=[("T1", "S1")])
+    p.write_text(p.read_text(encoding="utf-8").replace("```mermaid", "## Design\n\n### S3 storage\nBuckets.\n\n#### UTF8 handling\nx\n\n```mermaid", 1),
+                 encoding="utf-8")
+    cp = pt("lint", "--plan", p)
+    assert "S3" not in cp.out and "UTF8" not in cp.out, cp.out
+    assert sched(p)["critical_path"] == ["T1", "S1"]
+
+
+def test_commit_task_seams_ignore_non_task_tokens(monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import commit_task
+    monkeypatch.setattr(commit_task.nt, "taskgraph_full",
+                        lambda plan: {"graph": {"T3": [], "T5": ["T3"]}, "seams": ["T3 -> T5 via S3 upload"]})
+    assert commit_task.seams("plan.md") == [("T3", "T5")]

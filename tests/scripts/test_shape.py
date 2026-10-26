@@ -54,6 +54,14 @@ def test_example_lint_flags_a_consumer_of_structured_data_without_examples(tmp_p
     assert "EXAMPLE" not in issues(two(tmp_path, eg=[EG], name="ok.md"))
 
 
+def test_example_lint_accepts_await_and_try_before_the_call(tmp_path):
+    for i, eg in enumerate(['`await lang.parse("1+2")` -> Binary("+", Num(1), Num(2))',
+                            'try await lang.parse("1") -> Num(1)', 'let ast = lang.parse("1") // Num(1)']):
+        out = run(SCRIPTS / "plan_tools.py", "lint", "--plan", two(tmp_path, eg=[eg], name=f"p{i}.md"))
+        assert "EXAMPLE" not in out.out, eg
+        assert "DeprecationWarning" not in out.err
+
+
 def test_example_lint_exempts_primitive_returns(tmp_path):
     assert "EXAMPLE" not in issues(two(tmp_path, ret="string", name="prim.md"))
 
@@ -70,6 +78,15 @@ def test_edge_lint_names_a_removable_edge_with_the_new_critical_path(tmp_path):
     out = issues(two(tmp_path, eg=[EG]))
     assert "EDGE: T2 waits for T1 only for interfaces that have examples; drop the edge (critical path T" in out
     assert "EDGE" not in issues(two(tmp_path, name="noeg.md"))  # no example: not removable
+
+
+def test_edge_lint_skips_draft_tasks_without_crashing(tmp_path):
+    cons = "lang.parse(src: string) -> Ast"
+    draft = task("T3", None, cons).replace("**Owns:**", "**Status:** draft\n**Owns:**")
+    p = plan(tmp_path, [task("T1", PARSE, eg=[EG]), task("T2", None, cons), draft], [("T1", "T2"), ("T1", "T3")])
+    r = run(SCRIPTS / "plan_tools.py", "lint", "--plan", p)
+    assert "Traceback" not in r.both, r.both
+    assert "EDGE: T2 waits for T1" in r.out and "EDGE: T3" not in r.out  # draft tasks are not scheduled
 
 
 def test_edge_is_not_removable_when_one_consumed_interface_lacks_an_example(tmp_path):
@@ -118,6 +135,25 @@ def test_prune_rewrites_chains_and_groups(tmp_path):
     new = p.read_text(encoding="utf-8")
     assert "T2 --> T3" in new and "T1 --> T2" not in new and "subgraph s" in new
     assert run(SCRIPTS / "plan_tools.py", "lint", "--plan", p).returncode == 0
+
+
+def test_hard_edges_are_kept_by_prune_and_edge_notes(tmp_path):
+    prod = "lang.parse(src: string) -> Ast"
+    p = plan(tmp_path, [task("T1", prod, eg=[EG]), task("T2", None, prod), task("T3", None, prod)], [])
+    text = p.read_text(encoding="utf-8").replace("flowchart LR\n", "flowchart LR\n  T1 -->|hard| T2\n  T1 --> T3\n", 1)
+    p.write_text(text, encoding="utf-8")
+    out = issues(p)
+    assert "EDGE: T3 waits for T1" in out and "EDGE: T2" not in out
+    assert run(SCRIPTS / "plan_tools.py", "prune", "--plan", p, cwd=tmp_path).out.strip() == "pruned: T1->T3"
+    assert "T1 -->|hard| T2" in p.read_text(encoding="utf-8")
+
+
+def test_hard_edge_comment_line_and_labels_survive_a_chain_rewrite(tmp_path):
+    prod = "lang.parse(src: string) -> Ast"
+    p = plan(tmp_path, [task("T1", prod, eg=[EG]), task("T2", prod, prod, eg=[EG]), task("T3", None, prod)], [])
+    text = p.read_text(encoding="utf-8").replace("flowchart LR\n", "flowchart LR\n  %% hard: T1->T2\n  T1 --> T2 -->|why| T3\n", 1)
+    p.write_text(text, encoding="utf-8")
+    assert "EDGE: T2 waits for T1" not in issues(p)
 
 
 def test_split_note_for_a_multi_component_task_with_independent_consumes(tmp_path):

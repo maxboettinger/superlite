@@ -25,7 +25,7 @@ DEFAULT_PLAN = ".superlite/plan.md"  # O(1)
 DEFAULT_TIME = 1.0  # O(1)
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")  # O(1)
-_TASK_HEADING = re.compile(r"^###\s+(T\d+[A-Za-z]?)\b(.*)$")  # O(1)
+_TASK_HEADING = re.compile(r"^###\s+([A-Z]{1,3}\d+[A-Za-z]?)\b(.*)$")  # O(1)
 
 
 def die(msg, code=2):  # O(len msg)
@@ -164,6 +164,8 @@ def parse_plan(plan):  # O(L)
     out = {}  # O(1)
     for tid, t in tasks.items():  # O(n) iterations
         body = "\n".join(t["body"])  # O(len body)
+        if not (re.match(r"T\d", tid) or "**Owns:**" in body):  # `### S3 storage` is prose, not a task | O(len body)
+            continue  # O(1)
         head = t["head"]  # O(1)
         parts = [p.strip() for p in head.split("·")]  # O(len head)
         if parts and parts[0] == "":  # O(1)

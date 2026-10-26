@@ -242,3 +242,12 @@ def test_kind_miss_logs_incident_and_task_never_returns_to_haiku(tmp_path):
     d, _ = dispatch(tmp_path, p, [])
     assert d["T1"].startswith("fresh tier=sonnet")  # never retried on haiku
     assert "tier=haiku" in d["T2"]
+
+
+def test_tests_build_routes_like_fast(monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import plan_tools
+    import routing
+    t = plan_tools.Plan("### T1 shell · Complexity 2\n**Owns:** App/Main.swift\n**LOC owned:** 40\n**Tests:** build\n").tasks[0]
+    ft = routing.task_features(t, {}, [], {})
+    assert ft["tests"] == "fast" and ft["band"] == "design/le60/fast"

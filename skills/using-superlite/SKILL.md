@@ -12,7 +12,7 @@ Superlite: parallel work, short reports.
 - Bounded (change to an existing flow): short design in chat, build.
 - Architectural: batched questions (one AskUserQuestion, up to 4), one combined design+plan doc.
 
-**Who orchestrates?** Ask once, in that same batch: human orchestrator (approves the plan before it runs) or AI orchestrator (hands off). Skip when the request settles it ("decide yourself", away, headless): AI, as a Ruling. `sl orchestrator set human|ai`. AI stops only for destructive, outward or security-sensitive actions.
+**Who orchestrates?** Ask in that batch: human (approves the plan first) or AI. Request settles it ("decide yourself", away, headless): AI, as a Ruling. `sl orchestrator set human|ai`. AI asks only major or uncertain questions while planning, then stops only for destructive, outward or security-sensitive actions.
 
 **Skill map**
 - build -> superlite:brainstorming

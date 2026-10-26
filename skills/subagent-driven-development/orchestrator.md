@@ -3,17 +3,19 @@
 When someone asks superlite to create something, it first settles who orchestrates (D40).
 
 - **Human orchestrator:** the human validates the plan before it is linted and sent off, in two phases. Phase 1: the review plan
-  (`docs/plans/<date>-<topic>.review.md`, plain words with diagrams; template in `../writing-plans/review-plan.md`) is shown with its
+  (`<plans>/<date>-<topic>.review.md`, `docs/superpowers/plans/` when it exists, else `docs/plans/`; plain words with diagrams; template in `../writing-plans/review-plan.md`) is shown with its
   path and a five-line summary. Phase 2, after the yes: `sl orchestrator approve --review <path>`, then the coordinator writes the
   machine plan from it (header `**Review plan:** <path>`), `schedule --insert`, `lint --stable`, dispatch.
-- **AI orchestrator:** does everything itself (plan, lint, dispatch, rulings) and never stops to ask, except for the
+- **AI orchestrator:** does everything itself (plan, lint, dispatch, rulings). While planning it asks one batch of major or
+  uncertain decisions (brainstorming step 2; minor and medium ones are rulings; none when unattended). After the first
+  dispatch it never stops to ask, except for the
   destructive, outward-facing or security-sensitive actions in the SDD "Stop conditions".
 
 ## The question (brainstorming, once)
 One single-choice question, in the same `AskUserQuestion` call as brainstorming's other open questions (up to 4 per call):
 
 - `Human orchestrator: I approve the plan before it runs`
-- `AI orchestrator: hands off, it does everything`
+- `AI orchestrator: asks only major questions while planning, then hands off`
 
 Do NOT ask when the request already settles it: "decide yourself", "I am away", pre-approved design and plan, or any other
 unattended signal (all mean AI). When no human can answer (a headless `claude -p` run), default to AI and record it:

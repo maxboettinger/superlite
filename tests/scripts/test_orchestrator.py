@@ -139,10 +139,11 @@ def test_skill_size_caps_and_the_new_names():
     assert len((skills / "using-superlite" / "SKILL.md").read_text(encoding="utf-8")) <= 2000
     assert len((skills / "subagent-driven-development" / "SKILL.md").read_text(encoding="utf-8")) <= 11600
     brain = (skills / "brainstorming" / "SKILL.md").read_text(encoding="utf-8")
-    assert "Human orchestrator: I approve the plan before it runs" in brain and "AI orchestrator: hands off, it does everything" in brain
+    assert "Human orchestrator: I approve the plan before it runs" in brain and "AI orchestrator: asks only major questions while planning, then hands off" in brain
     assert brain.count("AskUserQuestion") >= 1 and "ONE `AskUserQuestion` call" in brain
     plans = (skills / "writing-plans" / "SKILL.md").read_text(encoding="utf-8")
     assert "**Human orchestrator**" in plans and "**AI orchestrator**" in plans and "A human approves" not in plans
+    assert "hands off: the user pre-approved" not in plans  # a chosen AI orchestrator still asks major questions while planning
 
 
 # ---------------------------------------------------------------- review plan (human orchestrator, phase 1)
