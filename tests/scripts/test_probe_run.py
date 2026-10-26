@@ -16,10 +16,10 @@ import time
 from pathlib import Path
 
 import pytest
+from _fixtures import FIXTURES  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 RUNNER = REPO / "skills" / "subagent-driven-development" / "probes" / "probe_run.py"
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def make_project(tmp_path, fixture="probe_lib", **patches):

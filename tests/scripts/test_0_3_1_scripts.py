@@ -9,12 +9,13 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from _fixtures import FIXTURES  # noqa: E402
 
 import pytest
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1] / "skills" / "subagent-driven-development" / "scripts"
-FIX = HERE / "fixtures"
+FIX = FIXTURES
 sys.path.insert(0, str(SCRIPTS))
 
 # the real sibling tools, not the fake sl launcher

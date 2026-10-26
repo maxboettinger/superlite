@@ -11,11 +11,12 @@ import types
 from pathlib import Path
 
 import pytest
+from _fixtures import FIXTURES as _FIXTURES  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "skills" / "subagent-driven-development" / "scripts"
 CONFIG = ROOT / "skills" / "subagent-driven-development" / "config"
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "plans"
+FIXTURES = _FIXTURES / "plans"
 PLAN_TOOLS = SCRIPTS / "plan_tools.py"
 PREDICT = SCRIPTS / "predict.py"
 

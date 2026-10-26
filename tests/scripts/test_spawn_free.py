@@ -9,10 +9,11 @@ import sys
 from pathlib import Path
 
 import pytest
+from _fixtures import FIXTURES  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1] / "skills" / "subagent-driven-development" / "scripts"
-PLAN = HERE / "fixtures" / "run_plan" / "plan.md"
+PLAN = FIXTURES / "run_plan" / "plan.md"
 
 ENV = {k: v for k, v in os.environ.items() if k not in ("SUPERLITE_SL", "SUPERLITE_PYTHON")}
 ENV["SUPERLITE_BASH"] = str(HERE / "no-such-bash")  # a spawn through sl would fail

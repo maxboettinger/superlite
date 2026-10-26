@@ -12,10 +12,11 @@ import time
 
 import pytest
 from pathlib import Path
+from _fixtures import FIXTURES  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = (HERE.parents[1] / "skills" / "subagent-driven-development" / "scripts")
-FIX = HERE / "fixtures"
+FIX = FIXTURES
 PLAN_FIX = FIX / "run_plan"
 sys.path.insert(0, str(SCRIPTS))
 

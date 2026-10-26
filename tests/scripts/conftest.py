@@ -2,6 +2,8 @@
 The host's session id and state override stay out too: a test that wants a session sets one."""
 import pytest
 
+import _fixtures  # noqa: F401 (the fixture copy is made before collection)
+
 
 @pytest.fixture(autouse=True)
 def _isolated_superlite_home(tmp_path, monkeypatch):

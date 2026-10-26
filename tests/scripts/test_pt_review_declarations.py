@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _fixtures import FIXTURES  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parent.parent / "skills" / "subagent-driven-development" / "scripts" / "pt_review.py"
@@ -21,13 +22,13 @@ _spec.loader.exec_module(pt_review)
 
 def swift(tmp_path: Path) -> Path:
     dest = tmp_path / "swiftproj"
-    shutil.copytree(HERE / "fixtures" / "review_swift", dest)
+    shutil.copytree(FIXTURES / "review_swift", dest)
     return dest
 
 
 def basic(tmp_path: Path) -> Path:
     dest = tmp_path / "basicproj"
-    shutil.copytree(HERE / "fixtures" / "review_basic", dest)
+    shutil.copytree(FIXTURES / "review_basic", dest)
     return dest
 
 
