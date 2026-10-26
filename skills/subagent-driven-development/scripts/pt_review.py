@@ -57,9 +57,9 @@ RESOLVED = {"fixed", "resolved", "closed", "wontfix", "accepted"}  # O(1)
 PASS_STATUSES = {"pass", "passed", "ok"}  # O(1)
 SKIP_DIRS = {".git", ".superlite", ".venv", "venv", "node_modules", "__pycache__", "tests",  # O(1)
              "test", "build", "dist", ".pytest_cache"}  # O(1)
-TASK_RE = re.compile(r"^#{2,4}\s+(T\d+[a-z]?)\b(.*)$")  # O(1)
+TASK_RE = re.compile(r"^#{2,4}\s+([A-Z]{1,3}\d+[a-z]?)\b(.*)$")  # O(1)
 LABEL_RE = re.compile(r"^\s*(?:[-*]\s+)?\*\*([A-Za-z][A-Za-z .]*?):?\*\*:?\s*(.*)$")  # O(1)
-EDGE_RE = re.compile(r"\b(T\d+[a-z]?)(?:\[[^\]]*\])?\s*-->\s*(?:\|[^|]*\|\s*)?(T\d+[a-z]?)\b")  # O(1)
+EDGE_RE = re.compile(r"\b([A-Z]{1,3}\d+[a-z]?)(?:\[[^\]]*\])?\s*-->\s*(?:\|[^|]*\|\s*)?([A-Z]{1,3}\d+[a-z]?)\b")  # O(1)
 HTTP_LINE_RE = re.compile(r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S*)\s*(.*)$")  # O(1)
 TEST_PATH_RE = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$)")  # O(1)
 CONSUMER_EXT = {".html", ".htm", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".vue", ".py"}  # O(1)
@@ -97,7 +97,7 @@ class Task:  # O(1)
         return items  # O(1)
 
     def consumes_ids(self) -> set[str]:  # O(m) total
-        return set(re.findall(r"\((T\d+[a-z]?)\)", " ".join(self.fields.get("consumes", []))))  # O(m) join + regex
+        return set(re.findall(r"\(([A-Z]{1,3}\d+[a-z]?)\)", " ".join(self.fields.get("consumes", []))))  # O(m) join + regex
 
 
 @dataclass  # O(1)
@@ -190,6 +190,7 @@ def parse_plan(path: str | Path) -> Plan:  # O(W + L*m + H^2) total
     probe_entries: list[str] = []  # O(1)
     for tid, t in tasks.items():  # O(n) iterations
         _collect_fields(lines, fence_id, t.start + 1, t.end, t.fields)  # O(task lines * m); O(L) over all tasks
+    tasks = {tid: t for tid, t in tasks.items() if re.match(r"T\d", tid) or "owns" in t.fields}  # `### S3 storage` is prose | O(n)
     plan_fields: dict[str, list[str]] = {}  # O(1)
     _collect_fields(lines, fence_id, 0, len(lines), plan_fields)  # O(L*m)
     probe_entries = [v.strip().strip("`").strip() for v in plan_fields.get("probe entry", []) if v.strip()]  # O(entries*m)

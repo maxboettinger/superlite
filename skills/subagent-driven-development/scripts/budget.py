@@ -35,7 +35,7 @@ def committed(sl: Path) -> set:  # O(ledger)
     f = sl / "progress.md"  # O(1)
     if not f.is_file():  # O(1)
         return set()  # O(1)
-    return set(re.findall(r"^- commit (T\d+[A-Za-z]?)\b", f.read_text(encoding="utf-8", errors="replace"), re.M))  # O(ledger)
+    return set(re.findall(r"^- commit ([A-Z]{1,3}\d+[A-Za-z]?)\b", f.read_text(encoding="utf-8", errors="replace"), re.M))  # O(ledger)
 
 
 def compute(plan_path, sl_dir=".superlite", now=None) -> dict:  # O(M + B + n*(n + e))

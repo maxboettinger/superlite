@@ -62,6 +62,7 @@ def load_models(path=None) -> dict:  # O(S + M)
 
 
 HISTORY_MIN_ROWS = 30  # rows with loc and duration needed before history replaces the shipped coefficients | O(1)
+SLOW_MIN_ROWS = 8  # slow-test rows needed before a refit moves slow_tests_min off its prior | O(1)
 _HIST_CACHE: dict = {}  # O(1)
 
 
@@ -317,16 +318,19 @@ def refit(obs: list[dict], models: dict, coef: dict, ridge: float = 0.25) -> tup
         raise PredictError(f"need at least 4 usable observations to refit, got {len(obs)}")  # O(1)
     t = coef["time"]  # O(1)
     prior = [t["base_min"], t["per_component_min"], t["per_loc_min"] * 100, t["slow_tests_min"]]  # O(1)
+    fit_slow = sum(1 for o in obs if o["slow"]) >= SLOW_MIN_ROWS  # too few slow rows: keep the prior, one outlier would set it | O(N)
     rows, ys = [], []  # O(1)
     for o in obs:  # O(N) iterations
         model = resolve_model(o["model"], models, coef)  # O(M)
-        rows.append([1.0, o["components"], o["loc"] * speed_scale(model, models, coef) / 100, 1.0 if o["slow"] else 0.0])  # O(1)
-        ys.append(o["actual"])  # O(1)
-    k = 4  # O(1)
+        row = [1.0, o["components"], o["loc"] * speed_scale(model, models, coef) / 100]  # O(1)
+        slow = 1.0 if o["slow"] else 0.0  # O(1)
+        rows.append(row + [slow] if fit_slow else row)  # O(1)
+        ys.append(o["actual"] if fit_slow else o["actual"] - prior[3] * slow)  # O(1)
+    k = len(rows[0])  # O(1)
     a = [[sum(r[i] * r[j] for r in rows) + (ridge if i == j else 0.0) for j in range(k)] for i in range(k)]  # O(N*k^2) = O(N)
     b = [sum(r[i] * y for r, y in zip(rows, ys)) + ridge * prior[i] for i in range(k)]  # O(N*k) = O(N)
     sol = _solve(a, b)  # O(k^3) = O(1)
-    sol = [max(0.0, v) for v in sol]  # O(1)
+    sol = [max(0.0, v) for v in sol] + ([] if fit_slow else [prior[3]])  # O(1)
     new = json.loads(json.dumps(coef))  # O(size of coef) JSON round trip
     new["time"] = {"base_min": round(sol[0], 4), "per_component_min": round(sol[1], 4),  # O(1)
                    "per_loc_min": round(sol[2] / 100, 6), "slow_tests_min": round(sol[3], 4)}  # O(1)

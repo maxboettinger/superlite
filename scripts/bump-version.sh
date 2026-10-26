@@ -87,7 +87,8 @@ read_yaml_field() {
 
 write_yaml_field() {
   local file="$1" field="$2" value="$3"
-  sed -i -E "s/^(${field}:[[:space:]]*)[^[:space:]#]+/\1${value}/" "$file"
+  # -i.bak works on GNU and BSD sed (BSD `-i -E` takes -E as the backup suffix)
+  sed -i.bak -E "s/^(${field}:[[:space:]]*)[^[:space:]#]+/\1${value}/" "$file" && rm -f "$file.bak"
 }
 
 read_manifest_field() {

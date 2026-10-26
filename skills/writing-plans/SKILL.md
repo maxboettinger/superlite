@@ -9,7 +9,7 @@ A plan is a set of contracts Sonnet implementers can execute without asking ques
 
 Any build with 2+ tasks runs through `superlite:subagent-driven-development`: load it before writing the plan. Never use `general-purpose` agents for build or review work.
 
-Save to `docs/plans/YYYY-MM-DD-<topic>.md`. When called from `superlite:brainstorming`, append to its doc instead. If the spec covers independent subsystems, write one plan per subsystem.
+Save to `<plans>/YYYY-MM-DD-<topic>.md`; `<plans>` is `docs/superpowers/plans/` when that folder exists, else `docs/plans/`. When called from `superlite:brainstorming`, append to its doc instead. If the spec covers independent subsystems, write one plan per subsystem.
 
 ## Lint, extract what's stable, fix the rest
 
@@ -19,12 +19,12 @@ Save to `docs/plans/YYYY-MM-DD-<topic>.md`. When called from `superlite:brainsto
 
 **Who orchestrates sets the mode** (`sl orchestrator status`).
 - **Human orchestrator** (the human validates the plan before it runs), two phases:
-  1. Write the review plan, small requests too (one-page form): `docs/plans/<date>-<topic>.review.md`, plain words with diagrams, no code or taskgraph (`review-plan.md`). Nothing is built, dispatched or written except this file before the human's approving reply.
+  1. Write the review plan, small requests too (one-page form): `<plans>/<date>-<topic>.review.md`, plain words with diagrams, no code or taskgraph (`review-plan.md`). Nothing is built, dispatched or written except this file before the human's approving reply.
   2. Show it in plain text, not AskUserQuestion: the path, a five-line summary and "Reply approve to start, or tell me what to change". END THE TURN and do nothing else until the human replies; changes mean revise and ask again.
   3. Only after an approving reply: `sl orchestrator approve --review <path>` (refused without a fresh human reply; `lint --stable`, `dispatch`, `wave0` and `build_prime` refuse until then).
-  4. Write the machine plan `docs/plans/<date>-<topic>.md` from the approved review plan, in the order below (same tasks and scope, header `**Review plan:** <path>`), then `schedule --insert`, `lint --stable`, and dispatch the stable set in the same turn.
+  4. Write the machine plan `<plans>/<date>-<topic>.md` from the approved review plan, in the order below (same tasks and scope, header `**Review plan:** <path>`), then `schedule --insert`, `lint --stable`, and dispatch the stable set in the same turn.
   5. It patches the FIX tasks, re-lints and dispatches the newly stable ones without asking again, as long as each fix stays inside what was approved (sizes, splits, stubs, field corrections). A fix that changes scope, an interface the human saw, or the spec coverage goes back to the human as one question. AI orchestrator: no review plan, straight to the machine plan.
-- **AI orchestrator** (hands off: the user pre-approved, said "decide yourself", or an agent runs the session): write a queue that starts building while the fixes are made. Lint splits what you write into stable tasks, which build now, and fix tasks, which wait. Follow all six rules. Record open choices as `Ruling:` lines.
+- **AI orchestrator** (plans, lints and dispatches itself; asks only major or uncertain decisions while planning, nothing when unattended): write a queue that starts building while the fixes are made. Lint splits what you write into stable tasks, which build now, and fix tasks, which wait. Follow all six rules. Record minor and medium choices as `Ruling:` lines; a major or uncertain one that surfaces while writing the plan is asked once, before the first dispatch (brainstorming step 2), unless the run is unattended.
 
 In both modes, write for the split:
 
@@ -107,19 +107,20 @@ sequenceDiagram
 **Notes:** only non-obvious detail (a tie-break rule, an ordering).
 ````
 
-The title line shows `Complexity` and `Est. context`; drop the mini diagram if the task does not interact.
+Task ids are 1-3 capital letters and a number, optionally a lowercase suffix (`T1`, `S2`, `UI3a`), the same in headings, the taskgraph and `Consumes` refs. The title line shows `Complexity` and `Est. context`; drop the mini diagram if the task does not interact.
 
 | Field | Rule |
 |---|---|
 | `Owns` | Exact paths, only this task's. Two tasks that can run at once never share a file. |
 | `Components` | Integer count of components the task builds. |
 | `LOC owned` | Integer estimate of lines this task writes. |
-| `Tests` | `fast` or `slow` (browser, server and I/O suites are slow, pure functions fast). |
+| `Tests` | `fast`, `slow` or `build`. Browser and out-of-process server suites are slow; pure functions and in-process test servers are fast; `build` is a compile check for targets without tests (app shells). |
 | `Kind` | `design` (the default) or `mechanical`. **Mechanical** means the what is fully decided and only the typing is left: LOC owned ≤ 150, Components ≤ 2, `Tests: fast`, no Review Focus case in deep, numeric, state or protocol, and test code or named tests with exact inputs and outputs. Typical: skeleton and config, thin CLI or route wrappers over a given interface, constant tables, small pure functions with a crisp spec (slug, date format), tests from an explicit list, docs from existing code. Never: parsers, evaluators, servers, UI, anything with state or an ambiguous spec. Lint rejects (`KIND:`) a mechanical task that breaks a rule. |
 | `Model` | `haiku` for `Kind: mechanical` (lint rejects haiku on any other kind), otherwise always `sonnet`; lint rejects `opus` (Opus writes about half as fast). Split a task that seems to need Opus. If Sonnet can't get part of it right, a `fixer-opus` handles that part. Security-sensitive code still gets an Opus review. |
 | `Est. time` | `predict.py` recomputes it from the four fields above, and the fields win on disagreement. Write them honestly. |
 | `Est. context` | `18k + 3.3k + 21.6 per LOC owned + 0.45 per char of docs handed over + 36.9 per LOC read`, plus a 10-15% margin. Over 80k means split. |
 | `Consumes`/`Produces` | Exact names, parameter types and return types. An implementer reads only its own task, so this is how it learns what neighbors named things. |
+| `Covers` | Optional: the spec sections this task builds, `**Covers:** 3.1, 4` (a number covers its subsections). Lint's SPEC coverage counts it; Intent, Decisions, Validation and Out of scope need no task. |
 | `Review Focus` | Cases from the Review Focus section that touch this task's files, as named tests (see below). |
 | `Test code` | At `contracts`, each test named with exact inputs and outputs. At `tests` and `full`, the code, runnable as written. Include the error and edge cases the spec implies. `**Detail:** full` on one task overrides the header, for tricky cores. |
 
@@ -142,11 +143,11 @@ Rules:
 - List, per package: app type, categories, specific risks.
 - Copy into each task the cases that touch its files, as named tests with exact inputs and outcomes. The implementer writes them during TDD, so the failures never reach review (lever 1).
 - Never list the spec's own examples: tests already cover them.
-- A **`**Probe entry:**` line per package** feeds the generated probe adapter, for example `call=minisheet.Workbook.set · run=python -m minisheet · serve=minisheet.server.create_server`. Use `call=` for libraries, `run=` for CLIs, `serve=` for servers. No agent writes adapters.
+- A **`**Probe entry:**` line per package** feeds the generated probe adapter, for example `call=minisheet.Workbook.set · run=python -m minisheet · serve=minisheet.server.create_server`. Use `call=` for libraries, `run=` for CLIs, `serve=` for servers. No agent writes adapters. `call=` and `serve=` import Python; other languages use `run=` with an already built command, because each probe call has a 10 s timeout: a Swift package with an executable target gets `run=.build/debug/<Exec>` (built by `swift build`). Never `run=swift run`, `swift test` or `xcodebuild` (they compile on every call). A Swift library or Xcode app target without an executable gets no `Probe entry`; its Review Focus cases become named XCTest or Swift Testing tests in the owning task.
 
-## Plan size cap: 15k characters
+## Plan size: aim for 15k characters
 
-The plan rides in the shared prime and is written on the critical path. Keep contracts, verbatim tests and the required diagrams. Move spec excerpts out and reference them by section. Check with `wc -c`.
+The plan rides in the shared prime and is written on the critical path. Keep contracts, verbatim tests and the required diagrams. Move spec excerpts out and reference them by section. Over the cap is a lint `NOTE`, not an issue; a project with larger plans sets `**Max chars:** N` in the plan header.
 
 ## No placeholders
 
@@ -161,7 +162,7 @@ bash "<superlite-root>/skills/subagent-driven-development/scripts/sl" plan_tools
 bash "<superlite-root>/skills/subagent-driven-development/scripts/sl" plan_tools lint --plan PLAN --spec SPEC --stable
 ```
 
-`prune` drops the edges that examples make removable (consumer not yet dispatched), then runs `schedule --insert`, which writes the Gantt, its summary line (critical path, peak width, predicted total) and a `shape:` line under a `%% schedule` marker. Never hand-edit that block. `CHAIN [chain-xxxx]` is silenced only by `Ruling: sequential [chain-xxxx] - <why>` with the id lint printed; a ruling written before lint never matches.
+`prune` drops the edges that examples make removable (consumer not yet dispatched), except hard edges: mark an edge whose consumer needs the producer built (a compiled package, e.g. Swift) as `T1 -->|hard| T2` or list it in a `%% hard: T1->T2` line inside the taskgraph; prune and `EDGE:` skip it. Then it runs `schedule --insert`, which writes the Gantt, its summary line (critical path, peak width, predicted total) and a `shape:` line under a `%% schedule` marker. Never hand-edit that block. `CHAIN [chain-xxxx]` is silenced only by `Ruling: sequential [chain-xxxx] - <why>` with the id lint printed; a ruling written before lint never matches.
 
 Read the lint output:
 - **`MISSED TARGET`** is a warning, not a failure. Consider re-splitting or stubbing the tasks on the named critical path. If the chain is inherently sequential, accept the plan and record `Ruling: <why>`.
@@ -177,8 +178,8 @@ Run it yourself, not as a subagent. Fix in place, with no re-review.
 3. **Type consistency:** each Consumes line matches the Produces line of its owner. `clearLayers` in T3 and `clearFullLayers` in T7 is a bug.
 4. **Graph:** every edge is an execution dependency, with no cycles, and no two tasks that can run at once share a file.
 5. **Measurable fields:** every task has `Components`, `LOC owned`, `Tests`, `Model`.
-6. **Review Focus:** each package has an app type, categories and a `Probe entry`, and each task carries the cases for its files.
-7. **Limits:** the plan is at most 15k chars, no task is over the size band (`SIZE:`), and schedule and lint have run.
+6. **Review Focus:** each package has an app type, categories and a `Probe entry` (unless it has no runnable entry, see above), and each task carries the cases for its files.
+7. **Limits:** the plan is near its char cap (15k or `**Max chars:**`), no task is over the size band (`SIZE:`), and schedule and lint have run.
 
 ## Handoff
 

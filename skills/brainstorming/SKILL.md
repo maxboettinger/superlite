@@ -5,7 +5,7 @@ description: Use when the user asks to build a feature or component, add functio
 
 # Brainstorming
 
-Turn a request into an approved design with as little ceremony as the request allows. Intent comes first: know what the user wants to accomplish and what success looks like before you pick an approach. Who orchestrates is chosen first: with a human orchestrator the human approves the plan once, before it runs; with an AI orchestrator nothing is asked. After that, nothing stops you except destructive, outward-facing (push, merge, publish) or security-sensitive actions.
+Turn a request into an approved design with as little ceremony as the request allows. Intent comes first: know what the user wants to accomplish and what success looks like before you pick an approach. Who orchestrates is chosen first: with a human orchestrator the human approves the plan once, before it runs; with an AI orchestrator only major decisions and important uncertainties are asked, once, while planning. After that, nothing stops you except destructive, outward-facing (push, merge, publish) or security-sensitive actions.
 
 ## 1. Size the request, in one line
 
@@ -22,7 +22,9 @@ Hidden complexity found mid-task upgrades the size. Say so and step up. If the r
 
 Read the relevant code and recent commits first. Use an Explore agent (model haiku, effort low) for broad sweeps. Do not ask what the repo or the request already answers.
 
-If purpose, constraints or success criteria are still missing, ask them in ONE `AskUserQuestion` call: up to 4 questions, multiple choice where possible, your recommended option first. For architectural work, include the plan `detail` choice in the same batch: `contracts`, `tests` or `full`. Recommend `full` when the core is algorithmic or risky, otherwise `tests` (the default). Add the orchestrator choice to that same call as one single-choice question, options `Human orchestrator: I approve the plan before it runs` and `AI orchestrator: hands off, it does everything` (details in `../subagent-driven-development/orchestrator.md`); never ask it when the request settles it, and in a headless run default to AI with a `Ruling:`. Then record it: `bash <skill-dir>/../subagent-driven-development/scripts/sl orchestrator set human|ai`. Never one question per message. Bounded work gets at most one batch. If nothing is missing, ask nothing and restate your understanding in the design instead.
+If purpose, constraints or success criteria are still missing, ask them in ONE `AskUserQuestion` call: up to 4 questions, multiple choice where possible, your recommended option first. For architectural work, include the plan `detail` choice in the same batch: `contracts`, `tests` or `full`. Recommend `full` when the core is algorithmic or risky, otherwise `tests` (the default). Add the orchestrator choice to that same call as one single-choice question, options `Human orchestrator: I approve the plan before it runs` and `AI orchestrator: asks only major questions while planning, then hands off` (details in `../subagent-driven-development/orchestrator.md`); never ask it when the request settles it, and in a headless run default to AI with a `Ruling:`. Then record it: `bash <skill-dir>/../subagent-driven-development/scripts/sl orchestrator set human|ai`. Never one question per message. Bounded work gets at most one batch. If nothing is missing, ask nothing and restate your understanding in the design instead.
+
+With an AI orchestrator (chosen, the user still present) the batch holds only **major** decisions (design, scope, a trade-off, anything destructive or outward-facing) and **uncertain** ones (you cannot name the right answer from the code, docs or the user's messages). Minor and medium choices are `Ruling:` lines, never questions. A second batch only when an answer opens a new major question, or when writing the plan surfaces one before the first dispatch. After the first dispatch the AI orchestrator does not ask.
 
 ## 3. Design
 
@@ -39,16 +41,16 @@ Write what you understood (separate what the user said from your assumptions), t
 
 **Architectural:**
 
-1. With an AI orchestrator write ONE doc, `docs/plans/YYYY-MM-DD-<topic>.md`: the design above, then the plan. With a human orchestrator write the review plan instead (`<date>-<topic>.review.md`, template `../writing-plans/review-plan.md`); the machine plan comes after the yes. Invoke `superlite:writing-plans` for the plan half and append it to the same file. If the user named a different location, use theirs.
+1. With an AI orchestrator write ONE doc, `<plans>/YYYY-MM-DD-<topic>.md` (`<plans>` is `docs/superpowers/plans/` when that folder exists, else `docs/plans/`): the design above, then the plan. With a human orchestrator write the review plan instead (`<date>-<topic>.review.md`, template `../writing-plans/review-plan.md`); the machine plan comes after the yes. Invoke `superlite:writing-plans` for the plan half and append it to the same file. If the user named a different location, use theirs.
 2. Self-review inline: placeholders, contradictions, scope (one plan, or decompose?), and requirements that could be read two ways. Fix them in place. No review loop, no subagent.
 3. With a human orchestrator ask in plain text, not AskUserQuestion (the human's typed reply is what the hook verifies): the review plan's path, a five-line summary and "Reply approve to start, or tell me what to change"; END THE TURN and do nothing until the human replies. Only then run `sl orchestrator approve --review <path>` and write the machine plan from it. The human approves the design in the review plan, never the machine plan: that one is task-graph format for the orchestrator, is not shown for approval, and must not add or change anything the human approved. With an AI orchestrator skip the approval. Run `bash <skill-dir>/../subagent-driven-development/scripts/sl graphify_gate`; when it reports `needs_install: true`, add the Graphify install opt-in (`uv tool install graphifyy`) to that same question. Never install without a yes.
 4. On approval, invoke `superlite:subagent-driven-development` once, in this session: this session is the one coordinator. It runs `lint --stable`, dispatches the stable tasks at once and patches only the FIX tasks.
 
 Until approval, only read-only exploration is allowed. No scaffolding, no dependency installs, no product code. Approval covers the doc as presented. If the user changes the design, revise and re-present once.
 
-## AI orchestrator (unattended)
+## AI orchestrator
 
-If the user says they are away, or "decide yourself", or the prompt pre-approves design and plan, or the orchestrator is AI, the gate is already passed. Skip the questions and the approval. Choose the sensible default for each open question, including the plan `detail` (`full` for algorithmic or risky cores, otherwise `tests`), and record it in the doc, or in chat for bounded work, as a line:
+With an AI orchestrator the approval gate is already passed: no review plan, no approval. Questions follow step 2 (major and uncertain only, while planning). Unattended (the user says they are away, "decide yourself", the prompt pre-approves design and plan, or a headless run): skip the questions too. Choose the sensible default for each open question, including the plan `detail` (`full` for algorithmic or risky cores, otherwise `tests`), and record it in the doc, or in chat for bounded work, as a line:
 
 `Ruling: <decision> (because <reason>)`
 

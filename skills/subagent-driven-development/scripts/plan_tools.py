@@ -37,7 +37,7 @@ DEFAULT_CAP = 10  # O(1)
 DEFAULT_SIZE_BAND = {"low_min": 1.5, "high_min": 6.0}  # O(1) used when predictor.json has no size_band
 DEFAULT_MAX_CHARS = 15000  # O(1)
 
-TASK_ID = r"T\d+[a-z]*"  # O(1)
+TASK_ID = r"[A-Z]{1,3}\d+[a-z]*"  # T1, S2, UI3a | O(1)
 TASK_ID_RE = re.compile(rf"^{TASK_ID}$")  # O(1)
 HEADING_RE = re.compile(rf"^#{{3,4}}\s+({TASK_ID})\b(.*)$")  # O(1)
 ANY_HEADING_RE = re.compile(r"^#{1,4}\s")  # O(1)
@@ -52,9 +52,14 @@ class PlanError(Exception):  # O(1)
         self.code = code  # O(1)
 
 
+def is_task(tid: str, has_owns: bool) -> bool:  # O(1)
+    """`T1` is always a task; another prefix (`S1`, `UI3`) only with an **Owns:** field, so `### S3 storage` stays prose."""
+    return bool(re.match(r"T\d", tid)) or has_owns  # O(1)
+
+
 def nkey(tid: str):  # O(1)
-    m = re.match(r"T(\d+)([a-z]*)$", tid)  # O(1)
-    return (int(m.group(1)), m.group(2)) if m else (10**9, tid)  # O(1)
+    m = re.match(r"([A-Z]{1,3})(\d+)([a-z]*)$", tid)  # O(1)
+    return (m.group(1), int(m.group(2)), m.group(3)) if m else ("\uffff", 10**9, tid)  # O(1)
 
 
 # --------------------------------------------------------------------------
@@ -240,7 +245,7 @@ class Task:  # O(1)
                 if m:  # O(1)
                     f[key] = int(next(g for g in m.groups() if g))  # O(1)
             if "tests" not in f:  # O(1)
-                m = re.search(r"tests?\s*[=:]\s*(fast|slow)|\b(fast|slow)\s+tests?\b", text, re.I)  # O(s)
+                m = re.search(r"tests?\s*[=:]\s*(fast|slow|build)|\b(fast|slow)\s+tests?\b", text, re.I)  # O(s)
                 if m:  # O(1)
                     f["tests"] = (m.group(1) or m.group(2)).lower()  # O(1)
             if "model" not in f:  # O(1)
@@ -271,7 +276,7 @@ class Plan:  # O(1)
         self.text = text.replace("\r\n", "\n")  # O(C)
         self.lines = self.text.split("\n")  # O(C)
         self.fenced, self.blocks = scan_fences(self.lines)  # O(C+L)
-        self.tasks: list[Task] = self._parse_tasks()  # O(C+L)
+        self.tasks: list[Task] = [t for t in self._parse_tasks() if is_task(t.id, "owns" in t.fields)]  # O(C+L)
         self.by_id = {t.id: t for t in self.tasks}  # O(n)
 
     @classmethod  # O(1)
@@ -337,6 +342,10 @@ class Plan:  # O(1)
     def header_target(self) -> float | None:  # O(C)
         m = re.search(r"^\*\*Target(?:[-\s]*(?:min|minutes|time))?:\*\*\s*~?\s*(\d+(?:\.\d+)?)", self.text, re.M)  # O(C)
         return float(m.group(1)) if m else None  # O(1)
+
+    def header_max_chars(self) -> int | None:  # O(C)
+        m = re.search(r"^\*\*Max chars:\*\*\s*([\d_,]+)", self.text, re.M)  # O(C)
+        return int(re.sub(r"[_,]", "", m.group(1))) if m else None  # O(1)
 
     def non_fenced_text(self) -> str:  # O(L)
         return "\n".join(ln for ln, f in zip(self.lines, self.fenced) if not f)  # O(L)
@@ -408,6 +417,29 @@ def parse_taskgraph(plan: Plan) -> dict[str, list[str]]:  # O(L*s + R*M + e log 
     if cycle:  # O(1)
         raise PlanError("cycle in taskgraph: " + " → ".join(cycle))  # O(n)
     return graph  # O(1)
+
+
+HARD_LABEL = re.compile(r"^\|\s*hard\s*\|$", re.I)  # O(1)
+
+
+def hard_edges(plan: Plan) -> set[tuple[str, str]]:  # O(L*s) total
+    """Edges prune must keep: `A -->|hard| B` in the taskgraph, or a `%% hard: A->B, C->D` line in it."""
+    out: set[tuple[str, str]] = set()  # O(1)
+    for block, j in find_taskgraph_blocks(plan):  # O(blocks) iterations
+        for raw in block.content[j + 1:]:  # O(G) iterations
+            ln = raw.strip()  # O(s)
+            m = re.match(r"%%\s*hard\s*:\s*(.*)$", ln, re.I)  # O(s)
+            if m:  # O(1)
+                out.update(re.findall(r"([A-Za-z_][\w\-]*)\s*-+>\s*([A-Za-z_][\w\-]*)", m.group(1)))  # O(s)
+                continue  # O(1)
+            if "-->" not in ln or ln.startswith("%%"):  # O(1)
+                continue  # O(1)
+            tokens = re.split(r"\s*-->\s*(\|[^|]*\|)?\s*", ln)  # [part, label, part, label, ...] | O(s)
+            groups = [[_node_token(p) for p in part.split("&") if p.strip()] for part in tokens[::2]]  # O(s)
+            for i, label in enumerate(tokens[1::2]):  # O(parts) iterations
+                if label and HARD_LABEL.match(label):  # O(1)
+                    out.update((a, b) for a in groups[i] for b in groups[i + 1])  # O(left*right)
+    return out  # O(1)
 
 
 def find_cycle(graph: dict[str, list[str]]) -> list[str] | None:  # O(n+e) total
@@ -652,7 +684,7 @@ def insert_schedule(plan: Plan, rep: dict) -> None:  # O(L+C+n log n) total + fi
 # --------------------------------------------------------------------------
 
 # A trailing "(T4)" / "(T4, T5)" / "(T14, names only)" names the producer; the note after the ids is ignored.
-REF_TAIL = r"\s+\((T\d+[a-z]*(?:\s*[,/]\s*T\d+[a-z]*)*)(?:\s*[,;:]\s*[^()]*)?\)\s*$"  # O(1)
+REF_TAIL = rf"\s+\(({TASK_ID}(?:\s*[,/]\s*{TASK_ID})*)(?:\s*[,;:]\s*[^()]*)?\)\s*$"  # O(1)
 
 
 def parse_signature(item: str) -> dict | None:  # O(s) total
@@ -694,7 +726,7 @@ def param_names(args: str) -> list[str]:  # O(s) total
         if p in ("/", "*"):  # O(1)
             continue  # O(1)
         p = p.lstrip("*")  # O(s)
-        names.append(re.split(r"[:=\s]", p, 1)[0])  # O(s)
+        names.append(re.split(r"[:=\s]", p, maxsplit=1)[0])  # O(s)
     return names  # O(1)
 
 
@@ -974,7 +1006,8 @@ PLACEHOLDERS = [  # O(1)
 DIAGRAM_TYPES = ("flowchart", "graph", "sequencediagram", "statediagram", "statediagram-v2", "gantt", "classdiagram",  # O(1)
                  "erdiagram", "journey", "pie", "mindmap", "timeline", "gitgraph", "quadrantchart", "requirementdiagram")  # O(1)
 SPEC_SKIP = {"overview", "introduction", "background", "goals", "non-goals", "glossary", "contents",  # O(1)
-             "table of contents", "references", "open questions", "appendix", "summary", "status"}  # O(1)
+             "table of contents", "references", "open questions", "appendix", "summary", "status",
+             "intent", "decisions", "validation", "out of scope", "out-of-scope"}  # O(1) sections no task builds
 
 
 def check_diagram(block: FenceBlock) -> str | None:  # O(B) total, B = block chars
@@ -1073,7 +1106,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
     for tid in sorted({i for i in ids if ids.count(i) > 1}, key=nkey):  # O(n^2) ids.count per distinct id; hotspot
         issues.append(Issue(f"duplicate task heading {tid}", [tid]))  # O(1)
     if not plan.tasks:  # O(1)
-        issues.append(Issue("no task headings (### Tn ...) found", scope="plan"))  # O(1)
+        issues.append(Issue("no task headings (### T1 ..., ### S1 ...: 1-3 capital letters and a number) found", scope="plan"))  # O(1)
 
     # placeholders (outside code fences and draft task blocks)
     draft_lines: set[int] = set()  # O(1)
@@ -1155,9 +1188,10 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
             issues.append(Issue(f"mermaid block at line {b.start + 1}: {err}", scope="plan"))  # O(1)
 
     # size caps
-    max_chars = getattr(args, "max_chars", DEFAULT_MAX_CHARS)  # O(1)
-    if len(plan.text) > max_chars:  # O(1)
-        issues.append(Issue(f"plan is {len(plan.text)} chars, over the {max_chars} cap", scope="plan"))  # O(1)
+    max_chars = getattr(args, "max_chars", None) or plan.header_max_chars() or DEFAULT_MAX_CHARS  # flag, then header | O(C)
+    if len(plan.text) > max_chars:  # advice only: real plans run past it | O(1)
+        warnings.append(f"NOTE: plan is {len(plan.text)} chars, over the {max_chars} cap; move spec excerpts out "  # O(1)
+                        "or set **Max chars:** N in the header")
     predict = _predict()  # O(1)
     models = predict.load_models(getattr(args, "models", None))  # O(config size) file I/O
     coef = predict.load_coef(getattr(args, "coef", None))  # O(config size) file I/O
@@ -1202,7 +1236,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
                     issues.append(Issue(f"CHAIN [{cid}]: critical path {' -> '.join(cp)} is {sum(ctimes):.1f} min, over 2.5x "  # O(n)
                                         f"max(longest task, work / peak width) = {base:.1f} min{ignored}; give producers e.g. examples and "
                                         f"run prune, or add Ruling: sequential [{cid}] - <why>", cp, "plan", chain=True))  # O(1)
-            warnings.extend(shape.edge_notes(plan, graph, rep))  # EDGE: removable edges, with the path after each | O(e*n*(n + e))
+            warnings.extend(shape.edge_notes(plan, rep["graph"], rep))  # EDGE: removable edges, with the path after each; rep["graph"] has no draft tasks | O(e*n*(n + e))
             if rep["target_min"] is not None and not rep["target_met"]:  # O(1)
                 miss = (f"MISSED TARGET: predicted {rep['total_min']:.1f} min vs target {rep['target_min']:.1f} min "  # O(1)
                         f"— critical path {' → '.join(rep['critical_path'])}")  # O(1)
@@ -1238,6 +1272,8 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
             stext = sp.read_text(encoding="utf-8-sig").replace("\r\n", "\n")  # O(S) file read
             sflags, _ = scan_fences(stext.split("\n"))  # O(S)
             plan_l = plan.text.lower()  # O(C)
+            covers = [c.strip().strip("`§").strip().lower() for t in plan.tasks  # **Covers:** 2.1, Parser | O(n*k*s)
+                      for c in re.split(r"[,·;]", t.field_text("covers")) if c.strip()]
             for ln, fenced in zip(stext.split("\n"), sflags):  # O(S) iterations; split repeated
                 m = None if fenced else re.match(r"^#{2,3}\s+(.*?)\s*#*$", ln)  # O(s)
                 if not m:  # O(1)
@@ -1248,7 +1284,8 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
                 title = title.strip().strip("`")  # O(1)
                 if title.lower() in SPEC_SKIP:  # O(1)
                     continue  # O(1)
-                covered = title.lower() in plan_l  # O(C) substring search
+                covered = title.lower() in plan_l or any(  # O(C + covers) a Covers number also covers its subsections
+                    c == title.lower() or (num and (num == c or num.startswith(c + "."))) for c in covers)
                 if not covered and num:  # O(1)
                     covered = bool(re.search(rf"(?:§|section\s+|sec\.\s*)\s*{re.escape(num)}\b", plan_l))  # O(C) regex
                 if not covered:  # O(1)
@@ -1311,7 +1348,7 @@ def dispatched_tasks(sl_dir: Path) -> set[str]:  # O(c + pool)
     ledger = sl_dir / "progress.md"  # O(1)
     if ledger.is_file():  # O(1)
         out.update(re.findall(rf"^- commit ({TASK_ID})\b", ledger.read_text(encoding="utf-8", errors="replace"), re.M))  # O(c)
-        for line in re.findall(r"^[-*+ ]*unblocked:\s*dispatched\s+((?:T\d+[A-Za-z]?\s*)+)", ledger.read_text(encoding="utf-8", errors="replace"), re.M):  # O(c)
+        for line in re.findall(r"^[-*+ ]*unblocked:\s*dispatched\s+((?:[A-Z]{1,3}\d+[A-Za-z]?\s*)+)", ledger.read_text(encoding="utf-8", errors="replace"), re.M):  # O(c)
             out.update(line.split())  # O(tasks)
     pool = sl_dir / "pool.json"  # O(1)
     if pool.is_file():  # O(1)
@@ -1532,7 +1569,7 @@ def build_parser():  # O(1) total
     p.add_argument("--target-min", type=float, default=None)  # O(1)
     p.add_argument("--tail-min", type=float, default=None)  # O(1)
     p.add_argument("--max-task-min", type=float, default=None, help="override size_band.high_min for this run")  # O(1)
-    p.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS)  # O(1)
+    p.add_argument("--max-chars", type=int, default=None, help=f"plan size NOTE threshold (default: header **Max chars:** or {DEFAULT_MAX_CHARS})")  # O(1)
     p.add_argument("--stable", action="store_true", help="partition tasks into STABLE and FIX; writes .superlite/stable.json")
     add_predictor_args(p)  # O(1)
     p.set_defaults(func=cmd_lint)  # O(1)

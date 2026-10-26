@@ -82,6 +82,32 @@ def test_refit_low_is_2_5x_median_overhead(tmp_path):
     assert band["high_min"] == 6.0
 
 
+def _obs(n_fast, slow_actuals):
+    fast = [{"components": 1.0 + i % 2, "loc": 60.0 + 10 * i, "slow": False, "model": "sonnet", "actual": 2.0 + 0.3 * (i % 5),
+             "overhead": None} for i in range(n_fast)]
+    return fast + [{"components": 1.0, "loc": 140.0, "slow": True, "model": "sonnet", "actual": a, "overhead": None}
+                   for a in slow_actuals]
+
+
+def test_refit_keeps_slow_prior_with_too_few_slow_rows(monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import predict
+    coef = predict.load_coef(CONFIG / "predictor.json")
+    few, _ = predict.refit(_obs(40, [4.3, 8.3, 46.0]), predict.load_models(), coef)  # one outlier among three
+    assert few["time"]["slow_tests_min"] == coef["time"]["slow_tests_min"]
+    many, _ = predict.refit(_obs(40, [6.0] * predict.SLOW_MIN_ROWS), predict.load_models(), coef)
+    assert many["time"]["slow_tests_min"] > coef["time"]["slow_tests_min"] + 1.0  # enough rows: fitted
+
+
+def test_tests_build_parses_and_adds_no_test_time(tmp_path):
+    p = make_plan(tmp_path, [{"id": "T1", "components": 1, "loc": 140, "tests": "build"},
+                             {"id": "T2", "components": 1, "loc": 140, "tests": "fast"}])
+    cp = run(PREDICT, "--plan", p, "--coef", CONFIG / "predictor.json")
+    tasks = json.loads(cp.out)["tasks"]
+    assert tasks["T1"]["features"]["tests"] == "build"
+    assert tasks["T1"]["est_time_min"] == tasks["T2"]["est_time_min"]
+
+
 # ---------------------------------------------------------------- stable split
 
 def _split_plan(tmp_path, edges):

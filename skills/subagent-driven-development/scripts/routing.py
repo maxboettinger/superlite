@@ -38,7 +38,8 @@ def task_features(task, focus, cp, times) -> dict:  # O(k*s + pkgs)
     parts = {seg.lower() for o in task.owns for seg in re.split(r"[/.]", o)}  # O(o)
     cats = {c for pkg, cases in focus.items() if pkg in parts for c in cases}  # O(pkgs)
     kind = f.get("kind", "design")  # O(1)
-    return {"task": task.id, "band": __import__("history").band_of(kind, f.get("loc"), f.get("tests")), "kind": kind, "loc": f.get("loc"), "components": f.get("components"), "tests": f.get("tests"),  # O(1)
+    tests = "fast" if f.get("tests") == "build" else f.get("tests")  # build-only routes like fast | O(1)
+    return {"task": task.id, "band": __import__("history").band_of(kind, f.get("loc"), tests), "kind": kind, "loc": f.get("loc"), "components": f.get("components"), "tests": tests,  # O(1)
             "focus": cats, "time": times.get(task.id), "critical_path": task.id in cp,
             "mechanical": kind == "mechanical" and not pt.not_mechanical_reasons(task, focus)}
 
@@ -114,7 +115,7 @@ def tiers_for_plan(plan_path: str, cfg=None) -> dict:  # O(schedule + n*(k*s + r
     return compute_tiers(plan, rep["critical_path"], rep["times"], cfg, history.project_stats(pt.stable_root(plan_path) / ".superlite"))  # O(n*(k*s + r))
 
 
-KIND_MISS = re.compile(r"kind-miss\s+(T\d+[A-Za-z]?)")  # O(1)
+KIND_MISS = re.compile(r"kind-miss\s+([A-Z]{1,3}\d+[A-Za-z]?)")  # O(1)
 
 
 def missed_tasks(plan_path: str) -> set:  # O(incident log)

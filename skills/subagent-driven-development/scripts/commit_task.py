@@ -56,8 +56,8 @@ DEFAULT_LEDGER = ".superlite/progress.md"  # O(1)
 DEFAULT_LOG = ".superlite/incidents.jsonl"  # O(1)
 IGNORED_PARTS = (".superlite/", "__pycache__/")  # never staged, never blocking | O(1)
 SHARED_OWNS = ("tests/regression/",)  # generated probe regression tests: owned by the committer | O(1)
-COMMIT_LINE = re.compile(r"^\s*[-*+]?\s*commit\s+(T\d+[A-Za-z]?)\s+[0-9a-f]{7,40}")  # O(1)
-TASK_ID = re.compile(r"T\d+[A-Za-z]?")  # O(1)
+COMMIT_LINE = re.compile(r"^\s*[-*+]?\s*commit\s+([A-Z]{1,3}\d+[A-Za-z]?)\s+[0-9a-f]{7,40}")  # O(1)
+TASK_ID = re.compile(r"\b[A-Z]{1,3}\d+[A-Za-z]?\b")  # O(1)
 
 IMPORT_DRIVER = r"""
 import importlib, importlib.util, json, os, sys, traceback
@@ -265,8 +265,9 @@ def seams(plan):  # O(n + e), plan parsed once per process (nt.taskgraph_full)
         print("warning: no seams (taskgraph failed)", file=sys.stderr)  # O(1)
         return []  # O(1)
     pairs = []  # O(1)
+    known = set(data.get("graph") or {})  # only real task ids: `S3`, `UTF8` in seam text are not tasks | O(n)
     for s in data.get("seams") or []:  # O(s) iterations
-        ids = TASK_ID.findall(s)  # O(len seam)
+        ids = [i for i in TASK_ID.findall(s) if not known or i in known]  # O(len seam)
         if len(ids) == 2:  # O(1)
             pairs.append((ids[0], ids[1]))  # O(1)
     if not pairs:  # seams missing from the output: derive them from the graph edges | O(1)
