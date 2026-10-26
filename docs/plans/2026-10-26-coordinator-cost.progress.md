@@ -1,0 +1,35 @@
+- start 693bc89549fed98031b6f9a813c6a8352562ab0e
+- Ruling: skip T0 - existing repo, every owned file but pool.py and the test files exists and the tasks create those - cost: none
+- unblocked: dispatched T1 T2 T3 T4 at 10:24:16; waiting on fixes: none
+- tests fast passed=4 failed=2 skipped=0 seconds=3.6
+- tests fast passed=14 failed=0 skipped=0 seconds=18.9
+- tests fast passed=14 failed=0 skipped=0 seconds=17.5
+- tests fast passed=41 failed=1 skipped=0 seconds=25.1
+- tests fast passed=39 failed=1 skipped=0 seconds=25.4
+- Ruling: plan docs committed by hand before the first checkpoint - the current commit_task still blocks on them (#18, being fixed by T3) - cost: none
+- commit T4 5ba4a1ae7d autocommit: apply replays onto a moved HEAD
+- tests fast passed=47 failed=2 skipped=0 seconds=21.3
+- commit T1 547d19a07a run_tests: wait by path, prompts
+- commit T3 1a015062ac commit_task: plan folder never blocks
+- tests fast passed=48 failed=1 skipped=0 seconds=23.6
+- Ruling: test_next_tasks_longest_first_and_cap is red only inside this live run (#19: the fixture plan resolves to this checkout's .superlite/stable.json, which lists T1-T4); passes on a clean worktree of main - final verification runs the suite in a clean worktree too - cost: one duplicate suite run
+- Ruling: busy_since is set by the pool CLI (add --current, busy), not by pool.add(); hand-made busy entries are what sl pool replaces - cost: a hand-edited agent stays busy until pool free
+- commit T2 d48679fdf7 sl pool, dispatch sync, docs, version 1.2.2
+- tests fast passed=44 failed=1 skipped=0 seconds=24.6
+- tests fast passed=15 failed=0 skipped=0 seconds=16.5
+- tests fast passed=40 failed=1 skipped=0 seconds=22.7
+- tests fast passed=16 failed=0 skipped=0 seconds=1.4
+- commit T1 69738d65be run_tests: wait by path, prompts
+- commit T2 7f886deab2 sl pool, dispatch sync, docs, version 1.2.2
+- commit T3 84579b0118 commit_task: plan folder never blocks
+- commit T4 45680686f3 autocommit: apply replays onto a moved HEAD
+- tests fast passed=29 failed=0 skipped=0 seconds=6.6
+- Ruling: final-review findings 1-3 (plan_folder missing, changed_files signature, dispatch evict) are stale TDD-red incidents; the named tests pass after implementation and review (T2 16/16, T3 40/40) - cost: none
+- Ruling: finding 4 is #19 (fixture plan reads this checkout's live stable.json); verified green on a clean worktree - cost: none
+- Ruling: run_tests --full collected bench/ hidden tests; test-cmd.json set to `pytest tests/scripts` for this run (#12-style packet false positive: the packet used the last fast summary) - cost: none
+- tests full passed=674 failed=4 skipped=1 seconds=126.7
+- tests fast passed=23 failed=0 skipped=0 seconds=3.6
+- tests fast passed=23 failed=0 skipped=0 seconds=3.8
+- Ruling: tests/scripts/test_0_3_1_scripts.py (fixer edit, unowned) committed by hand; filed #21 - cost: none
+- commit T2 8717671981 sl pool, dispatch sync, docs, version 1.2.2
+- tests full passed=676 failed=2 skipped=1 seconds=133.1

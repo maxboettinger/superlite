@@ -1,0 +1,119 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-10-26T10:24:09",
+ "headline": {
+  "wall_min": {
+   "projected": 5.847,
+   "actual": 10.185
+  },
+  "cost_usd_agents": {
+   "projected": 0.384239,
+   "actual": 1.660949
+  },
+  "task_min": {
+   "projected": 15.3,
+   "actual": 14.072
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 26
+  }
+ },
+ "cost_split": {
+  "agents_usd": 1.444165,
+  "rework_usd": 0.216784,
+  "coordinator_usd": 3.00907,
+  "total_usd": 4.670019
+ },
+ "concurrency": {
+  "peak": 4,
+  "projected_peak": 4
+ },
+ "critical_path": {
+  "actual": [
+   "T2"
+  ],
+  "projected": [
+   "T2"
+  ],
+  "projected_min": 5.847
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 4,
+   "cost_usd": 1.6609489999999998
+  }
+ },
+ "coordinator_cost_by_model": {
+  "sonnet": 3.00907
+ },
+ "quality": {
+  "tests": {
+   "passed": 676,
+   "failed": 2,
+   "skipped": 1,
+   "seconds": 133.1,
+   "mode": "full",
+   "failures": [
+    "tests/scripts/test_run_scripts.py::test_next_tasks_longest_first_and_cap: AssertionError: assert ['T2', 'T4', 'T1'] == ['T2', 'T5', 'T4', 'T1']",
+    "tests/scripts/test_spawn_free.py::test_next_tasks_in_process_matches_launcher_route: AssertionError: assert ['T2', 'T4', 'T1'] == ['T2', 'T5', 'T4', 'T1']"
+   ],
+   "skipped_tests": [
+    "tests/scripts/test_no_popup_windows.py::test_detached_helper_children_get_no_console_window"
+   ]
+  },
+  "first_time_pass": 0,
+  "first_time_n": 0,
+  "rework_dispatches": 2,
+  "open_incidents": 18
+ },
+ "tasks": [
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 5.847,
+   "actual_min": 4.773,
+   "delta": {
+    "abs": -1.0737,
+    "pct": -18.4
+   },
+   "cost_usd": 0.734347,
+   "first_time_pass": null
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 3.229,
+   "actual_min": 3.023,
+   "delta": {
+    "abs": -0.2057,
+    "pct": -6.4
+   },
+   "cost_usd": 0.300741,
+   "first_time_pass": null
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 3.053,
+   "actual_min": 3.258,
+   "delta": {
+    "abs": 0.2053,
+    "pct": 6.7
+   },
+   "cost_usd": 0.303065,
+   "first_time_pass": null
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 3.171,
+   "actual_min": 3.017,
+   "delta": {
+    "abs": -0.1543,
+    "pct": -4.9
+   },
+   "cost_usd": 0.322796,
+   "first_time_pass": null
+  }
+ ]
+}
