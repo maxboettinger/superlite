@@ -16,7 +16,8 @@ Defaults when a flag is omitted: committed tasks come from the ledger's `- commi
 lines; running tasks are the pool agents' `current` tasks not yet committed (busy or not:
 a FAILED or BLOCKED task keeps its `current` until commit_task commits it). An agent with
 a `current` gets no new task, and no agent appears on two lines of one call (`agent=` or
-`poll`). The plan is parsed once, in this process. Stdlib only.
+`poll`). The pool is synced first (`pool.sync`: real context_k, idle_min, busy from the stop
+records). The plan is parsed once, in this process. Stdlib only.
 """
 
 # Complexity notation:
@@ -32,6 +33,7 @@ import assign as asg  # noqa: E402 | O(1)
 import commit_task as ct  # noqa: E402 | O(1)
 import routing  # noqa: E402 | O(1)
 import next_tasks as nt  # noqa: E402 | O(1)
+import pool as poolmod  # noqa: E402 | O(1)
 
 
 def load_pool(path):  # O(pool bytes)
@@ -146,6 +148,11 @@ def render(lines, evict):  # O(R + a)
 def run(plan, pool_path, ledger, committed=None, running=None, cap=10):  # O(c + L + n + e + R*a*(F + o))
     """Library entry for commit_task --dispatch; flags left as None take their defaults."""
     pool = load_pool(pool_path)  # O(pool bytes)
+    if Path(pool_path).exists():  # real context_k, idle_min, busy from the stop records; saved only when a value changed | O(a*m + a*T)
+        before = json.dumps(pool, sort_keys=True)  # O(pool bytes)
+        poolmod.sync(pool, Path(pool_path).parent)  # O(a*m + a*T)
+        if json.dumps(pool, sort_keys=True) != before:  # O(pool bytes)
+            poolmod.save(pool_path, pool)  # O(pool bytes) atomic
     done = nt.csv(committed) if committed is not None else sorted(ct.committed_tasks(ledger))  # O(c)
     busy = nt.csv(running) if running is not None else running_from_pool(pool, done)  # O(a)
     import wave0  # noqa: E402 | O(1) lazy

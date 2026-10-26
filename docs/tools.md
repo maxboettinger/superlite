@@ -11,11 +11,12 @@ Mechanical steps are scripts, not agents. Every tool runs as `bash <skill-dir>/s
 | `predict` | Predicts each task's time, context and cost; `--refit` fits the coefficients |
 | `build_prime` | Builds the shared prime that every agent reads first (`--tier haiku` builds the mini prime) |
 | `dispatch` | Ready tasks and who runs each, in one call (`next_tasks` + `assign`) |
+| `pool` | Keeps `.superlite/pool.json` (never edit it by hand): `add ID --tier T [--current Tn]`, `busy ID Tn`, `free ID`, `list`, `sync` (real `context_k` from the agent transcript, `idle_min`, `busy` cleared by a newer stop record; `dispatch` syncs first) |
 | `next_tasks` | Computes which tasks are ready |
 | `assign` | Scores idle agents and picks the most relevant one |
 | `commit_task` | Checks scope, then checkpoints (default: hidden `refs/superlite/*` commits, branch untouched) or commits (autocommit on) one or more tasks' owned files; `--dispatch` also prints the next dispatch |
 | `autocommit` | `on`/`off`/`status` opt-in real commits (`.superlite/autocommit.json`, env `SUPERLITE_AUTOCOMMIT=1`); `apply` turns checkpoints into commits on the current branch; `clean` deletes them |
-| `run_tests` | Runs the project's test command (`{junit}`, `{names}` = test file basenames joined by `\|` for `--filter`; every non-empty sidecar `<junit stem>*.xml` is counted), with `--background`, then `--wait` for the summary; writes `.superlite/test-summary.json` |
+| `run_tests` | Runs the project's test command (`{junit}`, `{names}` = test file basenames joined by `\|` for `--filter`; every non-empty sidecar `<junit stem>*.xml` is counted), with `--background` (prints `summary: <path>` and a `wait:` line), then `--wait PATH` for that run's summary (bare `--wait`: the shared latest pointer); writes `.superlite/test-summary.json` |
 | `testcmd` | Resolves the project's test command: `.superlite/test-cmd.json`, else detection (npm, go, cargo, dotnet, Python) |
 | `pt_review` | `adapter`, `packet` (the final review packet) and `contract` (seam checks; a producer without Python sources is checked by declaration: the first name of each Produces must be declared in an owned source file, parameters unchecked). The packet diffs against the newest `checkpoints.json` sha when there is one, else the working tree |
 | `probe_run` | Parallel robustness probes with no agents (Python projects only) |
