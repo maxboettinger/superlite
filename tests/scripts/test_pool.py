@@ -170,3 +170,15 @@ def test_dispatch_syncs_before_planning(tmp_path):
     r = run(DISPATCH, "--plan", p, "--pool", sl / "pool.json", "--ledger", tmp_path / "l.md", cwd=tmp_path)
     assert "evict=" not in r.err
     assert 30.0 <= read(tmp_path)["agents"][0]["context_k"] < 31.0
+
+
+def test_corrupt_pool_gives_one_stderr_line(tmp_path):
+    sl = tmp_path / ".superlite"
+    sl.mkdir()
+    (sl / "pool.json").write_text("{not json", encoding="utf-8")
+    for args in (("list",), ("sync",), ("busy", "a", "T1")):
+        r = pl(tmp_path, *args)
+        assert r.returncode != 0 and "Traceback" not in r.err and len(r.err.strip().splitlines()) == 1
+    p = plan(tmp_path, "**Tech stack:** Python", "x", PY)
+    r = run(DISPATCH, "--plan", p, "--pool", sl / "pool.json", "--ledger", tmp_path / "l.md", cwd=tmp_path)
+    assert r.returncode != 0 and "Traceback" not in r.err

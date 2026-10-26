@@ -26,7 +26,15 @@ import metrics as mx  # noqa: E402 | O(1)
 
 def load(path):  # O(pool bytes)
     p = Path(path)  # O(1)
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {"agents": []}  # O(pool bytes)
+    if not p.exists():  # O(1)
+        return {"agents": []}  # O(1)
+    try:  # O(1)
+        data = json.loads(p.read_text(encoding="utf-8"))  # O(pool bytes)
+    except (ValueError, OSError) as e:  # a corrupt pool.json: one stderr line, no traceback | O(1)
+        raise SystemExit(f"pool.json unreadable ({p}): {e}")  # O(1)
+    if not isinstance(data, dict):  # O(1)
+        raise SystemExit(f"pool.json unreadable ({p}): top level is not an object")  # O(1)
+    return data  # O(1)
 
 
 def save(path, data):  # O(pool bytes), atomic

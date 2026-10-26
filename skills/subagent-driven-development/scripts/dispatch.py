@@ -37,8 +37,7 @@ import pool as poolmod  # noqa: E402 | O(1)
 
 
 def load_pool(path):  # O(pool bytes)
-    p = Path(path)  # O(1)
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {"agents": []}  # O(pool bytes)
+    return poolmod.load(path)  # O(pool bytes) one stderr line on a corrupt file
 
 
 def skip_t0(ledger):  # O(c)
