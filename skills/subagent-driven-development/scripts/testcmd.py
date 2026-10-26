@@ -13,6 +13,7 @@ Library: resolve, parse_output (best-effort counts and failing names without JUn
 # Complexity notation:
 #   m = marker files checked, f = files walked for the Python test-file scan (bounded), o = output lines
 import argparse  # O(1)
+import configparser  # O(1)
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
@@ -99,6 +100,49 @@ def detect(root: Path):  # O(m + f)
             or _has_pytest_files(root)):  # O(m + f)
         return {"language": "python", "test": None, "test_file": None, "junit": "", "setup": ""}  # pytest path of run_tests | O(1)
     return None  # O(1)
+
+
+def _ini_testpaths(path: Path, section: str) -> bool:  # O(file)
+    cp = configparser.ConfigParser(interpolation=None, strict=False)  # O(1)
+    try:  # O(1)
+        cp.read_string(path.read_text(encoding="utf-8"))  # O(file)
+    except (OSError, ValueError, configparser.Error):  # ValueError: undecodable bytes | O(1)
+        return False  # O(1)
+    return cp.has_option(section, "testpaths")  # O(1)
+
+
+def _toml_testpaths(path: Path) -> bool:  # O(file)
+    try:  # O(1)
+        text = path.read_text(encoding="utf-8")  # O(file)
+    except (OSError, ValueError):  # O(1) unreadable or undecodable
+        return False  # O(1)
+    try:  # O(1)
+        import tomllib  # O(1) Python 3.11+: handles multi-line arrays, comments, CRLF
+    except ImportError:  # O(1)
+        tomllib = None  # O(1)
+    if tomllib is not None:  # O(1)
+        try:  # O(1)
+            tbl = tomllib.loads(text).get("tool", {}).get("pytest", {}).get("ini_options", {})  # O(file)
+        except (ValueError, AttributeError):  # O(1) malformed TOML
+            return False  # O(1)
+        return isinstance(tbl, dict) and "testpaths" in tbl  # O(1)
+    m = re.search(r"^\[tool\.pytest\.ini_options\][ \t]*(?:#.*)?\r?$(.*?)(?=^\[|\Z)", text, re.M | re.S)  # the block | O(file)
+    return bool(m and re.search(r"^\s*testpaths\s*=", m.group(1), re.M))  # O(block)
+
+
+def python_full_args(root: Path) -> list:  # O(file)
+    """Extra pytest args for a Python full run: none when testpaths is configured, `tests` when it exists, else ignore bench."""
+    root = Path(root)  # O(1)
+    if ((root / "pytest.ini").exists() and _ini_testpaths(root / "pytest.ini", "pytest")  # O(file)
+            or (root / "pyproject.toml").exists() and _toml_testpaths(root / "pyproject.toml")  # O(file)
+            or (root / "setup.cfg").exists() and _ini_testpaths(root / "setup.cfg", "tool:pytest")  # O(file)
+            or (root / "tox.ini").exists() and _ini_testpaths(root / "tox.ini", "pytest")):  # O(file)
+        return []  # O(1)
+    if (root / "tests").is_dir():  # O(1)
+        return ["tests"]  # O(1)
+    if (root / "bench").is_dir():  # O(1)
+        return ["--ignore=bench"]  # O(1)
+    return []  # O(1)
 
 
 def resolve(root=".", paths=()):  # O(m + f)

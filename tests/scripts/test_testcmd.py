@@ -95,7 +95,7 @@ def test_no_test_command_exits_2_with_a_clear_summary(tmp_path):
     cp = rt(tmp_path, "--full")
     assert cp.returncode == 2 and cp.out.strip() == "0 0 0 0.0" and "no test command found" in cp.err
     s = summary(tmp_path)
-    assert set(s) == {"passed", "failed", "skipped", "seconds", "mode", "failures", "skipped_tests"}
+    assert set(s) == {"passed", "failed", "skipped", "seconds", "mode", "failures", "skipped_tests", "files"}
     assert s["failed"] == 1 and "no test command found" in s["failures"][0]
 
 
@@ -108,7 +108,7 @@ def test_junit_from_a_node_runner_keeps_the_summary_shape(tmp_path):
     assert cp.returncode == 1, cp.both
     assert cp.out.strip().split()[:3] == ["2", "1", "0"]
     s = summary(tmp_path)
-    assert set(s) == {"passed", "failed", "skipped", "seconds", "mode", "failures", "skipped_tests"}
+    assert set(s) == {"passed", "failed", "skipped", "seconds", "mode", "failures", "skipped_tests", "files"}
     assert (s["passed"], s["failed"], s["mode"]) == (2, 1, "full")
     assert s["failures"] == ["tests/feed.test.ts::feed > builds rss: expected 1 to be 2"]
     inc = (tmp_path / ".superlite" / "incidents.jsonl").read_text(encoding="utf-8")
