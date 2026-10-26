@@ -110,17 +110,111 @@ def test_apply_makes_one_commit_per_task_and_cleans_up(tmp_path):
     assert git(repo, "for-each-ref", "refs/superlite") == ""
 
 
-def test_apply_refuses_when_head_moved(tmp_path):
+def test_apply_replays_onto_moved_head(tmp_path):
     repo = make_repo(tmp_path)
     two_tasks(repo)
-    write(repo, "other.txt", "o\n")
-    git(repo, "add", "other.txt")
-    git(repo, "commit", "-q", "-m", "user commit")
+    write(repo, "README.md", "base\nmanual\n")
+    git(repo, "add", "README.md")
+    git(repo, "commit", "-q", "-m", "manual readme")
+    r = run("autocommit", "apply", cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert git(repo, "log", "--format=%s", "-3").split("\n") == ["T2: lexer", "T1: parser", "manual readme"]
+    assert git(repo, "diff", "--name-only", "HEAD~1", "HEAD").split() == ["src/b.py"]
+    assert sorted(git(repo, "diff", "--name-only", "HEAD~2", "HEAD~1").split()) == ["src/a.py", "tests/test_a.py"]
+    assert "manual" in git(repo, "show", "HEAD:README.md")
+    assert git(repo, "status", "--porcelain") == ""
+    assert git(repo, "for-each-ref", "refs/superlite") == ""
+    assert not (repo / ".superlite" / "checkpoint.index").exists()
+
+
+def test_apply_replays_a_deletion(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "src/a.py", "old\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "add a")
+    (repo / "src" / "a.py").unlink()
+    write(repo, "src/a_new.py", "new\n")
+    st_files = ["src/a.py", "src/a_new.py"]
+    sys.path.insert(0, str(SCRIPTS))
+    import autocommit
+    cwd = os.getcwd()
+    os.chdir(repo)
+    try:
+        sha = autocommit.checkpoint("T1", "gone", st_files, "plan.md")
+        write(repo, "README.md", "base\nmanual\n")
+        git(repo, "add", "README.md")
+        git(repo, "commit", "-q", "-m", "manual")
+        head = git(repo, "rev-parse", "HEAD")
+        tree = autocommit.replay_tree(head, {"sha": sha, "files": st_files})
+    finally:
+        os.chdir(cwd)
+    names = git(repo, "ls-tree", "-r", "--name-only", tree).split()
+    assert "src/a.py" not in names and "src/a_new.py" in names
+    assert "manual" in git(repo, "show", f"{tree}:README.md")
+
+
+def test_moved_overlap_cases(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "src/a.py", "a\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "a")
+    base = git(repo, "rev-parse", "HEAD")
+    sys.path.insert(0, str(SCRIPTS))
+    import autocommit
+    cwd = os.getcwd()
+    os.chdir(repo)
+    try:
+        assert autocommit.moved_overlap(base, base, {"src/a.py"}) == []
+        write(repo, "README.md", "x\n")
+        git(repo, "commit", "-q", "-am", "readme")
+        assert autocommit.moved_overlap(base, git(repo, "rev-parse", "HEAD"), {"src/a.py"}) == []
+        write(repo, "src/a.py", "b\n")
+        git(repo, "commit", "-q", "-am", "touch a")
+        assert autocommit.moved_overlap(base, git(repo, "rev-parse", "HEAD"), {"src/a.py"}) == ["src/a.py"]
+    finally:
+        os.chdir(cwd)
+
+
+def test_apply_refuses_when_moved_commit_touched_a_checkpointed_file(tmp_path):
+    repo = make_repo(tmp_path)
+    two_tasks(repo)
+    write(repo, "README.md", "base\nmanual\n")
+    git(repo, "add", "README.md")
+    git(repo, "commit", "-q", "-m", "manual readme")
+    # a manual commit that edits a checkpointed path, made on a side tree via plumbing
+    idx = repo / ".git" / "side.index"
+    env = {**os.environ, "GIT_INDEX_FILE": str(idx)}
+    subprocess.run(["git", "read-tree", "HEAD"], cwd=repo, env=env, check=True)
+    h = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=repo, input="user\n", text=True,
+                       capture_output=True, check=True).stdout.strip()
+    subprocess.run(["git", "update-index", "--add", "--cacheinfo", f"100644,{h},src/a.py"], cwd=repo, env=env, check=True)
+    tree = subprocess.run(["git", "write-tree"], cwd=repo, env=env, capture_output=True, text=True, check=True).stdout.strip()
+    idx.unlink()
+    c = git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "user a")
+    git(repo, "update-ref", "HEAD", c)
+    git(repo, "reset", "-q", "--", "README.md")
     head = git(repo, "rev-parse", "HEAD")
     r = run("autocommit", "apply", cwd=repo)
-    assert r.returncode != 0 and "HEAD moved" in r.stderr
+    assert r.returncode != 0 and "src/a.py" in r.stderr
     assert git(repo, "rev-parse", "HEAD") == head
     assert git(repo, "for-each-ref", "refs/superlite") != ""
+
+
+def test_apply_unmoved_head_unchanged(tmp_path):
+    repo = make_repo(tmp_path)
+    base = git(repo, "rev-parse", "HEAD")
+    two_tasks(repo)
+    r = run("autocommit", "apply", cwd=repo)
+    assert r.returncode == 0 and "applied 2 commit(s)" in r.stdout
+    assert git(repo, "rev-parse", "HEAD~2") == base
+
+
+def test_apply_still_refuses_branch_change(tmp_path):
+    repo = make_repo(tmp_path)
+    two_tasks(repo)
+    git(repo, "checkout", "-q", "-b", "other")
+    r = run("autocommit", "apply", cwd=repo)
+    assert r.returncode != 0 and "branch changed" in r.stderr
 
 
 def test_apply_refuses_unrelated_changes(tmp_path):

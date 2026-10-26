@@ -117,14 +117,39 @@ def dirty_outside(files):
     return bad
 
 
+def moved_overlap(base, head, files):
+    """Checkpointed files touched by the commits in base..head, sorted; [] when HEAD did not move."""
+    if base == head or not base or not files:
+        return []
+    r = git("diff", "--name-only", "-z", base, head, "--", *sorted(files))
+    return sorted(p for p in r.stdout.split("\0") if p)
+
+
+def replay_tree(parent, entry):
+    """Tree of `parent` with each file of the entry taken from the checkpoint (removed when absent there)."""
+    idx = str(Path(TEMP_INDEX).resolve())
+    Path(idx).parent.mkdir(parents=True, exist_ok=True)
+    Path(idx).unlink(missing_ok=True)
+    env = {"GIT_INDEX_FILE": idx}
+    try:
+        git("read-tree", parent, env=env)
+        for f in entry["files"]:
+            line = git("ls-tree", entry["sha"], "--", f).stdout.strip()
+            if line:
+                meta, path = line.split("\t", 1)
+                mode, kind, blob = meta.split()
+                git("update-index", "--add", "--cacheinfo", f"{mode},{blob},{path}", env=env)
+            else:
+                git("update-index", "--force-remove", "--", f, env=env)
+        return git("write-tree", env=env).stdout.strip()
+    finally:
+        Path(idx).unlink(missing_ok=True)
+
+
 def apply():
     st = load_state()
     if not st or not st.get("entries"):
         sys.exit("apply: no checkpoints recorded (nothing to commit)")
-    if head_sha() != st["head"]:
-        sys.exit(f"apply: refused, HEAD moved since the run started "
-                 f"({st['head'][:10] or 'unborn'} -> {head_sha()[:10] or 'unborn'}); "
-                 "commit the files yourself with `git add -A && git commit`")
     if git("symbolic-ref", "-q", "HEAD", check=False).stdout.strip() != st.get("branch", ""):
         sys.exit("apply: refused, the checked-out branch changed since the run started")
     files = {f for e in st["entries"] for f in e["files"]}
@@ -133,12 +158,22 @@ def apply():
         sys.exit("apply: refused, the tree has changes unrelated to the run: "
                  + ", ".join(bad[:8]) + (" ..." if len(bad) > 8 else "")
                  + "; commit or stash them first")
-    parent = st["head"]
+    moved = head_sha() != st["head"]
+    hit = moved_overlap(st["head"], head_sha(), files)
+    if hit:
+        sys.exit("apply: refused, commits made since the run started touched checkpointed files: "
+                 + ", ".join(hit[:8]) + (" ..." if len(hit) > 8 else "")
+                 + "; commit the files yourself with `git add -A && git commit`")
+    start = head_sha()
+    parent = start
     for e in st["entries"]:
-        tree = git("rev-parse", f"{e['sha']}^{{tree}}").stdout.strip()
+        if moved:
+            tree = replay_tree(parent, e)
+        else:
+            tree = git("rev-parse", f"{e['sha']}^{{tree}}").stdout.strip()
         parent = git("commit-tree", tree, "-m", e["title"],
                      *(["-p", parent] if parent else [])).stdout.strip()
-    git("update-ref", "-m", "superlite: apply checkpoints", "HEAD", parent, *([st["head"]] if st["head"] else []))
+    git("update-ref", "-m", "superlite: apply checkpoints", "HEAD", parent, *([start] if start else []))
     git("reset", "-q")  # index to the new HEAD; the working tree keeps the agents' files
     print(f"applied {len(st['entries'])} commit(s) on {st.get('branch') or 'HEAD'}:")
     for e in st["entries"]:
