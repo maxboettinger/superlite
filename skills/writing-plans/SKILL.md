@@ -9,7 +9,7 @@ A plan is a set of contracts Sonnet implementers can execute without asking ques
 
 Any build with 2+ tasks runs through `superlite:subagent-driven-development`: load it before writing the plan. Never use `general-purpose` agents for build or review work.
 
-Save to `<plans>/YYYY-MM-DD-<topic>.md`; `<plans>` is `docs/superpowers/plans/` when that folder exists, else `docs/plans/`. When called from `superlite:brainstorming`, append to its doc instead. If the spec covers independent subsystems, write one plan per subsystem.
+Save to `<plans>/YYYY-MM-DD-<topic>.md`; `<plans>` is `docs/superpowers/plans/` when that folder exists, else `docs/plans/`. When called from `superlite:brainstorming`, append to its doc instead. If the spec covers independent subsystems, write one plan per subsystem. The plan is the first file of the change: when the project works in worktrees or branches per change, create that worktree or branch first and write the plan there, never into the shared main checkout.
 
 ## Lint, extract what's stable, fix the rest
 
