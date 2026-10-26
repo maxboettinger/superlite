@@ -8,3 +8,6 @@ bench/results/*-smoke*
 bench/results/*.jsonl
 bench/results/*.stderr
 bench/results/*.runlog
+.claude/worktrees/
+.claude/settings.local.json
+.maxapp
