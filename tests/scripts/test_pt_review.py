@@ -10,10 +10,11 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from _fixtures import FIXTURES  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parent.parent / "skills" / "subagent-driven-development" / "scripts" / "pt_review.py"
-FIXTURE = HERE / "fixtures" / "review_basic"
+FIXTURE = FIXTURES / "review_basic"
 
 _spec = importlib.util.spec_from_file_location("pt_review", SCRIPT)
 pt_review = importlib.util.module_from_spec(_spec)

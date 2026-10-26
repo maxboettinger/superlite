@@ -7,6 +7,7 @@ import time
 
 from test_plan_tools import SCRIPTS, run
 from test_routing import mech_plan, mixed, plan, task
+from _fixtures import FIXTURES  # noqa: E402
 
 METRICS = SCRIPTS / "metrics.py"
 HISTORY = SCRIPTS / "history.py"
@@ -228,7 +229,7 @@ def test_lint_prints_stats_and_prediction_line(tmp_path):
     assert cp.out.rstrip().splitlines()[-1].startswith("DISPATCH NOW")
 
 
-FIX = SCRIPTS.parent.parent.parent / "tests" / "scripts" / "fixtures" / "capture_real"
+FIX = FIXTURES / "capture_real"
 
 
 def test_golden_real_capture_log(tmp_path):

@@ -2,7 +2,7 @@
 """Opt-in auto-commit and hidden checkpoints for superlite runs.
 
     autocommit.py on|off|status
-    autocommit.py apply      make real commits on the current branch from the checkpoints
+    autocommit.py apply [--no-squash]   real commits on the current branch, one per task (--no-squash: one per checkpoint)
     autocommit.py clean      delete refs/superlite/* and the checkpoint state
 
 Default is OFF: commit_task then records a shadow checkpoint commit (never on HEAD, the
@@ -149,7 +149,42 @@ def replay_tree(parent, entry):
         Path(idx).unlink(missing_ok=True)
 
 
-def apply():
+def squash_entries(entries):
+    """One entry per task in first-seen order: newest sha, first title, union of files in first-seen order."""
+    groups = {}
+    for e in entries:
+        g = groups.get(e["task"])
+        if g is None:
+            groups[e["task"]] = {"task": e["task"], "sha": e["sha"], "title": e["title"], "files": list(e["files"])}
+        else:
+            g["sha"] = e["sha"]
+            g["files"] += [f for f in e["files"] if f not in g["files"]]
+    return list(groups.values())
+
+
+def interleaved_file(entries):
+    """First file where another task's entry sits between a task's first and last entry and touches its files."""
+    for g in squash_entries(entries):
+        pos = [i for i, e in enumerate(entries) if e["task"] == g["task"]]
+        for e in entries[pos[0] + 1:pos[-1]]:
+            if e["task"] != g["task"]:
+                for f in e["files"]:
+                    if f in g["files"]:
+                        return f
+    return ""
+
+
+def build_chain(start, entries, moved):
+    """Commit each entry on top of `start`; return (list of (entry, tree), final tree) without writing commits."""
+    parent, out = start, []
+    for e in entries:
+        tree = replay_tree(parent, e) if moved else git("rev-parse", f"{e['sha']}^{{tree}}").stdout.strip()
+        out.append((e, tree))
+        parent = tree
+    return out, parent
+
+
+def apply(squash=True):
     st = load_state()
     if not st or not st.get("entries"):
         sys.exit("apply: no checkpoints recorded (nothing to commit)")
@@ -168,18 +203,33 @@ def apply():
                  + ", ".join(hit[:8]) + (" ..." if len(hit) > 8 else "")
                  + "; commit the files yourself with `git add -A && git commit`")
     start = head_sha()
-    parent = start
-    for e in st["entries"]:
+    plan, note = st["entries"], ""
+    groups = squash_entries(st["entries"]) if squash else plan
+    hit_file = interleaved_file(plan) if len(groups) != len(plan) else ""
+    if hit_file:
+        note = f"squash skipped: tasks interleave on {hit_file}"
+    elif len(groups) != len(plan):
+        ref, ref_tree = build_chain(start, plan, moved)
         if moved:
-            tree = replay_tree(parent, e)
+            ref_final = ref_tree
         else:
-            tree = git("rev-parse", f"{e['sha']}^{{tree}}").stdout.strip()
+            ref_final = git("rev-parse", f"{plan[-1]['sha']}^{{tree}}").stdout.strip()
+        chain, final = build_chain(start, groups, True)
+        if final == ref_final:
+            plan = groups
+        else:
+            d = git("diff", "--name-only", final, ref_final).stdout.split()
+            note = f"squash skipped: tasks interleave on {d[0] if d else '?'}"
+    parent = start
+    for e, tree in build_chain(start, plan, moved or plan is not st["entries"])[0]:
         parent = git("commit-tree", tree, "-m", e["title"],
                      *(["-p", parent] if parent else [])).stdout.strip()
     git("update-ref", "-m", "superlite: apply checkpoints", "HEAD", parent, *([start] if start else []))
     git("reset", "-q")  # index to the new HEAD; the working tree keeps the agents' files
-    print(f"applied {len(st['entries'])} commit(s) on {st.get('branch') or 'HEAD'}:")
-    for e in st["entries"]:
+    if note:
+        print(note)
+    print(f"applied {len(plan)} commit(s) on {st.get('branch') or 'HEAD'}:")
+    for e in plan:
         print(f"- {e['title']}")
     clean()
     return 0
@@ -210,12 +260,12 @@ def main(argv=None):
     elif cmd == "status":
         print(f"autocommit: {'on (commit each task on your branch)' if is_on() else 'off (hidden checkpoints, work stays uncommitted)'}")
         print(listing())
-    elif cmd == "apply":
-        return apply()
+    elif cmd == "apply" and set(argv[1:]) <= {"--no-squash"}:
+        return apply(squash="--no-squash" not in argv[1:])
     elif cmd == "clean":
         clean()
     else:
-        print(__doc__.split("\n")[0] + "\nusage: autocommit.py on|off|status|apply|clean", file=sys.stderr)
+        print(__doc__.split("\n")[0] + "\nusage: autocommit.py on|off|status|apply [--no-squash]|clean", file=sys.stderr)
         return 2
     return 0
 

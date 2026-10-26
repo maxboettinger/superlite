@@ -12,12 +12,13 @@ import pytest
 from test_plan_tools import SCRIPTS, run
 from test_stable_split import DISPATCH
 from test_wave0 import PY, plan
+from _fixtures import FIXTURES  # noqa: E402
 
 sys.path.insert(0, str(SCRIPTS))
 import pool as poolmod  # noqa: E402 (the swappable seam: real pool.py is the only implementation; SUPERLITE_REAL has no fake to swap)
 
 POOL = SCRIPTS / "pool.py"
-FIX = SCRIPTS.parents[2] / "tests" / "scripts" / "fixtures" / "capture_real"
+FIX = FIXTURES / "capture_real"
 REAL = os.environ.get("SUPERLITE_REAL") == "1"  # noqa: F841
 
 

@@ -5,10 +5,11 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from _fixtures import FIXTURES  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1] / "skills" / "subagent-driven-development" / "scripts"
-PLAN_FIX = HERE / "fixtures" / "run_plan"
+PLAN_FIX = FIXTURES / "run_plan"
 ENV = {**os.environ, "SUPERLITE_SL": str(PLAN_FIX / "fake_sl"), "SL_TEST_PYTHON": sys.executable,
        "SUPERLITE_PROBE_RUN": str(PLAN_FIX / "no_such_probe.py"), "SUPERLITE_AUTOCOMMIT": "0"}
 

@@ -11,7 +11,8 @@ tests all pass becomes a `verified` incident (once per distinct entry). Appends
 a `tests` line to the progress ledger. On every run it also writes
 `.superlite/test-summary.json` (--summary), the file `pt_review packet` reads:
 `{"passed": N, "failed": N, "skipped": N, "seconds": S, "mode": "fast|full",
-"failures": ["file::test: message", ...], "skipped_tests": ["file::test", ...]}`
+"failures": ["file::test: message", ...], "skipped_tests": ["file::test", ...],
+"files": {"file": [passed, failed], ...}}` (the background pointer also records `"mode"`)
 (a run where pytest produced nothing records failed=1 and the reason). Exit 0 when nothing failed, 1 when a
 test failed or none ran, 2 when pytest could not run.
 
@@ -86,7 +87,8 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
              *[x for x in argv if x != "--background"],  # O(len argv)
              "--summary", str(mine), "--publish", str(Path(a.summary).resolve()), "--run-id", run_id]  # O(1) last flag wins
     atomic_write(pointer_path(a.summary), json.dumps({"id": run_id, "summary": str(mine),  # O(1)
-                                                      "started": time.time()}) + "\n")  # O(1)
+                                                      "started": time.time(),  # O(1)
+                                                      "mode": "fast" if "--fast" in argv else "full"}) + "\n")  # O(1)
     pyrun.spawn_detached(child, mine.with_suffix(".log"))  # O(1) + process spawn
     print(f"summary: {mine}")  # O(1)
     print(wait_line(mine))  # O(1)
@@ -233,13 +235,14 @@ def existing_verified(log):  # O(B)
     return seen  # O(1)
 
 
-def write_summary(path, mode, counts, failures, seconds, error=None):  # O(k + sk) + file write
+def write_summary(path, mode, counts, failures, seconds, error=None, files=None):  # O(k + sk) + file write
     """Write the test summary `pt_review packet` reads (atomically)."""  # O(1)
     data = {"passed": counts["passed"], "failed": counts["failed"] + (1 if error else 0),  # O(1)
             "skipped": counts["skipped"], "seconds": round(seconds, 1), "mode": mode,  # O(1)
             "failures": [f"{f}::{ctx}"[:200] for f, _line, ctx in failures]  # O(k)
             + ([error[:200]] if error else []),  # O(k) list concat
-            "skipped_tests": counts["skipped_tests"]}  # O(1)
+            "skipped_tests": counts["skipped_tests"],  # O(1)
+            "files": {k: list(v) for k, v in (files or {}).items()}}  # O(F)
     p = Path(path)  # O(1)
     p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     tmp = p.with_name(p.name + ".tmp")  # O(1)
@@ -346,7 +349,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             print(f"run_tests: {e}", file=sys.stderr)  # O(1)
             print("0 0 0 0.0")  # O(1)
             return 2  # O(1)
-        cmd = [*base, *paths, "-q", "-p", "no:cacheprovider",  # O(p)
+        cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), "-q", "-p", "no:cacheprovider",  # O(p)
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
         t0 = time.monotonic()  # O(1)
         r = pyrun.run_tree(cmd, capture_output=True, text=True, encoding="utf-8",  # O(O) + process spawn (pytest run time dominates)
@@ -368,7 +371,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
 
 
 def finish_run(a, label, counts, failures, files, seconds, returncode):  # O(k + F + B) one incident append
-    write_summary(a.summary, label, counts, failures, seconds)  # O(k + sk)
+    write_summary(a.summary, label, counts, failures, seconds, files=files)  # O(k + sk + F)
     publish_summary(a)  # O(summary size)
     items = [(f, line, ctx, "test-failure", "open") for f, line, ctx in failures]  # O(k)
     if label == "full":  # O(1)

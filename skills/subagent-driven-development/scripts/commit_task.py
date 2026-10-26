@@ -31,6 +31,10 @@ the regression test it caused. `.superlite/` is never staged and never blocks; a
 to the repo's `.git/info/exclude` at setup (`setup_exclude()` here does it, and
 commit_task also does it on every run). Unowned files under the plan's own folder (the
 directory of --plan: sibling spec, review) never block and are never staged; owned ones commit.
+A tracked, modified (not new, not deleted) file under a `tests/` folder that no task owns
+commits with the task being committed (a fixer's edit to a shared test): `shared-test <path>`
+on stderr and a `workaround` incident `Tn: shared test adjusted` (resolution `accepted`).
+New tests, deletions and source files still block; T0 never takes shared tests.
 Stdlib only.
 """
 
@@ -123,15 +127,26 @@ def plan_folder(plan):  # O(len path) + process spawn
     return "" if rel == "." else rel + "/"  # O(1)
 
 
-def changed_files(skip_prefix=""):  # O(m log m) + process spawn
+def changed_entries(skip_prefix=""):  # O(m log m) + process spawn
+    """Sorted (path, XY) pairs from porcelain status; XY is the two-letter status code."""
     r = git("status", "--porcelain", "-z", "--untracked-files=all", "--no-renames")  # O(m) output + process spawn
-    files = []  # O(1)
+    entries = {}  # O(1)
     for entry in r.stdout.split("\0"):  # O(m) iterations
         if len(entry) > 3:  # O(1)
             path = entry[3:].replace("\\", "/")  # O(len path)
             if not ignored(path) and not (skip_prefix and path.startswith(skip_prefix)):  # O(len path)
-                files.append(path)  # O(1)
-    return sorted(set(files))  # O(m log m)
+                entries[path] = entry[:2]  # O(1)
+    return sorted(entries.items())  # O(m log m)
+
+
+def changed_files(skip_prefix=""):  # O(m log m) + process spawn
+    return [p for p, _ in changed_entries(skip_prefix)]  # O(m)
+
+
+def shared_test(path, code):  # O(len path)
+    """True for a tracked, modified (not new, not deleted) file under a `tests/` folder."""
+    p = "/" + path.replace("\\", "/")  # O(len path)
+    return "/tests/" in p and "M" in code and set(code) <= {"M", " "}  # O(len path)
 
 
 def syntax_errors(files):  # O(total size of m_py files)
@@ -310,6 +325,19 @@ def log_incidents(log, task, items):  # O(k) + one append (no spawn in process)
                            for f, line, msg in items])
 
 
+def changed_vs_parent(files):  # O(m) + 2 git spawns, batched
+    """Subset of files whose working-tree blob differs from the parent checkpoint (HEAD without one)."""
+    st = None if autocommit.is_on() else autocommit.load_state()  # O(1) file read
+    parent = st["entries"][-1]["sha"] if st and st.get("entries") else "HEAD"  # O(1)
+    have = {}  # path -> blob sha in parent | O(1)
+    for ln in git("ls-tree", "-z", parent, "--", *files).stdout.split("\0"):  # O(m) + process spawn
+        if ln:  # O(1)
+            meta, _, p = ln.partition("\t")  # O(len)
+            have[p] = meta.split()[2]  # O(1)
+    live = git("hash-object", "--", *files).stdout.split()  # O(m) + process spawn
+    return [f for f, h in zip(files, live) if have.get(f) != h]  # O(m)
+
+
 def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (status, add, commit, rev-parse)
     """Commit one task; (exit code, sha or None). Files other tasks own are left alone."""
     if tid not in info:  # O(1)
@@ -326,7 +354,8 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
 
     mine, out_of_scope = [], []  # O(1)
     skip = plan_folder(a.plan)  # O(1) + process spawn
-    for f in changed_files():  # O(m) iterations; changed_files is O(m log m) + git spawn
+    shared, cand = [], []  # modified tracked tests no task owns | O(1)
+    for f, code in changed_entries():  # O(m) iterations; changed_entries is O(m log m) + git spawn
         if skip and f.startswith(skip) and not nt.owns_match(f, owns):  # plan folder: only owned paths count | O(f)
             continue  # O(1)
         if f in own_files and not nt.owns_match(f, owns):  # O(f)
@@ -337,8 +366,14 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
             mine.append(f)  # O(1)
         elif nt.owns_match(f, other):  # O(o)
             continue  # another task's file, built in parallel in this tree: leave it alone | O(1)
+        elif tid != "T0" and shared_test(f, code):  # a fixer's edit to a shared test joins this task | O(len path)
+            cand.append(f)  # O(1)
         else:  # O(1)
             out_of_scope.append(f)  # O(1)
+
+    if cand:  # a shared test already in the parent checkpoint is not this task's change | O(1)
+        shared = changed_vs_parent(cand)  # O(m) + process spawns
+        mine += shared  # O(m)
 
     if out_of_scope:  # O(1)
         for f in out_of_scope:  # O(m) iterations
@@ -350,6 +385,8 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         print(f"nothing to commit for {tid}", file=sys.stderr)  # O(1)
         return 1, None  # O(1)
 
+    for f in shared:  # O(m) iterations
+        print(f"shared-test {f}", file=sys.stderr)  # O(1)
     present = [f for f in mine if os.path.exists(f)]  # O(m) stat
     py = [f for f in present if f.endswith(".py")]  # O(m)
     problems = syntax_errors(py)  # O(size of py files)
@@ -363,6 +400,9 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
                                    for f, line, msg in problems])
         return 1, None  # O(1)
 
+    if shared:  # O(1)
+        nt.add_incidents(a.log, [(f, 0, f"{tid}: shared test adjusted", "workaround", "commit_task", "accepted")  # O(m) one append
+                                 for f in shared])
     if autocommit.is_on():  # opt-in: a real commit on the user's branch | O(1)
         git("add", "-A", "--", *mine)  # O(m) + process spawn
         title = f"{tid}: {task['title']}"  # O(1)
