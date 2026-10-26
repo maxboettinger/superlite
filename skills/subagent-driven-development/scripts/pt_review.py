@@ -104,7 +104,7 @@ class Task:  # O(1)
         items: list[str] = []  # O(1)
         for line in self.fields.get("produces", []):  # O(p) iterations
             line = re.sub(r"^\s*[-*]\s+", "", line)  # O(m)
-            items.extend(p.strip() for p in line.split("·") if p.strip())  # O(m) per field line
+            items.extend(p.strip() for p in line.split("·") if p.strip().strip("`").strip().lower() not in ("", "none", "-", "n/a"))  # none/-/n/a/empty = nothing to check | O(m) per field line
         return items  # O(1)
 
     def consumes_ids(self) -> set[str]:  # O(m) total
@@ -1527,17 +1527,82 @@ def source_excerpts(root: Path, base: str | None, files: list[str],  # O(X) + on
     return "\n".join(out) or "- none (no changed hunks in the hot-spot files)"  # O(output)
 
 
+def load_summary(path: Path) -> dict | None:  # O(file size) total
+    try:  # O(1)
+        d = json.loads(path.read_text(encoding="utf-8"))  # O(file size)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+    return d if isinstance(d, dict) else None  # O(1)
+
+
+def _failure_test(entry: dict) -> tuple[str, str]:  # O(m) total
+    m = re.search(r"\btest_\w+", str(entry.get("context", "")))  # O(m)
+    return str(entry.get("file", "")), m.group(0) if m else ""  # O(1)
+
+
+def stale_test_failure(entry: dict, summary: dict | None) -> bool:  # O(F) total
+    """A test-failure incident is stale when the newest summary shows its file or test green."""
+    if entry.get("kind") != "test-failure" or not summary:  # O(1)
+        return False  # O(1)
+    files = summary.get("files")  # O(1)
+    if not isinstance(files, dict):  # O(1)
+        return False  # O(1)
+    file, name = _failure_test(entry)  # O(m)
+    counts = files.get(file)  # O(1)
+    if not isinstance(counts, list) or len(counts) < 2:  # O(1)
+        return False  # O(1)
+    failures = [str(f) for f in (summary.get("failures") or [])]  # O(F)
+    if name:  # O(1)
+        return not any(re.match(rf"{re.escape(file)}::{re.escape(name)}(?!\w)", f) for f in failures)  # O(F) exact name: test_x must not match test_x2
+    return not counts[1]  # O(1)
+
+
+def _pointer(summary: Path) -> dict | None:  # O(1) total
+    d = load_summary(summary.with_name(summary.stem + ".latest"))  # O(1)
+    return d if d and d.get("summary") else None  # O(1)
+
+
+def wait_for_full(summary: Path, timeout: float, min_age: float = 5.0) -> None:  # O(timeout / 0.5) polls
+    """Wait for an older in-flight full run (pointer mode full, its summary missing) to finish."""
+    ptr = _pointer(summary)  # O(1)
+    if not ptr or ptr.get("mode") != "full":  # O(1)
+        return  # O(1)
+    target = Path(str(ptr["summary"]))  # O(1)
+    if target.is_file():  # O(1)
+        return  # O(1)
+    try:  # O(1)
+        started = float(ptr.get("started") or 0)  # O(1)
+    except (TypeError, ValueError):  # O(1)
+        return  # O(1)
+    if time.time() - started < min_age:  # O(1) a run just started with this packet: do not block on it
+        return  # O(1)
+    deadline = time.monotonic() + timeout  # O(1)
+    while not target.is_file():  # O(timeout / 0.5) iterations
+        if time.monotonic() >= deadline:  # O(1)
+            print(f"packet: timed out waiting for {target}", file=sys.stderr)  # O(1)
+            return  # O(1)
+        time.sleep(0.5)  # O(1)
+
+
+def newest_summary_path(path: Path) -> Path:  # O(1) total
+    ptr = _pointer(path)  # O(1)
+    if ptr and ptr.get("mode") == "full" and Path(str(ptr["summary"])).is_file():  # O(1)
+        return Path(str(ptr["summary"]))  # O(1)
+    return path  # O(1)
+
+
 def read_test_summary(path: Path) -> tuple[str, int]:  # O(file size) total
     if not path.is_file():  # O(1)
         return "- no test summary recorded (`run_tests.py --full` runs alongside this review)", 0  # O(1)
-    try:  # O(1)
-        d = json.loads(path.read_text(encoding="utf-8"))  # O(1)
-    except ValueError:  # O(1)
+    d = load_summary(path)  # O(file size)
+    if d is None:  # O(1)
         return "- test summary unreadable", 0  # O(1)
     failed = d.get("failures") or d.get("failed_tests") or []  # O(1)
     skipped = d.get("skipped_tests") or []  # O(1)
     nfail = int(d["failed"]) if isinstance(d.get("failed"), int) else len(failed)  # O(1)
     rows = [f"- passed {d.get('passed', '?')} · failed {nfail} · skipped {d.get('skipped', len(skipped))}"]  # O(1)
+    if d.get("mode") == "fast":  # O(1)
+        rows.insert(0, "- full suite not run yet (it runs alongside this review); newest fast run:")  # O(1)
     rows += [f"- FAILING: {t}" for t in failed[:30]]  # O(min(30, failed))
     rows += [f"- SKIPPED: {t}" for t in skipped[:30]]  # O(min(30, skipped))
     return "\n".join(rows), nfail  # O(1)
@@ -1573,7 +1638,13 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     tests = Path(a.tests) if a.tests else sl / "test-summary.json"  # O(1)
     cap = int(a.max_tokens * CHARS_PER_TOKEN)  # O(1)
 
+    wait_for_full(tests, a.wait_timeout)  # O(timeout / 0.5)
+    tests = newest_summary_path(tests)  # O(1)
+    summary = load_summary(tests)  # O(file size)
     entries = read_incidents(log)  # O(file size)
+    n_all = len(entries)  # O(1)
+    entries = [e for e in entries if not stale_test_failure(e, summary)]  # O(K*F)
+    n_stale = n_all - len(entries)  # O(1)
     items = incident_items(entries) + read_probe_failures(probes) + uncovered_items(plan, root, entries)  # O(K + R + pkgs*cats*...)
     mismatches, n_checked = check_interfaces(plan, root, None)  # O(P) + 1 subprocess
     for m in mismatches:  # O(Mm) iterations
@@ -1615,7 +1686,8 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
             "## 7. Review Focus", focus, "",  # O(1)
             "## 8. Source excerpts (changed hunks of the hot-spot files)", excerpts, ""]  # O(1)
     sec_titles = {  # O(1)
-        "incidents": "## 1. Open incidents (repeated file:line first, then unresolved, then low confidence)",  # O(1)
+        "incidents": "## 1. Open incidents (repeated file:line first, then unresolved, then low confidence)"  # O(1)
+                     + (f"\ndropped {n_stale} stale test-failure incident(s)" if n_stale else ""),  # O(1)
         "probes": "## 2. Probe results: failures still open and unverified categories",  # O(1)
         "contract": f"## 3. Contract check: real signatures vs the plan's Produces ({n_checked} checked, "  # O(1)
                     f"{len(mismatches)} mismatch(es))",  # O(1)
@@ -1671,6 +1743,8 @@ def build_parser() -> argparse.ArgumentParser:  # O(1) total
             sp.add_argument("--out")  # O(1)
             sp.add_argument("--max-tokens", type=int, default=20000)  # O(1)
             sp.add_argument("--tests", help="test summary JSON (default .superlite/test-summary.json)")  # O(1)
+            sp.add_argument("--wait-timeout", type=float, default=600.0,  # O(1)
+                            help="seconds to wait for an older in-flight full run (default 600)")  # O(1)
             sp.add_argument("--base", help="git ref for the diff stat and source excerpts (default: the root commit)")  # O(1)
         else:  # O(1)
             sp.add_argument("--seam", help="Ta,Tb: run parts 1-3 for that seam")  # O(1)
