@@ -76,3 +76,28 @@ def test_prompts_say_wait_path():
         text = p.read_text(encoding="utf-8")
         assert "--wait" in text, p
         assert not re.search(r"--wait(`|\s*\n)", text), p
+
+
+def test_wait_half_written_summary_retries(tmp_path):
+    import subprocess
+    import time
+    p = tmp_path / "s.json"
+    p.write_text('{"passed": ', encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(RUN_TESTS), "--wait", str(p), "--timeout", "30"], cwd=tmp_path,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    time.sleep(1.0)
+    assert proc.poll() is None  # still retrying, not crashed
+    p.write_text('{"passed": 1, "failed": 0, "skipped": 0}', encoding="utf-8")
+    out, err = proc.communicate(timeout=30)
+    assert proc.returncode == 0 and json.loads(out)["passed"] == 1, err
+
+
+def test_wait_relative_path_uses_cwd(tmp_path):
+    (tmp_path / "s.json").write_text('{"passed": 0, "failed": 1, "skipped": 0}', encoding="utf-8")
+    cp = run(RUN_TESTS, "--wait", "s.json", "--timeout", "5", cwd=tmp_path)
+    assert cp.returncode == 1, cp.both
+
+
+def test_wait_before_other_flag_parses(tmp_path):
+    cp = run(RUN_TESTS, "--wait", "--timeout", "1", cwd=tmp_path)  # bare wait, no pointer
+    assert cp.returncode == 2 and "no background run" in cp.err, cp.both
