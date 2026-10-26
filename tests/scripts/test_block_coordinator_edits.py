@@ -194,3 +194,60 @@ def test_allows_nested_plans_folders(proj):
 def test_removing_the_state_folder_points_to_orchestrator_end(proj):
     r = bash(proj, "rm -rf .superlite")
     assert r.returncode == 2 and "sl orchestrator end" in r.stderr
+
+
+# Directory targets of cp/mv/tee are judged by <dir>/<basename of the first source>.
+def test_cp_into_state_dir_allowed(proj):
+    assert bash(proj, "cp ../../.superlite/test-cmd.json .superlite/").returncode == 0
+    assert bash(proj, "mv docs/plans/a.md .superlite/").returncode == 0
+
+
+def test_mv_source_out_of_project_blocked(proj):
+    assert bash(proj, "mv src/a.py .superlite/").returncode == 2
+
+
+def test_cp_into_source_dir_blocked(proj):
+    assert bash(proj, "cp /tmp/x.py src/").returncode == 2
+
+
+def test_mv_into_existing_source_dir_blocked(proj):
+    (proj / "src").mkdir()
+    assert bash(proj, "mv /tmp/x.py src").returncode == 2
+    assert bash(proj, "mv /tmp/x.py .superlite").returncode == 0
+
+
+# sys.argv[N] resolves to the interpreter's N-th positional argument.
+_ARGV_BODY = "import sys\nopen(sys.argv[1],'w').write('x')\nEOF"
+
+
+def test_argv_target_through_variable_allowed(proj):
+    cmd = "P=docs/plans/p.md; python3 - \"$P\" <<'EOF'\n" + _ARGV_BODY
+    assert bash(proj, cmd).returncode == 0
+    cmd = "P=docs/plans/p.md; python3 - \"$P\" <<'EOF'\nimport sys\np=sys.argv[1]\nopen(p,'w').write('x')\nEOF"
+    assert bash(proj, cmd).returncode == 0
+    assert bash(proj, "python3 - docs/plans/p.md <<'EOF'\n" + _ARGV_BODY).returncode == 0
+
+
+def test_argv_target_to_source_blocked(proj):
+    assert bash(proj, "python3 - src/a.py <<'EOF'\n" + _ARGV_BODY).returncode == 2
+    assert bash(proj, "P=src/a.py; python3 - \"$P\" <<'EOF'\n" + _ARGV_BODY).returncode == 2
+    assert bash(proj, "P=a.py; P=docs/plans/p.md; python3 - \"$P\" <<'EOF'\n" + _ARGV_BODY).returncode == 2
+
+
+def test_argv_without_argument_still_blocks(proj):
+    assert bash(proj, "python3 - <<'EOF'\n" + _ARGV_BODY).returncode == 2
+    assert bash(proj, "python3 - docs/plans/p.md <<'EOF'\nimport sys\nopen(sys.argv[2],'w').write('x')\nEOF").returncode == 2
+
+
+def test_argv_flag_with_value_does_not_shift_positions(proj):
+    body = "<<'EOF'\n" + _ARGV_BODY
+    assert bash(proj, "python3 -W ignore - src/a.py " + body).returncode == 2
+
+
+def test_dir_target_judged_against_project_not_cwd(proj, tmp_path_factory):
+    (proj / "docs" / "plans").mkdir(parents=True)
+    raw = json.dumps({"tool_name": "Bash", "tool_input": {"command": "cp /tmp/x.md docs/plans"}})
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(proj)}
+    r = subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env,
+                       cwd=str(tmp_path_factory.mktemp("elsewhere")))
+    assert r.returncode == 0

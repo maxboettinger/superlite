@@ -13,7 +13,9 @@
 #     .superlite/**. `sl orchestrator end` closes the run.
 # The .superlite folder is the session's own (hooks/superlite-state.sh): its binding, else the launch
 # directory's unless another session owns that one. Interpreter writes are judged by each writer call's own
-# target (a literal, Path('...'), or a name assigned one); a writer whose target is unknown blocks.
+# target (a literal, Path('...'), a name assigned one, or sys.argv[N] read off the interpreter's command line, directly
+# or through one VAR=literal); a writer whose target is unknown blocks. cp/mv/tee into a directory (trailing /, .,
+# or an existing one) are judged by <dir>/<basename of the first source>; mv also judges every source.
 # Bash/PowerShell write detection is best-effort; when unsure, allow. Sessions without a .superlite
 # directory are never touched. Bash builtins only (no external process is spawned: each spawn costs
 # ~250 ms on Windows), cheap exits first. Exit 2 blocks (message on stderr); anything else,
@@ -101,11 +103,13 @@ project_code() {
 # 'p' or "p", Path('p'), or a name assigned only such literals in the command (the first denied one when several;
 # unknown when any assignment of the name, or a `for name in`, is not a literal).
 writer_target() {
-  local e="$1" re rest t n=0 lit=0 sq="'" dq='"'
+  local e="$1" re rest t a n=0 lit=0 sq="'" dq='"'
   e="${e#"${e%%[![:space:]]*}"}"; e="${e%"${e##*[![:space:]]}"}"
   TGT=""
   re="^(Path\\([[:space:]]*)?[$sq$dq]([^$sq$dq]+)[$sq$dq][[:space:]]*\\)?\$"
   if [[ $e =~ $re ]]; then TGT="${BASH_REMATCH[2]}"; return 0; fi
+  re='^(sys\.)?argv\[([0-9]+)\]$'
+  if [[ $e =~ $re ]]; then argv_arg "${BASH_REMATCH[2]}"; return 0; fi
   re='^[A-Za-z_][A-Za-z_0-9]*$'
   [[ $e =~ $re ]] || return 0
   re="(^|[^A-Za-z_0-9])for[[:space:]]+$e[[:space:]]+in([^A-Za-z_0-9]|\$)"
@@ -119,8 +123,71 @@ writer_target() {
     lit=$((lit + 1)); t="${BASH_REMATCH[3]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"
     if [ -z "$TGT" ]; then TGT="$t"; elif project_code "$t"; then TGT="$t"; fi
   done
+  re="(^|[^A-Za-z_0-9.])$e[[:space:]]*=[[:space:]]*(sys\\.)?argv\\[([0-9]+)\\]"
+  rest="$cmd"
+  while [[ $rest =~ $re ]]; do
+    t="${BASH_REMATCH[3]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"; a="$TGT"; argv_arg "$t"; t="$TGT"; TGT="$a"
+    if [ -z "$t" ]; then n=$((n + 100)); continue; fi
+    lit=$((lit + 1))
+    if [ -z "$TGT" ]; then TGT="$t"; elif project_code "$t"; then TGT="$t"; fi
+  done
   [ "$n" = "$lit" ] || TGT=""
   return 0
+}
+
+# argv_arg N: the N-th positional argument (1-based) after the script spec of the first interpreter command, into TGT
+# (empty if unknown): flags are dropped, `-c CODE` takes CODE as the spec, a $VAR/"$VAR" token resolves through
+# exactly one VAR=literal assignment in the command.
+argv_arg() {
+  local n="$1" rest tok re v cnt i=0 spec=0 sq="'" dq='"'
+  TGT=""
+  re='(^|[^[:alnum:]_])(python[0-9.]*|node|ruby|php)[[:space:]]+([^'$'\n'']*)'
+  [[ $cmd =~ $re ]] || return 0
+  rest="${BASH_REMATCH[3]}"
+  [ "$n" -ge 1 ] 2>/dev/null || return 0
+  re="^[[:space:]]*($dq[^$dq]*$dq|$sq[^$sq]*$sq|[^[:space:]]+)(.*)\$"
+  while [[ $rest =~ $re ]]; do
+    tok="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
+    case "$tok" in '<'*|'>'*|';'*|'|'*|'&'*) break ;; esac
+    if [ "$spec" = 0 ]; then
+      case "$tok" in
+        -c) [[ $rest =~ $re ]] || return 0; rest="${BASH_REMATCH[2]}"; spec=1 ;;
+        -) spec=1 ;;
+        -W|-X|-Q) return 0 ;;   # takes a value: the positions would shift
+        -*) ;;
+        *) spec=1 ;;
+      esac
+      continue
+    fi
+    i=$((i + 1))
+    if [ "$i" = "$n" ]; then
+      tok="${tok%\;}"; tok="${tok#\"}"; tok="${tok%\"}"; tok="${tok#$sq}"; tok="${tok%$sq}"
+      re='^\$\{?([A-Za-z_][A-Za-z_0-9]*)\}?$'
+      if [[ $tok =~ $re ]]; then
+        v="${BASH_REMATCH[1]}"; cnt=0
+        re="(^|[^A-Za-z_0-9.])$v[[:space:]]*=[^=]"; rest="$cmd"
+        while [[ $rest =~ $re ]]; do cnt=$((cnt + 1)); rest="${rest#*"${BASH_REMATCH[0]}"}"; done
+        re="(^|[^A-Za-z_0-9.])$v=($dq[^$dq]+$dq|$sq[^$sq]+$sq|[^[:space:];&|<>$dq$sq]+)"
+        if [ "$cnt" = 1 ] && [[ $cmd =~ $re ]]; then
+          tok="${BASH_REMATCH[2]}"; tok="${tok#\"}"; tok="${tok%\"}"; tok="${tok#$sq}"; tok="${tok%$sq}"
+          case "$tok" in *'$'*) return 0 ;; esac
+          TGT="$tok"
+        fi
+        return 0
+      fi
+      case "$tok" in *'$'*|'') return 0 ;; esac
+      TGT="$tok"; return 0
+    fi
+  done
+  return 0
+}
+
+# dir_target TARGET FIRST: into DT, the path judged for a cp/mv/tee target: TARGET/<basename FIRST> when TARGET
+# ends with /, is . or is an existing directory, else TARGET itself.
+dir_target() {
+  local t="$1" b="${2%/}"
+  b="${b##*/}"; DT="$t"
+  if [[ $t == */ || $t == . || $t == */. || -d $t || ( $t != /* && $t != [A-Za-z]:* && -d "$proj/$t" ) ]]; then DT="${t%/}/${b:-x}"; fi
 }
 
 if [ -z "$hit" ] && [ "$tool" != Bash ] && [ "$tool" != PowerShell ]; then
@@ -225,9 +292,12 @@ elif [ -z "$hit" ]; then
         git) [ "$1" = apply ] && [ "$enforce" = 1 ] && hit="git apply" ;;
         sed) case " $* " in *' -i'*|*' --in-place'*) [ -n "$last" ] && project_code "$last" && hit="sed -i $last" ;; esac ;;
         perl) case " $* " in *' -pi'*|*' -i'*|*' -ni'*) [ -n "$last" ] && project_code "$last" && hit="perl -i $last" ;; esac ;;
-        tee) for a in "${args[@]}"; do project_code "$a" && { hit="tee $a"; break; }; done ;;
-        rm|mv) for a in "${args[@]}"; do project_code "$a" && { hit="$c $a"; break; }; done ;;
-        cp) [ "$n" -gt 1 ] && project_code "$last" && hit="cp $last" ;;
+        tee) for a in "${args[@]}"; do dir_target "$a" "$a"; project_code "$DT" && { hit="tee $a"; break; }; done ;;
+        rm) for a in "${args[@]}"; do project_code "$a" && { hit="$c $a"; break; }; done ;;
+        mv) dir_target "$last" "${args[0]}"
+            for a in "${args[@]:0:n-1}"; do project_code "$a" && { hit="$c $a"; break; }; done
+            [ -z "$hit" ] && project_code "$DT" && hit="mv $last" ;;
+        cp) if [ "$n" -gt 1 ]; then dir_target "$last" "${args[0]}"; project_code "$DT" && hit="cp $last"; fi ;;
       esac
       [ -n "$hit" ] && break
     done <<< "$stripped"
