@@ -17,7 +17,7 @@ Shorthand (every agent brief states `SUPERLITE=<path>`):
 ## Setup
 
 - Branch `superlite/<topic>` if on the default branch (no worktree). Write the start SHA to `.superlite/progress.md` (`- start <sha>`). `commit_task` adds `.superlite/` to `.git/info/exclude` itself.
-- Wave 0 is never yours: `lint --stable` builds `.superlite/briefs/wave0.md` from the plan and prints `START FIRST:` with the Agent line for `superlite:implementer-haiku` (T0; `bash "$SL" wave0 --plan $PLAN` reprints it). Send it first in the same message as the stable set; commit with `commit_task T0`. No skeleton files by you; tasks do not wait for T0. Then `bash "$SL" plan_tools adapter --plan $PLAN`.
+- Wave 0 is never yours: `lint --stable` builds `.superlite/briefs/wave0.md` from the plan and prints `START FIRST:` with the Agent line for `superlite:implementer-haiku` (T0; `bash "$SL" wave0 --plan $PLAN` reprints it). Send it first with the stable set; commit with `commit_task T0`. `Ruling: skip T0` mutes it. No skeleton by you; tasks do not wait for T0. Then `bash "$SL" plan_tools adapter --plan $PLAN`.
 - Prime now: `bash "$SL" build_prime --plan $PLAN --spec SPEC --sections "1,3"` prints `hash size` and writes `.superlite/prime.md`. Start the first ready tasks now. Never retype the prime.
 - Incidents: `.superlite/incidents.jsonl` (agents call `bash "$SL" incident add`); you log BLOCKED and NEEDS_CONTEXT with `--agent coordinator`.
 - Graphify: `bash "$SL" graphify_gate` prints JSON. `use` false: skip. Installed: `graphify update .`. `needs_install` and `allowed`: `uv tool install graphifyy`, `graphify extract . --code-only`. You alone run `graphify update .` after each package commits.

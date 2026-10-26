@@ -167,3 +167,58 @@ def test_python_project_still_uses_pytest(tmp_path):
     (tmp_path / "test_a.py").write_text("def test_a():\n    assert 1 == 1\n", encoding="utf-8")
     cp = rt(tmp_path, "--full")
     assert cp.returncode == 0 and cp.out.strip().startswith("1 0 0"), cp.both
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True,
+                   env={**__import__("os").environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+
+
+def _repo_with_worktree(tmp_path):
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q")
+    (main / "go.mod").write_text("module m\n", encoding="utf-8")
+    _git(main, "add", "go.mod")
+    _git(main, "commit", "-qm", "init")
+    wt = tmp_path / "wt"
+    _git(main, "worktree", "add", "-q", str(wt), "-b", "side")
+    return main, wt
+
+
+SWIFT_DICT = {"language": "swift", "test": "swift test --xunit-output {junit}",
+              "test_file": "swift test --xunit-output {junit} --filter {names}", "junit": "{junit}", "setup": ""}
+
+
+def test_swift_package_detected(tmp_path):
+    (tmp_path / "Package.swift").write_text("// swift-tools-version:5.9\n", encoding="utf-8")
+    sys.path.insert(0, str(SCRIPTS))
+    import testcmd
+    assert testcmd.detect(tmp_path) == SWIFT_DICT
+    r = resolved(tmp_path)
+    assert r["language"] == "swift" and r["command"] == "swift test --xunit-output {junit}" and r["junit"] == "{junit}"
+
+
+def test_names_placeholder_builds_filter(tmp_path):
+    (tmp_path / "Package.swift").write_text("// x\n", encoding="utf-8")
+    assert resolved(tmp_path, "Tests/A/FooTests.swift")["command"] == "swift test --xunit-output {junit} --filter FooTests"
+    sys.path.insert(0, str(SCRIPTS))
+    import testcmd
+    assert testcmd.names_filter(["Tests/PixKitTests/NotificationModelTests.swift", "Tests/X/PushPayloadTests.swift"]) == "NotificationModelTests|PushPayloadTests"
+
+
+def test_worktree_falls_back_to_main_checkout_config(tmp_path):
+    main, wt = _repo_with_worktree(tmp_path)
+    config(main, language="x", test="echo x")
+    r = resolved(wt)
+    assert r["source"] == "test-cmd.json" and r["command"] == "echo x"
+
+
+def test_main_checkout_without_config_is_none(tmp_path):
+    main, wt = _repo_with_worktree(tmp_path)
+    sys.path.insert(0, str(SCRIPTS))
+    import testcmd
+    assert testcmd.main_checkout_config(main) is None
+    assert testcmd.main_checkout_config(wt) is None
+    assert testcmd.main_checkout_config(tmp_path / "nowhere") is None
+    assert resolved(wt)["source"] == "markers" and resolved(wt)["command"] == "go test ./..."

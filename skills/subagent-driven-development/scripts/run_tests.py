@@ -170,6 +170,41 @@ def parse_junit(xml_path):  # O(X + T*(d + len(failure text)))
     return counts, failures, files  # O(1)
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")  # CSI and OSC escape sequences | O(1)
+
+
+def strip_ansi(text):  # O(len text)
+    return ANSI_RE.sub("", text)  # O(len text)
+
+
+def junit_reports(xml_path, literal):  # O(n log n) for n files next to xml_path
+    """Every non-empty `<stem>*.xml` beside xml_path (sidecars) plus the literal report, sorted."""
+    found = {p for p in Path(xml_path).parent.glob(Path(xml_path).stem + "*.xml")}  # O(n)
+    if literal is not None:  # O(1)
+        found.add(Path(literal))  # O(1)
+    return sorted(p for p in found if p.exists() and p.stat().st_size)  # O(n log n)
+
+
+def merge_junit(paths):  # O(sum of parse_junit)
+    """Sum parse_junit over the reports; a file that is not XML is skipped. -> (counts, failures, files)"""
+    counts = {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}  # O(1)
+    failures, files = [], {}  # O(1)
+    for p in paths:  # O(len paths) iterations
+        try:  # O(1)
+            c, f, fl = parse_junit(p)  # O(X + T*d)
+        except ET.ParseError:  # O(1)
+            continue  # O(1)
+        for k in ("passed", "failed", "skipped"):  # O(1)
+            counts[k] += c[k]  # O(1)
+        counts["skipped_tests"] += c["skipped_tests"]  # O(sk)
+        failures += f  # O(k)
+        for name, (ok, bad) in fl.items():  # O(F) iterations
+            cur = files.setdefault(name, [0, 0])  # O(1)
+            cur[0] += ok  # O(1)
+            cur[1] += bad  # O(1)
+    return counts, failures, files  # O(1)
+
+
 def existing_verified(log):  # O(B)
     seen = set()  # O(1)
     p = Path(log)  # O(1)
@@ -257,14 +292,14 @@ def run_other(a, spec, paths, label):  # one runner command (any language) | O(X
         r = pyrun.run_tree(sub(spec["command"]), shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)  # O(o) + the run
         seconds = time.monotonic() - t0  # O(1)
         text = (r.stdout or "") + (r.stderr or "")  # O(o)
-        report = xml_path if xml_path.exists() and xml_path.stat().st_size else (literal if literal and literal.exists() and literal.stat().st_size else None)  # O(1)
-        if report is not None:  # O(1)
-            try:  # O(1)
-                counts, failures, files = parse_junit(report)  # O(X + T*d)
-            except ET.ParseError:  # O(1)
-                report = None  # O(1)
+        reports = junit_reports(xml_path, literal)  # the main report plus sidecars | O(n log n)
+        report = None  # O(1)
+        if reports:  # O(1)
+            counts, failures, files = merge_junit(reports)  # O(X + T*d)
+            if sum(counts[k] for k in ("passed", "failed", "skipped")):  # nothing parseable: fall back to the exit code | O(1)
+                report = reports  # O(1)
         if report is None:  # no JUnit: exit code plus the last 40 lines, failing names best effort | O(o)
-            p = testcmd.parse_output(text, r.returncode)  # O(o)
+            p = testcmd.parse_output(strip_ansi(text), r.returncode)  # O(o)
             counts = {"passed": p["passed"], "failed": p["failed"], "skipped": p["skipped"], "skipped_tests": []}  # O(1)
             last = next((ln for ln in reversed(p["tail"]) if ln.strip()), "no output")  # O(1)
             failures = [("-", 0, f"{n}: failed") for n in p["names"]] or ([("-", 0, f"exit code {r.returncode}: {last}"[:160])] if r.returncode else [])  # O(k)

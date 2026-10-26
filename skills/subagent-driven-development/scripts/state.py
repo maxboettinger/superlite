@@ -10,6 +10,9 @@ Resolution, the same order as the hooks (hooks/superlite-state.sh):
   3. ./.superlite, unless another live session owns it; then the session's private folder
      $SUPERLITE_HOME/sessions/<session id>.d/.superlite (state set before any plan, moved to the plan's folder on the
      next bind; the hooks judge paths against the launch directory meanwhile).
+A bind refuses a folder another live session owns, except that a session launched in the folder's own project (launch
+directory = the .superlite's parent) takes it over when the owner's recorded launch directory (binding line 3) is
+elsewhere; an owner launched in the same directory, or an old binding without line 3, still needs `force`.
 The session id is $SUPERLITE_SESSION_ID (the SessionStart hook writes the hook's id there, so it follows /clear), else
 CLAUDE_CODE_SESSION_ID. A plan (or review plan) given explicitly resolves to the .superlite next to its nearest `docs`
 ancestor below the git toplevel, else at the toplevel, so docs/superpowers/plans/x.md in a worktree maps to
@@ -18,7 +21,7 @@ id), moves a pending gate (orchestrator.json, human-replies.jsonl) from the sess
 folder another live session owns (`force` takes it over). An owner is live while its binding points at the folder.
 Paths stay as given (absolute, symlinks not resolved, a relative path joined to $PWD), as the hooks see them. A
 binding also records $CLAUDE_PID, so the SessionStart hook moves it to the new id after /clear (same process). Bindings
-older than 14 days are pruned on each bind. Library: git_root, plan_dir, session_id, bound, resolve, bind, unbind, owner, live_owner. Stdlib only.
+older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, resolve, bind, unbind, owner, live_owner. Stdlib only.
 """
 # Complexity notation:
 #   d = depth of a path (parents walked), b = bindings in $SUPERLITE_HOME/sessions
@@ -136,6 +139,43 @@ def live_owner(sd, sid=None):  # O(d)
     return o if t is not None and _abs(t) == _abs(sd) else None  # O(d)
 
 
+def launch_dir() -> Path:  # O(d)
+    """Where this session was launched: $CLAUDE_PROJECT_DIR, else the logical $PWD (a stale one gives the real cwd)."""
+    env = os.environ.get("CLAUDE_PROJECT_DIR", "")  # O(1)
+    if env:  # O(1)
+        return _abs(env)  # O(d)
+    pwd = os.environ.get("PWD", "")  # O(1)
+    if os.path.isabs(pwd):  # O(1)
+        try:  # O(1)
+            if os.path.samefile(pwd, os.getcwd()):  # O(1)
+                return _abs(pwd)  # O(d)
+        except OSError:  # O(1)
+            return _abs(pwd)  # O(d)
+    return _abs(os.getcwd())  # O(d)
+
+
+def owner_launch_dir(sid):  # O(1)
+    """The launch directory recorded on line 3 of the session's binding, or None (old binding, unreadable)."""
+    try:  # O(1)
+        lines = _binding(sid).read_text(encoding="utf-8").splitlines()  # O(1)
+    except OSError:  # O(1)
+        return None  # O(1)
+    return Path(lines[2].strip()) if len(lines) > 2 and os.path.isabs(lines[2].strip()) else None  # O(1)
+
+
+def own_project(sd) -> bool:  # O(d)
+    """True when this session was launched in sd's project (the folder's parent)."""
+    return launch_dir() == _abs(sd).parent  # O(d)
+
+
+def _hands_over(sd, other) -> bool:  # O(d)
+    """True when this session may take sd from its live owner without force: launched in sd's project, owner elsewhere."""
+    if not own_project(sd):  # O(d)
+        return False  # O(1)
+    ol = owner_launch_dir(other)  # O(1)
+    return ol is not None and _abs(ol) != _abs(sd).parent  # O(d)
+
+
 def bound(sid=None):  # O(d)
     """The .superlite folder bound to the session, while it exists and no other session took it over; else None."""
     sid = sid or session_id()  # O(1)
@@ -158,7 +198,8 @@ def resolve(plan_or_dir=None) -> Path:  # O(d)
     if b is not None:  # O(1)
         return b  # O(1)
     sid = session_id()  # O(1)
-    if sid and live_owner(".superlite", sid):  # ./.superlite is another session's run | O(d)
+    other = live_owner(".superlite", sid) if sid else None  # O(d)
+    if other and not _hands_over(".superlite", other):  # ./.superlite is another session's run | O(d)
         return private_dir(sid)  # O(1)
     return Path(".superlite")  # O(1)
 
@@ -193,6 +234,8 @@ def bind(sd, sid=None, force=False):  # O(b + d)
         return None  # O(1)
     sd = _abs(sd)  # O(d)
     other = live_owner(sd, sid)  # O(d)
+    if other and not force and _hands_over(sd, other):  # an owner launched elsewhere hands the folder to its own project | O(d)
+        other = None  # O(1)
     if other and not force:  # O(1)
         raise Owned(f"{sd} belongs to session {other}; pass --plan with your own worktree's plan, "  # O(1)
                     "or take it over with `sl orchestrator bind --force`")
@@ -208,7 +251,7 @@ def bind(sd, sid=None, force=False):  # O(b + d)
         f.parent.mkdir(parents=True, exist_ok=True)  # O(1)
         _prune(time.time())  # O(b)
         pid = os.environ.get("CLAUDE_PID", "")  # line 2: the Claude process, so /clear can hand the binding on | O(1)
-        f.write_text(sd.as_posix() + "\n" + (pid + "\n" if pid.isdigit() else ""), encoding="utf-8")  # forward slashes for bash | O(1)
+        f.write_text(sd.as_posix() + "\n" + (pid if pid.isdigit() else "") + "\n" + launch_dir().as_posix() + "\n", encoding="utf-8")  # line 3: launch dir; forward slashes for bash | O(d)
     except OSError as e:  # a read-only home must not stop the run | O(1)
         print(f"superlite: session binding not written ({e}); hooks fall back to the launch directory", file=sys.stderr)  # O(1)
         return None  # O(1)

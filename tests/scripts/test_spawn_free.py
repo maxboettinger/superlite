@@ -77,9 +77,18 @@ def test_incident_append_batches_and_validates(tmp_path):
 
 # ------------------------------------------------------------- dispatch
 
+def isolated_plan(tmp_path):
+    """Copy of the run_plan fixture outside any git toplevel, so the checkout's own
+    .superlite (e.g. briefs/wave0.json of a live run) never leaks into dispatch."""
+    d = tmp_path / "plan_copy"
+    if not d.exists():
+        shutil.copytree(PLAN.parent, d)
+    return d / "plan.md"
+
+
 def pool(tmp_path, agents):
     p = tmp_path / "pool.json"
-    p.write_text(json.dumps({"plan": str(PLAN), "agents": agents}), encoding="utf-8")
+    p.write_text(json.dumps({"plan": str(isolated_plan(tmp_path)), "agents": agents}), encoding="utf-8")
     return p
 
 
@@ -118,6 +127,18 @@ def test_dispatch_reads_committed_from_ledger(tmp_path):
     lines, _ = dispatch(tmp_path, [], ledger=led)
     assert [t for t, _ in lines] == ["T5", "T3", "T4"]
     assert all(d == "fresh" for _, d in lines)
+
+
+def test_dispatch_depends_only_on_the_copied_plans_superlite(tmp_path):
+    lines, _ = dispatch(tmp_path, [])
+    assert "T0" not in [t for t, _ in lines]
+    briefs = isolated_plan(tmp_path).parent / ".superlite" / "briefs"
+    briefs.mkdir(parents=True)
+    (briefs / "wave0.json").write_text(
+        json.dumps({"id": "T0", "synthetic": True, "title": "Wave 0 skeleton", "owns": ["package.json"]}),
+        encoding="utf-8")
+    lines, _ = dispatch(tmp_path, [])
+    assert "T0" in [t for t, _ in lines]
 
 
 # ------------------------------------------------------------- multi-task commit_task

@@ -8,7 +8,8 @@ stdout, one line per ready task, longest predicted first, within the cap:
     Tn agent=<id>        clear winner (D11 scoring, margin >= 3); that agent is now taken
     Tn poll <id>,<id>    tie or no signal: relevance-poll these idle agents
     Tn fresh             no eligible idle agent: start a primed implementer
-    T0 wave0             synthesized Wave 0 skeleton still pending (`sl wave0`): its own agent, first line
+    T0 wave0             synthesized Wave 0 skeleton still pending (`sl wave0`): its own agent, first line;
+                         a ledger line `- Ruling: skip T0` silences it
 stderr: `evict=<id> <reason>` for each idle agent eligible for none of the ready tasks.
 
 Defaults when a flag is omitted: committed tasks come from the ledger's `- commit Tn <sha>`
@@ -36,6 +37,13 @@ import next_tasks as nt  # noqa: E402 | O(1)
 def load_pool(path):  # O(pool bytes)
     p = Path(path)  # O(1)
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {"agents": []}  # O(pool bytes)
+
+
+def skip_t0(ledger):  # O(c)
+    p = Path(ledger)  # O(1)
+    if not p.is_file():  # O(1)
+        return False  # O(1)
+    return any(ln.startswith(("- Ruling: skip T0", "Ruling: skip T0")) for ln in p.read_text(encoding="utf-8", errors="replace").splitlines())  # O(c)
 
 
 def running_from_pool(pool, committed=()):  # O(a)
@@ -141,7 +149,7 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10):  # O(c +
     done = nt.csv(committed) if committed is not None else sorted(ct.committed_tasks(ledger))  # O(c)
     busy = nt.csv(running) if running is not None else running_from_pool(pool, done)  # O(a)
     import wave0  # noqa: E402 | O(1) lazy
-    w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy  # synthesized Wave 0 still pending | O(1)
+    w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy and not skip_t0(ledger)  # synthesized Wave 0 still pending | O(1)
     lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0)  # see plan_dispatch
     if w0:  # first line, a haiku lane agent | O(R)
         cfg = routing.load_cfg()  # O(file)

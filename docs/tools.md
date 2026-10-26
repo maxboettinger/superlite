@@ -15,9 +15,9 @@ Mechanical steps are scripts, not agents. Every tool runs as `bash <skill-dir>/s
 | `assign` | Scores idle agents and picks the most relevant one |
 | `commit_task` | Checks scope, then checkpoints (default: hidden `refs/superlite/*` commits, branch untouched) or commits (autocommit on) one or more tasks' owned files; `--dispatch` also prints the next dispatch |
 | `autocommit` | `on`/`off`/`status` opt-in real commits (`.superlite/autocommit.json`, env `SUPERLITE_AUTOCOMMIT=1`); `apply` turns checkpoints into commits on the current branch; `clean` deletes them |
-| `run_tests` | Runs the project's test command, with `--background`, then `--wait` for the summary; writes `.superlite/test-summary.json` |
+| `run_tests` | Runs the project's test command (`{junit}`, `{names}` = test file basenames joined by `\|` for `--filter`; every non-empty sidecar `<junit stem>*.xml` is counted), with `--background`, then `--wait` for the summary; writes `.superlite/test-summary.json` |
 | `testcmd` | Resolves the project's test command: `.superlite/test-cmd.json`, else detection (npm, go, cargo, dotnet, Python) |
-| `pt_review` | `adapter`, `packet` (the final review packet) and `contract` (seam checks) |
+| `pt_review` | `adapter`, `packet` (the final review packet) and `contract` (seam checks; a producer without Python sources is checked by declaration: the first name of each Produces must be declared in an owned source file, parameters unchecked). The packet diffs against the newest `checkpoints.json` sha when there is one, else the working tree |
 | `probe_run` | Parallel robustness probes with no agents (Python projects only) |
 | `incident` | Records and queries the shared incident log (file, line, context) |
 | `budget` | One line of elapsed time and cost against the plan's target and cap |
@@ -29,3 +29,5 @@ Mechanical steps are scripts, not agents. Every tool runs as `bash <skill-dir>/s
 | `state` | `where`: which `.superlite` this session uses (`SUPERLITE_STATE_DIR`, the session's binding, else `./.superlite`; a plan resolves at its git toplevel) |
 
 `_pyrun.py` is a shared helper, not a tool. Probes live in `probes/` with the probe pack in `probes/pack/`.
+
+The coordinator guard (`hooks/block-coordinator-edits`) judges `cp`, `mv` and `tee` with a directory target (trailing `/`, `.` or an existing directory) by `<dir>/<basename of the first source>`, and resolves `sys.argv[N]` writer targets to the interpreter's N-th positional argument, through one `VAR=literal` assignment in the same command; anything unresolvable still blocks.

@@ -50,6 +50,7 @@ from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import _pyrun as pyrun  # noqa: E402 | O(1)
+import autocommit  # noqa: E402 | O(1)
 
 CATEGORIES = ("deep", "numeric", "encoding", "protocol", "file", "state")  # O(1)
 CHARS_PER_TOKEN = 1.9  # 20k tokens ~ 38k chars (plan section 5) | O(1)
@@ -62,6 +63,16 @@ LABEL_RE = re.compile(r"^\s*(?:[-*]\s+)?\*\*([A-Za-z][A-Za-z .]*?):?\*\*:?\s*(.*
 EDGE_RE = re.compile(r"\b([A-Z]{1,3}\d+[a-z]?)(?:\[[^\]]*\])?\s*-->\s*(?:\|[^|]*\|\s*)?([A-Z]{1,3}\d+[a-z]?)\b")  # O(1)
 HTTP_LINE_RE = re.compile(r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S*)\s*(.*)$")  # O(1)
 TEST_PATH_RE = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$)")  # O(1)
+_DECL_GENERIC = r"(class|interface|enum|fun|func|def|function|struct|record|trait)\s+{name}\b"  # O(1)
+DECL_PATTERNS = {  # extension -> declaration regex with a {name} slot | O(1)
+    ".swift": r"(struct|class|enum|actor|protocol|func|typealias|let|var)\s+{name}\b",  # O(1)
+    **{e: r"(class|function|interface|type|enum|const|let|var)\s+{name}\b" for e in (".ts", ".tsx", ".js", ".mjs", ".jsx")},  # O(1)
+    ".go": r"(func(\s*\([^)]*\))?|type|var|const)\s+{name}\b",  # O(1)
+    ".rs": r"(fn|struct|enum|trait|type|const|static|mod)\s+{name}\b",  # O(1)
+    **{e: _DECL_GENERIC for e in (".kt", ".java", ".cs", ".rb", ".php")},  # O(1)
+}  # O(1)
+STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')  # O(1)
+DECLARED_NOTES: list[str] = []  # tasks checked by declaration in the last check_interfaces call | O(1)
 CONSUMER_EXT = {".html", ".htm", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".vue", ".py"}  # O(1)
 
 
@@ -289,6 +300,8 @@ def planned_items(plan: Plan, task_ids: list[str] | None = None) -> list[Planned
             parsed = parse_sig(item)  # O(m) per iteration
             if parsed:  # O(1)
                 out.append(Planned(tid, item, parsed[0], parsed[1], parsed[2], t.start + 1))  # O(1)
+            elif by_declaration(plan, tid) and (nm := re.match(r"^`?([A-Za-z_][\w.]*)", item.strip())):  # non-Python signature: name only | O(m)
+                out.append(Planned(tid, item, nm.group(1), None, None, t.start + 1))  # O(1)
     return out  # O(1)
 
 
@@ -341,6 +354,8 @@ def compare_sig(p: Planned, real: dict) -> list[str]:  # O(p^2 + p*m) total
     """Differences between a planned signature and the real one (empty = match)."""  # O(m)
     if not real.get("ok"):  # O(m)
         return [f"{p.qual}: {real.get('error', 'cannot read the real signature')}"]  # O(m)
+    if real.get("declared"):  # declared-only: parameters are not compared | O(1)
+        return []  # O(1)
     msgs: list[str] = []  # O(m)
     if p.args_src is not None:  # O(m)
         want = _params_from_src(p.args_src)  # O(m)
@@ -531,8 +546,59 @@ def rel_to(root: Path, f: str | Path | None) -> str:  # O(d) path syscalls total
         return str(f).replace("\\", "/")  # O(d)
 
 
+def is_test_path(rel: str) -> bool:  # O(m) total
+    return bool(TEST_PATH_RE.search(rel)) or "Tests" in rel.split("/")  # O(m)
+
+
+def source_owns(plan: Plan, tid: str) -> list[str]:  # O(o*m) total
+    return [o for o in plan.tasks[tid].owns() if not is_test_path(o)]  # O(o*m)
+
+
+def by_declaration(plan: Plan, tid: str) -> bool:  # O(o*m) total
+    owned = source_owns(plan, tid)  # O(o*m)
+    return bool(owned) and not any(o.endswith(".py") for o in owned)  # O(o)
+
+
+def find_declaration(root: Path, files: list[str], name: str) -> tuple[str, int] | None:  # O(F*B) total
+    """First (file, line) that declares `name`; comments, strings and test files are ignored."""  # O(1)
+    for rel in files:  # O(F) iterations
+        pat = DECL_PATTERNS.get(Path(rel).suffix)  # O(1)
+        f = root / rel  # O(1)
+        if not pat or is_test_path(rel) or not f.is_file():  # O(d)
+            continue  # O(1)
+        rx = re.compile(pat.replace("{name}", re.escape(name)))  # O(m)
+        for n, ln in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):  # O(B) iterations
+            if ln.lstrip().startswith(("//", "#", "*", "/*")):  # O(1)
+                continue  # O(1)
+            code = STRING_RE.sub('""', ln).split("//", 1)[0]  # O(len(ln))
+            if rx.search(code):  # O(len(ln))
+                return rel, n  # O(1)
+    return None  # O(1)
+
+
+def check_declarations(plan: Plan, root: Path, p: Planned) -> list[Mismatch]:  # O(F*B) total
+    files = source_owns(plan, p.task)  # O(o*m)
+    hit = find_declaration(root, files, p.parts[0])  # O(F*B)
+    if hit:  # O(1)
+        return []  # O(1)
+    shown = ", ".join(files)  # O(m)
+    return [Mismatch(1, files[0], 1, f"{p.task} Produces: `{p.parts[0]}` not declared in {shown}", p.task)]  # O(1)
+
+
 def check_interfaces(plan: Plan, root: Path, task_ids: list[str] | None) -> tuple[list[Mismatch], int]:  # O(P*(d^2 + o*B + p^2)) + 1 subprocess total
     items = planned_items(plan, task_ids)  # O(1)
+    DECLARED_NOTES.clear()  # O(1)
+    decl = [p for p in items if by_declaration(plan, p.task)]  # O(P*o)
+    if decl:  # O(1)
+        out = [m for p in decl for m in check_declarations(plan, root, p)]  # O(P*F*B)
+        DECLARED_NOTES.extend(sorted({p.task for p in decl}))  # O(P log P)
+        rest = [p for p in items if p not in decl]  # O(P^2)
+        locs = [locate(root, plan, p) for p in rest]  # O(1)
+        reals = read_real(root, [(m, c) for m, c, _f in locs])  # O(1)
+        for p, (mod, chain, f), real in zip(rest, locs, reals):  # O(P) iterations
+            for m in compare_sig(p, real):  # O(msgs) iterations
+                out.append(Mismatch(1, rel_to(root, real.get("file") or f) if (real.get("file") or f) else rel_to(root, plan.path), 1, f"{p.task} Produces: {m}", p.task))  # O(1)
+        return out, len(items)  # O(1)
     locs = [locate(root, plan, p) for p in items]  # O(1)
     reals = read_real(root, [(m, c) for m, c, _f in locs])  # O(1)
     out: list[Mismatch] = []  # O(1)
@@ -970,6 +1036,8 @@ def cmd_contract(a: argparse.Namespace) -> int:  # O(parts above + Mm file opens
         mismatches, n = check_interfaces(plan, root, [producer.id])  # O(1)
         if n == 0:  # O(1)
             notes.append(f"part1: {producer.id} has no parseable Produces signatures")  # O(1)
+        if DECLARED_NOTES:  # O(1)
+            notes.append(f"part1: {n} Produces name(s) of {', '.join(DECLARED_NOTES)} checked by declaration, parameters unchecked")  # O(1)
         m2, n2 = check_data_contract(plan, root, producer, consumer)  # O(1)
         mismatches += m2  # O(1)
         notes += n2  # O(1)
@@ -980,6 +1048,8 @@ def cmd_contract(a: argparse.Namespace) -> int:  # O(parts above + Mm file opens
         label = "contract"  # O(1)
         mismatches, n = check_interfaces(plan, root, None)  # O(1)
         notes.append(f"part1: {n} Produces signature(s) checked")  # O(1)
+        if DECLARED_NOTES:  # O(1)
+            notes.append(f"part1: Produces of {', '.join(DECLARED_NOTES)} checked by declaration, parameters unchecked")  # O(1)
     for n_ in notes:  # O(parts) iterations
         print(f"note: {n_}")  # O(1)
     for m in mismatches:  # O(Mm) iterations
@@ -1389,6 +1459,16 @@ def cross_package_calls(root: Path) -> list[str]:  # O(S*B) total, reads+parses 
     return [f"- {f}:{ln}  {a} -> {b}: {full}()" for f, ln, a, b, full in sorted(rows)]  # O(R log R) sort of rows
 
 
+def diff_head(root: Path) -> str | None:  # O(file size) total
+    """Sha of the newest checkpoint entry, or None without checkpoints."""  # O(1)
+    try:  # O(1)
+        entries = json.loads((root / autocommit.STATE).read_text(encoding="utf-8")).get("entries") or []  # O(file size)
+        sha = entries[-1]["sha"]  # O(1)
+        return sha if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{1,64}", sha) else None  # a hex id only: never an option or None | O(1)
+    except (OSError, ValueError, AttributeError, IndexError, KeyError, TypeError):  # O(1)
+        return None  # O(1)
+
+
 def git_diff_stat(root: Path, base: str | None) -> str:  # O(X) + up to 2 git subprocess spawns total
     def git(*args: str) -> subprocess.CompletedProcess | None:  # O(X) + 1 git subprocess spawn
         try:  # O(X)
@@ -1402,7 +1482,8 @@ def git_diff_stat(root: Path, base: str | None) -> str:  # O(X) + up to 2 git su
     if base is None:  # O(1)
         first = git("rev-list", "--max-parents=0", "HEAD")  # O(1)
         base = first.stdout.split()[0] if first and first.returncode == 0 and first.stdout.split() else "HEAD"  # O(1)
-    r = git("diff", "--stat", base)  # O(1)
+    head = diff_head(root)  # O(file size)
+    r = git("diff", "--stat", base, *([head] if head else []))  # O(1)
     if not r or r.returncode != 0:  # O(1)
         return "(diff stat unavailable)"  # O(1)
     return r.stdout.strip() or "(no changes)"  # O(1)
@@ -1422,6 +1503,7 @@ def source_excerpts(root: Path, base: str | None, files: list[str],  # O(X) + on
                                capture_output=True, text=True, encoding="utf-8", errors="replace")  # O(1)
         roots = first.stdout.split() if first.returncode == 0 else []  # O(1)
         base = roots[0] if roots else "HEAD"  # O(1)
+    head = diff_head(root)  # O(file size)
     out: list[str] = []  # O(1)
     left = total  # O(1)
     for n, f in enumerate(files):  # O(files) iterations
@@ -1429,7 +1511,7 @@ def source_excerpts(root: Path, base: str | None, files: list[str],  # O(X) + on
             out.append(f"- (excerpts stopped at the {total}-line total cap; {len(files) - n} more file(s) omitted)")  # O(1)
             break  # O(1)
         try:  # O(1)
-            r = subprocess.run(["git", "-C", str(root), "diff", "-U3", base, "--", f],  # O(X) + git spawn
+            r = subprocess.run(["git", "-C", str(root), "diff", "-U3", base, *([head] if head else []), "--", f],  # O(X) + git spawn
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
         except (OSError, subprocess.TimeoutExpired):  # O(1)
             continue  # O(1)
