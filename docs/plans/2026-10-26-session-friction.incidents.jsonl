@@ -1,0 +1,41 @@
+{"kind":"rule-block","agent":"coordinator","tool":"Bash","target":"PLANREF=Found in the session audit of the PixKit notifications build (2026-10-26). Fix planned in docs/plans/2026-10-26"}
+{"file": "tests/scripts/test_testcmd.py", "line": 204, "context": "test_names_placeholder_builds_filter: AssertionError: assert 'swift test -...ilter {names}' == 'swift test -...lter FooTests'", "agent": "run_tests", "kind": "test-failure", "resolution": "open", "time": "09:19:37"}
+{"file": "tests/scripts/test_testcmd.py", "line": 204, "context": "test_names_placeholder_builds_filter: AssertionError: assert 'swift test -...ilter {names}' == 'swift test -...lter FooTests'", "agent": "run_tests", "kind": "test-failure", "resolution": "open", "time": "09:19:41"}
+{"file": "tests/scripts/test_pt_review_declarations.py", "line": 87, "context": "test_declaration_line_in_fixture: AssertionError: assert ('Sources/Kit...ns.swift', 12) == ('Sources/Kit...ns.swift', 11)", "agent": "run_tests", "kind": "test-failure", "resolution": "open", "time": "09:20:28"}
+{"file": "docs/plans/2026-10-26-session-friction.spec.md", "line": 0, "context": "T1: change outside Owns blocked by commit_task; nothing committed", "agent": "commit_task", "kind": "exception", "resolution": "open", "time": "09:21:18"}
+{"file": "docs/plans/2026-10-26-session-friction.spec.md", "line": 0, "context": "T2: change outside Owns blocked by commit_task; nothing committed", "agent": "commit_task", "kind": "exception", "resolution": "open", "time": "09:21:18"}
+{"file": "docs/plans/2026-10-26-session-friction.spec.md", "line": 0, "context": "T4: change outside Owns blocked by commit_task; nothing committed", "agent": "commit_task", "kind": "exception", "resolution": "open", "time": "09:21:18"}
+{"file": "skills/subagent-driven-development/scripts/pt_review.py", "line": 1467, "context": "diff_head accepted null or option-like sha; now hex-only, tests added", "agent": "reviewer", "kind": "workaround", "resolution": "fixed", "confidence": "high", "time": "09:24:21"}
+{"file": "skills/subagent-driven-development/scripts/run_tests.py", "line": 300, "context": "sidecar merge: main report kept, no double count, non-XML skipped", "agent": "reviewer", "kind": "verified", "resolution": "fixed", "confidence": "high", "time": "09:24:21"}
+{"file": "skills/subagent-driven-development/scripts/testcmd.py", "line": 37, "context": "worktree fallback: nonzero git rc returns None, main checkout skipped", "agent": "reviewer", "kind": "verified", "resolution": "fixed", "confidence": "high", "time": "09:24:21"}
+{"file": "skills/subagent-driven-development/scripts/pt_review.py", "line": 580, "context": "find_declaration skips comments/strings/tests; DECLARED_NOTES acceptable given fixed return signature, cleared per call", "agent": "reviewer", "kind": "verified", "resolution": "fixed", "confidence": "medium", "time": "09:24:21"}
+{"file": "tests/scripts/test_0_3_1_scripts.py", "line": 0, "context": "run_tests full: 29 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_autocommit.py", "line": 0, "context": "run_tests full: 9 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_block_coordinator_edits.py", "line": 0, "context": "run_tests full: 71 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_block_unsafe_kill.py", "line": 0, "context": "run_tests full: 9 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_capture_hooks.py", "line": 0, "context": "run_tests full: 14 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_dispatch_skip.py", "line": 0, "context": "run_tests full: 3 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_graphify_gate.py", "line": 0, "context": "run_tests full: 5 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_human_gate.py", "line": 0, "context": "run_tests full: 71 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_incident.py", "line": 0, "context": "run_tests full: 9 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_metrics_history.py", "line": 0, "context": "run_tests full: 18 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_no_popup_windows.py", "line": 0, "context": "run_tests full: 1 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_orchestrator.py", "line": 0, "context": "run_tests full: 23 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_plan_tools.py", "line": 0, "context": "run_tests full: 55 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_probe_run.py", "line": 0, "context": "run_tests full: 20 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_pt_review.py", "line": 0, "context": "run_tests full: 29 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_pt_review_declarations.py", "line": 0, "context": "run_tests full: 17 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_report.py", "line": 0, "context": "run_tests full: 6 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_rewrite_test_runs.py", "line": 0, "context": "run_tests full: 50 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_routing.py", "line": 0, "context": "run_tests full: 21 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_run_scripts.py", "line": 0, "context": "run_tests full: 34 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_run_tests_sidecars.py", "line": 0, "context": "run_tests full: 3 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_session_handover.py", "line": 0, "context": "run_tests full: 6 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_session_start.py", "line": 0, "context": "run_tests full: 1 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_session_state.py", "line": 0, "context": "run_tests full: 52 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_shape.py", "line": 0, "context": "run_tests full: 17 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_spawn_free.py", "line": 0, "context": "run_tests full: 20 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_stable_split.py", "line": 0, "context": "run_tests full: 28 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_testcmd.py", "line": 0, "context": "run_tests full: 14 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_wave0.py", "line": 0, "context": "run_tests full: 9 tests pass", "agent": "run_tests", "kind": "verified", "time": "09:30:30"}
+{"file": "tests/scripts/test_testcmd.py", "line": 204, "context": "test_names_placeholder_builds_filter: names_filter fills {names}; full suite 644 passed", "agent": "coordinator", "kind": "verified", "resolution": "fixed", "time": "09:38:23"}

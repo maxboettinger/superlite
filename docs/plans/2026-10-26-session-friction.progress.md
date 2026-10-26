@@ -1,0 +1,33 @@
+- start 96285edffe83296525ed8f850d3e11f6ce3fe1d2
+- unblocked: dispatched T0 T1 T2 T3 T4 T5 T6 at 09:16:31; waiting on fixes: none
+- Ruling: skip T0 - every Owns file but the new test files exists, implementers create their own tests; no skeleton to build - cost if wrong: none
+- Ruling: fresh implementers get the prime by path and sha, not pasted - six copies of 20 KB from Opus cost more than six Reads - cost if wrong: one extra Read per agent
+- tests fast passed=12 failed=0 skipped=0 seconds=2.6
+- tests fast passed=13 failed=1 skipped=0 seconds=2.5
+- tests fast passed=16 failed=1 skipped=0 seconds=2.7
+- tests fast passed=14 failed=0 skipped=0 seconds=2.4
+- tests fast passed=12 failed=0 skipped=0 seconds=1.5
+- tests fast passed=120 failed=0 skipped=0 seconds=4.0
+- tests fast passed=37 failed=1 skipped=0 seconds=4.2
+- Ruling: T4 resolve() (set/approve without --plan) applies the own-project takeover too - the Review Focus case needs it and it is the hand-over path - cost if wrong: a session launched in a worktree takes over a run its owner started from elsewhere, which is the intent
+- Ruling: T2 empty JUnit falls back to exit-code parsing - both paths exit 1 and the fallback names the cause - cost if wrong: a different failure text
+- Ruling: bump-version --audit noise from .superlite/prime.md accepted - the folder is git-excluded and the audit scans untracked files - cost if wrong: none for the release
+- Ruling: plan and spec committed by hand before the first checkpoint - commit_task blocks the unowned spec file as out-of-scope - cost if wrong: one docs commit on the branch
+- commit T1 2941c358c8 testcmd: Swift detection, names, worktree fallback
+- commit T2 e4c2c842fe run_tests: sidecar JUnit merge, ANSI-free log
+- commit T3 818c53d966 pt_review: declaration contract, checkpoint diff
+- commit T4 4e130623f6 state: own-project session takes over
+- Ruling: T5 mv example in the plan was wrong - a root-level a.txt is project code during a run, so mv a.txt .superlite/ blocks; the test uses docs/plans/a.md - cost if wrong: none
+- commit T5 ffdca773c3 guard: dir targets and argv writers
+- Ruling: T6 tightened two existing Wave 0 phrases to fit the skill cap ('Send it first with the stable set', 'No skeleton by you') - no rule lost - cost if wrong: none
+- commit T6 d0ed70d3ee dispatch skip T0, docs, version 1.2.1
+- commit T3 3b7e7dcbc1 pt_review: declaration contract, checkpoint diff
+- review: package T1-T3 reviewed, 1 fix (diff_head sha validation), no source findings otherwise
+- Ruling: full suite scoped to tests/scripts via .superlite/test-cmd.json - a bare pytest from the root collects bench/tasks hidden tests that need their own tree - cost if wrong: none
+- commit T5 5ca559a3ba guard: dir targets and argv writers
+- review: package T4-T6 reviewed, 2 guard fixes (argv flag shift, dir target vs project), docs match
+- Ruling: F-T6-1 (test_spawn_free reads the checkout's live .superlite) is a pre-existing test-isolation defect, fixed in the test only and committed by hand - commit_task cannot stage an unowned test file - cost if wrong: one test-only commit
+- fix: F-T6-1 committed by hand 8ee9ff7
+- tests full passed=644 failed=0 skipped=1 seconds=176.8
+- final review: CHANGES_REQUESTED, 4 findings, none a code defect: F1 packet diff stat omitted untracked files (the installed plugin 1.2.0 builds the packet; T3 fixes exactly this; every checkpoint lists its test files), F2 line 12 is the real `public struct NotificationPreferences` (line 11 is a doc comment), F3 {names} incidents closed by the verified entry, F4 Windows-only skipif
+- Ruling: final-review findings F1-F4 closed without code changes - each verified against the tree - cost if wrong: none, the suite is green
