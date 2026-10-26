@@ -42,8 +42,11 @@ def test_background_returns_at_once_then_wait_reads_green(tmp_path):
     proj = project(tmp_path, "pass")
     r = run("run_tests", "--fast", "test_pass.py", "--background", cwd=proj)
     assert r.returncode == 0, r.stderr
-    line = r.stdout.strip().splitlines()[-1]
+    lines = r.stdout.strip().splitlines()
+    line = lines[0]
     assert line.startswith("summary: ")
+    assert lines[1].startswith('wait: bash "$SL" run_tests --wait ')
+    assert lines[1].endswith(line[len("summary: "):])
     w = run("run_tests", "--wait", "--timeout", "120", cwd=proj)
     assert w.returncode == 0, w.stdout + w.stderr
     assert json.loads(w.stdout)["failed"] == 0
@@ -90,7 +93,7 @@ def test_two_background_runs_keep_separate_summaries(tmp_path):
     proj = project(tmp_path, "pass")
     a = run("run_tests", "--fast", "test_pass.py", "--background", cwd=proj)
     b = run("run_tests", "--fast", "test_pass.py", "--background", cwd=proj)
-    pa, pb = (x.stdout.strip().splitlines()[-1].split(": ", 1)[1] for x in (a, b))
+    pa, pb = (x.stdout.strip().splitlines()[0].split(": ", 1)[1] for x in (a, b))
     assert pa != pb
     ptr = json.loads((proj / ".superlite" / "test-summary.latest").read_text(encoding="utf-8"))
     assert ptr["summary"] == pb  # the pointer names the newest run

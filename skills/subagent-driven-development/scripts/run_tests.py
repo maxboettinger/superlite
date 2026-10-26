@@ -3,7 +3,7 @@
 
     run_tests.py [--fast PATHS... | --full] [--log PATH] [--ledger PATH]
                  [--summary PATH] [--background]
-    run_tests.py --wait [--timeout S] [--summary PATH]
+    run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
 Prints `passed failed skipped seconds` (errors count as failed). Each failing
 test becomes a `test-failure` incident; on a --full run each test file whose
@@ -21,6 +21,9 @@ at once. Each background run gets its own summary file (`test-summary-<id>.json`
 finishes it also publishes its summary to --summary, unless a newer run has started since.
 --wait blocks until the pointed run's own summary exists (an older summary never counts),
 prints it, and exits 0 green, 1 red, 2 on timeout or when no background run was started.
+--wait PATH waits on exactly that run's summary (the `summary:` line; --background also prints
+`wait: bash "$SL" run_tests --wait <path>`, copy it verbatim); bare --wait uses the shared pointer.
+Put --wait last or before another flag: argparse takes a following word as its PATH.
 Stdlib only.
 """
 # Complexity notation:
@@ -86,15 +89,26 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
                                                       "started": time.time()}) + "\n")  # O(1)
     pyrun.spawn_detached(child, mine.with_suffix(".log"))  # O(1) + process spawn
     print(f"summary: {mine}")  # O(1)
+    print(wait_line(mine))  # O(1)
     return 0  # O(1)
 
 
+def wait_line(path):  # O(1)
+    return f'wait: bash "$SL" run_tests --wait {path}'  # O(1)
+
+
+def wait_target(a):  # O(1)
+    if a.wait_path:  # O(1) an explicit run
+        return Path(a.wait_path)  # O(1)
+    ptr = read_pointer(a.summary)  # O(1) bare --wait: the shared pointer
+    return Path(ptr["summary"]) if ptr else None  # O(1)
+
+
 def wait_background(a):  # O(timeout / POLL_SECONDS) polls
-    ptr = read_pointer(a.summary)  # O(1)
-    if not ptr:  # O(1)
+    mine = wait_target(a)  # O(1)
+    if mine is None:  # O(1)
         print("run_tests: no background run to wait for", file=sys.stderr)  # O(1)
         return 2  # O(1)
-    mine = Path(ptr["summary"])  # O(1)
     deadline = time.monotonic() + (a.timeout if a.timeout is not None else DEFAULT_WAIT)  # O(1)
     while True:  # O(timeout / POLL_SECONDS) iterations
         if mine.exists():  # O(1)
@@ -251,13 +265,14 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                     help="test summary JSON for pt_review packet (default %(default)s)")  # O(1)
     ap.add_argument("--background", action="store_true",  # O(1)
                     help="start a detached run, print `summary: <path>`, exit 0")  # O(1)
-    ap.add_argument("--wait", action="store_true", help="wait for the latest background run's summary")  # O(1)
+    ap.add_argument("--wait", nargs="?", const="", default=None, dest="wait_path", metavar="PATH",  # O(1)
+                    help="wait for PATH's run (the `summary:` line); bare: the latest background run")  # O(1)
     ap.add_argument("--timeout", type=float, default=None, help=f"--wait limit in seconds (default {DEFAULT_WAIT:.0f})")  # O(1)
     ap.add_argument("--run-id", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
     a = ap.parse_args(argv)  # O(1)
-    if a.wait:  # O(1)
+    if a.wait_path is not None:  # O(1)
         return wait_background(a)  # O(timeout / POLL_SECONDS)
     if a.background:  # O(1)
         return start_background(a, argv)  # O(len argv) + spawn
