@@ -117,7 +117,7 @@ def plan_folder(plan):  # O(len path) + process spawn
     if r.returncode != 0 or not r.stdout.strip():  # O(1)
         return ""  # O(1)
     try:  # O(1)
-        rel = Path(plan).resolve().parent.relative_to(Path(r.stdout.strip()).resolve()).as_posix()  # O(len path)
+        rel = Path(str(plan).replace("\\", "/")).resolve().parent.relative_to(Path(r.stdout.strip()).resolve()).as_posix()  # O(len path)
     except ValueError:  # plan outside the repo | O(1)
         return ""  # O(1)
     return "" if rel == "." else rel + "/"  # O(1)

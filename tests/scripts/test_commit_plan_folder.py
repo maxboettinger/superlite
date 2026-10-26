@@ -84,3 +84,14 @@ def test_changed_files_skip_prefix(tmp_path, monkeypatch):
     monkeypatch.chdir(repo)
     assert commit_task.changed_files("docs/plans/") == ["src/a.py"]
     assert commit_task.changed_files("") == ["docs/plans/x.spec.md", "src/a.py"]
+
+
+def test_plan_folder_abs_subdir_backslash_root(tmp_path, monkeypatch):
+    repo = repo_with_plan(tmp_path)
+    (repo / "sub").mkdir()
+    monkeypatch.chdir(repo)
+    assert commit_task.plan_folder(str(repo / PLAN)) == "docs/plans/"
+    assert commit_task.plan_folder("docs\\plans\\p.md") == "docs/plans/"
+    monkeypatch.chdir(repo / "sub")
+    assert commit_task.plan_folder("../docs/plans/p.md") == "docs/plans/"
+    assert commit_task.plan_folder(str(repo / "plan.md")) == ""
