@@ -6,7 +6,7 @@
 Order: (a) `.superlite/test-cmd.json` {"language","test","test_file","junit","setup"} (JSON; `test_file` is a template
 with {files}; `{junit}` in a command is replaced by the path run_tests wants the JUnit XML at; a literal `junit` path is read
 after the run); (b) detection from the project's own marker files: package.json scripts.test (npm test; the JUnit flag when
-vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo.toml, *.sln / *.csproj, then Python
+vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo.toml, Package.swift, *.sln / *.csproj, then Python
 (pyproject.toml, pytest.ini, setup.cfg, tox.ini, conftest.py, or test_*.py files); (c) otherwise None.
 Library: resolve, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
 """
@@ -16,6 +16,7 @@ import argparse  # O(1)
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
+import subprocess  # O(1)
 import sys  # O(1)
 from pathlib import Path  # O(1)
 
@@ -31,6 +32,23 @@ def read_config(root: Path):  # O(file)
     except (OSError, ValueError):  # O(1)
         return None  # O(1)
     return d if isinstance(d, dict) and d.get("test") else None  # O(1)
+
+
+def main_checkout_config(root: Path):  # config of the main checkout when root is a linked worktree | O(file)
+    try:  # O(1)
+        out = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-common-dir"], capture_output=True, text=True, timeout=10)  # O(1)
+        if out.returncode != 0 or not out.stdout.strip():  # O(1)
+            return None  # O(1)
+        common = (Path(root) / out.stdout.strip()).resolve()  # O(1)
+    except (OSError, ValueError, subprocess.SubprocessError):  # O(1)
+        return None  # O(1)
+    if common == (Path(root) / ".git").resolve():  # the main checkout itself | O(1)
+        return None  # O(1)
+    return read_config(common.parent)  # O(file)
+
+
+def names_filter(paths) -> str:  # basenames without suffix joined by | | O(p)
+    return "|".join(Path(p).stem for p in paths)  # O(p)
 
 
 def _pkg(root: Path):  # O(file)
@@ -72,6 +90,8 @@ def detect(root: Path):  # O(m + f)
         return {"language": "go", "test": "go test ./...", "test_file": "go test {files}", "junit": "", "setup": ""}  # O(1)
     if (root / "Cargo.toml").exists():  # O(1)
         return {"language": "rust", "test": "cargo test", "test_file": "cargo test {files}", "junit": "", "setup": ""}  # O(1)
+    if (root / "Package.swift").exists():  # O(1)
+        return {"language": "swift", "test": "swift test --xunit-output {junit}", "test_file": "swift test --xunit-output {junit} --filter {names}", "junit": "{junit}", "setup": ""}  # O(1)
     names = [p.name for p in root.iterdir()] if root.is_dir() else []  # O(entries)
     if any(n.endswith((".sln", ".csproj")) for n in names):  # O(entries)
         return {"language": "csharp", "test": "dotnet test", "test_file": "dotnet test {files}", "junit": "", "setup": ""}  # O(1)
@@ -84,7 +104,7 @@ def detect(root: Path):  # O(m + f)
 def resolve(root=".", paths=()):  # O(m + f)
     """-> {"language", "python": bool, "command": str|None, "junit": str, "env": {}, "setup": str, "source"} or None."""
     root = Path(root)  # O(1)
-    cfg = read_config(root)  # O(file)
+    cfg = read_config(root) or main_checkout_config(root)  # O(file)
     src = "test-cmd.json"  # O(1)
     if cfg is None:  # O(1)
         cfg, src = detect(root), "markers"  # O(m + f)
@@ -97,6 +117,7 @@ def resolve(root=".", paths=()):  # O(m + f)
     command = template.replace("{files}", files) if paths else cfg["test"]  # O(1)
     if paths and "{files}" not in template:  # a test_file without {files} runs everything | O(1)
         command = template  # O(1)
+    command = command.replace("{names}", names_filter(paths))  # O(p)
     return {"language": cfg.get("language") or "unknown", "python": False, "command": command, "junit": cfg.get("junit") or "",  # O(1)
             "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src}
 
