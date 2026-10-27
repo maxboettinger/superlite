@@ -55,6 +55,34 @@ POLL_SECONDS = 0.5  # O(1)
 DEFAULT_WAIT = 600.0  # O(1)
 
 
+def project_root(start):  # O(d) stats, d = depth of start
+    """Nearest ancestor-or-self of start holding a `.superlite/` directory, else None."""
+    p = Path(start).resolve()  # O(d)
+    for d in (p, *p.parents):  # O(d) iterations
+        if (d / ".superlite").is_dir():  # O(1)
+            return d  # O(1)
+    return None  # O(1)
+
+
+def to_root(a, argv, cwd, root):  # O(len argv + p) rewrite --fast paths against cwd, then chdir to root
+    """Relative --fast paths are rewritten (in a.fast and in argv) so they stay valid from the root."""
+    def fix(chunk):  # O(len chunk)
+        parts = [x if os.path.isabs(x) else os.path.relpath(os.path.join(cwd, x), root) for x in chunk.split(",") if x]  # O(len chunk)
+        return ",".join(parts)  # O(len chunk)
+    eq = [j for j, x in enumerate(argv) if x.startswith("--fast=")]  # --fast=PATH spelling | O(len argv)
+    if a.fast and eq:  # O(1)
+        j = eq[0]  # O(1)
+        argv[j] = "--fast=" + fix(argv[j][7:])  # O(len)
+        argv[j + 1:j + len(a.fast)] = [fix(c) for c in argv[j + 1:j + len(a.fast)]]  # O(p)
+        a.fast = [argv[j][7:], *argv[j + 1:j + len(a.fast)]]  # O(p)
+    elif a.fast and "--fast" in argv:  # O(1)
+        i = argv.index("--fast") + 1  # O(len argv)
+        argv[i:i + len(a.fast)] = [fix(c) for c in a.fast]  # O(p)
+        a.fast = argv[i:i + len(a.fast)]  # O(p)
+    os.chdir(root)  # O(1)
+    print(f"run_tests: running from {root}", file=sys.stderr)  # O(1)
+
+
 def pointer_path(summary):  # O(1)
     p = Path(summary)  # O(1)
     return p.with_name(p.stem + ".latest")  # O(1)
@@ -279,6 +307,10 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
     a = ap.parse_args(argv)  # O(1)
+    cwd = Path.cwd().resolve()  # O(1)
+    root = project_root(cwd) if a.wait_path is None else None  # --wait paths are absolute | O(d)
+    if root is not None and root != cwd:  # O(1)
+        to_root(a, argv, cwd, root)  # O(len argv + p)
     if a.wait_path is not None:  # O(1)
         return wait_background(a)  # O(timeout / POLL_SECONDS)
     if a.background:  # O(1)

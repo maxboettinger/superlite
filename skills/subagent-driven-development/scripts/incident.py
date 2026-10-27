@@ -47,9 +47,14 @@ def _die(msg):  # O(1)
     sys.exit(2)  # O(1)
 
 
+def _clean(s):  # O(len(s))
+    return s.encode("utf-8", "surrogateescape").decode("utf-8", "replace") if isinstance(s, str) else s  # O(len(s))
+
+
 def make_entry(file, line, context, agent=None, kind=None, resolution=None,  # O(c)
                confidence=None):
     """One validated log entry; ValueError on bad input."""
+    file, context, agent, resolution = _clean(file), _clean(context), _clean(agent), _clean(resolution)  # O(c)
     if line < 0:  # O(1)
         raise ValueError("line must be >= 0")  # O(1)
     if kind is not None and kind not in KINDS:  # O(1)
@@ -103,7 +108,7 @@ def _read(log):  # O(B)
     if not path.exists():  # O(1)
         return []  # O(1)
     out = []  # O(1)
-    with open(path, encoding="utf-8") as f:  # O(1) open
+    with open(path, encoding="utf-8", errors="replace") as f:  # O(1) open
         for ln in f:  # O(i) iterations
             ln = ln.strip()  # O(w)
             if not ln:  # O(1)

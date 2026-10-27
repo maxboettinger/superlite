@@ -1,0 +1,55 @@
+- start 9a8a51b
+- unblocked: dispatched T1 T4 T5 T7 T9 at 18:56:01; waiting on fixes: T2 T3 T6 T8 T10
+- tests fast passed=3 failed=1 skipped=0 seconds=0.9
+- tests fast passed=0 failed=4 skipped=0 seconds=0.7
+- tests fast passed=1 failed=4 skipped=0 seconds=0.8
+- tests fast passed=75 failed=0 skipped=0 seconds=1.3
+- tests fast passed=11 failed=0 skipped=0 seconds=0.2
+- Ruling: accept predicted ~19 min - T1 -> T2 -> T10 is a real import chain and docs wait for code - cost if wrong: a few minutes of wall clock
+- tests fast passed=3 failed=2 skipped=0 seconds=1.3
+- unblocked: dispatched T6 T8 at 18:57:19; waiting on fixes: none
+- tests fast passed=20 failed=1 skipped=0 seconds=1.2
+- commit T9 80eaba54ad guard: scratchpad scripts that edit the plan
+- tests fast passed=13 failed=0 skipped=0 seconds=5.4
+- tests fast passed=24 failed=0 skipped=0 seconds=29.9
+- Ruling: pyroots.import_roots takes the plan file path (relative to root), not plan text - matches commit_task/pt_review, which hold the path - cost if wrong: one call-site change
+- commit T1 58a25d8c9a pyroots: import roots from test-cmd.json or Produces
+- tests fast passed=20 failed=1 skipped=0 seconds=1.2
+- tests fast passed=21 failed=0 skipped=0 seconds=1.1
+- commit T4 b689a2f35a probe_run: self-contained regression tests
+- Ruling: run_tests resolves explicit relative --summary/--log/--ledger against the project root after chdir - the defaults live there and agents pass none - cost if wrong: one path rewrite
+- commit T5 376da29d02 run_tests: run from the repository root
+- tests fast passed=1 failed=4 skipped=0 seconds=0.6
+- tests fast passed=1 failed=2 skipped=0 seconds=0.3
+- commit T7 1d00ed8b8b dispatch, assign: prime out of the context budget
+- tests fast passed=60 failed=0 skipped=0 seconds=4.4
+- tests fast passed=1 failed=8 skipped=0 seconds=2.6
+- tests fast passed=60 failed=0 skipped=0 seconds=4.4
+- tests fast passed=20 failed=0 skipped=0 seconds=2.6
+- tests fast passed=77 failed=0 skipped=0 seconds=5.9
+- tests fast passed=61 failed=0 skipped=0 seconds=3.8
+- commit T6 5ec636db6c finish, incident: UTF-8-safe ledger and log
+- Ruling: pt_review keeps import roots in a module global set by main() - every caller (commit_task seam checks, coordinator) goes through the CLI - cost if wrong: a direct cmd_* caller misses roots
+- commit T3 43cb09f64c pt_review: import roots, bytes-safe adapter, seam usage text
+- commit T8 79413a8c3d lint: placeholder, spec headings, frozen EXAMPLE hint
+- tests fast passed=34 failed=0 skipped=0 seconds=1.7
+- tests fast passed=79 failed=0 skipped=0 seconds=26.1
+- tests fast passed=26 failed=0 skipped=0 seconds=1.5
+- commit T2 7afa4461cc commit_task: import roots, docs never block, hint, UTF-8 ledger
+- Ruling: pyroots may add a false root when an unrelated directory holds a module named like a Produces first segment - roots come after the repo root and src/, and test-cmd.json pythonpath overrides - cost if wrong: one shadowed import in a check
+- commit T9 d6bd0b6085 guard: scratchpad scripts that edit the plan
+- commit T5 22ff95c0ec run_tests: run from the repository root
+- commit T1 443be377c4 pyroots: import roots from test-cmd.json or Produces
+- tests fast passed=19 failed=0 skipped=0 seconds=1.3
+- tests fast passed=25 failed=0 skipped=0 seconds=3.5
+- Ruling: version audit hits in .superlite/prime.md ignored - untracked run state quoting the installed 1.2.5 sl path - cost if wrong: none
+- Ruling: T10 (docs, version) gets no separate package review - docs-only, covered by the final review - cost if wrong: a wording fix
+- commit T10 af3e4505a3 docs: pythonpath, prime budget, run_tests root; 1.2.6
+- commit T3 85ca4e8040 pt_review: import roots, bytes-safe adapter, seam usage text
+- Ruling: spec-heading prefix exemption limited to intent, decisions, validation, acceptance, open, out of scope - prefix on every SPEC_SKIP key would exempt real sections like 'Status bar' - cost if wrong: one extra Covers line
+- tests fast passed=61 failed=0 skipped=0 seconds=4.3
+- commit T8 c97e3a35f4 lint: placeholder, spec headings, frozen EXAMPLE hint
+- tests full passed=959 failed=0 skipped=1 seconds=123.5
+- Ruling: final review findings 1-11 are TDD red-phase incidents the packet did not mark stale - full suite 959 passed 0 failed, every named test green (test_dispatch_prime_budget 5/5, test_commit_pix_v2 9/9, test_ledger_utf8 3/3, test_guard_scratch_script 9/9) - cost if wrong: none, the suite proves it
+- Ruling: finding 12 (6 omitted incidents, suite not run) closed - suite ran green after the packet; omitted items are lower-ranked red-phase incidents - cost if wrong: a missed low-rank item
+- tests full passed=959 failed=0 skipped=1 seconds=123.5

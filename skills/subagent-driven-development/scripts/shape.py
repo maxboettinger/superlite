@@ -66,7 +66,7 @@ def resolve_consumes(plan):  # O(n*q)
     return out  # O(q)
 
 
-def example_issues(plan) -> list:  # O(n*q)
+def example_issues(plan, frozen=()) -> list:  # O(n*q)
     """EXAMPLE: a consumer of a structured Produces without an `e.g.` line is a fix task until the producer has one."""
     issues, seen = [], set()  # O(1)
     for cid, sig, cands in resolve_consumes(plan):  # O(q)
@@ -79,7 +79,8 @@ def example_issues(plan) -> list:  # O(n*q)
                 break  # O(1)
         if structured(psig["ret"]) and not has_example(plan.by_id[pid], psig) and (cid, psig["name"]) not in seen:  # O(k*s)
             seen.add((cid, psig["name"]))  # O(1)
-            issues.append(pt.Issue(f"EXAMPLE: {cid} consumes {psig['name']} but its Produces line has no e.g.", [cid]))  # O(1)
+            hint = f" (producer {pid} is dispatched and frozen: drop this Consumes entry or move it to a follow-up task)" if pid in frozen else ""  # O(1)
+            issues.append(pt.Issue(f"EXAMPLE: {cid} consumes {psig['name']} but its Produces line has no e.g.{hint}", [cid]))  # O(1)
     return issues  # O(q)
 
 

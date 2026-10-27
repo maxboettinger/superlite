@@ -51,6 +51,9 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import _pyrun as pyrun  # noqa: E402 | O(1)
 import autocommit  # noqa: E402 | O(1)
+import pyroots  # noqa: E402 | O(1)
+
+IMPORT_ROOTS: list[str] = []  # set once per command by main | O(1)
 
 CATEGORIES = ("deep", "numeric", "encoding", "protocol", "file", "state")  # O(1)
 CHARS_PER_TOKEN = 1.9  # 20k tokens ~ 38k chars (plan section 5) | O(1)
@@ -444,33 +447,39 @@ print("@@SIG@@" + json.dumps(out))
 '''  # O(1)
 
 
-def project_env(root: Path, **extra: str) -> dict[str, str]:  # O(env vars) total
+def project_env(root: Path, roots: list[str] | None = None, **extra: str) -> dict[str, str]:  # O(env vars + roots) total
     env = dict(os.environ)  # O(1)
+    extra_roots = [str(root / r) for r in (IMPORT_ROOTS if roots is None else roots)]  # O(roots)
     env["PYTHONPATH"] = os.pathsep.join(  # O(1)
-        [str(root / "src"), str(root)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))  # O(1)
+        [str(root / "src"), str(root)] + extra_roots + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))  # O(1)
     env["PYTHONDONTWRITEBYTECODE"] = "1"  # O(1)
     env["PYTHONIOENCODING"] = "utf-8"  # O(1)
     env.update(extra)  # O(1)
     return env  # O(1)
 
 
-def module_name(root: Path, file: Path) -> str:  # O(d) path syscalls total
+def module_name(root: Path, file: Path) -> str:  # O(roots*d) path syscalls total
     file = file.resolve()  # O(d)
-    for base in (root / "src", root):  # O(2) iterations
+    best: tuple[int, list[str]] | None = None  # (base depth, dotted parts): the deepest import root wins | O(1)
+    for base in (root / "src", root, *(root / r for r in IMPORT_ROOTS)):  # O(roots) iterations
+        b = base.resolve()  # O(d)
         try:  # O(d)
-            rel = file.relative_to(base.resolve())  # O(d)
+            rel = file.relative_to(b)  # O(d)
         except ValueError:  # O(d)
             continue  # O(d)
-        parts = list(rel.with_suffix("").parts)  # O(d)
-        if parts and parts[-1] == "__init__":  # O(d)
-            parts.pop()  # O(d)
-        return ".".join(parts)  # O(d)
-    return file.stem  # O(d)
+        if best is None or len(b.parts) > best[0]:  # O(1)
+            best = (len(b.parts), list(rel.with_suffix("").parts))  # O(d)
+    if best is None:  # O(1)
+        return file.stem  # O(d)
+    parts = best[1]  # O(1)
+    if parts and parts[-1] == "__init__":  # O(d)
+        parts.pop()  # O(d)
+    return ".".join(parts)  # O(d)
 
 
 def find_module_file(root: Path, dotted: str) -> Path | None:  # O(d) stat calls total (4 is_file)
     rel = dotted.replace(".", "/")  # O(d)
-    for base in (root / "src", root):  # O(2) iterations
+    for base in (root / "src", root, *(root / r for r in IMPORT_ROOTS)):  # O(roots) iterations
         for cand in (base / f"{rel}.py", base / rel / "__init__.py"):  # O(2) iterations
             if cand.is_file():  # O(d)
                 return cand  # O(d)
@@ -1024,7 +1033,7 @@ def rerun_consumer_tests(root: Path, consumer: Task, timeout: float) -> tuple[li
 def resolve_seam(plan: Plan, seam: str) -> tuple[Task, Task]:  # O(E + m) total
     parts = [s.strip() for s in seam.split(",")]  # O(1)
     if len(parts) != 2 or any(p not in plan.tasks for p in parts):  # O(1)
-        raise ToolError(f"--seam needs two task ids that exist in the plan, got {seam!r}")  # O(1)
+        raise ToolError(f"--seam needs two task ids that exist in the plan, comma-separated like Ta,Tb, got {seam!r}")  # O(1)
     a, b = parts  # O(1)
     ta, tb = plan.tasks[a], plan.tasks[b]  # O(1)
     if (a, b) in plan.edges or a in tb.consumes_ids():  # O(1)
@@ -1111,7 +1120,8 @@ import sys
 from pathlib import Path
 
 ROOT = (Path(__file__).resolve().parent / __REL_ROOT__).resolve()
-for _p in (ROOT / "src", ROOT):
+IMPORT_ROOTS = __IMPORT_ROOTS__
+for _p in (ROOT / "src", ROOT, *(ROOT / _r for _r in IMPORT_ROOTS)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -1164,10 +1174,11 @@ def run(args=(), stdin="", package=None, timeout=10):
     if isinstance(args, str):
         args = shlex.split(args, posix=(os.name != "nt"))
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONPATH=os.pathsep.join(
-        [str(ROOT / "src"), str(ROOT)] + ([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else [])))
-    p = subprocess.run(cmd + list(args), input=stdin, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", cwd=ROOT, env=env, timeout=timeout)
-    return p.returncode, p.stdout, p.stderr
+        [str(ROOT / "src"), str(ROOT)] + [str(ROOT / r) for r in IMPORT_ROOTS]
+        + ([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else [])))
+    data = stdin if isinstance(stdin, bytes) else stdin.encode("utf-8", "surrogateescape")
+    p = subprocess.run(cmd + list(args), input=data, capture_output=True, cwd=ROOT, env=env, timeout=timeout)
+    return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 '''  # O(1)
 
 _ADAPTER_SERVE = '''
@@ -1252,7 +1263,7 @@ def build_adapter(plan: Plan, out: Path, root: Path) -> str:  # O(E_p*m + templa
         raise ToolError("no `Probe entry:` lines with call=/run=/serve= found in the plan")  # O(1)
     kinds = [k for k in ("call", "run", "serve") if any(k in e for e in entries)]  # O(3*E_p)
     rel_root = os.path.relpath(root, out.parent.resolve()).replace("\\", "/")  # O(1)
-    src = _ADAPTER_HEAD.replace("__REL_ROOT__", repr(rel_root)).replace("__ENTRIES__", repr(entries)) \
+    src = _ADAPTER_HEAD.replace("__REL_ROOT__", repr(rel_root)).replace("__IMPORT_ROOTS__", repr(list(IMPORT_ROOTS))).replace("__ENTRIES__", repr(entries)) \
         .replace("__KINDS__", repr(["request" if k == "serve" else k for k in kinds]))  # O(1)
     if "call" in kinds:  # O(1)
         src += _ADAPTER_CALL  # O(1)
@@ -1787,6 +1798,7 @@ def main(argv: list[str]) -> int:  # O(1) + dispatched command
         a = build_parser().parse_args(argv)  # O(1)
     except SystemExit as e:  # O(1)
         return int(e.code) if isinstance(e.code, int) else 2  # O(1)
+    IMPORT_ROOTS[:] = pyroots.import_roots(Path(getattr(a, "root", None) or ".").resolve(), str(Path(a.plan).resolve()) if getattr(a, "plan", None) else None)  # O(d)
     try:  # O(1)
         return {"adapter": cmd_adapter, "packet": cmd_packet, "contract": cmd_contract}[a.cmd](a)  # O(1)
     except ToolError as e:  # O(1)

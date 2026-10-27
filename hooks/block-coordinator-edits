@@ -103,7 +103,7 @@ project_code() {
 # 'p' or "p", Path('p'), or a name assigned only such literals in the command (the first denied one when several;
 # unknown when any assignment of the name, or a `for name in`, is not a literal).
 writer_target() {
-  local e="$1" re rest t a n=0 lit=0 sq="'" dq='"'
+  local e="$1" re rest t a n=0 lit=0 sq="'" dq='"' nl=$'\n'
   e="${e#"${e%%[![:space:]]*}"}"; e="${e%"${e##*[![:space:]]}"}"
   TGT=""
   re="^(Path\\([[:space:]]*)?[$sq$dq]([^$sq$dq]+)[$sq$dq][[:space:]]*\\)?\$"
@@ -117,16 +117,16 @@ writer_target() {
   re="(^|[^A-Za-z_0-9.])$e[[:space:]]*=[^=]"
   rest="$cmd"
   while [[ $rest =~ $re ]]; do n=$((n + 1)); rest="${rest#*"${BASH_REMATCH[0]}"}"; done
-  re="(^|[^A-Za-z_0-9.])$e[[:space:]]*=[[:space:]]*(Path\\([[:space:]]*)?[$sq$dq]([^$sq$dq]+)[$sq$dq]"
+  re="(^|[^A-Za-z_0-9.])$e[[:space:]]*=[[:space:]]*(Path\\([[:space:]]*)?[$sq$dq]([^$sq$dq]+)[$sq$dq]\\)?[ "$'\t'"]*([;#]|$nl|\$)"
   rest="$cmd"
   while [[ $rest =~ $re ]]; do
     lit=$((lit + 1)); t="${BASH_REMATCH[3]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"
     if [ -z "$TGT" ]; then TGT="$t"; elif project_code "$t"; then TGT="$t"; fi
   done
-  re="(^|[^A-Za-z_0-9.])$e[[:space:]]*=[[:space:]]*(sys\\.)?argv\\[([0-9]+)\\]"
+  re="(^|[^A-Za-z_0-9.])$e[[:space:]]*=[[:space:]]*(Path\\([[:space:]]*)?(sys\\.)?argv\\[([0-9]+)\\]\\)?[ "$'\t'"]*([;#]|$nl|\$)"
   rest="$cmd"
   while [[ $rest =~ $re ]]; do
-    t="${BASH_REMATCH[3]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"; a="$TGT"; argv_arg "$t"; t="$TGT"; TGT="$a"
+    t="${BASH_REMATCH[4]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"; a="$TGT"; argv_arg "$t"; t="$TGT"; TGT="$a"
     if [ -z "$t" ]; then n=$((n + 100)); continue; fi
     lit=$((lit + 1))
     if [ -z "$TGT" ]; then TGT="$t"; elif project_code "$t"; then TGT="$t"; fi
