@@ -998,8 +998,8 @@ def cmd_schedule(args) -> int:  # O(C+L + schedule) total
 # --------------------------------------------------------------------------
 
 PLACEHOLDERS = [  # O(1)
-    (r"\bTBD\b", "TBD"),  # O(1)
-    (r"\bTODO\b", "TODO"),  # O(1)
+    (r"(?-i:\bTBD\b)", "TBD"),  # O(1) whole uppercase word only
+    (r"(?-i:\bTODO\b)", "TODO"),  # O(1) whole uppercase word only
     (r"handle edge cases", "'handle edge cases'"),  # O(1)
     (r"add (?:appropriate )?error handling", "'add error handling'"),  # O(1)
     (r"similar to task\s+\w+", "'similar to Task N'"),  # O(1)
@@ -1010,7 +1010,7 @@ DIAGRAM_TYPES = ("flowchart", "graph", "sequencediagram", "statediagram", "state
                  "erdiagram", "journey", "pie", "mindmap", "timeline", "gitgraph", "quadrantchart", "requirementdiagram")  # O(1)
 SPEC_SKIP = {"overview", "introduction", "background", "goals", "non-goals", "glossary", "contents",  # O(1)
              "table of contents", "references", "open questions", "appendix", "summary", "status",
-             "intent", "decisions", "validation", "out of scope", "out-of-scope"}  # O(1) sections no task builds
+             "intent", "decisions", "validation", "out of scope", "out-of-scope", "acceptance", "open"}  # O(1) sections no task builds (also as a prefix)
 
 
 def check_diagram(block: FenceBlock) -> str | None:  # O(B) total, B = block chars
@@ -1119,8 +1119,9 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
     for i, ln in enumerate(plan.lines):  # O(L) iterations
         if plan.fenced[i] or i in draft_lines:  # O(1)
             continue  # O(1)
+        bare = re.sub(r"`[^`\n]*`", "", ln)  # text inside backticks is quoted, not a placeholder | O(s)
         for pat, label in PLACEHOLDERS:  # O(P) iterations, P=7 patterns
-            if re.search(pat, ln, re.I):  # O(s) regex per pattern
+            if re.search(pat, bare, re.I):  # O(s) regex per pattern
                 owner = [t.id for t in plan.tasks if t.line <= i + 1 <= t.line + t.text.count("\n") + 1]  # O(n)
                 issues.append(Issue(f"placeholder {label} at line {i + 1}", owner, "task" if owner else "plan"))  # O(1)
 
@@ -1181,7 +1182,11 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
                                     f"{psig['name']}({psig['args']})" + (f" -> {psig['ret']}" if psig["ret"] else ""), [t.id]))  # O(1)
 
     import shape  # lazy: shape imports this module | O(1)
-    issues.extend(shape.example_issues(plan))  # a consumer of structured data without examples is a fix task | O(n*q)
+    try:  # O(1)
+        frozen = dispatched_tasks(stable_root(str(plan.path)) / ".superlite") if plan.path else set()  # O(c)
+    except (OSError, ValueError):  # O(1)
+        frozen = set()  # O(1)
+    issues.extend(shape.example_issues(plan, frozen))  # a consumer of structured data without examples is a fix task | O(n*q)
     warnings.extend(shape.split_notes(plan))  # O(n*q)
 
     # diagrams
@@ -1285,7 +1290,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
                 nm = re.match(r"^(?:§\s*)?(\d+(?:\.\d+)*)\.?\s+(.*)$", raw)  # O(s)
                 num, title = (nm.group(1), nm.group(2)) if nm else (None, raw)  # O(1)
                 title = title.strip().strip("`")  # O(1)
-                if title.lower() in SPEC_SKIP:  # O(1)
+                if title.lower() in SPEC_SKIP or re.match(r"(?:intent|decisions|validation|acceptance|open|out of scope|out-of-scope)[ (:]", title.lower()):  # O(K) a heading may extend an exempt one
                     continue  # O(1)
                 covered = title.lower() in plan_l or any(  # O(C + covers) a Covers number also covers its subsections
                     c == title.lower() or (num and (num == c or num.startswith(c + "."))) for c in covers)
