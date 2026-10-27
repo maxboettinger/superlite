@@ -1,0 +1,463 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-10-26T10:24:09 (plan edited since)",
+ "headline": {
+  "wall_min": {
+   "projected": 5.847,
+   "actual": 5.953
+  },
+  "cost_usd_agents": {
+   "projected": 0.384239,
+   "actual": 2.262779
+  },
+  "task_min": {
+   "projected": 15.3,
+   "actual": 19.562
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 11
+  }
+ },
+ "cost_split": {
+  "agents_usd": 2.204482,
+  "rework_usd": 0.058297,
+  "coordinator_usd": 5.742788,
+  "total_usd": 8.005567
+ },
+ "concurrency": {
+  "peak": 6,
+  "projected_peak": 4
+ },
+ "critical_path": {
+  "actual": [
+   "T1",
+   "T2"
+  ],
+  "projected": [
+   "T2"
+  ],
+  "projected_min": 5.847
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 9,
+   "cost_usd": 2.2044819999999996
+  },
+  "unknown": {
+   "tasks": 1,
+   "cost_usd": 0.058297
+  }
+ },
+ "coordinator_cost_by_model": {
+  "opus": 5.742788
+ },
+ "quality": {
+  "tests": {
+   "passed": 959,
+   "failed": 0,
+   "skipped": 1,
+   "seconds": 123.5,
+   "mode": "full",
+   "failures": [],
+   "skipped_tests": [
+    "tests/scripts/test_no_popup_windows.py::test_detached_helper_children_get_no_console_window"
+   ],
+   "files": {
+    "tests/bench/test_build_shape_audit.py": [
+     4,
+     0
+    ],
+    "tests/bench/test_generalized.py": [
+     8,
+     0
+    ],
+    "tests/bench/test_language_runner.py": [
+     10,
+     0
+    ],
+    "tests/bench/test_mechanical.py": [
+     10,
+     0
+    ],
+    "tests/bench/test_mechanical_ab.py": [
+     3,
+     0
+    ],
+    "tests/bench/test_metrics.py": [
+     33,
+     0
+    ],
+    "tests/bench/test_predict_calibration.py": [
+     2,
+     0
+    ],
+    "tests/bench/test_real_formats.py": [
+     15,
+     0
+    ],
+    "tests/bench/test_routing_evidence.py": [
+     2,
+     0
+    ],
+    "tests/bench/test_start_dir.py": [
+     1,
+     0
+    ],
+    "tests/bench/test_task_records.py": [
+     2,
+     0
+    ],
+    "tests/scripts/test_0_3_1_scripts.py": [
+     29,
+     0
+    ],
+    "tests/scripts/test_autocommit.py": [
+     15,
+     0
+    ],
+    "tests/scripts/test_autocommit_squash.py": [
+     10,
+     0
+    ],
+    "tests/scripts/test_block_coordinator_edits.py": [
+     71,
+     0
+    ],
+    "tests/scripts/test_block_unsafe_kill.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_build_prime_mini.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_capture_hooks.py": [
+     14,
+     0
+    ],
+    "tests/scripts/test_commit_also.py": [
+     12,
+     0
+    ],
+    "tests/scripts/test_commit_pix_v2.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_commit_plan_folder.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_commit_running_scope.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_commit_shared_test.py": [
+     11,
+     0
+    ],
+    "tests/scripts/test_dispatch_prime_budget.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_dispatch_skip.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_docs_contract.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_finish_grouping.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_fixture_isolation.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_graphify_gate.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_guard_scratch_script.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_human_gate.py": [
+     71,
+     0
+    ],
+    "tests/scripts/test_incident.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_ledger_utf8.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_lint_pix_v2.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_metrics_fable.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_metrics_history.py": [
+     18,
+     0
+    ],
+    "tests/scripts/test_no_popup_windows.py": [
+     1,
+     0
+    ],
+    "tests/scripts/test_orchestrator.py": [
+     23,
+     0
+    ],
+    "tests/scripts/test_packet_stale.py": [
+     18,
+     0
+    ],
+    "tests/scripts/test_plan_tools.py": [
+     55,
+     0
+    ],
+    "tests/scripts/test_pool.py": [
+     13,
+     0
+    ],
+    "tests/scripts/test_probe_regression_portable.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_probe_run.py": [
+     20,
+     0
+    ],
+    "tests/scripts/test_pt_review.py": [
+     29,
+     0
+    ],
+    "tests/scripts/test_pt_review_declarations.py": [
+     17,
+     0
+    ],
+    "tests/scripts/test_pt_review_noise.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_pt_review_pix_v2.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_pyroots.py": [
+     11,
+     0
+    ],
+    "tests/scripts/test_report.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_rewrite_test_runs.py": [
+     50,
+     0
+    ],
+    "tests/scripts/test_routing.py": [
+     21,
+     0
+    ],
+    "tests/scripts/test_run_scripts.py": [
+     34,
+     0
+    ],
+    "tests/scripts/test_run_tests_root.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_run_tests_sidecars.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_run_tests_summary.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_run_tests_wait.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_session_handover.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_session_start.py": [
+     1,
+     0
+    ],
+    "tests/scripts/test_session_state.py": [
+     52,
+     0
+    ],
+    "tests/scripts/test_shape.py": [
+     17,
+     0
+    ],
+    "tests/scripts/test_spawn_free.py": [
+     20,
+     0
+    ],
+    "tests/scripts/test_stable_split.py": [
+     28,
+     0
+    ],
+    "tests/scripts/test_testcmd.py": [
+     14,
+     0
+    ],
+    "tests/scripts/test_testcmd_xcode.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_tier_reason_wave0.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_trees.py": [
+     14,
+     0
+    ],
+    "tests/scripts/test_wave0.py": [
+     10,
+     0
+    ]
+   }
+  },
+  "first_time_pass": 0,
+  "first_time_n": 0,
+  "rework_dispatches": 1,
+  "open_incidents": 27
+ },
+ "tasks": [
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 5.847,
+   "actual_min": 1.407,
+   "delta": {
+    "abs": -4.4403,
+    "pct": -75.9
+   },
+   "cost_usd": 0.196519,
+   "first_time_pass": null
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 3.171,
+   "actual_min": 6.027,
+   "delta": {
+    "abs": 2.8557,
+    "pct": 90.1
+   },
+   "cost_usd": 0.559316,
+   "first_time_pass": null
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 3.053,
+   "actual_min": 1.298,
+   "delta": {
+    "abs": -1.7547,
+    "pct": -57.5
+   },
+   "cost_usd": 0.169873,
+   "first_time_pass": null
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 3.229,
+   "actual_min": 1.615,
+   "delta": {
+    "abs": -1.614,
+    "pct": -50.0
+   },
+   "cost_usd": 0.18924,
+   "first_time_pass": null
+  },
+  {
+   "task": "T10",
+   "model": "sonnet",
+   "pred_min": null,
+   "actual_min": 1.408,
+   "delta": {
+    "abs": null,
+    "pct": null
+   },
+   "cost_usd": 0.117571,
+   "first_time_pass": null
+  },
+  {
+   "task": "T5",
+   "model": "sonnet",
+   "pred_min": null,
+   "actual_min": 1.47,
+   "delta": {
+    "abs": null,
+    "pct": null
+   },
+   "cost_usd": 0.159001,
+   "first_time_pass": null
+  },
+  {
+   "task": "T6",
+   "model": "sonnet",
+   "pred_min": null,
+   "actual_min": 1.275,
+   "delta": {
+    "abs": null,
+    "pct": null
+   },
+   "cost_usd": 0.156261,
+   "first_time_pass": null
+  },
+  {
+   "task": "T7",
+   "model": "sonnet",
+   "pred_min": null,
+   "actual_min": 1.882,
+   "delta": {
+    "abs": null,
+    "pct": null
+   },
+   "cost_usd": 0.236845,
+   "first_time_pass": null
+  },
+  {
+   "task": "T8",
+   "model": null,
+   "pred_min": null,
+   "actual_min": 0.0,
+   "delta": {
+    "abs": null,
+    "pct": null
+   },
+   "cost_usd": 0.058297,
+   "first_time_pass": null
+  },
+  {
+   "task": "T9",
+   "model": "sonnet",
+   "pred_min": null,
+   "actual_min": 3.18,
+   "delta": {
+    "abs": null,
+    "pct": null
+   },
+   "cost_usd": 0.419856,
+   "first_time_pass": null
+  }
+ ]
+}
