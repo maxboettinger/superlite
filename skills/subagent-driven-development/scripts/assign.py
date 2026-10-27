@@ -42,19 +42,25 @@ def package(path):  # O(len path)
     return posixpath.dirname(path.replace("\\", "/"))  # O(len path)
 
 
-def eligibility(agent, est_context, limits=None):  # O(1)
+def eligibility(agent, est_context, limits=None, prime_k=0.0):  # O(1)
     """None when eligible, else a short reason. `limits` (config/routing.json, per tier) overrides the defaults."""
     lim = limits or {}  # O(1)
     max_ctx = float(lim.get("max_context_k", MAX_CONTEXT_K))  # O(1)
     max_tasks = int(lim.get("max_tasks", MAX_TASKS))  # O(1)
     max_idle = float(lim.get("max_idle_min", MAX_IDLE_MIN))  # O(1)
-    if float(agent.get("context_k", 0)) + est_context > max_ctx:  # O(1)
+    if max(0.0, float(agent.get("context_k", 0)) - prime_k) + est_context > max_ctx:  # the prime is not counted | O(1)
         return f"context over {max_ctx:g}k"  # O(1)
     if len(agent.get("tasks", [])) >= max_tasks:  # O(1)
         return f"{max_tasks} tasks done"  # O(1)
     if float(agent.get("idle_min", 0)) > max_idle:  # O(1)
         return f"idle over {max_idle:g} min"  # O(1)
     return None  # O(1)
+
+
+def prime_k(sl_dir, tier):  # O(1)
+    """k tokens of the prime file (bytes / 4000); `prime-haiku.md` for haiku; 0.0 when missing."""
+    f = Path(sl_dir) / ("prime-haiku.md" if tier == "haiku" else "prime.md")  # O(1)
+    return f.stat().st_size / 4000 if f.is_file() else 0.0  # O(1)
 
 
 def score(agent, task_id, deps, owns, info):  # O(t + d + o*F*len)
@@ -103,11 +109,12 @@ def main(argv=None):  # O(L + a*o*F*len) + process spawn
     deps = graph.get(a.task, [])  # O(1)
     owns = task.get("owns", [])  # O(1)
     est_context = task.get("est_context") or DEFAULT_CONTEXT_K  # O(1)
+    pk = prime_k(pool_path.parent, "sonnet")  # O(1)
     scores = {}  # O(1)
     for agent in pool.get("agents", []):  # O(a) iterations
         if agent.get("busy") or agent.get("status") == "busy":  # O(1)
             continue  # O(1)
-        why = eligibility(agent, est_context)  # O(1)
+        why = eligibility(agent, est_context, None, pk)  # O(1)
         if why:  # O(1)
             print(f"evict={agent['id']} {why}", file=sys.stderr)  # O(1)
             continue  # O(1)

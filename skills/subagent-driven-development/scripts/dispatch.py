@@ -40,6 +40,10 @@ def load_pool(path):  # O(pool bytes)
     return poolmod.load(path)  # O(pool bytes) one stderr line on a corrupt file
 
 
+def prime_k(sl_dir, tier):  # O(1)
+    return asg.prime_k(sl_dir, tier)  # O(1)
+
+
 def skip_t0(ledger, plan=None):  # O(c)
     if plan is not None:  # O(1)
         import plan_tools  # noqa: E402 | O(1) lazy
@@ -61,7 +65,7 @@ def is_idle(ag):  # O(1)
     return not (ag.get("busy") or ag.get("status") == "busy" or ag.get("current"))  # O(1)
 
 
-def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lane_virtual=0):  # O(L + n + e + R*a*(F + o))
+def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lane_virtual=0, sl_dir=None):  # O(L + n + e + R*a*(F + o))
     """[(task, decision)] and {agent id: evict reason}; decision is 'agent=ID tier=T', 'poll IDS tier=T' or
     'fresh tier=T agent=TYPE'. A task only goes to an idle agent of its own tier; the lane tier (haiku) reuses
     an idle eligible lane agent (lowest context, then fewest tasks) with no poll, else starts a fresh one."""
@@ -97,7 +101,7 @@ def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lan
         for ag in idle:  # O(a) iterations
             if routing.agent_tier(ag, cfg) != tier(t):  # strict: never across tiers | O(1)
                 continue  # O(1)
-            why = asg.eligibility(ag, est_context, limits)  # O(1)
+            why = asg.eligibility(ag, est_context, limits, prime_k(sl_dir, tier(t)) if sl_dir else 0.0)  # O(1)
             if why:  # O(1)
                 reasons.setdefault(ag["id"], why)  # O(1)
                 continue  # O(1)
@@ -160,7 +164,7 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10):  # O(c +
     busy = nt.csv(running) if running is not None else running_from_pool(pool, done)  # O(a)
     import wave0  # noqa: E402 | O(1) lazy
     w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy and not skip_t0(ledger, plan)  # synthesized Wave 0 still pending | O(1)
-    lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0)  # see plan_dispatch
+    lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0, sl_dir=Path(pool_path).parent)  # see plan_dispatch
     if w0:  # first line, a haiku lane agent | O(R)
         cfg = routing.load_cfg()  # O(file)
         lt = (cfg.get("lane") or {}).get("tier", "haiku")  # O(1)
