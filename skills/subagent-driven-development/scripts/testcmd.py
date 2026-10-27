@@ -24,6 +24,8 @@ from pathlib import Path  # O(1)
 CONFIG = ".superlite/test-cmd.json"  # O(1)
 SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "target", "bin", "obj", "dist", "build", "__pycache__", ".superlite"}  # O(1)
 WALK_LIMIT = 400  # O(1)
+ISOLATE_LANGS = {"swift", "go", "rust", "csharp"}  # compiled stacks: a sibling's half-edit breaks the build | O(1)
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")  # O(1)
 
 
 def read_config(root: Path):  # O(file)
@@ -50,6 +52,27 @@ def main_checkout_config(root: Path):  # config of the main checkout when root i
 
 def names_filter(paths) -> str:  # basenames without suffix joined by | | O(p)
     return "|".join(Path(p).stem for p in paths)  # O(p)
+
+
+def only_testing(paths) -> str:  # one -only-testing:<Target>/<stem> per path | O(p)
+    out: list[str] = []  # O(1)
+    for p in paths:  # O(p)
+        parts = Path(p).parts  # O(1)
+        tgt = parts[parts.index("Tests") + 1] if "Tests" in parts[:-2] else ""  # directory right under Tests/ | O(d)
+        arg = f"-only-testing:{tgt}/{Path(p).stem}" if tgt else f"-only-testing:{Path(p).stem}"  # O(1)
+        if arg not in out:  # O(p)
+            out.append(arg)  # O(1)
+    return " ".join(out)  # O(p)
+
+
+def missing_reason(root) -> str:  # why no test command resolved, with a hint for Xcode projects | O(entries)
+    root = Path(root)  # O(1)
+    names = [q.name for q in root.iterdir()] if root.is_dir() else []  # O(entries)
+    if any(n.endswith((".xcodeproj", ".xcworkspace")) for n in names):  # O(entries)
+        dest = "-destination 'platform=iOS Simulator,name=iPhone 16'"  # O(1)
+        return (f'no test command found: add .superlite/test-cmd.json, e.g. {{"language": "swift", "test": "xcodebuild test -scheme <Scheme> {dest}", '
+                f'"test_file": "xcodebuild test -scheme <Scheme> {dest} {{only_testing}}"}}')  # O(1)
+    return 'no test command found: add .superlite/test-cmd.json with {"test": ..., "test_file": ...} or a marker file'  # O(1)
 
 
 def _pkg(root: Path):  # O(file)
@@ -154,15 +177,17 @@ def resolve(root=".", paths=()):  # O(m + f)
         cfg, src = detect(root), "markers"  # O(m + f)
     if cfg is None:  # O(1)
         return None  # O(1)
+    lang = cfg.get("language") or "unknown"  # O(1)
+    iso = cfg["isolate"] if isinstance(cfg.get("isolate"), bool) else lang in ISOLATE_LANGS  # explicit config wins | O(1)
     if cfg.get("test") is None and cfg.get("language") == "python":  # O(1)
-        return {"language": "python", "python": True, "command": None, "junit": "", "env": {}, "setup": "", "source": src}  # O(1)
+        return {"language": "python", "python": True, "command": None, "junit": "", "env": {}, "setup": "", "source": src, "isolate": iso}  # O(1)
     files = " ".join(f'"{p}"' if " " in p else p for p in paths)  # O(p)
     template = cfg.get("test_file") or cfg["test"]  # O(1)
     command = template.replace("{files}", files) if paths else cfg["test"]  # O(1)
     if paths and "{files}" not in template:  # a test_file without {files} runs everything | O(1)
         command = template  # O(1)
-    command = command.replace("{names}", names_filter(paths))  # O(p)
-    return {"language": cfg.get("language") or "unknown", "python": False, "command": command, "junit": cfg.get("junit") or "",  # O(1)
+    command = command.replace("{names}", names_filter(paths)).replace("{only_testing}", only_testing(paths))  # O(p)
+    return {"language": lang, "isolate": iso, "python": False, "command": command, "junit": cfg.get("junit") or "",  # O(1)
             "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src}
 
 
@@ -171,9 +196,37 @@ NAME_PATTERNS = [r"^--- FAIL: (\S+)", r"^test (\S+) \.\.\. FAILED", r"^\s*(?:FAI
 COUNT_PASSED = [r"(\d+)\s+passed", r"Passed!?.*?Passed:\s*(\d+)", r"test result: \w+\. (\d+) passed", r"^ok\s+\S+", ]  # O(1)
 
 
+def _parse_xcode(lines: list, rc: int):  # Swift Testing + XCTest counts, summed; None when neither printed | O(o)
+    st_total = xc_total = xc_failed = 0  # O(1)
+    names: list[str] = []  # O(1)
+    st_names: list[str] = []  # O(1)
+    seen = False  # O(1)
+    for ln in lines:  # O(o)
+        m = re.search(r"Test run with (\d+) tests?", ln)  # the last one wins | O(w)
+        if m:  # O(1)
+            st_total, seen = int(m.group(1)), True  # O(1)
+        m = re.match(r"\s*[✘✗] Test (?!run with)(.+?) failed after", ln)  # O(w)
+        if m and m.group(1) not in st_names:  # O(1)
+            st_names.append(m.group(1))  # O(1)
+        m = re.search(r"Executed (\d+) tests?, with (\d+) failures?", ln)  # the last line is the grand total | O(w)
+        if m:  # O(1)
+            xc_total, xc_failed, seen = int(m.group(1)), int(m.group(2)), True  # O(1)
+        m = re.match(r"\s*Test Case '-\[(?:\w+\.)?(\w+) (\w+)\]' failed", ln)  # O(w)
+        if m and f"{m.group(1)}.{m.group(2)}" not in names:  # O(1)
+            names.append(f"{m.group(1)}.{m.group(2)}")  # O(1)
+    if not seen:  # O(1)
+        return None  # O(1)
+    fail = len(st_names) + xc_failed  # O(1)
+    return {"passed": max(st_total + xc_total - fail, 0), "failed": fail or (1 if rc else 0), "skipped": 0,  # O(1)
+            "names": (st_names + names)[:50], "tail": lines[-40:]}
+
+
 def parse_output(text: str, rc: int) -> dict:  # O(o)
     """Best-effort counts and failing test names from a runner's plain output (no JUnit)."""
-    lines = [ln.rstrip() for ln in text.splitlines()]  # O(o)
+    lines = [ANSI.sub("", ln).rstrip() for ln in text.splitlines()]  # O(o)
+    xc = _parse_xcode(lines, rc)  # O(o)
+    if xc is not None:  # O(1)
+        return xc  # O(1)
     names: list[str] = []  # O(1)
     for ln in lines:  # O(o)
         for pat in NAME_PATTERNS:  # O(1)
