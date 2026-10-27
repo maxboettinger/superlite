@@ -355,6 +355,17 @@ def _rel(f):
     return os.path.normpath(f).replace("\\", "/")
 
 
+def others_running(pool_path, tids):  # O(pool bytes)
+    """Tasks that busy pool agents are working on, other than `tids`; [] when the pool is missing or unreadable."""
+    try:  # O(1)
+        pool = json.loads(Path(pool_path).read_text(encoding="utf-8"))  # O(pool bytes)
+        agents = pool.get("agents", [])  # O(1)
+        return sorted({ag["current"] for ag in agents if ag.get("busy") and ag.get("current")  # O(a)
+                       and ag["current"] not in tids})  # O(a)
+    except (OSError, ValueError, AttributeError, TypeError):  # O(1)
+        return []  # O(1)
+
+
 def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (status, add, commit, rev-parse)
     """Commit one task; (exit code, sha or None). Files other tasks own are left alone."""
     if tid not in info:  # O(1)
@@ -406,6 +417,11 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         shared = changed_vs_parent(cand)  # O(m) + process spawns
         mine += shared  # O(m)
 
+    running = others_running(getattr(a, "pool", ".superlite/pool.json"), [tid]) if out_of_scope else []  # O(pool bytes)
+    if out_of_scope and running:  # a running task's stray file is not this task's block | O(m)
+        for f in out_of_scope:  # O(m) iterations
+            print(f"left uncommitted (another task is running: {', '.join(running)}): {f}", file=sys.stderr)  # O(1)
+        out_of_scope = []  # O(1)
     if out_of_scope:  # O(1)
         for f in out_of_scope:  # O(m) iterations
             print(f"out-of-scope {f}")  # O(1)
