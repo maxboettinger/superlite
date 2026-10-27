@@ -187,7 +187,8 @@ def synth_info(plan_path: str):  # O(1) + file read
 
 
 def agent_line(brief: Path, tid: str) -> str:  # O(1)
-    prompt = (f"SUPERLITE={SUPERLITE.as_posix()}. This message is your whole task, not the shared plan: do not reply READY. "
+    sl = (SUPERLITE / "skills" / "subagent-driven-development" / "scripts" / "sl").as_posix()  # O(1)
+    prompt = (f"Your sl command is `bash {sl}`; type that absolute path in every command. This message is your whole task, not the shared plan: do not reply READY. "
               f"Read {brief.as_posix()} and do it. Reply in the implementer report format.")  # O(1)
     return f'Agent(subagent_type="superlite:implementer-haiku", description="{tid} Wave 0 skeleton", prompt={json.dumps(prompt)})'  # O(1)
 
