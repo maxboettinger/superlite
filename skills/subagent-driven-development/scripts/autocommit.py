@@ -13,6 +13,7 @@ commit on the current branch as before. State: .superlite/autocommit.json and
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import date
@@ -71,6 +72,26 @@ def head_sha():
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def ticket(plan):
+    """The first `**Ticket:** KEY` header line of the plan, or None."""
+    try:
+        for ln in Path(plan).read_text(encoding="utf-8").splitlines():
+            if re.match(r"##+\s", ln):  # header block only: a task body never sets the ticket
+                break
+            m = re.match(r"\s*\*\*Ticket:\*\*\s*(\S.*?)\s*$", ln)
+            if m:
+                return m.group(1)
+    except (OSError, TypeError, ValueError):
+        pass
+    return None
+
+
+def message(tid, title, plan):
+    """Commit message of a task: `KEY Tn: title` with a plan ticket, else `Tn: title`."""
+    key = ticket(plan) if plan else None
+    return f"{key} {tid}: {title}" if key else f"{tid}: {title}"
+
+
 def checkpoint(tid, title, files, plan):
     """Shadow-commit `files` on top of the previous checkpoint (HEAD for the first); return the sha.
 
@@ -93,10 +114,11 @@ def checkpoint(tid, title, files, plan):
         tree = git("write-tree", env=env).stdout.strip()
     finally:
         Path(idx).unlink(missing_ok=True)
-    cmd = ["commit-tree", tree, "-m", f"{tid}: {title}"] + (["-p", parent] if parent else [])
+    msg = message(tid, title, plan)
+    cmd = ["commit-tree", tree, "-m", msg] + (["-p", parent] if parent else [])
     sha = git(*cmd).stdout.strip()
     git("update-ref", f"{REF_ROOT}/{st['run']}/{tid}", sha)
-    st["entries"].append({"task": tid, "sha": sha, "title": f"{tid}: {title}", "files": files})
+    st["entries"].append({"task": tid, "sha": sha, "title": msg, "files": files})
     save_state(st)
     return sha
 

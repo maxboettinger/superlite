@@ -3,6 +3,7 @@
 
     commit_task.py Tn [Tm ...] [--plan P] [--ledger .superlite/progress.md]
                       [--log .superlite/incidents.jsonl] [--allow-other-tasks]
+                      [--also FILE ... --ruling TEXT]
                       [--dispatch [--pool .superlite/pool.json] [--running T3] [--cap 10]]
 
 Several ids commit in order in one process (one plan parse, one exclude check). Output:
@@ -10,6 +11,11 @@ the SHA for one task; `Tn <sha>` or `Tn FAILED` per task for several. Each commi
 task's agent in the pool (`current: Tn`) gets `current` cleared, `busy: false`, and Tn in
 its `tasks`. `--dispatch` then prints `next:` and the `dispatch` lines (ready tasks and
 agents) for the updated ledger; a dispatch failure only warns, the commits stand.
+
+`--also FILE` (one task only, needs `--ruling TEXT`) commits FILE with that task though
+another task owns it or nobody does, and writes `- Ruling: Tn also commits FILE - TEXT` to
+the ledger; a FILE with no change is noted on stderr and ignored. The commit message is
+`autocommit.message()`: `KEY Tn: title` when the plan has a `**Ticket:** KEY` header.
 
 Default is checkpoint mode: instead of committing, a shadow commit (never on HEAD, the
 branch or the user's index) is stored under refs/superlite/<run>/<Tn> and its SHA is what
@@ -338,6 +344,17 @@ def changed_vs_parent(files):  # O(m) + 2 git spawns, batched
     return [f for f, h in zip(files, live) if have.get(f) != h]  # O(m)
 
 
+def _rel(f):
+    """Repo-relative posix form of an --also path (`./x`, absolute under the cwd)."""
+    f = f.replace("\\", "/")
+    try:
+        if os.path.isabs(f):
+            f = os.path.relpath(f, os.getcwd()).replace("\\", "/")
+    except ValueError:
+        pass
+    return os.path.normpath(f).replace("\\", "/")
+
+
 def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (status, add, commit, rev-parse)
     """Commit one task; (exit code, sha or None). Files other tasks own are left alone."""
     if tid not in info:  # O(1)
@@ -355,7 +372,21 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     mine, out_of_scope = [], []  # O(1)
     skip = plan_folder(a.plan)  # O(1) + process spawn
     shared, cand = [], []  # modified tracked tests no task owns | O(1)
-    for f, code in changed_entries():  # O(m) iterations; changed_entries is O(m log m) + git spawn
+    entries = changed_entries()  # O(m log m) + process spawn
+    live = {f for f, _ in entries}  # O(m)
+    also = [_rel(f).rstrip("/") for f in (getattr(a, "also", None) or [])]  # O(k)
+    hit = lambda f, e: f == e or f.startswith(e + "/")  # file, or file under a directory entry | O(len f)
+    named = {}  # entry -> name as given (directory entries keep the user's text) | O(1)
+    for raw in (getattr(a, "also", None) or []):  # O(k) iterations
+        named[_rel(raw).rstrip("/")] = raw if raw.replace("\\", "/").endswith("/") else _rel(raw)  # O(1)
+    for e in also:  # O(k) iterations
+        if not any(hit(f, e) for f in live):  # O(m)
+            print(f"also {e}: unchanged, ignored", file=sys.stderr)  # O(1)
+    also = [e for e in also if any(hit(f, e) for f in live)]  # entries committed with this task whoever owns them | O(k*m)
+    for f, code in entries:  # O(m) iterations
+        if any(hit(f, e) for e in also):  # O(k)
+            mine.append(f)  # O(1)
+            continue  # O(1)
         if skip and f.startswith(skip) and not nt.owns_match(f, owns):  # plan folder: only owned paths count | O(f)
             continue  # O(1)
         if f in own_files and not nt.owns_match(f, owns):  # O(f)
@@ -405,7 +436,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
                                  for f in shared])
     if autocommit.is_on():  # opt-in: a real commit on the user's branch | O(1)
         git("add", "-A", "--", *mine)  # O(m) + process spawn
-        title = f"{tid}: {task['title']}"  # O(1)
+        title = autocommit.message(tid, task["title"], a.plan)  # O(L) file read
         r = git("commit", "-m", title, check=False)  # O(1) + process spawn
         if r.returncode != 0:  # O(1)
             print((r.stderr or r.stdout).strip(), file=sys.stderr)  # O(1)
@@ -414,6 +445,8 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     else:  # default: shadow checkpoint under refs/superlite, HEAD/branch/index/tree untouched | O(m) + git spawns
         sha = autocommit.checkpoint(tid, task["title"], mine, a.plan)  # O(m) + process spawn
     append_ledger(a.ledger, f"- commit {tid} {sha[:10]} {task['title']}")  # O(1) file I/O
+    for f in also:  # O(k) iterations
+        append_ledger(a.ledger, f"- Ruling: {tid} also commits {named.get(f, f)} - {a.ruling}")  # O(1) file I/O
     launch_probes(sha, a.plan)  # O(L) + process spawn
     launch_seam_checks(a.plan, tid, a.ledger, a.log)  # O(c + s) + process spawn per seam (graph memoized)
     return 0, sha  # O(1)
@@ -432,7 +465,14 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     ap.add_argument("--pool", default=".superlite/pool.json", help="pool for --dispatch")  # O(1)
     ap.add_argument("--running", help="running tasks for --dispatch (default: from the pool)")  # O(1)
     ap.add_argument("--cap", type=int, default=10, help="cap for --dispatch")  # O(1)
+    ap.add_argument("--also", action="append", default=[], metavar="FILE",  # O(1)
+                    help="commit FILE with the one named task even if another task owns it or nobody does")  # O(1)
+    ap.add_argument("--ruling", help="why --also is needed; written to the ledger")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    if a.also and len(a.task) != 1:  # O(1)
+        nt.die("--also takes exactly one task")  # O(1)
+    if a.also and not a.ruling:  # O(1)
+        nt.die("--also needs --ruling TEXT")  # O(1)
 
     info = nt.parse_plan(a.plan)  # O(L) parse plan, once for every task
     if "T0" not in info:  # a Wave 0 task synthesized by `wave0` | O(1)
