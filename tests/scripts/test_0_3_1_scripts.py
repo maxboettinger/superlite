@@ -46,7 +46,9 @@ def test_background_returns_at_once_then_wait_reads_green(tmp_path):
     lines = r.stdout.strip().splitlines()
     line = lines[0]
     assert line.startswith("summary: ")
-    assert lines[1].startswith('wait: bash "$SL" run_tests --wait ')
+    assert lines[1].startswith("wait: bash ")
+    assert "skills/subagent-driven-development/scripts/sl" in lines[1].replace("\\", "/")
+    assert " run_tests --wait " in lines[1]
     assert lines[1].endswith(line[len("summary: "):])
     w = run("run_tests", "--wait", "--timeout", "120", cwd=proj)
     assert w.returncode == 0, w.stdout + w.stderr

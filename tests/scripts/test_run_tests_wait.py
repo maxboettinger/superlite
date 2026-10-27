@@ -53,7 +53,9 @@ def test_background_prints_wait_line(tmp_path):
     setup(tmp_path)
     lines, path = start(tmp_path)
     assert len(lines) == 2
-    assert lines[1] == f'wait: bash "$SL" run_tests --wait {path}'
+    assert "$SL" not in lines[1]
+    assert lines[1].startswith("wait: bash ") and lines[1].endswith(f"run_tests --wait {path}")
+    assert str(RUN_TESTS.resolve().with_name("sl")) in lines[1].replace('"', "")
     assert Path(path).is_absolute()
 
 
