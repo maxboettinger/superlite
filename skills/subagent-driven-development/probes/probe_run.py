@@ -693,7 +693,7 @@ import sys
 import threading
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-ADAPTER = ROOT / {adapter_rel!r}
+ADAPTER = pathlib.Path(__file__).resolve().parent / "_probe_adapter.py"
 ENTRY = {entry!r}
 INPUT = {input_text}
 EXPECT = {expect!r}
@@ -781,6 +781,22 @@ def write_regression(cfg: Cfg, group: dict, rep: dict, shrunk_size) -> str | Non
         return _write_regression(cfg, group, rep)  # O(t * B + len text) under lock
 
 
+def _copy_adapter(cfg: Cfg, outdir: Path) -> None:  # O(adapter bytes) read + write
+    """Copy the adapter next to the generated tests, ROOT rewritten to the repository root."""  # O(1)
+    outdir.mkdir(parents=True, exist_ok=True)  # O(1)
+    lines = cfg.adapter.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)  # O(bytes)
+    for i, ln in enumerate(lines):  # O(lines) first ROOT line only
+        if ln.startswith("ROOT = "):  # O(1)
+            lines[i] = "ROOT = Path(__file__).resolve().parents[2]\n"  # O(1)
+            if not re.search(r"^\s*from pathlib import .*\bPath\b", "".join(lines[:i]), re.M):  # O(bytes)
+                lines.insert(i, "from pathlib import Path\n")  # O(lines)
+            break  # O(1)
+    text = "".join(lines)  # O(bytes)
+    dest = outdir / "_probe_adapter.py"  # O(1)
+    if not dest.exists() or dest.read_text(encoding="utf-8", errors="replace") != text:  # O(bytes)
+        dest.write_text(text, encoding="utf-8")  # O(bytes)
+
+
 def _write_regression(cfg: Cfg, group: dict, rep: dict) -> str | None:  # O(t log t + t * B) total, t = existing tests, B = bytes per test
     meta = rep.get("probe_meta") or {}  # O(1)
     if not meta.get("regress", True) or meta.get("has_check") or not rep.get("input"):  # O(1)
@@ -800,7 +816,7 @@ def _write_regression(cfg: Cfg, group: dict, rep: dict) -> str | None:  # O(t lo
     n = 1 + max([int(re.search(r"_(\d+)\.py$", p.name).group(1)) for p in existing] or [0])  # O(t) regex per existing test
     text = REGRESSION_TEMPLATE.format(  # O(len template + len input) format
         category=cat, kind=group["kind"], key=group["key"].replace('"', "'"),  # O(1)
-        orig_size=group.get("size"), probe_id=group["probe"], adapter_rel=cfg.rel(str(cfg.adapter)),  # O(1)
+        orig_size=group.get("size"), probe_id=group["probe"],  # O(1)
         entry=meta["entry"], input_text=rep["input"], expect=expect,  # O(1)
         timeout=timeout_for(meta, cfg), test_name=f"probe_{cat}_{n}")  # O(1)
     def body(t):  # O(len t)
@@ -808,8 +824,10 @@ def _write_regression(cfg: Cfg, group: dict, rep: dict) -> str | None:  # O(t lo
 
     for p in existing:  # O(t) iterations | same content already written: reuse it
         if body(p.read_text(encoding="utf-8")) == body(text):  # O(B) read file + O(len text) body(text) recomputed every iteration
+            _copy_adapter(cfg, outdir)  # O(adapter bytes)
             return p.relative_to(out_root).as_posix()  # O(1)
     outdir.mkdir(parents=True, exist_ok=True)  # O(1)
+    _copy_adapter(cfg, outdir)  # O(adapter bytes)
     path = outdir / f"test_probe_{cat}_{n}.py"  # O(1)
     path.write_text(text, encoding="utf-8")  # O(len text) write
     return path.relative_to(out_root).as_posix()  # O(1)
