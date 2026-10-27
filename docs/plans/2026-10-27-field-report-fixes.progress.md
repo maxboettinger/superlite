@@ -1,0 +1,74 @@
+- start 6b3608e
+- Ruling: skip T0 - existing repo, no skeleton needed (the Wave0: none header is built in this run) - cost if wrong: none
+- unblocked: dispatched T1 T2 T3 T5 T6 T7 at 15:28:33; waiting on fixes: T4 T8
+- unblocked: dispatched T4 at 15:29:08; waiting on fixes: none
+- tests fast passed=0 failed=8 skipped=0 seconds=0.6
+- tests fast passed=0 failed=3 skipped=0 seconds=0.3
+- tests fast passed=8 failed=0 skipped=0 seconds=0.3
+- tests fast passed=21 failed=0 skipped=0 seconds=3.1
+- commit T3 ee8c01508a testcmd: xcodebuild, Swift Testing and XCTest output, isolate flag
+- tests fast passed=0 failed=7 skipped=0 seconds=0.4
+- tests fast passed=93 failed=0 skipped=0 seconds=10.0
+- tests fast passed=27 failed=0 skipped=0 seconds=2.8
+- Ruling: tier reason stays right after its own token in the TIERS line - unambiguous for several differing tasks - cost if wrong: one string move
+- commit T7 b32359f874 lint: tier reasons, Wave0 none header
+- tests fast passed=34 failed=0 skipped=0 seconds=18.2
+- tests fast passed=51 failed=0 skipped=0 seconds=33.3
+- tests fast passed=50 failed=3 skipped=0 seconds=5.5
+- commit T2 fbbcb6895c finish: group open incidents
+- tests fast passed=7 failed=0 skipped=0 seconds=0.3
+- Ruling: T1 Owns widened to tests/scripts/fixtures/review_noise/** - its brief already said so; an extra fixture blocked T5's commit - cost if wrong: none
+- tests fast passed=3 failed=1 skipped=0 seconds=0.4
+- tests fast passed=27 failed=1 skipped=0 seconds=9.3
+- Ruling: T1 also owns tests/scripts/test_pt_review.py and test_pt_review_declarations.py - two existing tests assert the old contract (adapter exit 2, mismatch names the type) - cost if wrong: none
+- commit T5 c2fb3f8359 commit_task --also, ticket key in commits
+- tests fast passed=28 failed=0 skipped=0 seconds=2.8
+- tests fast passed=53 failed=0 skipped=0 seconds=5.1
+- Ruling: T4 also owns tests/scripts/test_run_tests_wait.py - its wait-line assertion changes with the absolute sl path (#35) - cost if wrong: none
+- commit T1 c2697ddae2 pt_review: one Produces parser, member names, no duplicate incidents
+- tests fast passed=28 failed=0 skipped=0 seconds=9.2
+- commit T6 4bb7f0817c metrics: Fable family and prices
+- commit T4 2631bd8636 isolated test tree per task for compiled stacks
+- tests fast passed=53 failed=0 skipped=0 seconds=5.2
+- tests fast passed=54 failed=0 skipped=0 seconds=5.0
+- Ruling: accept the common-leaf false pass (let/var part pre-existed; a stricter parser is out of scope) and the Windows separator duplicate risk (pt_review writes and compares its own posix paths) - cost if wrong: an occasional missed mismatch or one duplicate incident
+- commit T1 eca138ea8a pt_review: one Produces parser, member names, no duplicate incidents
+- tests fast passed=21 failed=1 skipped=0 seconds=8.3
+- commit T4 5196614ac1 isolated test tree per task for compiled stacks
+- tests fast passed=59 failed=2 skipped=0 seconds=8.3
+- tests fast passed=21 failed=2 skipped=0 seconds=4.4
+- tests fast passed=25 failed=2 skipped=0 seconds=5.8
+- tests fast passed=25 failed=1 skipped=0 seconds=5.9
+- tests fast passed=39 failed=1 skipped=0 seconds=7.8
+- Ruling: T8 also owns tests/scripts/test_wave0.py - one assertion still expects SUPERLITE= text in the wave0 agent line - cost if wrong: none
+- commit T3 7ab2836bc0 testcmd: xcodebuild, Swift Testing and XCTest output, isolate flag
+- commit T5 d97100cb0a commit_task --also, ticket key in commits
+- commit T7 96143799ef lint: tier reasons, Wave0 none header
+- Ruling: --also ignores a directory (changed files only) - documenting is enough - cost if wrong: one retry with file paths
+- tests fast passed=27 failed=0 skipped=0 seconds=5.8
+- commit T8 587ec70330 docs: prime pointer, absolute sl path, new flags; version 1.2.5
+- tests full passed=883 failed=1 skipped=1 seconds=149.6
+- Ruling: T4 also owns tests/scripts/test_0_3_1_scripts.py - full suite: one assertion expects the old $SL wait line - cost if wrong: none
+- tests fast passed=29 failed=0 skipped=0 seconds=6.4
+- commit T4 a2859c7915 isolated test tree per task for compiled stacks
+- Ruling: final packet built from .superlite/incidents.final.jsonl - drops TDD-red failures of test files green in the full run and fixture blocks resolved by the Owns ruling; marks 4 follow-up-resolved entries fixed (#25/#26 stay open issues) - cost if wrong: a stale item hidden from the reviewer
+- tests fast passed=29 failed=1 skipped=0 seconds=12.2
+- tests fast passed=30 failed=0 skipped=0 seconds=12.4
+- commit T5 ea1da11d8e commit_task --also, ticket key in commits
+- Ruling: final-review findings outside the approved plan filed as #38 (haiku prime cuts lines) and #39 (unowned file of a running task blocks commits), not fixed in 1.2.5 - cost if wrong: one more release
+- tests full passed=884 failed=0 skipped=1 seconds=149.9
+- tests full passed=886 failed=0 skipped=1 seconds=152.2
+- Ruling: FROZEN notes for T1 T4 T8 are the Owns widenings ruled above; blocks otherwise unchanged - cost if wrong: none
+- unblocked: dispatched T9 T10 at 15:47:45; waiting on fixes: none
+- tests fast passed=50 failed=0 skipped=0 seconds=24.8
+- tests fast passed=11 failed=3 skipped=0 seconds=1.8
+- commit T10 e301991f33 commit_task: a running task's stray file does not block others
+- tests fast passed=14 failed=0 skipped=0 seconds=1.5
+- commit T9 bc8aca9ec5 build_prime: haiku prime keeps whole lines and the constraints
+- Ruling: plan_tools strip_ticks for other callers stays (mini prime now reads raw items) - cost if wrong: unbalanced backticks elsewhere
+- tests full passed=896 failed=0 skipped=1 seconds=151.2
+- Ruling: the two workaround incidents are fixed by T9 (#38) and T10 (#39); marked fixed in the final log - cost if wrong: none
+- Ruling: final review APPROVED on its stated condition - the one skipped test is a Windows-only skipif and its file is untouched - cost if wrong: none
+- tests fast passed=19 failed=0 skipped=0 seconds=2.8
+- tests fast passed=20 failed=0 skipped=0 seconds=3.3
+- commit T10 1bc1fbdaaa commit_task: a running task's stray file does not block others
