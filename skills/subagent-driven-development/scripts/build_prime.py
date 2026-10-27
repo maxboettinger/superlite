@@ -177,7 +177,7 @@ def build_mini(plan, tier):  # O(B + n*s)
     for t in mine:  # O(n) iterations
         lines.append(f"### {t.id} {t.title}")  # O(1)
         lines.append("Owns: " + ", ".join(t.owns))  # O(o)
-        lines += [f"Produces: {x}" for x in t.produces] + [f"Consumes: {x}" for x in t.consumes]  # O(q)
+        lines += [f"Produces: {x}" for x in wave0.raw_items(t, "produces")] + [f"Consumes: {x}" for x in wave0.raw_items(t, "consumes")]  # O(q)
     parts.append("## Interfaces your tasks touch" + nl + nl + normalize(nl.join(lines) if lines else "(none yet)"))  # O(n*s)
     return ((nl + nl).join(parts) + nl).encode("utf-8")  # O(out)
 

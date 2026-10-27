@@ -58,8 +58,12 @@ def find_wave0(plan):  # O(n)
 
 def constraint_lines(plan) -> list[str]:  # O(L)
     """Global constraints, Tech stack and Architecture lines as the plan states them, plus a `## Global constraints` section."""
-    out, in_sec = [], False  # O(1)
+    out, in_sec, bullets = [], False, False  # O(1)
     for ln in plan.lines:  # O(L)
+        if bullets and re.match(r"^\s*[-*]\s+\S", ln):  # a bullet under a label line is part of it | O(1)
+            out.append(ln.rstrip())  # O(1)
+            continue  # O(1)
+        bullets = False  # O(1)
         if re.match(r"^#{1,4}\s+global constraints", ln, re.I):  # O(1)
             in_sec = True  # O(1)
             continue  # O(1)
@@ -68,6 +72,7 @@ def constraint_lines(plan) -> list[str]:  # O(L)
         if in_sec or re.match(r"^(?:\*\*)?(?:Global constraints|Tech stack|Architecture|Stack|Language)\b", ln, re.I):  # O(1)
             if ln.strip():  # O(1)
                 out.append(ln.rstrip())  # O(1)
+                bullets = not in_sec  # O(1)
         if ln.startswith("```mermaid") or re.match(r"^###\s+T\d+", ln):  # constraints precede the diagram and tasks | O(1)
             if out:  # O(1)
                 break  # O(1)
@@ -86,6 +91,21 @@ def language_facts(lines: list[str], plan) -> str:  # O(L)
     return ("The plan and SPEC name no language. Infer it from the repo's marker files and the project's own declared tooling "
             "(package.json, go.mod, Cargo.toml, pyproject.toml, *.csproj, Makefile) and the file extensions the tasks' Owns lines use. "
             "Do not assume Python.")  # O(1)
+
+
+def raw_items(task, name: str) -> list[str]:  # O(k*s)
+    """A task field's items as the plan writes them: split on ` · `, bullet marks dropped, backticks kept (balanced)."""
+    out: list[str] = []  # O(1)
+    for raw in task.fields.get(name, []):  # O(k) iterations
+        for part in re.split(r"\s+·\s+", raw.strip()):  # O(s)
+            part = part.lstrip("-* ").strip()  # O(s)
+            if part:  # O(1)
+                out.append(part)  # O(1)
+    return out  # O(k*s)
+
+
+def raw_examples(task) -> list[str]:  # O(k*s)
+    return [x.strip() for x in task.fields.get("e.g.", []) if x.strip()]  # O(k*s)
 
 
 def quote(s: str) -> str:  # O(s)
@@ -126,9 +146,9 @@ def stub_spec(plan) -> str:  # O(q*s)
             out.append(f"      - name: {quote(sig['name'])}")  # O(1)
             out.append(f"        params: [{', '.join(quote(p) for p in params)}]")  # O(s)
             out.append(f"        returns: {quote(sig['ret'] or '')}")  # O(1)
-        if t.examples:  # the plan's hand-built examples: what the producer returns | O(k)
+        if raw_examples(t):  # the plan's hand-built examples: what the producer returns | O(k)
             out.append("    examples:")  # O(1)
-            out += [f"      - {quote(ex)}" for ex in t.examples]  # O(k)
+            out += [f"      - {quote(ex)}" for ex in raw_examples(t)]  # O(k)
     return "\n".join(out) + "\n"  # O(out)
 
 
