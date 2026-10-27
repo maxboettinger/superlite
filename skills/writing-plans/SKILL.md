@@ -38,7 +38,7 @@ In both modes, write for the split:
 
 ## Plan shape, in this order
 
-1. **Header:** Goal, Architecture, Tech stack, Spec path, `**Detail:** contracts | tests | full` (default `tests`), `**Target-min:** N` (predicted-total target, default 11), global constraints (exact values copied from the spec: version floors, names, formats). Task briefs point here, so do not repeat constraints per task.
+1. **Header** (an Xcode project: put `.superlite/test-cmd.json` `{"language":"swift","test":"xcodebuild test -scheme X {only_testing}"}` in the plan's setup; `{only_testing}` expands per test file): Goal, Architecture, Tech stack, Spec path, `**Detail:** contracts | tests | full` (default `tests`), `**Target-min:** N` (predicted-total target, default 11), `**Ticket:** KEY` (prefixes commit messages `KEY Tn: title`), `**Wave0:** none` (no Wave 0 skeleton; use it when the project already builds), global constraints (exact values copied from the spec: version floors, names, formats). Task briefs point here, so do not repeat constraints per task.
 2. **Main diagram** (always): Mermaid of components and data flow.
 3. **File structure:** every file and its one responsibility. Split by responsibility, not by layer, and follow the repo's patterns.
 4. **Task graph** (always, machine-readable): see below.

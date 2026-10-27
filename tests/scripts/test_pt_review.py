@@ -111,10 +111,11 @@ def test_adapter_serve_request(proj: Path):
         sys.path[:] = [p for p in sys.path if not p.startswith(str(proj))]
 
 
-def test_adapter_without_entries_exits_2(tmp_path: Path):
+def test_adapter_without_entries_exits_0(tmp_path: Path, capsys):
     plan = tmp_path / "plan.md"
     plan.write_text("# nothing here\n", encoding="utf-8")
-    assert run("adapter", "--plan", str(plan), "--out", str(tmp_path / "a.py")) == 2
+    assert run("adapter", "--plan", str(plan), "--out", str(tmp_path / "a.py")) == 0
+    assert "adapter: no Probe entry lines; probes skipped" in capsys.readouterr().out
     assert not (tmp_path / "a.py").exists()
 
 

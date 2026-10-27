@@ -64,6 +64,27 @@ def open_incidents(path):  # O(I*w)
     return out  # O(1)
 
 
+def ranked_incidents(incidents):  # O(I) hashing + O(G log G) sort
+    """Distinct (file, line, kind, context) groups with their counts, most frequent first, ties in log order."""
+    counts = {}  # group -> count, insertion order is log order | O(1)
+    for e in incidents:  # O(I) iterations
+        key = (e["file"], e["line"], e.get("kind") or "unknown", e.get("context", ""))  # O(w) hash
+        counts[key] = counts.get(key, 0) + 1  # O(1)
+    return sorted(counts.items(), key=lambda kv: -kv[1])  # O(G log G); stable sort keeps log order on ties
+
+
+def group_incidents(incidents, limit=15):  # O(I + G log G + limit*w)
+    """Summary lines for the open incidents: identical ones collapse to `Nx`, at most `limit` lines then a more line."""
+    ranked = ranked_incidents(incidents)  # O(I + G log G)
+    lines = []  # O(1)
+    for (file, line, kind, context), n in ranked[:limit]:  # O(limit) iterations
+        prefix = f"{n}x " if n > 1 else ""  # O(1)
+        lines.append(f"- {prefix}{file}:{line} [{kind}] {context}")  # O(w)
+    if len(ranked) > limit:  # O(1)
+        lines.append(f"- (+{len(ranked) - limit} more)")  # O(1)
+    return lines  # O(1)
+
+
 def unblocked_report(ledger, lint_log):  # O(R*w + L*n)
     """One line: were all stable tasks dispatched before the next patch, and the largest stable-to-dispatch lag."""
     lp = Path(lint_log)  # O(1)
@@ -181,10 +202,8 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     if plan is not None:  # O(1)
         out.append(history_section(plan or None, sl_dir or str(Path(ledger).parent)))  # see history_section
         out.append("")  # O(1)
-    out.append(f"open incidents: {len(incidents)}")  # O(1)
-    for e in incidents:  # O(I) iterations
-        kind = e.get("kind") or "unknown"  # O(1)
-        out.append(f"- {e['file']}:{e['line']} [{kind}] {e.get('context', '')}")  # O(w)
+    out.append(f"open incidents: {len(incidents)} ({len(ranked_incidents(incidents))} distinct)")  # O(I + G log G)
+    out += group_incidents(incidents)  # O(I + G log G)
     return "\n".join(out) + "\n"  # O(R + C + G + I) join
 
 

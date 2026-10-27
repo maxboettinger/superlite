@@ -23,7 +23,7 @@ finishes it also publishes its summary to --summary, unless a newer run has star
 --wait blocks until the pointed run's own summary exists (an older summary never counts),
 prints it, and exits 0 green, 1 red, 2 on timeout or when no background run was started.
 --wait PATH waits on exactly that run's summary (the `summary:` line; --background also prints
-`wait: bash "$SL" run_tests --wait <path>`, copy it verbatim); bare --wait uses the shared pointer.
+`wait: bash <abs>/sl run_tests --wait <path>` with the absolute path of the sl launcher, copy it verbatim); bare --wait uses the shared pointer.
 Put --wait last or before another flag: argparse takes a following word as its PATH.
 Stdlib only.
 """
@@ -47,6 +47,7 @@ import _pyrun as pyrun  # noqa: E402  # O(1) module load
 import testcmd  # noqa: E402  # O(1) module load
 import commit_task as ct  # noqa: E402  # O(1) module load
 import next_tasks as nt  # noqa: E402  # O(1) module load
+import trees  # noqa: E402  # O(1) module load
 
 
 DEFAULT_SUMMARY = ".superlite/test-summary.json"  # O(1)
@@ -96,7 +97,8 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
 
 
 def wait_line(path):  # O(1)
-    return f'wait: bash "$SL" run_tests --wait {path}'  # O(1)
+    sl = str(Path(__file__).resolve().with_name("sl"))  # O(1) absolute: shell variables do not persist between calls
+    return f'wait: bash {json.dumps(sl) if " " in sl else sl} run_tests --wait {path}'  # O(1)
 
 
 def wait_target(a):  # O(1)
@@ -271,6 +273,8 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--wait", nargs="?", const="", default=None, dest="wait_path", metavar="PATH",  # O(1)
                     help="wait for PATH's run (the `summary:` line); bare: the latest background run")  # O(1)
     ap.add_argument("--timeout", type=float, default=None, help=f"--wait limit in seconds (default {DEFAULT_WAIT:.0f})")  # O(1)
+    ap.add_argument("--task", default=None, help="task id: compiled stacks run in .superlite/trees/<task> (own files only)")  # O(1)
+    ap.add_argument("--plan", default=nt.DEFAULT_PLAN, help="plan for --task Owns (default %(default)s)")  # O(1)
     ap.add_argument("--run-id", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
@@ -292,22 +296,24 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     return run(a)  # see run
 
 
-def run_other(a, spec, paths, label):  # one runner command (any language) | O(X + o) + the run
+def run_other(a, spec, paths, label, cwd=None):  # one runner command (any language) | O(X + o) + the run
     """Run the resolved non-Python command: JUnit when the runner wrote one, else exit code plus output parsing."""
     with tempfile.TemporaryDirectory() as tmp:  # O(1)
         xml_path = Path(tmp) / "junit.xml"  # O(1)
         sub = lambda s: s.replace("{junit}", str(xml_path))  # noqa: E731 | O(len)
         env = {**os.environ, **{k: sub(str(v)) for k, v in (spec.get("env") or {}).items()}}  # O(env)
         literal = Path(spec["junit"]) if spec["junit"] and "{junit}" not in spec["junit"] else None  # a path the runner always writes | O(1)
+        if literal and cwd and not literal.is_absolute():  # the runner writes it inside its tree | O(1)
+            literal = Path(cwd) / literal  # O(1)
         if literal and literal.exists():  # a stale report must not count | O(1)
             literal.unlink()  # O(1)
-        marker = Path(".superlite") / "setup.done"  # setup runs once per run directory | O(1)
+        marker = Path(cwd) / ".superlite-setup.done" if cwd else Path(".superlite") / "setup.done"  # setup runs once per run directory (per tree) | O(1)
         if spec["setup"] and not marker.exists():  # O(1)
-            pyrun.run_tree(sub(spec["setup"]), shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)  # O(o)
+            pyrun.run_tree(sub(spec["setup"]), shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=cwd)  # O(o)
             marker.parent.mkdir(parents=True, exist_ok=True)  # O(1)
             marker.write_text("ok\n", encoding="utf-8")  # O(1)
         t0 = time.monotonic()  # O(1)
-        r = pyrun.run_tree(sub(spec["command"]), shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)  # O(o) + the run
+        r = pyrun.run_tree(sub(spec["command"]), shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=cwd)  # O(o) + the run
         seconds = time.monotonic() - t0  # O(1)
         text = (r.stdout or "") + (r.stderr or "")  # O(o)
         reports = junit_reports(xml_path, literal)  # the main report plus sidecars | O(n log n)
@@ -331,7 +337,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     label = "fast" if paths else "full"  # O(1)
     spec = testcmd.resolve(".", paths)  # .superlite/test-cmd.json, else marker files | O(m + f)
     if spec is None:  # no test command: exit 2 with a clear summary | O(1)
-        reason = ("no test command found: add .superlite/test-cmd.json "  # O(1)
+        hint = getattr(testcmd, "missing_reason", None)  # T3's text when present | O(1)
+        reason = hint(Path(".")) if hint else ("no test command found: add .superlite/test-cmd.json "  # O(1)
                   '{"language","test","test_file","junit","setup"} or a package.json scripts.test, go.mod, Cargo.toml, *.csproj or pytest project')
         print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
         write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
@@ -339,7 +346,13 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         print("0 0 0 0.0")  # O(1)
         return 2  # O(1)
     if not spec["python"]:  # O(1)
-        return run_other(a, spec, paths, label)  # O(X + o)
+        tree = None  # O(1)
+        if a.task and spec.get("isolate", False):  # compiled stack: test own files only, in an isolated tree | O(1)
+            info = nt.parse_plan(a.plan)  # O(L)
+            if a.task not in info:  # O(1)
+                nt.die(f"unknown task {a.task}")  # O(1)
+            tree = trees.prepare(".", a.task, info[a.task]["owns"])  # O(f * o) + git checkout
+        return run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
 
     with tempfile.TemporaryDirectory() as tmp:  # O(1) mkdtemp
         xml_path = Path(tmp) / "junit.xml"  # O(1)

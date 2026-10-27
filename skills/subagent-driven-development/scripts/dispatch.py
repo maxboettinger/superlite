@@ -40,7 +40,11 @@ def load_pool(path):  # O(pool bytes)
     return poolmod.load(path)  # O(pool bytes) one stderr line on a corrupt file
 
 
-def skip_t0(ledger):  # O(c)
+def skip_t0(ledger, plan=None):  # O(c)
+    if plan is not None:  # O(1)
+        import plan_tools  # noqa: E402 | O(1) lazy
+        if plan_tools.wave0_off(plan):  # `**Wave0:** none` header | O(C)
+            return True  # O(1)
     p = Path(ledger)  # O(1)
     if not p.is_file():  # O(1)
         return False  # O(1)
@@ -155,7 +159,7 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10):  # O(c +
     done = nt.csv(committed) if committed is not None else sorted(ct.committed_tasks(ledger))  # O(c)
     busy = nt.csv(running) if running is not None else running_from_pool(pool, done)  # O(a)
     import wave0  # noqa: E402 | O(1) lazy
-    w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy and not skip_t0(ledger)  # synthesized Wave 0 still pending | O(1)
+    w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy and not skip_t0(ledger, plan)  # synthesized Wave 0 still pending | O(1)
     lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0)  # see plan_dispatch
     if w0:  # first line, a haiku lane agent | O(R)
         cfg = routing.load_cfg()  # O(file)
