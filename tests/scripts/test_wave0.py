@@ -157,3 +157,10 @@ def test_lint_prints_log_line_and_unblocked_line_counts_as_dispatched(tmp_path):
     (tmp_path / ".superlite" / "progress.md").write_text("- unblocked: dispatched T0 T1 at 10:00:00; waiting on fixes: none\n", encoding="utf-8")
     again = run(SCRIPTS / "plan_tools.py", "lint", "--stable", "--plan", p, cwd=tmp_path).out
     assert again.rstrip().splitlines()[-1] == "DISPATCH NOW: T2"
+
+
+def test_wave0_brief_names_pythonpath(tmp_path):
+    p = plan(tmp_path, "**Tech stack:** Python 3.12; pytest", "x", PY)
+    assert run(WAVE0, "--plan", p, cwd=tmp_path).returncode == 0
+    b = brief(tmp_path)
+    assert '"pythonpath"' in b and "neither the repository root nor `src/`" in b
