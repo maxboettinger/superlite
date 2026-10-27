@@ -20,6 +20,22 @@
       "cache_read": 0.10,
       "output_tps": 80
     },
+    "fable": {
+      "input": 10.00,
+      "output": 50.00,
+      "cache_write_5m": 12.50,
+      "cache_write_1h": 20.00,
+      "cache_read": 0.25,
+      "output_tps": 45
+    },
+    "mythos": {
+      "input": 10.00,
+      "output": 50.00,
+      "cache_write_5m": 12.50,
+      "cache_write_1h": 20.00,
+      "cache_read": 0.25,
+      "output_tps": 45
+    },
     "haiku": {
       "input": 0.10,
       "output": 0.50,

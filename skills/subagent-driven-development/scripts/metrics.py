@@ -26,7 +26,7 @@ from datetime import datetime  # O(1)
 from pathlib import Path  # O(1)
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"  # O(1)
-FAMILIES = ("haiku", "sonnet", "opus")  # O(1)
+FAMILIES = ("fable", "mythos", "haiku", "sonnet", "opus")  # O(1)
 TID = re.compile(r"\bT(\d+[a-z]?)\b")  # O(1)
 STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b", re.I)  # O(1)
 RED = re.compile(r"\b(?:tests?|suite)\b[^\n]{0,40}\b(?:red|failing|failed)\b|\b\d+\s+failed\b", re.I)  # O(1)
@@ -51,6 +51,20 @@ FIXER = re.compile(r"fixer|\bfix(?:es|ed)?\b|F-T\d+-\d+|re-?dispatch|rework", re
 def family(model) -> str | None:  # O(1)
     m = str(model or "").lower()  # O(1)
     return next((f for f in FAMILIES if f in m), None)  # O(1)
+
+
+def fam_key(model) -> str:  # O(1)
+    """Pricing key: a known family, else `unknown:<model id>` for a model the table does not know, else sonnet (no model)."""
+    return family(model) or (f"unknown:{model}" if model else "sonnet")  # O(1)
+
+
+def price_for(prices: dict, fam: str) -> tuple:  # O(F)
+    """Price of a fam_key: an unknown model takes the known family with the highest input price (first one on a tie)."""
+    if fam in prices:  # O(1)
+        return prices[fam]  # O(1)
+    if fam.startswith("unknown:"):  # O(1)
+        return max((prices[f] for f in FAMILIES if f in prices), key=lambda p: p[0])  # O(F)
+    return prices["sonnet"]  # O(1)
 
 
 def load_prices(path=None) -> dict:  # O(file)
@@ -252,11 +266,11 @@ def coordinator_record(sl_dir, prices=None) -> dict | None:  # O(bytes of the ma
     tok, by_model, ctx = _empty(), {}, []  # O(1)
     for rec in seen.values():  # O(turns)
         rec["output"] = max(rec["output"], int(rec["chars"] / CHARS_PER_TOKEN))  # O(1)
-        fam = family(rec["model"]) or "sonnet"  # O(1)
+        fam = fam_key(rec["model"])  # O(1)
         t5 = {k: rec[k] for k in tok}  # O(5)
         for k in tok:  # O(5)
             tok[k] += t5[k]  # O(1)
-        by_model[fam] = by_model.get(fam, 0.0) + cost_of(t5, prices.get(fam) or prices["sonnet"])  # O(1)
+        by_model[fam] = by_model.get(fam, 0.0) + cost_of(t5, price_for(prices, fam))  # O(1)
         ctx.append(rec["input"] + rec["cache_read"] + rec["cache_write_5m"] + rec["cache_write_1h"])  # O(1)
     ctx.sort()  # O(turns log turns)
     return {"turns": len(seen), "tokens": {"in": tok["input"], "out": tok["output"], "cache_read": tok["cache_read"],  # O(1)
@@ -269,7 +283,7 @@ def coordinator_record(sl_dir, prices=None) -> dict | None:  # O(bytes of the ma
 def agents_cost(sl_dir, prices=None) -> float:  # O(M + B)
     """Cost of every agent segment in metrics.jsonl, including ones not mapped to a plan task."""
     prices = prices or load_prices()  # O(file)
-    return sum(cost_of(s["tok"], prices.get(family(s["model"]) or family(a["type"]) or "sonnet") or prices["sonnet"])  # O(segments)
+    return sum(cost_of(s["tok"], price_for(prices, family(s["model"]) or family(a["type"]) or fam_key(s["model"])))  # O(segments)
                for a in agent_records(Path(sl_dir)) for s in a["segments"])  # O(M + B)
 
 
@@ -314,7 +328,7 @@ def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n
         for i, s in enumerate(segs):  # O(segments)
             if not s["tid"]:  # O(1)
                 continue  # O(1)
-            fam = family(s["model"]) or family(a["model"]) or family(a["type"]) or "sonnet"  # O(1)
+            fam = family(s["model"]) or family(a["model"]) or family(a["type"]) or fam_key(s["model"] or a["model"])  # O(1)
             # the transcript's own first and last message times; the hook times (launch can be logged after the
             # agent started, even after its stop) only when the transcript has none | O(1)
             st = s["first"] if s["first"] is not None else (a["start_ms"] or 0) / 1000.0  # O(1)
@@ -338,12 +352,12 @@ def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n
         for b in builds:  # O(builds)
             for k in tok:  # O(5)
                 tok[k] += b["tok"][k]  # O(1)
-            cost += cost_of(b["tok"], prices.get(b["fam"]) or prices["sonnet"])  # O(1)
+            cost += cost_of(b["tok"], price_for(prices, b["fam"]))  # O(1)
         last = builds[-1] if builds else None  # O(1)
         sm = STATUS.search(last["text"]) if last else None  # O(1)
         status = sm.group(1).upper() if sm else None  # O(1)
         rw_s = sum(f["end"] - f["start"] for f in fixes)  # O(fixes)
-        rw_c = sum(cost_of(f["tok"], prices.get(f["fam"]) or prices["sonnet"]) for f in fixes)  # O(fixes)
+        rw_c = sum(cost_of(f["tok"], price_for(prices, f["fam"])) for f in fixes)  # O(fixes)
         misses = [i for i in incidents if re.search(rf"kind-miss\s+{tid}\b", str(i.get("context", "")))]  # O(I)
         notes = [n for n in fix_notes if re.search(rf"\bF-{tid}-\d+|\b{tid}\b", n)]  # O(notes)
         reworked = bool(fixes or misses or notes)  # O(1)
