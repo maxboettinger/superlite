@@ -95,6 +95,19 @@ def _first_rule(ft: dict, cfg: dict) -> str:  # O(r)
     return cfg.get("default_tier", "sonnet")  # O(1)
 
 
+def tier_note(ft: dict, tier: str, planned: str | None, gated: bool) -> str | None:  # O(1)
+    """Why a task runs on a tier other than its planned `**Model:**`; None when they agree."""
+    if not planned or tier == planned:  # O(1)
+        return None  # O(1)
+    if gated:  # O(1)
+        return "history gate"  # O(1)
+    if ft.get("critical_path"):  # O(1)
+        return "critical path"  # O(1)
+    if not ft.get("mechanical"):  # O(1)
+        return "not mechanical"  # O(1)
+    return "routing rules"  # O(1)
+
+
 def compute_tiers(plan, cp, times, cfg=None, stats=None, gated=None) -> dict:  # O(n*(k*s + r))
     """{task id: tier} for every approved task. cp = critical-path ids, times = predicted minutes, stats = history
     stats (bands_by_tier), gated = list that receives the tasks kept off a tier by the stats gate."""
