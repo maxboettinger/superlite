@@ -63,27 +63,35 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import next_tasks as nt  # noqa: E402 | O(1)
 import autocommit  # noqa: E402 | O(1)
+import pyroots  # noqa: E402 | O(1)
 
 DEFAULT_LEDGER = ".superlite/progress.md"  # O(1)
 DEFAULT_LOG = ".superlite/incidents.jsonl"  # O(1)
 IGNORED_PARTS = (".superlite/", "__pycache__/")  # never staged, never blocking | O(1)
 SHARED_OWNS = ("tests/regression/",)  # generated probe regression tests: owned by the committer | O(1)
 COMMIT_LINE = re.compile(r"^\s*[-*+]?\s*commit\s+([A-Z]{1,3}\d+[A-Za-z]?)\s+[0-9a-f]{7,40}")  # O(1)
+SURROGATE = re.compile("[\ud800-\udfff]")  # lone surrogates from argv cannot be written as UTF-8 | O(1)
 TASK_ID = re.compile(r"\b[A-Z]{1,3}\d+[A-Za-z]?\b")  # O(1)
 
 IMPORT_DRIVER = r"""
 import importlib, importlib.util, json, os, sys, traceback
 sys.dont_write_bytecode = True
 root = os.path.abspath(sys.argv[1])
-files = sys.argv[2:]
+roots = sorted((os.path.abspath(r) for r in json.loads(sys.argv[2])), key=len, reverse=True)
+files = sys.argv[3:]
 sys.path.insert(0, root)
 if os.path.isdir(os.path.join(root, "src")):
     sys.path.insert(1, os.path.join(root, "src"))
+for r in roots:
+    sys.path.append(r)
 failures = []
 for rel in files:
     path = os.path.join(root, rel)
     parts = rel.replace("\\", "/")[:-3].split("/")
-    if parts[0] == "src" and os.path.isdir(os.path.join(root, "src")):
+    under = [r for r in roots if os.path.abspath(path).startswith(r + os.sep)]
+    if under:
+        parts = os.path.relpath(path, under[0])[:-3].replace("\\", "/").split("/")
+    elif parts[0] == "src" and os.path.isdir(os.path.join(root, "src")):
         parts = parts[1:]
     if parts and parts[-1] == "__init__":
         parts = parts[:-1]
@@ -169,10 +177,10 @@ def syntax_errors(files):  # O(total size of m_py files)
     return errors  # O(1)
 
 
-def import_errors(files):  # O(m_py * import cost) + 1 process spawn (batched)
+def import_errors(files, roots=None):  # O(m_py * import cost) + 1 process spawn (batched)
     if not files:  # O(1)
         return []  # O(1)
-    r = subprocess.run([sys.executable, "-I", "-c", IMPORT_DRIVER, ".", *files],  # O(output) + process spawn
+    r = subprocess.run([sys.executable, "-I", "-c", IMPORT_DRIVER, ".", json.dumps(list(roots or [])), *files],  # O(output) + process spawn
                        capture_output=True, text=True, encoding="utf-8", timeout=120,  # O(1)
                        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})  # O(1)
     try:  # O(1)
@@ -191,6 +199,7 @@ def is_module(path):  # O(len path)
 def append_ledger(ledger, line):  # O(1) file I/O
     p = Path(ledger)  # O(1)
     p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+    line = SURROGATE.sub("\ufffd", line)  # O(len line)
     new = not p.exists() or p.stat().st_size == 0  # O(1) stat
     with open(p, "a", encoding="utf-8", newline="\n") as f:  # O(1)
         if new:  # O(1)
@@ -285,7 +294,7 @@ def committed_tasks(ledger):  # O(c)
     if not p.exists():  # O(1)
         return set()  # O(1)
     out = set()  # O(1)
-    for ln in p.read_text(encoding="utf-8").replace("\r\n", "\n").split("\n"):  # O(c) iterations
+    for ln in p.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n").split("\n"):  # O(c) iterations
         m = COMMIT_LINE.match(ln)  # O(1) regex
         if m:  # O(1)
             out.add(m.group(1))  # O(1)
@@ -400,6 +409,8 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
             continue  # O(1)
         if skip and f.startswith(skip) and not nt.owns_match(f, owns):  # plan folder: only owned paths count | O(f)
             continue  # O(1)
+        if f.startswith("docs/") and f.endswith(".md") and not nt.owns_match(f, owns):  # docs: only owned ones count | O(f)
+            continue  # O(1)
         if f in own_files and not nt.owns_match(f, owns):  # O(f)
             continue  # O(1)
         if tid == "T0" and nt.owns_match(f, other):  # Wave 0 globs never take another task's file | O(f)
@@ -425,6 +436,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     if out_of_scope:  # O(1)
         for f in out_of_scope:  # O(m) iterations
             print(f"out-of-scope {f}")  # O(1)
+            a.blocked.add(f)  # O(1)
         log_incidents(a.log, tid, [(f, 0, "change outside Owns blocked by commit_task; "  # O(m) one append
                                     "nothing committed") for f in out_of_scope])
         return 1, None  # O(1)
@@ -438,7 +450,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     py = [f for f in present if f.endswith(".py")]  # O(m)
     problems = syntax_errors(py)  # O(size of py files)
     if not problems:  # O(1)
-        problems = import_errors([f for f in py if is_module(f)])  # O(m_py * import cost) + process spawn
+        problems = import_errors([f for f in py if is_module(f)], a.roots)  # O(m_py * import cost) + process spawn
     if problems:  # O(1)
         for f, line, msg in problems:  # O(problems) iterations
             print(f"{'syntax' if msg.startswith('SyntaxError') else 'import'} "  # O(1)
@@ -510,6 +522,8 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
         except ValueError:  # O(1)
             pass  # O(1)
 
+    a.roots = pyroots.import_roots(Path("."), a.plan)  # O(dirs) once per process
+    a.blocked = set()  # files reported out-of-scope by any task | O(1)
     worst = 0  # O(1)
     committed = []  # O(1)
     for tid in a.task:  # O(t) iterations
@@ -520,6 +534,8 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
             print(sha if len(a.task) == 1 else f"{tid} {sha}")  # O(1)
         elif len(a.task) > 1:  # O(1)
             print(f"{tid} FAILED")  # O(1)
+    if a.blocked:  # one hint for every task, not one per task | O(1)
+        print("hint: commit or exclude these files, they are outside every Owns: " + ", ".join(sorted(a.blocked)))  # O(b log b)
     release_agents(a.pool, committed)  # O(pool bytes)
 
     if a.dispatch:  # O(1)
