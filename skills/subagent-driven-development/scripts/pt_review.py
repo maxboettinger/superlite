@@ -65,13 +65,14 @@ HTTP_LINE_RE = re.compile(r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S*)\s
 TEST_PATH_RE = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$)")  # O(1)
 _DECL_GENERIC = r"(class|interface|enum|fun|func|def|function|struct|record|trait)\s+{name}\b"  # O(1)
 DECL_PATTERNS = {  # extension -> declaration regex with a {name} slot | O(1)
-    ".swift": r"(struct|class|enum|actor|protocol|func|typealias|let|var)\s+{name}\b",  # O(1)
+    ".swift": r"(struct|class|enum|actor|protocol|func|typealias|let|var|extension|case)\s+(?:\w+\.)*{name}\b",  # O(1)
     **{e: r"(class|function|interface|type|enum|const|let|var)\s+{name}\b" for e in (".ts", ".tsx", ".js", ".mjs", ".jsx")},  # O(1)
     ".go": r"(func(\s*\([^)]*\))?|type|var|const)\s+{name}\b",  # O(1)
     ".rs": r"(fn|struct|enum|trait|type|const|static|mod)\s+{name}\b",  # O(1)
     **{e: _DECL_GENERIC for e in (".kt", ".java", ".cs", ".rb", ".php")},  # O(1)
 }  # O(1)
 STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')  # O(1)
+DOCS_NOTES: list[str] = []  # tasks with Produces but no code files in the last check_interfaces call | O(1)
 DECLARED_NOTES: list[str] = []  # tasks checked by declaration in the last check_interfaces call | O(1)
 CONSUMER_EXT = {".html", ".htm", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".vue", ".py"}  # O(1)
 
@@ -102,7 +103,13 @@ class Task:  # O(1)
 
     def produces(self) -> list[str]:  # O(p*m) total
         items: list[str] = []  # O(1)
+        here = str(Path(__file__).resolve().parent)  # O(1)
+        if here not in sys.path:  # O(path entries)
+            sys.path.append(here)  # O(1)
+        from plan_tools import EG_RE  # lazy: plan_tools imports this module | O(1)
         for line in self.fields.get("produces", []):  # O(p) iterations
+            if EG_RE.match(line):  # an `e.g.` example line is not a Produces item | O(m)
+                continue  # O(1)
             line = re.sub(r"^\s*[-*]\s+", "", line)  # O(m)
             items.extend(p.strip() for p in line.split("·") if p.strip().strip("`").strip().lower() not in ("", "none", "-", "n/a"))  # none/-/n/a/empty = nothing to check | O(m) per field line
         return items  # O(1)
@@ -554,8 +561,12 @@ def source_owns(plan: Plan, tid: str) -> list[str]:  # O(o*m) total
     return [o for o in plan.tasks[tid].owns() if not is_test_path(o)]  # O(o*m)
 
 
+def code_owns(plan: Plan, tid: str) -> list[str]:  # O(o*m) total
+    return [o for o in source_owns(plan, tid) if Path(o).suffix in DECL_PATTERNS or o.endswith(".py")]  # O(o)
+
+
 def by_declaration(plan: Plan, tid: str) -> bool:  # O(o*m) total
-    owned = source_owns(plan, tid)  # O(o*m)
+    owned = code_owns(plan, tid)  # O(o*m)
     return bool(owned) and not any(o.endswith(".py") for o in owned)  # O(o)
 
 
@@ -577,17 +588,21 @@ def find_declaration(root: Path, files: list[str], name: str) -> tuple[str, int]
 
 
 def check_declarations(plan: Plan, root: Path, p: Planned) -> list[Mismatch]:  # O(F*B) total
-    files = source_owns(plan, p.task)  # O(o*m)
-    hit = find_declaration(root, files, p.parts[0])  # O(F*B)
+    files = code_owns(plan, p.task)  # O(o*m)
+    leaf = p.parts[-1]  # O(m)
+    hit = find_declaration(root, files, leaf)  # O(F*B)
     if hit:  # O(1)
         return []  # O(1)
     shown = ", ".join(files)  # O(m)
-    return [Mismatch(1, files[0], 1, f"{p.task} Produces: `{p.parts[0]}` not declared in {shown}", p.task)]  # O(1)
+    return [Mismatch(1, files[0], 1, f"{p.task} Produces: `{leaf}` not declared in {shown}", p.task)]  # O(1)
 
 
 def check_interfaces(plan: Plan, root: Path, task_ids: list[str] | None) -> tuple[list[Mismatch], int]:  # O(P*(d^2 + o*B + p^2)) + 1 subprocess total
-    items = planned_items(plan, task_ids)  # O(1)
     DECLARED_NOTES.clear()  # O(1)
+    DOCS_NOTES.clear()  # O(1)
+    DOCS_NOTES.extend(tid for tid, t in plan.tasks.items() if (task_ids is None or tid in task_ids)  # O(n*o)
+                      and t.owns() and t.produces() and not code_owns(plan, tid))  # O(o*m)
+    items = [p for p in planned_items(plan, task_ids) if p.task not in DOCS_NOTES]  # O(P)
     decl = [p for p in items if by_declaration(plan, p.task)]  # O(P*o)
     if decl:  # O(1)
         out = [m for p in decl for m in check_declarations(plan, root, p)]  # O(P*F*B)
@@ -1036,6 +1051,7 @@ def cmd_contract(a: argparse.Namespace) -> int:  # O(parts above + Mm file opens
         mismatches, n = check_interfaces(plan, root, [producer.id])  # O(1)
         if n == 0:  # O(1)
             notes.append(f"part1: {producer.id} has no parseable Produces signatures")  # O(1)
+        notes.extend(f"part1: {t} has no code files; Produces not checked" for t in DOCS_NOTES)  # O(n)
         if DECLARED_NOTES:  # O(1)
             notes.append(f"part1: {n} Produces name(s) of {', '.join(DECLARED_NOTES)} checked by declaration, parameters unchecked")  # O(1)
         m2, n2 = check_data_contract(plan, root, producer, consumer)  # O(1)
@@ -1048,6 +1064,7 @@ def cmd_contract(a: argparse.Namespace) -> int:  # O(parts above + Mm file opens
         label = "contract"  # O(1)
         mismatches, n = check_interfaces(plan, root, None)  # O(1)
         notes.append(f"part1: {n} Produces signature(s) checked")  # O(1)
+        notes.extend(f"part1: {t} has no code files; Produces not checked" for t in DOCS_NOTES)  # O(n)
         if DECLARED_NOTES:  # O(1)
             notes.append(f"part1: Produces of {', '.join(DECLARED_NOTES)} checked by declaration, parameters unchecked")  # O(1)
     for n_ in notes:  # O(parts) iterations
@@ -1059,10 +1076,16 @@ def cmd_contract(a: argparse.Namespace) -> int:  # O(parts above + Mm file opens
     if mismatches:  # O(1)
         print(f"FAIL: {label}: {len(mismatches)} mismatch(es)")  # O(1)
         if log:  # O(1)
+            known = [e for e in read_incidents(log) if e.get("agent") == "pt_review"  # O(K)
+                     and str(e.get("resolution", "")).lower() not in RESOLVED]  # O(K)
             for m in mismatches:  # O(Mm) iterations
+                if any(e["file"] == m.file and (str(e.get("context", "")).endswith(m.msg) or  # O(K) duplicate of an open incident
+                                                str(e.get("context", "")) == f"{label}: {m.msg}"[:200]) for e in known):  # O(K)
+                    continue  # O(1)
                 append_log(log, {"file": m.file, "line": m.line, "context": f"{label}: {m.msg}"[:200],  # O(file open) per mismatch: append_log reopens the log each time
                                  "agent": "pt_review", "kind": "exception", "confidence": "high",  # O(1)
                                  "resolution": "open", "time": time.strftime("%H:%M:%S")})  # O(1)
+                known.append({"file": m.file, "context": f"{label}: {m.msg}"[:200]})  # same mismatch twice in one run logs once | O(1)
         return 1  # O(1)
     print(f"PASS: verified: {label}")  # O(1)
     if log and a.seam:  # O(1)
@@ -1244,6 +1267,9 @@ def cmd_adapter(a: argparse.Namespace) -> int:  # O(template size) + file write 
     plan = parse_plan(a.plan)  # O(1)
     root = Path(a.root).resolve()  # O(1)
     out = Path(a.out) if a.out else root / ".superlite" / "probes" / "adapter.py"  # O(1)
+    if not any(parse_probe_entry(t) for t in plan.probe_entries):  # O(E_p)
+        print("adapter: no Probe entry lines; probes skipped")  # O(1)
+        return 0  # O(1)
     out.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     src = build_adapter(plan, out, root)  # O(1)
     compile(src, str(out), "exec")  # O(1)
@@ -1311,6 +1337,8 @@ def incident_items(entries: list[dict]) -> list[Item]:  # O(K) total
             groups.setdefault((e["file"], e["line"]), []).append(e)  # O(1)
     items: list[Item] = []  # O(1)
     for (file, line), es in groups.items():  # O(groups) iterations
+        seen: set[tuple] = set()  # identical entries (same kind, context, resolution, agent) count once | O(1)
+        es = [e for e in es if not ((k := tuple(str(e.get(f, "")) for f in ("kind", "context", "resolution", "agent"))) in seen or seen.add(k))]  # O(entries)
         repeated = len(es) >= 2  # O(1)
         unresolved = any(str(e.get("resolution", "")).lower() not in RESOLVED for e in es)  # O(entries at location)
         low = any(str(e.get("confidence", "")).lower() == "low" for e in es)  # O(1)

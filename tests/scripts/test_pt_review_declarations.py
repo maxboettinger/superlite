@@ -52,7 +52,7 @@ def test_swift_produces_missing_is_mismatch(tmp_path, capsys):
     assert contract(proj, "--seam", "T1,T2") == 1
     out = capsys.readouterr().out
     lines = [ln for ln in out.splitlines() if ln.startswith("MISMATCH part1")]
-    assert len(lines) == 1 and "`Missing`" in lines[0] and "Sources/Kit/Notifications.swift" in lines[0]
+    assert len(lines) == 1 and "`thing`" in lines[0] and "Sources/Kit/Notifications.swift" in lines[0]
 
 
 def test_check_interfaces_values(tmp_path):
