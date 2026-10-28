@@ -190,6 +190,8 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     import orchestrator  # O(1)
     out.append(orchestrator.summary_line(Path(ledger).resolve().parent))  # mode, and the approval time in human mode | O(file)
     out.append("after finishing: `sl orchestrator end` archives the run markers (the coordinator guard stops)")  # O(1)
+    out.append("superlite friction this run (broken, slow, unclear, repeated work)? "  # O(1)
+               "`sl feedback add \"<what, where, expected>\"` once per finding")
     out.append("")  # O(1)
     cr = Path(ledger).with_name("chain-rulings.json")  # sequential rulings lint accepted, with the minutes they cost | O(1)
     try:  # O(1)

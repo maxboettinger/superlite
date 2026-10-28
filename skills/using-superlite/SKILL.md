@@ -1,32 +1,20 @@
 ---
 name: using-superlite
-description: Use when starting any conversation - explains superlite, how to size a request, and which skill fits which task
+description: Use when starting any conversation - sizing requests, picking a superlite skill
 ---
 
-Superlite: parallel work, short reports.
+First message, no mode named, not trivial: `/superlite:start`.
 
-**Start menu.** First message, no mode named, not trivial: follow `/superlite:start`.
+**Size.** Trivial: do it (human mode: after an approved review plan). Bounded (changes an existing flow): chat design, build. Architectural: one AskUserQuestion (≤4), one design+plan.
 
-**Size the request first.**
-- Trivial: just do it (human orchestrator: only after an approved review plan).
-- Bounded (change to an existing flow): short design in chat, build.
-- Architectural: batched questions (one AskUserQuestion, up to 4), one combined design+plan doc.
+**Orchestrator**, in that batch: human (approves the plan first) or AI; "decide yourself", away, headless: AI (a Ruling). `sl orchestrator set human|ai`. AI asks only major or uncertain questions while planning, then halts only on destructive, outward, security-sensitive steps.
 
-**Who orchestrates?** Ask in that batch: human (approves the plan first) or AI. Request settles it ("decide yourself", away, headless): AI, as a Ruling. `sl orchestrator set human|ai`. AI asks only major or uncertain questions while planning, then stops only for destructive, outward or security-sensitive actions.
+**Skills** (`superlite:`): build `brainstorming`, plan `writing-plans`, run `subagent-driven-development`, bug `systematic-debugging`, TDD `test-driven-development`, done `verification-before-completion`, finish `finishing-a-development-branch`.
 
-**Skill map**
-- build -> superlite:brainstorming
-- plan -> superlite:writing-plans
-- execute -> superlite:subagent-driven-development
-- bug -> superlite:systematic-debugging
-- tests first -> superlite:test-driven-development
-- claim done -> superlite:verification-before-completion
-- finish -> superlite:finishing-a-development-branch
+**2+ tasks: `subagent-driven-development`,** loaded before the plan; no `general-purpose` builders or reviewers; inline only when small (a few files, one chain; say so). Non-trivial builds end with a fresh `superlite:final-reviewer` (review packet).
 
-**Builds with 2+ tasks always run through `superlite:subagent-driven-development`;** load it before writing the plan. No `general-purpose` agents for build or review. Build inline only when small (a few files, one chain); say so.
+**Tools.** `bash <skill-dir>/../subagent-driven-development/scripts/sl <tool>`, never `python`. Graphify only if `sl graphify_gate` allows.
 
-**Final review always applies.** A non-trivial build ends with a fresh `superlite:final-reviewer` on the review packet before you claim done.
+**Superlite broke, slow, unclear, repetitive?** `sl feedback add "<what, where, expected>"`; don't fix it mid-task.
 
-**Tools.** `bash <skill-dir>/../subagent-driven-development/scripts/sl <tool>`, never `python`. Incidents go to `.superlite/incidents.jsonl`; Graphify only if `sl graphify_gate` allows.
-
-**Platform adaptation.** Off Claude Code, read the matching `references/<harness>-tools.md` next to this skill (antigravity, codex, gemini, hermes, muse, pi); it maps tool names and says how to run `agents/*.md`.
+**Off Claude Code:** `references/<harness>-tools.md` (tool names, running `agents/*.md`).
