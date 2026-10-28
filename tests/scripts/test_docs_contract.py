@@ -61,4 +61,4 @@ def test_wave0_agent_line_absolute():
 
 
 def test_using_superlite_cap():
-    assert len((ROOT / "skills" / "using-superlite" / "SKILL.md").read_text(encoding="utf-8")) <= 1500 + 3000
+    assert len((ROOT / "skills" / "using-superlite" / "SKILL.md").read_text(encoding="utf-8")) <= 1500

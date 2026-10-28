@@ -16,6 +16,15 @@ A lean build-lifecycle plugin: 8 skills in `skills/`, 3 agents in `agents/`, and
 - Keep LF line endings. `hooks/session-start` uses `printf`, never a heredoc.
 - Do not touch `bench/` results or `docs/plans/` when working on a harness integration.
 
+## Feedback loop
+
+Agents using superlite log its own friction with `sl feedback add` into `~/.superlite/feedback.jsonl`, one inbox per machine (`skills/subagent-driven-development/scripts/feedback.py`).
+
+- Session start here: run `bash skills/subagent-driven-development/scripts/sl feedback triage`. Untriaged entries: offer a triage before other work.
+- Triage: draft one issue per new group (or a comment on the matched issue), sorted by count. The repo is public: drop hostnames and the project names and paths that are not superlite's own. Get one approval for the batch, file it with `gh`, then `sl feedback mark <ids>`.
+- "Improve the plugin" with nothing more specific: the inbox (triage) first, then open issues, then `docs/feedback/`.
+- Other machines: one ssh host per line in `~/.superlite/feedback-hosts`; triage reads them, skipping hosts it cannot reach.
+
 ## Harness files
 
 | Harness | Files |

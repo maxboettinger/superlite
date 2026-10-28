@@ -23,6 +23,7 @@ Mechanical steps are scripts, not agents. Every tool runs as `bash <skill-dir>/s
 | `probe_run` | Parallel robustness probes with no agents (Python projects only) |
 | `trees` | `trees.py clean` removes the isolated test trees under `.superlite/trees` (`sl trees clean`, at finish); `path Tn` prints one |
 | `incident` | Records and queries the shared incident log (file, line, context) |
+| `feedback` | Superlite's own friction inbox, `~/.superlite/feedback.jsonl` per machine: `add TEXT [--kind K] [--plan P]` (text scrubbed of home paths, e-mails, tokens), `triage [--host H]... [--all]` (merges the hosts in `feedback-hosts` over ssh, groups duplicates, ranks by count, matches open issues via `gh`), `mark ID...`; `finish` asks for it |
 | `budget` | One line of elapsed time and cost against the plan's target and cap |
 | `metrics` | Per-task time, tokens and cost from `.superlite/metrics.jsonl` and agent transcripts |
 | `history` | Run history: `write` rows to `~/.superlite/history.jsonl`, `read`, `derive` stats, `import` bench scores |
