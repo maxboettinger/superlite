@@ -151,6 +151,8 @@ if [ "$has_agent" = 1 ]; then
   while :; do
     if [[ $_rest =~ $re_seg ]]; then _seg="${BASH_REMATCH[1]}"; _rest="${BASH_REMATCH[3]}"; _last=0
     else _seg="$_rest"; _last=1; fi
+    _q="${_seg//[^\"]/}"; _q2="${_seg//[^\']/}"
+    if [ $(( ${#_q} % 2 )) = 1 ] || [ $(( ${#_q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
     if [[ $_seg =~ $re_test ]]; then
       files_from_seg "$_seg"
       [ -z "$REPLY" ] && deny_subagent_full
@@ -163,9 +165,13 @@ fi
 case "$cmd" in *until*|*while*|*null*|*[Nn][Uu][Ll]*) hid=1 ;; *) hid=0 ;; esac
 if [ "$hid" = 1 ]; then
   load_project_runner
-  if [[ $cmd =~ $re_loop ]]; then
-    [[ $cmd =~ $re_in_loop ]] && deny
-    [ "${#pp[@]}" -gt 0 ] && project_hit "$cmd" loop && deny
+  # Quoted text (commit messages, echo arguments) is not a command: blank it before the loop scan.
+  scan="$cmd"; unq=""; re_quoted='^([^"'"'"']*)("[^"]*"|'"'"'[^'"'"']*'"'"')(.*)$'
+  while [[ $scan =~ $re_quoted ]]; do unq="$unq${BASH_REMATCH[1]}Q"; scan="${BASH_REMATCH[3]}"; done
+  unq="$unq$scan"
+  if [[ $unq =~ $re_loop ]]; then
+    [[ $unq =~ $re_in_loop ]] && deny
+    [ "${#pp[@]}" -gt 0 ] && project_hit "$unq" loop && deny
   fi
 fi
 

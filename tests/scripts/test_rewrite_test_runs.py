@@ -314,3 +314,15 @@ def test_subagent_run_tests_fast_passes(proj):
 def test_subagent_bare_run_tests_passes(proj):
     r = run(proj, 'bash "x/sl" run_tests', agent_id="a1", agent_type="implementer")
     assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
+
+
+@pytest.mark.parametrize("cmd", [
+    'until false; do git commit -m "fix; pytest foo"; done',
+    "while true; do echo 'a; npm test'; done",
+    'git commit -m "a; pytest x"',
+])
+@pytest.mark.parametrize("agent", [False, True])
+def test_quoted_runner_name_not_denied(proj, cmd, agent):
+    extra = {"agent_id": "a1", "agent_type": "implementer"} if agent else {}
+    r = run(proj, cmd, **extra)
+    assert r.returncode == 0 and r.stderr == ""
