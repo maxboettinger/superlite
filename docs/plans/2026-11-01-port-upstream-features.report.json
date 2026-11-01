@@ -1,0 +1,430 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-01T14:09:31 (plan edited since)",
+ "headline": {
+  "wall_min": {
+   "projected": 17.78,
+   "actual": 8.47
+  },
+  "cost_usd_agents": {
+   "projected": 0.972095,
+   "actual": 3.703101
+  },
+  "task_min": {
+   "projected": 41.669,
+   "actual": 21.895
+  },
+  "agents": {
+   "projected": 7,
+   "actual": 12
+  }
+ },
+ "cost_split": {
+  "agents_usd": 3.350729,
+  "rework_usd": 0.352372,
+  "coordinator_usd": 8.533864,
+  "total_usd": 12.236965
+ },
+ "concurrency": {
+  "peak": 5,
+  "projected_peak": 5
+ },
+ "critical_path": {
+  "actual": [
+   "T6",
+   "T7",
+   "T8"
+  ],
+  "projected": [
+   "T3",
+   "T6",
+   "T7"
+  ],
+  "projected_min": 17.78
+ },
+ "model_mix": {
+  "unknown": {
+   "tasks": 1,
+   "cost_usd": 0.352372
+  },
+  "sonnet": {
+   "tasks": 7,
+   "cost_usd": 3.350729
+  }
+ },
+ "coordinator_cost_by_model": {
+  "opus": 8.533864
+ },
+ "quality": {
+  "tests": {
+   "passed": 1156,
+   "failed": 0,
+   "skipped": 1,
+   "seconds": 195.9,
+   "mode": "full",
+   "failures": [],
+   "skipped_tests": [
+    "tests/scripts/test_no_popup_windows.py::test_detached_helper_children_get_no_console_window"
+   ],
+   "files": {
+    "tests/scripts/test_0_3_1_scripts.py": [
+     29,
+     0
+    ],
+    "tests/scripts/test_autocommit.py": [
+     15,
+     0
+    ],
+    "tests/scripts/test_autocommit_squash.py": [
+     10,
+     0
+    ],
+    "tests/scripts/test_batching.py": [
+     13,
+     0
+    ],
+    "tests/scripts/test_block_coordinator_edits.py": [
+     81,
+     0
+    ],
+    "tests/scripts/test_block_unsafe_kill.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_build_prime_mini.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_capture_hooks.py": [
+     14,
+     0
+    ],
+    "tests/scripts/test_commit_also.py": [
+     12,
+     0
+    ],
+    "tests/scripts/test_commit_pix_v2.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_commit_plan_folder.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_commit_running_scope.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_commit_shared_test.py": [
+     11,
+     0
+    ],
+    "tests/scripts/test_compact_due.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_dispatch_prime_budget.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_dispatch_skip.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_docs_contract.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_feedback.py": [
+     19,
+     0
+    ],
+    "tests/scripts/test_finish_grouping.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_fixture_isolation.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_graphify_gate.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_guard_scratch_script.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_hooks_bash32.py": [
+     133,
+     0
+    ],
+    "tests/scripts/test_human_gate.py": [
+     71,
+     0
+    ],
+    "tests/scripts/test_incident.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_ledger_utf8.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_lint_pix_v2.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_metrics_fable.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_metrics_history.py": [
+     18,
+     0
+    ],
+    "tests/scripts/test_no_popup_windows.py": [
+     1,
+     0
+    ],
+    "tests/scripts/test_orchestrator.py": [
+     23,
+     0
+    ],
+    "tests/scripts/test_packet_stale.py": [
+     18,
+     0
+    ],
+    "tests/scripts/test_plan_tools.py": [
+     55,
+     0
+    ],
+    "tests/scripts/test_pool.py": [
+     15,
+     0
+    ],
+    "tests/scripts/test_probe_regression_portable.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_probe_run.py": [
+     20,
+     0
+    ],
+    "tests/scripts/test_pt_review.py": [
+     29,
+     0
+    ],
+    "tests/scripts/test_pt_review_declarations.py": [
+     17,
+     0
+    ],
+    "tests/scripts/test_pt_review_noise.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_pt_review_pix_v2.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_pyroots.py": [
+     11,
+     0
+    ],
+    "tests/scripts/test_report.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_rewrite_test_runs.py": [
+     99,
+     0
+    ],
+    "tests/scripts/test_routing.py": [
+     21,
+     0
+    ],
+    "tests/scripts/test_run_scripts.py": [
+     34,
+     0
+    ],
+    "tests/scripts/test_run_tests_root.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_run_tests_sidecars.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_run_tests_summary.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_run_tests_wait.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_session_cost_rewrite.py": [
+     2,
+     0
+    ],
+    "tests/scripts/test_session_cost_testcmd.py": [
+     24,
+     0
+    ],
+    "tests/scripts/test_session_handover.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_session_start.py": [
+     1,
+     0
+    ],
+    "tests/scripts/test_session_state.py": [
+     52,
+     0
+    ],
+    "tests/scripts/test_shape.py": [
+     17,
+     0
+    ],
+    "tests/scripts/test_slim_prime.py": [
+     16,
+     0
+    ],
+    "tests/scripts/test_spawn_free.py": [
+     20,
+     0
+    ],
+    "tests/scripts/test_split.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_stable_split.py": [
+     28,
+     0
+    ],
+    "tests/scripts/test_testcmd.py": [
+     14,
+     0
+    ],
+    "tests/scripts/test_testcmd_xcode.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_tier_reason_wave0.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_trees.py": [
+     14,
+     0
+    ],
+    "tests/scripts/test_wave0.py": [
+     10,
+     0
+    ]
+   }
+  },
+  "first_time_pass": 0,
+  "first_time_n": 0,
+  "rework_dispatches": 1,
+  "open_incidents": 79
+ },
+ "tasks": [
+  {
+   "task": "T1",
+   "model": null,
+   "pred_min": 5.494,
+   "actual_min": 0.0,
+   "delta": {
+    "abs": -5.494,
+    "pct": -100.0
+   },
+   "cost_usd": 0.352372,
+   "first_time_pass": null
+  },
+  {
+   "task": "T5",
+   "model": "sonnet",
+   "pred_min": 5.904,
+   "actual_min": 2.098,
+   "delta": {
+    "abs": -3.8057,
+    "pct": -64.5
+   },
+   "cost_usd": 0.298955,
+   "first_time_pass": null
+  },
+  {
+   "task": "T6",
+   "model": "sonnet",
+   "pred_min": 8.302,
+   "actual_min": 4.567,
+   "delta": {
+    "abs": -3.7353,
+    "pct": -45.0
+   },
+   "cost_usd": 0.723885,
+   "first_time_pass": null
+  },
+  {
+   "task": "T7",
+   "model": "sonnet",
+   "pred_min": 5.357,
+   "actual_min": 2.383,
+   "delta": {
+    "abs": -2.9737,
+    "pct": -55.5
+   },
+   "cost_usd": 0.377258,
+   "first_time_pass": null
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 4.121,
+   "actual_min": 1.613,
+   "delta": {
+    "abs": -2.5077,
+    "pct": -60.9
+   },
+   "cost_usd": 0.161153,
+   "first_time_pass": null
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 6.177,
+   "actual_min": 4.347,
+   "delta": {
+    "abs": -1.8303,
+    "pct": -29.6
+   },
+   "cost_usd": 0.656349,
+   "first_time_pass": null
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 6.314,
+   "actual_min": 6.017,
+   "delta": {
+    "abs": -0.2973,
+    "pct": -4.7
+   },
+   "cost_usd": 0.916159,
+   "first_time_pass": null
+  },
+  {
+   "task": "T8",
+   "model": "sonnet",
+   "pred_min": null,
+   "actual_min": 0.87,
+   "delta": {
+    "abs": null,
+    "pct": null
+   },
+   "cost_usd": 0.21697,
+   "first_time_pass": null
+  }
+ ]
+}
