@@ -277,11 +277,11 @@ def test_build_prime_numbers_unnumbered_sections_in_order(tmp_path):
     plan = tmp_path / "plan.md"
     plan.write_text("# Plan\n")
     out = tmp_path / "prime.md"
-    r = run(SCRIPTS / "build_prime.py", "--plan", plan, "--spec", spec, "--sections", "1,3", "--out", out, cwd=tmp_path)
+    r = run(SCRIPTS / "build_prime.py", "--plan", plan, "--spec", spec, "--sections", "1,3", "--prime", "full", "--out", out, cwd=tmp_path)
     assert r.returncode == 0, r.err
     text = out.read_text()
     assert "goal text" in text and "risk text" in text and "changes text" not in text
-    r = run(SCRIPTS / "build_prime.py", "--plan", plan, "--spec", spec, "--sections", "7", "--out", out, cwd=tmp_path)
+    r = run(SCRIPTS / "build_prime.py", "--plan", plan, "--spec", spec, "--sections", "7", "--prime", "full", "--out", out, cwd=tmp_path)
     assert r.returncode != 0 and "Goal" in r.err and "Risks" in r.err  # the error lists what exists
 
 

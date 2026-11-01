@@ -154,11 +154,11 @@ def test_fresh_haiku_when_none_idle_eligible(tmp_path):
 
 
 def test_limits_retire_a_haiku_agent(tmp_path):
-    worn = {"id": "w", "tier": "haiku", "tasks": ["a", "b", "c", "d", "e", "f"]}  # max_tasks 6
+    worn = {"id": "w", "tier": "haiku", "tasks": ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t"]}  # max_tasks 20
     big = {"id": "b", "tier": "haiku", "tasks": ["a"], "context_k": 59}  # + task context over max_context_k 60
     d, err = dispatch(tmp_path, mech_plan(tmp_path, 1), [worn, big])
     assert d["T1"].startswith("fresh tier=haiku")
-    assert "evict=w 6 tasks done" in err and "evict=b context over 60k" in err
+    assert "evict=w 20 tasks done" in err and "evict=b context over 60k" in err
 
 
 def test_choice_among_idle_haiku_agents_is_deterministic(tmp_path):
@@ -208,7 +208,7 @@ def test_mini_prime_is_small_and_hash_stable(tmp_path):
     out_h = tmp_path / "h.md"
     runs = [run(BUILD_PRIME, "--plan", p, "--tier", "haiku", "--out", out_h, cwd=tmp_path).out.split() for _ in range(2)]
     assert runs[0] == runs[1] and runs[0][0] == hashlib.sha256(out_h.read_bytes()).hexdigest()
-    full = run(BUILD_PRIME, "--plan", p, "--spec", spec, "--sections", "1", "--out", tmp_path / "f.md", cwd=tmp_path).out.split()
+    full = run(BUILD_PRIME, "--plan", p, "--spec", spec, "--sections", "1", "--prime", "full", "--out", tmp_path / "f.md", cwd=tmp_path).out.split()
     assert int(runs[0][1]) < int(full[1]) / 2
     text = out_h.read_text(encoding="utf-8")
     assert text.startswith("# superlite prime (mini)") and "## Stub spec" in text and "stdlib only" in text

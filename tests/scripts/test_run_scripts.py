@@ -51,7 +51,7 @@ def read_log(path):
 def prime(tmp_path, plan=None, spec=None, sections="1,3,5", out="prime.md", *extra):
     r = run("build_prime", "--plan", plan or PLAN_FIX / "plan.md",
             "--spec", spec or PLAN_FIX / "spec.md", "--sections", sections,
-            "--out", tmp_path / out, *extra)
+            "--prime", "full", "--out", tmp_path / out, *extra)
     return r
 
 
