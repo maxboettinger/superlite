@@ -367,9 +367,11 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
 def expand_fast_paths(paths):  # O(p) source paths -> related tests; test paths kept
     """--fast accepts source or test paths; a source path maps via testcmd.resolve_related."""
     out = []  # O(1)
+    spec = testcmd.resolve(".")  # O(m + f)
+    py = spec is None or bool(spec["python"])  # .py maps only for a Python runner | O(1)
     for p in paths:  # O(p)
         rel = p.replace("\\", "/")  # O(len)
-        mapped = rel.endswith(".py") or testcmd.has_related(".")  # O(file)
+        mapped = (rel.endswith(".py") and py) or testcmd.has_related(".")  # O(file)
         if not mapped or testcmd.is_test_path(rel) or not Path(rel).is_file():  # tests, packages, dirs, other sources pass through | O(1)
             out.append(rel)  # O(1)
             continue  # O(1)

@@ -124,3 +124,13 @@ def test_swift_fast_keeps_only_testing(tmp_path):
         "test_file": "xcodebuild test -scheme X {only_testing}"}), encoding="utf-8")
     spec = testcmd.resolve(str(tmp_path), ["Tests/CoreTests/LibraryTests.swift"])
     assert "-only-testing:CoreTests/LibraryTests" in spec["command"]
+
+
+def test_expand_fast_paths_non_python_spec_passes_py_source_through(tmp_path, monkeypatch):
+    import run_tests
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "b.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / ".superlite").mkdir()
+    (tmp_path / ".superlite" / "test-cmd.json").write_text(json.dumps({"language": "go", "test": "make test"}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert run_tests.expand_fast_paths(["src/b.py"]) == ["src/b.py"]
