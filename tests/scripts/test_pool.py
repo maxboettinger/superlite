@@ -183,3 +183,18 @@ def test_corrupt_pool_gives_one_stderr_line(tmp_path):
     p = plan(tmp_path, "**Tech stack:** Python", "x", PY)
     r = run(DISPATCH, "--plan", p, "--pool", sl / "pool.json", "--ledger", tmp_path / "l.md", cwd=tmp_path)
     assert r.returncode != 0 and "Traceback" not in r.err
+
+
+def test_currents_shapes():
+    assert poolmod.currents({"current": "T1,T2"}) == ["T1", "T2"]
+    assert poolmod.currents({"current": ["T1"]}) == ["T1"]
+    assert poolmod.currents({"current": "T3"}) == ["T3"]
+    assert poolmod.currents({}) == []
+
+
+def test_pool_busy_accepts_batch(tmp_path):
+    assert pl(tmp_path, "add", "a1", "--tier", "sonnet").returncode == 0
+    assert pl(tmp_path, "busy", "a1", "T1,T2").returncode == 0
+    ag = read(tmp_path)["agents"][0]
+    assert ag["busy"] is True and ag["current"] == "T1,T2"
+    assert "current=T1,T2" in pl(tmp_path, "list").out

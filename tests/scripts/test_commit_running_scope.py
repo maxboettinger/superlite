@@ -28,6 +28,22 @@ def test_others_running(tmp_path):
     assert commit_task.others_running(str(p), ["T1"]) == []
 
 
+def test_commit_releases_batch_member(tmp_path):
+    p = pool(tmp_path, [{"id": "a", "busy": True, "current": "T1,T2", "tasks": []}])
+    commit_task.release_agents(str(p), ["T1"])
+    ag = json.loads(p.read_text(encoding="utf-8"))["agents"][0]
+    assert ag["current"] == "T2" and ag["busy"] is True and ag["tasks"] == ["T1"]
+    commit_task.release_agents(str(p), ["T2"])
+    ag = json.loads(p.read_text(encoding="utf-8"))["agents"][0]
+    assert "current" not in ag and ag["busy"] is False and ag["tasks"] == ["T1", "T2"]
+
+
+def test_commit_running_scope_batch(tmp_path):
+    p = pool(tmp_path, [{"busy": True, "current": "T1,T2"}])
+    assert commit_task.others_running(str(p), ["T9"]) == ["T1", "T2"]
+    assert commit_task.others_running(str(p), ["T1"]) == ["T2"]
+
+
 def test_missing_pool_means_none_running(tmp_path):
     assert commit_task.others_running(str(tmp_path / "nope.json"), ["T5"]) == []
     bad = tmp_path / "bad.json"

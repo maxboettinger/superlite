@@ -24,6 +24,13 @@ import assign as asg  # noqa: E402 | O(1)
 import metrics as mx  # noqa: E402 | O(1)
 
 
+def currents(ag):  # O(len current)
+    """The tasks an agent is on: `current` is "Tn", a batch "Tn,Tm", or a list."""
+    cur = ag.get("current") or []  # O(1)
+    parts = cur if isinstance(cur, list) else str(cur).split(",")  # O(len)
+    return [str(x).strip() for x in parts if str(x).strip()]  # O(len)
+
+
 def load(path):  # O(pool bytes)
     p = Path(path)  # O(1)
     if not p.exists():  # O(1)
