@@ -41,10 +41,13 @@ jstr() {
 norm() {
   local p="${1//\\//}" re='^([A-Za-z]):/(.*)$'
   while [[ $p == *//* ]]; do p="${p//\/\//\/}"; done
-  [[ $p =~ $re ]] && p="/${BASH_REMATCH[1],,}/${BASH_REMATCH[2]}"
+  [[ $p =~ $re ]] && { lower "${BASH_REMATCH[1]}"; p="/$LOWER/${BASH_REMATCH[2]}"; }
   while [[ $p == */ && $p != / ]]; do p="${p%/}"; done
   NORM="$p"
 }
+
+# lower S: S in lower case (ASCII), into LOWER. bash 3.2 (stock macOS) has no ${var,,}.
+lower() { LOWER="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')"; }
 
 . "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
 superlite_state || exit 0
@@ -70,7 +73,7 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
   hit="Agent ${REPLY:-general-purpose}"
 fi
 
-norm "$proj"; projn="$NORM"; projl="${projn,,}"
+norm "$proj"; projn="$NORM"; lower "$projn"; projl="$LOWER"
 
 prot=0
 # project_code PATH: succeeds when writing PATH is denied (sets prot=1 for protected files).
@@ -79,12 +82,12 @@ project_code() {
   norm "$1"; p="$NORM"; p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
   case "$p" in ''|*'$'*|'~'*|/dev/*|-*) return 1 ;; esac
   case "$p" in
-    /*) pl="${p,,}"
+    /*) lower "$p"; pl="$LOWER"
         case "$pl" in "$projl"/*) rel="${p:$((${#projn}+1))}" ;; *) return 1 ;; esac ;;
     *) rel="${p#./}" ;;
   esac
   case "$rel" in ''|.|..|../*) return 1 ;; esac
-  pl="${rel,,}"
+  lower "$rel"; pl="$LOWER"
   case "$pl" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
   { [ "$human" = 1 ] || [ "$active" = 1 ]; } || return 1
   case "/$rel/" in */../*|*/./*) return 0 ;; esac   # docs/../src/a.py is not under docs/
@@ -198,8 +201,10 @@ if [ -z "$hit" ] && [ "$tool" != Bash ] && [ "$tool" != PowerShell ]; then
 elif [ -z "$hit" ]; then
   jstr command; cmd="$REPLY"
   [ -n "$cmd" ] || exit 0
+  cmd="${cmd//\\\\/$'\x01'}"   # JSON \\ first, so \\" and \\n keep their shell meaning
   cmd="${cmd//\\\"/\"}"; cmd="${cmd//\\t/ }"; cmd="${cmd//\\r/}"; cmd="${cmd//\\n/$'\n'}"
-  lc="${cmd,,}"
+  cmd="${cmd//$'\x01'/\\}"
+  lower "$cmd"; lc="$LOWER"
   mentions=0
   [[ $lc == *human-replies.jsonl* || $lc == *orchestrator.json* ]] && mentions=1
   # sl tools that start a build are denied until the plan is approved.
@@ -259,16 +264,19 @@ elif [ -z "$hit" ]; then
     # Drop heredoc bodies and quoted strings, then split into simple commands.
     sq="'"; dq='"'
     re_here="<<-?[[:space:]]*[$sq$dq]?([A-Za-z_][A-Za-z_0-9]*)"
-    re_quote="^([^$dq$sq]*)($dq[^$dq]*$dq|$sq[^$sq]*$sq)(.*)\$"
-    stripped=""; skip=0; tag=""
+    re_quote="^([^$dq$sq]*)($dq([^$dq\\\\]|\\\\.)*$dq|$sq[^$sq]*$sq)(.*)\$"
+    stripped=""; skip=0; tag=""; open=""
     while IFS= read -r line; do
+      # A quote left open on the previous line continues on this one.
+      [ -n "$open" ] && { line="$open $line"; open=""; }
       if [ "$skip" = 1 ]; then
         t="${line#"${line%%[![:space:]]*}"}"; t="${t%"${t##*[![:space:]]}"}"
         [ "$t" = "$tag" ] && skip=0
         continue
       fi
       if [[ $line =~ $re_here ]]; then tag="${BASH_REMATCH[1]}"; skip=1; fi
-      while [[ $line =~ $re_quote ]]; do line="${BASH_REMATCH[1]}Q${BASH_REMATCH[3]}"; done
+      while [[ $line =~ $re_quote ]]; do line="${BASH_REMATCH[1]}Q${BASH_REMATCH[4]}"; done
+      case "$line" in *[$dq$sq]*) open="$line"; continue ;; esac
       line="${line//&&/$'\n'}"; line="${line//||/$'\n'}"; line="${line//;/$'\n'}"; line="${line//|/$'\n'}"
       stripped="$stripped$line"$'\n'
     done <<< "$cmd"
@@ -285,7 +293,7 @@ elif [ -z "$hit" ]; then
       while [ $# -gt 0 ]; do case "$1" in *=*|sudo|command|env|time) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] || continue
       c="${1##*/}"; c="${c%.exe}"; shift
-      args=(); for a in "$@"; do case "$a" in -*) ;; *) args+=("$a") ;; esac; done
+      args=(); for a in "$@"; do case "$a" in -*|*'>'*|*'<'*) ;; *) args+=("$a") ;; esac; done   # redirects are not operands
       n=${#args[@]}; last=""; [ "$n" -gt 0 ] && last="${args[n-1]}"
       case "$c" in
         patch) [ "$enforce" = 1 ] && hit="patch" ;;

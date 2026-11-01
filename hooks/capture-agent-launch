@@ -37,7 +37,11 @@ jstr resolvedModel; model="$REPLY"
 jstr description; desc="${REPLY:0:120}"
 esc id; esc type; esc model; esc desc
 
-now="${EPOCHREALTIME//[.,]/}"; now="${now:0:${#now}-3}"
+now="${EPOCHREALTIME//[.,]/}"; now="${now%???}"   # epoch ms
+# bash 3.2 (stock macOS) has no EPOCHREALTIME: date's %N (GNU, newer macOS), else perl, else whole seconds.
+[[ $now =~ ^[0-9]{13,}$ ]] || { now="$(date +%s%N)"; now="${now%??????}"; }
+[[ $now =~ ^[0-9]{13,}$ ]] || now="$(perl -MTime::HiRes=time -e 'printf "%d", time*1000' 2>/dev/null)"
+[[ $now =~ ^[0-9]{13,}$ ]] || now="$(date +%s)000"
 printf '{"ev":"launch","t":%s,"agent_id":"%s","type":"%s","model":"%s","desc":"%s"}\n' \
   "$now" "$id" "$type" "$model" "$desc" >> "$sd/metrics.jsonl" 2>/dev/null
 exit 0

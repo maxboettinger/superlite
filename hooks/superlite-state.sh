@@ -64,7 +64,8 @@ superlite_state() {
       _sl_line "$SL_SD/session"; o="$SL_LINE"
       if [ -n "$sid" ] && [ -n "$o" ] && [ "$o" != "$sid" ] && [[ $o =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then
         _sl_line "$sessions/$o"; a="$SL_LINE"; _sl_trim a; b="$SL_SD"
-        if [ "${a,,}" = "${b,,}" ]; then SL_SD=""; SL_PROJ=""; return 1; fi   # another live session's folder
+        al="$(printf '%s' "$a" | LC_ALL=C tr '[:upper:]' '[:lower:]')"; bl="$(printf '%s' "$b" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        if [ "$al" = "$bl" ]; then SL_SD=""; SL_PROJ=""; return 1; fi   # another live session's folder
       fi
       return 0
     fi

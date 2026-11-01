@@ -101,6 +101,9 @@ def test_prime_marker_activates(tmp_path):
     "cp /tmp/x.py src/a.py",
     "rm src/a.py",
     "ls && rm -f src/a.py",
+    "cp /tmp/x.py src/a.py 2>/dev/null",
+    "echo \"multi\nline\" > src/a.py",
+    "echo \"x\\\"y\" > src/a.py",
 ])
 def test_blocks_bash_writes(proj, cmd):
     assert bash(proj, cmd).returncode == 2, cmd
@@ -118,6 +121,9 @@ def test_blocks_powershell_write(proj):
     "sed -n 1,5p src/app.py", "sed -i s/a/b/ .superlite/progress.md", "echo hi > /dev/null",
     "echo hi > /tmp/x.txt", "cp src/a.py /tmp/a.py", "rm -f /tmp/x", "python3 -c \"print(open('a.py').read())\"",
     "echo \"a > b\"", "tee .superlite/log.txt",
+    # Redirects are not cp operands; escaped and multi-line quotes hide their '>'.
+    "cp src/a.py /tmp/a.py 2>/dev/null", "grep -E \"href=\\\"[^>]*>\" x.html",
+    "grep -c \"<li[^>]*>\nfoo\" x.html",
 ])
 def test_allows_bash_reads_and_safe_writes(proj, cmd):
     r = bash(proj, cmd)
@@ -251,3 +257,19 @@ def test_dir_target_judged_against_project_not_cwd(proj, tmp_path_factory):
     r = subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env,
                        cwd=str(tmp_path_factory.mktemp("elsewhere")))
     assert r.returncode == 0
+
+
+def test_redirect_not_operand(proj):
+    assert bash(proj, "cp a /tmp/b 2>/dev/null").returncode == 0
+
+
+def test_real_write_stays_blocked(proj):
+    assert bash(proj, "cp x src/a.py 2>/dev/null").returncode == 2
+
+
+def test_escaped_quote_blocked(proj):
+    assert bash(proj, 'echo "x\\"y" > src/a.py').returncode == 2
+
+
+def test_multiline_quote_blocked(proj):
+    assert bash(proj, 'echo "multi\nline" > src/a.py').returncode == 2
