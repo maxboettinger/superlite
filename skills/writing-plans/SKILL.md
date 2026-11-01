@@ -147,7 +147,7 @@ Rules:
 
 ## Plan size: aim for 15k characters
 
-The plan rides in the shared prime and is written on the critical path. Keep contracts, verbatim tests and the required diagrams. Move spec excerpts out and reference them by section. Over the cap is a lint `NOTE`, not an issue; a project with larger plans sets `**Max chars:** N` in the plan header.
+The plan no longer rides in the sonnet prime (implementers read their task with `sl task Tn`), but it is written on the critical path. Keep contracts, verbatim tests and the required diagrams. Move spec excerpts out and reference them by section. Over the cap is a lint `NOTE`, not an issue; a project with larger plans sets `**Max chars:** N` in the plan header.
 
 ## No placeholders
 
