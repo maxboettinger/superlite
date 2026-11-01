@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# UserPromptSubmit nudge: when a superlite session is due for compact, emit an additionalContext line asking the
+# agent to tell the user to run /compact. The CLI stamps last-compact after printing, so it shows once per window.
+# Silent when SUPERLITE_NO_AUTOCOMPACT=1, when there is no state folder, or when not due. Exit 0 always (fail open).
+
+if [ "${SUPERLITE_NO_AUTOCOMPACT:-}" = "1" ]; then
+  exit 0
+fi
+
+input=""
+IFS= read -r -d '' input || true
+
+. "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
+superlite_state || exit 0
+sl_dir="$SL_SD"
+[ -n "$sl_dir" ] && [ -d "$sl_dir" ] || exit 0
+
+root="${CLAUDE_PLUGIN_ROOT:-}"
+if [ -z "$root" ]; then
+  self="${BASH_SOURCE[0]//\\//}"
+  case "$self" in /*|?:/*) ;; *) self="${PWD//\\//}/$self" ;; esac
+  root="${self%/hooks/*}"
+fi
+root="${root//\\//}"
+py="${SUPERLITE_PYTHON:-}"
+if [ -z "$py" ]; then
+  if command -v python >/dev/null 2>&1; then py=python; else py=python3; fi
+fi
+script="$root/skills/subagent-driven-development/scripts/compact_due.py"
+
+line="$("$py" "$script" "$sl_dir" 2>/dev/null)" || exit 0
+[ -n "$line" ] || exit 0
+
+esc="$line"
+esc="${esc//\\/\\\\}"
+esc="${esc//\"/\\\"}"
+esc="${esc//$'\r'/}"
+esc="${esc//$'\n'/\\n}"
+esc="${esc//$'\t'/\\t}"
+
+# Same host test as hooks/session-start.
+if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then
+  printf '{"additional_context":"%s"}\n' "$esc"
+elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -z "${COPILOT_CLI:-}" ]; then
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$esc"
+elif [ -n "${MUSE_PLUGIN_ROOT:-}" ]; then
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$esc"
+else
+  printf '{"additionalContext":"%s"}\n' "$esc"
+fi
+exit 0
