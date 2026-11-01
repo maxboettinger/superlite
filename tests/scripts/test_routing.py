@@ -175,7 +175,7 @@ def test_choice_among_idle_haiku_agents_is_deterministic(tmp_path):
 
 def test_three_ready_one_idle_agent_takes_one_and_two_start_fresh(tmp_path):
     h = {"id": "t0", "tier": "haiku", "tasks": ["T0"]}
-    d, _ = dispatch(tmp_path, mech_plan(tmp_path, 3), [h])
+    d, _ = dispatch(tmp_path, mech_plan(tmp_path, 3), [h], "--batch", "1")
     h_lines = sorted(v.split(" tier")[0] for v in haiku_lines(d).values())
     assert h_lines == ["agent=t0", "fresh", "fresh"]
 
@@ -232,14 +232,14 @@ def test_min_first_time_pass_band_below_minimum_stays_on_sonnet(tmp_path):
 
 def test_kind_miss_logs_incident_and_task_never_returns_to_haiku(tmp_path):
     p = mech_plan(tmp_path, 2)
-    d, _ = dispatch(tmp_path, p, [])
+    d, _ = dispatch(tmp_path, p, [], "--batch", "1")
     assert "tier=haiku" in d["T1"] or "tier=haiku" in d["T2"]
     cp = run(ROUTING, "miss", "--task", "T1", "--plan", p, cwd=tmp_path)
     assert cp.returncode == 0, cp.both
     assert cp.out.startswith("T1 kind-miss -> fixer-sonnet note=.superlite/fixes/F-T1-1.md tier=sonnet")
     log = (tmp_path / ".superlite" / "incidents.jsonl").read_text(encoding="utf-8")
     assert "kind-miss T1" in log
-    d, _ = dispatch(tmp_path, p, [])
+    d, _ = dispatch(tmp_path, p, [], "--batch", "1")
     assert d["T1"].startswith("fresh tier=sonnet")  # never retried on haiku
     assert "tier=haiku" in d["T2"]
 

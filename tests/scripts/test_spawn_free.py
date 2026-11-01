@@ -104,7 +104,7 @@ def test_dispatch_never_gives_one_agent_two_tasks(tmp_path):
     # a1 read src/b.py (T2, +3 file +1 pkg) and pkg/f.py (T5, +3 +1): it wins T2 first
     # (longest), then T5 must not go to a1 again.
     a1 = {"id": "a1", "tasks": [], "files": ["src/b.py", "pkg/f.py"]}
-    lines, _ = dispatch(tmp_path, [a1])
+    lines, _ = dispatch(tmp_path, [a1], "--batch", "1")
     assert lines[0] == ["T2", "agent=a1"]
     assert dict(lines)["T5"] == "fresh"
 
@@ -114,7 +114,7 @@ def test_dispatch_poll_lists_candidates_and_evicts(tmp_path):
     b2 = {"id": "b2", "tasks": ["T2"], "context_k": 20}
     old = {"id": "old", "tasks": [], "idle_min": 99}
     busy = {"id": "busy", "tasks": [], "busy": True, "current": "T4"}
-    lines, err = dispatch(tmp_path, [b1, b2, old, busy], "--committed", "T1,T2")
+    lines, err = dispatch(tmp_path, [b1, b2, old, busy], "--committed", "T1,T2", "--batch", "1")
     d = dict(lines)
     assert "T4" not in d  # running per the busy agent's `current`
     assert d["T3"] == "poll b1,b2"  # both built a dependency
@@ -125,7 +125,7 @@ def test_dispatch_reads_committed_from_ledger(tmp_path):
     led = tmp_path / "progress.md"
     led.write_text("# Progress ledger\n\n- commit T1 abcdef1234 parser\n"
                    "- commit T2 1234abcdef lexer\n", encoding="utf-8")
-    lines, _ = dispatch(tmp_path, [], ledger=led)
+    lines, _ = dispatch(tmp_path, [], "--batch", "1", ledger=led)
     assert [t for t, _ in lines] == ["T5", "T3", "T4"]
     assert all(d == "fresh" for _, d in lines)
 
@@ -179,7 +179,7 @@ def test_commit_several_tasks_in_one_call_then_dispatch(tmp_path):
     out = r.stdout.splitlines()
     assert out[0].startswith("T1 ") and out[1].startswith("T2 ")
     assert out[2] == "next:"
-    assert [ln.split()[0] for ln in out[3:]] == ["T5", "T3", "T4"]
+    assert sorted(t for ln in out[3:] for t in ln.split()[0].split(",")) == ["T3", "T4", "T5"]  # lines may be batches
     assert git(repo, "log", "--format=%s", "-2").splitlines() == ["T2: lexer", "T1: parser"]
     assert git(repo, "show", "--name-only", "--format=", "HEAD~1") == "src/a.py"
 
@@ -246,7 +246,7 @@ def test_dispatch_keeps_failed_task_running_and_its_agent_off_the_list(tmp_path)
     # a1 reported T2 FAILED: busy is false, but `current` stays until T2 is committed
     a1 = {"id": "a1", "tasks": [], "files": ["src/b.py"], "current": "T2"}
     a2 = {"id": "a2", "tasks": [], "files": ["pkg/f.py"]}
-    lines, _ = dispatch(tmp_path, [a1, a2])
+    lines, _ = dispatch(tmp_path, [a1, a2], "--batch", "1")
     d = dict(lines)
     assert "T2" not in d  # still running, not re-dispatched
     assert d["T5"] == "agent=a2"
@@ -257,7 +257,7 @@ def test_dispatch_reserves_polled_agents(tmp_path):
     # T2 (longest) ties b1/b2 on the package point and polls both; T5 must not reuse them
     b1 = {"id": "b1", "tasks": [], "files": ["src/x.py"]}
     b2 = {"id": "b2", "tasks": [], "files": ["src/y.py"]}
-    lines, _ = dispatch(tmp_path, [b1, b2])
+    lines, _ = dispatch(tmp_path, [b1, b2], "--batch", "1")
     d = dict(lines)
     assert d["T2"] == "poll b1,b2"
     assert d["T5"] == "fresh"

@@ -1,0 +1,137 @@
+"""Batching: dispatch uses split.choose for implementer count and batches."""
+from __future__ import annotations
+
+import json
+import sys
+
+from test_plan_tools import SCRIPTS, pt
+from test_routing import DISPATCH, mech_plan, plan, pool, run, task
+
+
+def dispatch(tmp_path, p, agents, batch=None):
+    extra = ("--batch", batch) if batch else ()
+    cp = run(DISPATCH, "--plan", p, "--pool", pool(tmp_path, agents), "--ledger", tmp_path / "l.md", *extra, cwd=tmp_path)
+    assert cp.returncode == 0, cp.both
+    return {ln.split()[0]: ln.split(" ", 1)[1] for ln in cp.out.splitlines()}, cp.err
+
+
+def cx_task(tid, cx, mech=False, mins=3, ctx=15, **kw):
+    return task(tid, mech, mins, **kw).replace("· Complexity 3 · Est. context 30k", f"· Complexity {cx} · Est. context {ctx}k", 1)
+
+
+def equal_task(tid, mins=10, ctx=15):
+    """Same features so the predictor gives equal minutes (or stated when features stripped)."""
+    body = (
+        f"### {tid} task {tid.lower()} · Complexity 2 · Est. context {ctx}k\n"
+        f"**Owns:** src/pkg/{tid.lower()}.py, tests/test_{tid.lower()}.py\n"
+        f"**Est. time:** {mins} min\n"
+        f"**Components:** 1\n**LOC owned:** 100\n**Tests:** fast\n\n"
+    )
+    return body
+
+
+def equal_plan(tmp_path, n, mins=10, ctx=15):
+    return plan(tmp_path, [equal_task(f"T{i}", mins, ctx) for i in range(1, n + 1)], [])
+
+
+def test_five_equal_tasks_three_implementers_2_2_1(tmp_path):
+    p = equal_plan(tmp_path, 5)
+    d, _ = dispatch(tmp_path, p, [], batch=None)
+    sizes = sorted(len(k.split(",")) for k in d)
+    assert sizes == [1, 2, 2]
+    assert all(v.startswith("fresh") for v in d.values())
+
+
+def test_four_equal_tasks_two_implementers(tmp_path):
+    p = equal_plan(tmp_path, 4)
+    d, _ = dispatch(tmp_path, p, [], batch=None)
+    assert sorted(len(k.split(",")) for k in d) == [2, 2]
+
+
+def test_tiers_never_share_a_batch(tmp_path):
+    d, _ = dispatch(tmp_path, mech_plan(tmp_path, 3), [], batch=None)
+    haiku = [k for k, v in d.items() if "tier=haiku" in v]
+    sonnet = [k for k, v in d.items() if "tier=sonnet" in v]
+    assert haiku and sonnet
+    for k in haiku:
+        assert "T9" not in k
+
+
+def test_summed_context_stays_within_the_tier_budget(tmp_path):
+    # sonnet max_context_k is 80; two tasks at 50k cannot share
+    p = plan(tmp_path, [equal_task(f"T{i}", ctx=50) for i in range(1, 4)], [])
+    d, _ = dispatch(tmp_path, p, [], batch=None)
+    assert all(len(k.split(",")) == 1 for k in d)
+
+
+def test_batch_one_turns_it_off(tmp_path):
+    p = equal_plan(tmp_path, 5)
+    d, _ = dispatch(tmp_path, p, [], batch="1")
+    assert sorted(d) == ["T1", "T2", "T3", "T4", "T5"]
+
+
+def test_critical_path_tasks_run_alone(tmp_path):
+    p = plan(tmp_path, [cx_task("T1", 2, mins=6, produces="pkg.t1.f(x: int) -> int"),
+                        cx_task("T2", 2, consumes="pkg.t1.f(x: int) -> int"),
+                        cx_task("T3", 2, mins=2), cx_task("T4", 2, mins=2)], [("T1", "T2")])
+    cp = pt("lint", "--stable", "--plan", p, cwd=tmp_path)
+    assert cp.returncode == 0, cp.both  # stable.json has no critical_path here: dispatch simulates it
+    d, _ = dispatch(tmp_path, p, [], batch=None)
+    assert "T1" in d  # alone on the critical path
+    assert all("T1," not in k and not k.startswith("T1,") for k in d if k != "T1")
+
+
+def test_running_from_batch(tmp_path):
+    p = equal_plan(tmp_path, 4)
+    busy = {"id": "s1", "tier": "sonnet", "tasks": [], "busy": True, "current": "T1,T2"}
+    d, _ = dispatch(tmp_path, p, [busy], batch=None)
+    assert "T1" not in ",".join(d) and "T2" not in ",".join(d)
+    sys.path.insert(0, str(SCRIPTS))
+    import commit_task as checkpoint
+    f = tmp_path / "pool.json"
+    checkpoint.release_agents(f, ["T1"])
+    ag = json.loads(f.read_text(encoding="utf-8"))["agents"][0]
+    assert ag["current"] == "T2" and ag["busy"] is True
+    checkpoint.release_agents(f, ["T2"])
+    ag = json.loads(f.read_text(encoding="utf-8"))["agents"][0]
+    assert "current" not in ag and ag["busy"] is False
+
+
+def test_batch_line_format(tmp_path):
+    d, _ = dispatch(tmp_path, equal_plan(tmp_path, 2), [])
+    assert all(v.startswith("fresh tier=sonnet agent=superlite:implementer") for v in d.values())
+    assert sorted(t for k in d for t in k.split(",")) == ["T1", "T2"]
+
+
+def test_make_batches_examples():
+    sys.path.insert(0, str(SCRIPTS))
+    import dispatch as dp
+    tier = lambda t: "sonnet"  # noqa: E731
+    assert dp.make_batches(["T1", "T2"], tier, {}, {}, lambda tr: 80, (), (), True) == [["T1"], ["T2"]]
+    assert dp.make_batches([], tier, {}, {}, lambda tr: 80, (), (), False) == []
+
+
+def test_make_batches_cp_alone_and_context():
+    sys.path.insert(0, str(SCRIPTS))
+    import dispatch as dp
+    tier = lambda t: "sonnet"  # noqa: E731
+    ids = ["T1", "T2", "T3", "T4"]
+    times = {t: 2.0 for t in ids}
+    info = {t: {"est_context": 15} for t in ids}
+    out = dp.make_batches(ids, tier, info, times, lambda tr: 80, ("T1",), (), False)
+    assert ["T1"] in out
+    big = {t: {"est_context": 50} for t in ids}
+    out = dp.make_batches(ids, tier, big, times, lambda tr: 80, (), (), False)
+    assert all(len(g) == 1 for g in out)
+
+
+def test_score_uses_members(tmp_path):
+    ag = {"id": "s1", "tier": "sonnet", "tasks": [], "files": ["src/pkg/t2.py"]}
+    d, _ = dispatch(tmp_path, equal_plan(tmp_path, 2), [ag])
+    assert any("agent=s1" in v for v in d.values())
+
+
+def test_no_agent_on_two_lines(tmp_path):
+    ag = {"id": "s1", "tier": "sonnet", "tasks": [], "files": ["src/pkg/t1.py", "src/pkg/t2.py"]}
+    d, _ = dispatch(tmp_path, equal_plan(tmp_path, 5), [ag])
+    assert sum("agent=s1" in v for v in d.values()) <= 1

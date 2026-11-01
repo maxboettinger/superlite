@@ -2,18 +2,22 @@
 """Ready tasks and who runs each, in one call: next_tasks + assign for every ready task.
 
     dispatch.py --plan P [--pool .superlite/pool.json] [--ledger .superlite/progress.md]
-                [--committed T1,T2] [--running T3] [--cap 10]
+                [--committed T1,T2] [--running T3] [--cap 10] [--batch N]
 
-stdout, one line per ready task, longest predicted first, within the cap:
+stdout, one line per batch of ready tasks (one agent, one message), longest predicted first, within the cap:
     Tn agent=<id>        clear winner (D11 scoring, margin >= 3); that agent is now taken
-    Tn poll <id>,<id>    tie or no signal: relevance-poll these idle agents
+    Tn,Tm poll <id>,<id> tie or no signal: relevance-poll these idle agents
     Tn fresh             no eligible idle agent: start a primed implementer
     T0 wave0             synthesized Wave 0 skeleton still pending (`sl wave0`): its own agent, first line;
                          a ledger line `- Ruling: skip T0` silences it
 stderr: `evict=<id> <reason>` for each idle agent eligible for none of the ready tasks.
 
+Batching: `split.choose` picks how many new implementers and which ready tasks each holds (one tier per
+batch, a stable.json `critical_path` task alone, summed context within the tier's max_context_k).
+`--batch 1` turns batching off: one task per line.
+
 Defaults when a flag is omitted: committed tasks come from the ledger's `- commit Tn <sha>`
-lines; running tasks are the pool agents' `current` tasks not yet committed (busy or not:
+lines; running tasks are the pool agents' `current` tasks (`Tn` or a batch `Tn,Tm`) not yet committed (busy or not:
 a FAILED or BLOCKED task keeps its `current` until commit_task commits it). An agent with
 a `current` gets no new task, and no agent appears on two lines of one call (`agent=` or
 `poll`). The pool is synced first (`pool.sync`: real context_k, idle_min, busy from the stop
@@ -57,16 +61,81 @@ def skip_t0(ledger, plan=None):  # O(c)
 
 def running_from_pool(pool, committed=()):  # O(a)
     done = set(committed)  # O(c)
-    return [ag["current"] for ag in pool.get("agents", [])  # O(a)
-            if ag.get("current") and ag["current"] not in done]
+    return [t for ag in pool.get("agents", []) for t in poolmod.currents(ag) if t not in done]  # O(a + tasks)
+
+
+def stable_cp(plan, graph=None, times=None):  # O(stable.json + n*(n + e))
+    """Critical-path task ids: stable.json's `critical_path` when it has one, else simulated from the plan."""
+    try:  # O(1)
+        import plan_tools as pt  # O(1) lazy
+        saved = json.loads((pt.stable_root(plan) / ".superlite" / "stable.json").read_text(encoding="utf-8")).get("critical_path")  # O(file)
+        if saved:  # O(1)
+            return set(saved)  # O(cp)
+        if graph and times:  # our stable.json carries no path: compute it | O(n*(n + e))
+            return set(pt.simulate(times, graph, 1000)["critical_path"])  # O(n*(n + e))
+    except Exception:  # noqa: BLE001 | no path known: no task is held alone for it | O(1)
+        pass  # O(1)
+    return set()  # O(1)
+
+
+def predicted_minutes(plan, graph, info):  # O(n * predict)
+    """Per-task minutes: predictor when features exist, else stated Est. time, else default."""
+    try:  # O(1)
+        import plan_tools as pt  # O(1) lazy
+        class _Args:  # O(1)
+            models = coef = None  # O(1)
+            stated = False  # O(1)
+        times, _ = pt.effective_times(pt.Plan.load(str(plan)), graph, _Args())  # O(n * predict)
+        return {t: float(times.get(t) or info.get(t, {}).get("est_time") or nt.DEFAULT_TIME) for t in graph}  # O(n)
+    except Exception:  # noqa: BLE001 | fall back to heading times | O(1)
+        return {t: (info[t]["est_time"] if t in info and info[t]["est_time"] is not None  # O(n)
+                    else nt.DEFAULT_TIME) for t in graph}
+
+
+def busy_left_tenths(pool, times, committed=()):  # O(a * tasks)
+    """Remaining minutes (tenths) for each busy implementer, from its unfinished current tasks."""
+    import split as sp  # O(1)
+    done = set(committed)  # O(c)
+    out = []  # O(1)
+    for ag in pool.get("agents", []):  # O(a)
+        cur = [t for t in poolmod.currents(ag) if t not in done]  # O(tasks)
+        if cur:  # O(1)
+            out.append(sp.tenths(sum(times.get(t, nt.DEFAULT_TIME) for t in cur)))  # O(tasks)
+    return out  # O(a)
+
+
+def make_batches(ready, tier, info, times, max_ctx, cp=(), busy_left=(), solo_mode=False):  # O(tiers * packing)
+    """[[task ids]] from split.choose per tier. `--batch 1` (solo_mode) returns one task per batch."""
+    import split as sp  # O(1)
+    if solo_mode or not ready:  # O(1)
+        return [[t] for t in ready]  # O(R)
+    cp = set(cp)  # O(|cp|)
+    by_tier = {}  # O(1)
+    for t in ready:  # O(R)
+        by_tier.setdefault(tier(t), []).append(t)  # O(1)
+    batches = []  # O(1)
+    for tr, ids in by_tier.items():  # O(tiers)
+        ms = [sp.tenths(times.get(t, nt.DEFAULT_TIME)) for t in ids]  # O(R)
+        ctx = [int(info.get(t, {}).get("est_context") or asg.DEFAULT_CONTEXT_K) for t in ids]  # O(R)
+        ix = {i for i, t in enumerate(ids) if t in cp}  # O(R)
+        r = sp.choose(ms, tuple(busy_left), ctx, float(max_ctx(tr)), ix)  # O(packing)
+        if r is None:  # O(1)
+            batches.extend([[t] for t in ids])  # O(R)
+            continue  # O(1)
+        for group in r[3]:  # O(A)
+            batches.append([ids[i] for i in group])  # O(|group|)
+    order = {t: k for k, t in enumerate(ready)}  # O(R)
+    batches.sort(key=lambda g: (-sum(times.get(t, nt.DEFAULT_TIME) for t in g), order[g[0]]))  # longest first | O(R log R)
+    return batches  # O(R)
 
 
 def is_idle(ag):  # O(1)
     return not (ag.get("busy") or ag.get("status") == "busy" or ag.get("current"))  # O(1)
 
 
-def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lane_virtual=0, sl_dir=None):  # O(L + n + e + R*a*(F + o))
-    """[(task, decision)] and {agent id: evict reason}; decision is 'agent=ID tier=T', 'poll IDS tier=T' or
+def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lane_virtual=0, sl_dir=None, batch=None):  # O(L + n + e + packing + R*a*(F + o))
+    """[(tasks, decision)] and {agent id: evict reason}; tasks is "Tn" or a batch "Tn,Tm"; `batch=1` forces one
+    task per agent, else split.choose packs them. Decision is 'agent=ID tier=T', 'poll IDS tier=T' or
     'fresh tier=T agent=TYPE'. A task only goes to an idle agent of its own tier; the lane tier (haiku) reuses
     an idle eligible lane agent (lowest context, then fewest tasks) with no poll, else starts a fresh one."""
     cfg = cfg or routing.load_cfg()  # O(file)
@@ -79,11 +148,18 @@ def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lan
             tiers = {}  # O(1)
     default = cfg.get("default_tier", "sonnet")  # O(1)
     tier = lambda t: tiers.get(t, default)  # noqa: E731 | O(1)
-    times = {t: (info[t]["est_time"] if t in info and info[t]["est_time"] is not None  # O(n)
-                 else nt.DEFAULT_TIME) for t in graph}
-    ready = nt.ready_tasks(graph, times, committed, running, cap,  # O(n*(n + e) + R log R) draft closure
+    times = predicted_minutes(plan, graph, info)  # O(n * predict)
+    ready_ids = nt.ready_tasks(graph, times, committed, running, cap,  # O(n*(n + e) + R log R) draft closure
                            nt.taskgraph_full(plan).get("status", {}),  # O(1) memoized
                            nt.stable_filter(plan))  # only stable tasks when .superlite/stable.json exists
+    cp = stable_cp(plan, graph, times) if (cfg.get("batch") or {}).get("critical_path_solo", True) else set()  # O(file)
+    groups = make_batches(ready_ids, tier, info, times,  # O(packing)
+                          lambda tr: float(routing.tier_limits(cfg, tr)["max_context_k"]),
+                          cp, busy_left_tenths(pool, times, committed), batch == 1)
+    members = {",".join(g): g for g in groups}  # batch key -> its tasks | O(R)
+    ready = list(members)  # O(R) batches, longest first
+    tier_of_task = tier  # O(1)
+    tier = lambda u: tier_of_task(members[u][0] if u in members else u)  # noqa: E731 | a batch has one tier | O(1)
     lane = cfg.get("lane") or {}  # O(1)
     lane_tier = lane.get("tier")  # O(1)
     agents = pool.get("agents", [])  # O(a)
@@ -92,10 +168,10 @@ def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lan
     eligible_somewhere = set()  # O(1)
     reasons = {}  # O(1)
     for t in ready:  # O(R) iterations
-        task = info.get(t, {})  # O(1)
-        deps = graph.get(t, [])  # O(1)
-        owns = task.get("owns", [])  # O(1)
-        est_context = task.get("est_context") or asg.DEFAULT_CONTEXT_K  # O(1)
+        ms = members[t]  # O(1)
+        deps = sorted({d for m in ms for d in graph.get(m, [])})  # O(d)
+        owns = [o for m in ms for o in info.get(m, {}).get("owns", [])]  # O(o)
+        est_context = sum(info.get(m, {}).get("est_context") or asg.DEFAULT_CONTEXT_K for m in ms)  # O(batch)
         limits = routing.tier_limits(cfg, tier(t))  # O(1)
         eligible[t] = {}  # O(1)
         for ag in idle:  # O(a) iterations
@@ -152,7 +228,7 @@ def render(lines, evict):  # O(R + a)
         print(f"{t} {decision}")  # O(1)
 
 
-def run(plan, pool_path, ledger, committed=None, running=None, cap=10):  # O(c + L + n + e + R*a*(F + o))
+def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=None):  # O(c + L + n + e + R*a*(F + o))
     """Library entry for commit_task --dispatch; flags left as None take their defaults."""
     pool = load_pool(pool_path)  # O(pool bytes)
     if Path(pool_path).exists():  # real context_k, idle_min, busy from the stop records; saved only when a value changed | O(a*m + a*T)
@@ -164,7 +240,7 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10):  # O(c +
     busy = nt.csv(running) if running is not None else running_from_pool(pool, done)  # O(a)
     import wave0  # noqa: E402 | O(1) lazy
     w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy and not skip_t0(ledger, plan)  # synthesized Wave 0 still pending | O(1)
-    lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0, sl_dir=Path(pool_path).parent)  # see plan_dispatch
+    lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0, sl_dir=Path(pool_path).parent, batch=batch)  # see plan_dispatch
     if w0:  # first line, a haiku lane agent | O(R)
         cfg = routing.load_cfg()  # O(file)
         lt = (cfg.get("lane") or {}).get("tier", "haiku")  # O(1)
@@ -180,13 +256,14 @@ def main(argv=None):  # O(c + L + n + e + R*a*(F + o))
     ap.add_argument("--committed", help="default: the ledger's commit lines")  # O(1)
     ap.add_argument("--running", help="default: `current` of each busy pool agent")  # O(1)
     ap.add_argument("--cap", type=int, default=10)  # O(1)
+    ap.add_argument("--batch", type=int, help="1 = one task per agent (batching off)")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     plan = a.plan or load_pool(a.pool).get("plan") or nt.DEFAULT_PLAN  # O(pool bytes)
     import orchestrator  # O(1)
     blocked = orchestrator.require(plan, "dispatch")  # human mode waits for approval | O(file)
     if blocked:  # O(1)
         return blocked  # O(1)
-    render(*run(plan, a.pool, a.ledger, a.committed, a.running, a.cap))  # see run
+    render(*run(plan, a.pool, a.ledger, a.committed, a.running, a.cap, a.batch))  # see run
     try:  # the budget line when it changed (needs .superlite/metrics.jsonl) | O(compute)
         import budget  # O(1)
         budget.maybe_print(plan, str(Path(a.pool).parent))  # O(compute)
