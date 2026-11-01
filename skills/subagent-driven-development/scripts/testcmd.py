@@ -3,12 +3,12 @@
 
     testcmd.py [--fast PATHS...] [--root .]      print the resolved command as JSON
 
-Order: (a) `.superlite/test-cmd.json` {"language","test","test_file","junit","setup"} (JSON; `test_file` is a template
+Order: (a) `.superlite/test-cmd.json` {"language","test","test_file","junit","setup","related"} (JSON; `test_file` is a template
 with {files}; `{junit}` in a command is replaced by the path run_tests wants the JUnit XML at; a literal `junit` path is read
-after the run); (b) detection from the project's own marker files: package.json scripts.test (npm test; the JUnit flag when
+after the run; `related` is a template with `{src}` for source->test mapping); (b) detection from the project's own marker files: package.json scripts.test (npm test; the JUnit flag when
 vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo.toml, Package.swift, *.sln / *.csproj, then Python
 (pyproject.toml, pytest.ini, setup.cfg, tox.ini, conftest.py, or test_*.py files); (c) otherwise None.
-Library: resolve, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
+Library: resolve, resolve_related, is_test_path, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
 """
 # Complexity notation:
 #   m = marker files checked, f = files walked for the Python test-file scan (bounded), o = output lines
@@ -166,6 +166,50 @@ def python_full_args(root: Path) -> list:  # O(file)
     if (root / "bench").is_dir():  # O(1)
         return ["--ignore=bench"]  # O(1)
     return []  # O(1)
+
+
+def _raw_config(root: Path):  # O(file)
+    try:  # O(1)
+        d = json.loads((root / CONFIG).read_text(encoding="utf-8"))  # O(file)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+    return d if isinstance(d, dict) else None  # O(1)
+
+
+def _related_candidates(root: Path, src: str) -> list[str]:  # O(1)
+    """Paths to try for a source file: config `related` template first, else name convention."""
+    src = src.replace("\\", "/")  # O(len)
+    stem = Path(src).stem  # O(1)
+    related = (_raw_config(root) or {}).get("related")  # O(file)
+    if isinstance(related, str) and "{src}" in related:  # O(1)
+        return [related.replace("{src}", stem).replace("\\", "/")]  # O(1)
+    return [f"tests/test_{stem}{Path(src).suffix}"]  # src/foo.py -> tests/test_foo.py | O(1)
+
+
+def has_related(root: str) -> bool:  # O(file)
+    """True when test-cmd.json sets a `related` template."""
+    r = (_raw_config(Path(root)) or {}).get("related")  # O(file)
+    return isinstance(r, str) and "{src}" in r  # O(1)
+
+
+def resolve_related(root: str, src: str) -> list:  # O(file)
+    """Map one source path to existing related test paths. Raises FileNotFoundError if none."""
+    root_p = Path(root)  # O(1)
+    src = src.replace("\\", "/")  # O(len)
+    found = [c.replace("\\", "/") for c in _related_candidates(root_p, src) if (root_p / c).is_file()]  # O(1)
+    if not found:  # O(1)
+        raise FileNotFoundError(f"no tests found for {src}")  # O(1)
+    return found  # O(1)
+
+
+def is_test_path(path: str) -> bool:  # O(1)
+    """True when path looks like a test file (kept as a --fast arg, not resolved)."""
+    p = path.replace("\\", "/")  # O(len)
+    name = Path(p).name  # O(1)
+    if re.match(r"^(test_.*|.*_test|.*\.test|.*\.spec|.*_spec|.*Tests?)\.[^.]+$", name):  # O(1)
+        return True  # O(1)
+    dirs = p.lower().split("/")[:-1]  # O(len)
+    return any(d in ("tests", "test", "__tests__", "spec") for d in dirs)  # O(depth)
 
 
 def resolve(root=".", paths=()):  # O(m + f)
