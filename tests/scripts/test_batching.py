@@ -135,3 +135,10 @@ def test_no_agent_on_two_lines(tmp_path):
     ag = {"id": "s1", "tier": "sonnet", "tasks": [], "files": ["src/pkg/t1.py", "src/pkg/t2.py"]}
     d, _ = dispatch(tmp_path, equal_plan(tmp_path, 5), [ag])
     assert sum("agent=s1" in v for v in d.values()) <= 1
+
+
+def test_dispatched_tasks_splits_batch_current(tmp_path):
+    (tmp_path / "pool.json").write_text(json.dumps({"agents": [{"id": "s1", "current": "T1,T2"}, {"id": "s2", "current": ["T3"]}]}), encoding="utf-8")
+    sys.path.insert(0, str(SCRIPTS))
+    import plan_tools
+    assert plan_tools.dispatched_tasks(tmp_path) == {"T1", "T2", "T3"}
