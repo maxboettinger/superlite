@@ -64,6 +64,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import next_tasks as nt  # noqa: E402 | O(1)
 import autocommit  # noqa: E402 | O(1)
 import pyroots  # noqa: E402 | O(1)
+import _pyrun  # noqa: E402 | O(1)
 from pool import currents  # noqa: E402 | O(1)
 
 DEFAULT_LEDGER = ".superlite/progress.md"  # O(1)
@@ -178,16 +179,21 @@ def syntax_errors(files):  # O(total size of m_py files)
     return errors  # O(1)
 
 
-def import_errors(files, roots=None):  # O(m_py * import cost) + 1 process spawn (batched)
+def import_errors(files, roots=None, root="."):  # O(m_py * import cost) + 1 process spawn (batched)
+    """Import every file once under the project's own interpreter (root/.venv, VIRTUAL_ENV, else ours)."""
     if not files:  # O(1)
         return []  # O(1)
-    r = subprocess.run([sys.executable, "-I", "-c", IMPORT_DRIVER, ".", json.dumps(list(roots or [])), *files],  # O(output) + process spawn
-                       capture_output=True, text=True, encoding="utf-8", timeout=120,  # O(1)
-                       env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})  # O(1)
+    py = _pyrun.project_python(root)  # O(1) file lookups, never run
+    try:  # O(1)
+        r = subprocess.run([py, "-I", "-c", IMPORT_DRIVER, str(root), json.dumps(list(roots or [])), *files],  # O(output) + process spawn
+                           capture_output=True, text=True, encoding="utf-8", timeout=120,  # O(1)
+                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})  # O(1)
+    except OSError as e:  # a venv interpreter that cannot start (not executable, wrong platform): a block, not a traceback | O(1)
+        return [(files[0], 0, f"import check crashed under {os.path.abspath(py)}: {e}"[:300])]  # O(1)
     try:  # O(1)
         out = json.loads(r.stdout.strip().splitlines()[-1])  # O(output)
     except (IndexError, json.JSONDecodeError):  # O(1)
-        return [(files[0], 0, f"import check crashed: {r.stderr.strip()[-150:]}")]  # O(1)
+        return [(files[0], 0, f"import check crashed under {os.path.abspath(py)}: {r.stderr.strip()[-150:]}")]  # O(1) absolute, so the log names the exact file
     return [(f["file"], f["line"], f["error"]) for f in out]  # O(failures)
 
 

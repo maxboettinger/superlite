@@ -456,12 +456,26 @@ class Cfg:  # O(1)
             return Path(filename).as_posix()  # O(1)
 
 
+def project_python(root: Path) -> str:  # O(module size) once per worker spawn
+    """The project's own interpreter (root/.venv, VIRTUAL_ENV, else ours), so the adapter sees the
+    project's packages. _pyrun is loaded by path under a private name (no sys.path change, no clash);
+    a copy of this file without the scripts folder falls back to sys.executable."""
+    try:  # O(1)
+        spec = importlib.util.spec_from_file_location(  # O(1)
+            "_superlite_pyrun", HERE.parent / "scripts" / "_pyrun.py")  # O(1)
+        pyrun = importlib.util.module_from_spec(spec)  # O(1)
+        spec.loader.exec_module(pyrun)  # O(module size)
+        return pyrun.project_python(root)  # O(1) file lookups, never run
+    except Exception:  # missing or broken _pyrun | O(1)
+        return sys.executable  # O(1)
+
+
 class Worker:  # O(1) + process spawn + wait for ready <=60s
     def __init__(self, cfg: Cfg):  # O(1)
         self.cfg = cfg  # O(1)
         self.dead = False  # O(1)
         self.errf = tempfile.NamedTemporaryFile(prefix="probe-worker-", suffix=".err", delete=False)  # O(1)
-        cmd = [sys.executable, "-X", "utf8", str(HERE / "probe_run.py"), "--worker",  # O(1)
+        cmd = [project_python(getattr(cfg, "out_root", cfg.root)), "-X", "utf8", str(HERE / "probe_run.py"), "--worker",  # O(1) project interpreter: the project's .venv, not a --commit checkout's
                "--root", str(cfg.root), "--adapter", str(cfg.adapter)]  # O(1)
         kw: dict = {}  # O(1)
         if IS_WIN:  # O(1)
