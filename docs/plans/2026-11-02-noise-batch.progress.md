@@ -1,0 +1,61 @@
+Ruling: AI orchestrator - Max chose dogfooding in AI mode for the 9-issue noise batch - none
+- tests full passed=1246 failed=0 skipped=1 seconds=125.4
+- start d0efabb
+- unblocked: dispatched T1 T2 T3 T4 T5 T6 T7 T8 T9 at 11:49:34; waiting on fixes: T10
+- unblocked: T10 stable at 11:52:06, waits on T5 T7; waiting on fixes: none
+- tests fast passed=25 failed=2 skipped=0 seconds=2.4
+- tests fast passed=27 failed=0 skipped=0 seconds=2.3
+- tests fast passed=1 failed=3 skipped=0 seconds=1.0
+- tests fast passed=0 failed=9 skipped=0 seconds=0.2
+- tests fast passed=2 failed=2 skipped=0 seconds=0.2
+- tests fast passed=100 failed=4 skipped=0 seconds=1.2
+- tests fast passed=9 failed=0 skipped=0 seconds=0.2
+- tests fast passed=4 failed=0 skipped=0 seconds=0.2
+- tests fast passed=4 failed=0 skipped=0 seconds=0.2
+- tests fast passed=104 failed=0 skipped=0 seconds=1.2
+- tests fast passed=138 failed=0 skipped=0 seconds=0.2
+- commit T6 c6f19a249e plan_tools: unreadable plan raises PlanError
+- commit T8 122443f373 metrics: sidecar agents are not counted
+- commit T7 1e94c5304f rewrite-test-runs: quoted test paths pass unchanged
+- commit T9 d7fc548052 orchestrator end: archive per-run test summaries
+- commit T1 8b3ee56044 _pyrun: project interpreter
+- tests fast passed=2 failed=7 skipped=0 seconds=0.9
+- tests fast passed=24 failed=0 skipped=0 seconds=1.6
+- tests fast passed=80 failed=0 skipped=0 seconds=16.8
+- tests fast passed=2 failed=12 skipped=0 seconds=0.3
+- commit T5 5da0815d49 dispatch: an evicted agent is never offered
+- tests fast passed=2 failed=6 skipped=0 seconds=0.4
+- tests fast passed=94 failed=0 skipped=0 seconds=6.3
+- tests fast passed=12 failed=2 skipped=0 seconds=0.2
+- tests fast passed=14 failed=0 skipped=0 seconds=0.3
+- tests fast passed=9 failed=0 skipped=0 seconds=0.2
+- commit T10 4fc8cfc721 docs and version 1.3.1
+- Ruling: bump-version --audit hits in .superlite/prime*.md are run-local and ignored - .superlite is git-excluded run state - none
+- tests fast passed=94 failed=0 skipped=0 seconds=6.3
+- tests fast passed=48 failed=1 skipped=0 seconds=37.0
+- commit T2 65550c6211 pt_review: prose is not a symbol, newest entry wins, project interpreter
+- tests fast passed=49 failed=0 skipped=0 seconds=38.0
+- commit T3 a07f537f9e commit_task and probe_run: project interpreter
+- tests fast passed=3 failed=8 skipped=0 seconds=0.4
+- tests fast passed=22 failed=3 skipped=0 seconds=1.1
+- tests fast passed=94 failed=0 skipped=0 seconds=6.2
+- tests fast passed=26 failed=0 skipped=0 seconds=1.0
+- tests fast passed=12 failed=0 skipped=0 seconds=0.3
+- tests fast passed=14 failed=3 skipped=0 seconds=0.3
+- tests fast passed=103 failed=0 skipped=0 seconds=22.3
+- commit T4 f281d31873 finish and report: open incidents match the packet
+- tests fast passed=111 failed=0 skipped=0 seconds=6.2
+- tests fast passed=112 failed=0 skipped=0 seconds=6.1
+- commit T2 e37c1e3e79 pt_review: prose is not a symbol, newest entry wins, project interpreter
+- tests fast passed=444 failed=0 skipped=0 seconds=46.9
+- tests fast passed=20 failed=0 skipped=0 seconds=0.3
+- commit T3 e6d7d08b5b commit_task and probe_run: project interpreter
+- commit T5 b215b63d1d dispatch: an evicted agent is never offered
+- commit T7 c0fd9cf270 rewrite-test-runs: quoted test paths pass unchanged
+- commit T10 6cbbdd15f5 docs and version 1.3.1
+- tests fast passed=92 failed=0 skipped=0 seconds=19.1
+- tests fast passed=95 failed=0 skipped=0 seconds=19.5
+- tests fast passed=15 failed=0 skipped=0 seconds=0.3
+- commit T4 0059eaa4f8 finish and report: open incidents match the packet
+- tests full passed=1344 failed=0 skipped=1 seconds=126.6
+- Ruling: final review APPROVED; skipped test_detached_helper_children_get_no_console_window is a Windows-only gate untouched here - accept - none
