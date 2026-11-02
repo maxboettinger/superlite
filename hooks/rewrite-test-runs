@@ -147,6 +147,7 @@ deny_subagent_full() {
 
 # Subagents: deny a bare full-suite runner; leave everything else untouched.
 if [ "$has_agent" = 1 ]; then
+  _dq='"'; _sq="'"
   _rest="$cmd"; _last=0
   while :; do
     if [[ $_rest =~ $re_seg ]]; then _seg="${BASH_REMATCH[1]}"; _rest="${BASH_REMATCH[3]}"; _last=0
@@ -155,6 +156,10 @@ if [ "$has_agent" = 1 ]; then
     if [ $(( ${#_q} % 2 )) = 1 ] || [ $(( ${#_q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
     if [[ $_seg =~ $re_test ]]; then
       files_from_seg "$_seg"
+      if [ -z "$REPLY" ]; then   # a quoted path ("my test.py") is a path; a quoted flag value (-m "not slow") is not
+        _nq=${_seg//[$_dq$_sq]/}
+        files_from_seg "$_nq"
+      fi
       [ -z "$REPLY" ] && deny_subagent_full
     fi
     [ "$_last" = 1 ] && break
@@ -186,6 +191,7 @@ while :; do
   q="${seg//[^\"]/}"; q2="${seg//[^\']/}"
   if [ $(( ${#q} % 2 )) = 1 ] || [ $(( ${#q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
   if [[ $seg =~ $re_test ]]; then
+    case "$seg" in *'"'*|*"'"*) exit 0 ;; esac   # quoted test arguments: leave the command unchanged
     files_from_seg "$seg"
     if [ -n "$REPLY" ]; then out="$out $sl_base --fast $REPLY "; used_fast=1
     else out="$out $sl "; fi
