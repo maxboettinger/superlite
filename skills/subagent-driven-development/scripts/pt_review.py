@@ -74,6 +74,12 @@ DECL_PATTERNS = {  # extension -> declaration regex with a {name} slot | O(1)
     ".rs": r"(fn|struct|enum|trait|type|const|static|mod)\s+{name}\b",  # O(1)
     **{e: _DECL_GENERIC for e in (".kt", ".java", ".cs", ".rb", ".php")},  # O(1)
 }  # O(1)
+SWIFT_INIT_RE = r"(?<![\w.])init[?!]?\s*[(<]"  # `init(`, `init?(`, `init!(`, `init<T>(`; `self.init(` is a call, not a declaration | O(1)
+NAME_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")  # leading dotted identifier | O(1)
+NAME_END_RE = re.compile(r"$|[(:<]| ->")  # what may follow an unquoted symbol name; anything else is prose | O(1)
+DECL_PREFIX_RE = re.compile(r"(?:(?:public|private|internal|fileprivate|open|final|static|export|default|async|abstract|override|mutating|indirect|lazy|convenience|required"  # O(1)
+                            r"|struct|class|enum|actor|protocol|typealias|extension|interface|trait|func|fn|def|fun|function|type|let|var|const|case|record|mod)\s+)+")  # leading modifiers and declaration keywords | O(1)
+FILE_SUFFIXES = {e.lstrip(".") for e in DECL_PATTERNS} | {"py", "md", "json", "yml", "yaml", "toml", "txt"}  # a name ending in one is a file name | O(1)
 STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')  # O(1)
 DOCS_NOTES: list[str] = []  # tasks with Produces but no code files in the last check_interfaces call | O(1)
 DECLARED_NOTES: list[str] = []  # tasks checked by declaration in the last check_interfaces call | O(1)
@@ -301,6 +307,32 @@ def parse_sig(item: str) -> tuple[str, str | None, str | None] | None:  # O(m) t
     return m.group(1), args, ret  # O(m)
 
 
+def symbol_names(item: str) -> list[str]:  # O(m) total
+    """The symbol names a Produces item declares: backticked spans win, else a leading dotted name; prose gives none.
+    Leading modifiers and declaration keywords (`struct Foo`, `static func make()`) are skipped; unquoted, the name
+    after them must look like a symbol (capitalised, or followed by `(` or `:`) so `class hierarchy` stays prose."""
+    text = item.strip()  # O(m)
+    spans = re.findall(r"`([^`]*)`", text)  # O(m)
+    cands: list[str] = []  # O(1)
+    for s in (spans or [text]):  # O(spans) iterations
+        s = s.strip()  # O(m)
+        kw = DECL_PREFIX_RE.match(s)  # O(m)
+        rest = s[kw.end():] if kw else s  # O(m)
+        m = NAME_RE.match(rest)  # O(m)
+        if not m:  # O(1)
+            continue  # O(1)
+        if not spans and not (NAME_END_RE.match(rest, m.end()) and (not kw or rest[0].isupper() or rest[m.end():m.end() + 1] in ("(", ":"))):  # unquoted: end marker needed | O(1)
+            continue  # O(1)
+        cands.append(m.group(0))  # O(1)
+    out: list[str] = []  # O(1)
+    for name in cands:  # O(c) iterations
+        if "." in name and name.rsplit(".", 1)[1].lower() in FILE_SUFFIXES:  # a file name, not a symbol | O(len(name))
+            continue  # O(1)
+        if name not in out:  # O(c)
+            out.append(name)  # O(1)
+    return out  # O(1)
+
+
 def planned_items(plan: Plan, task_ids: list[str] | None = None) -> list[Planned]:  # O(n*t + P*m) total
     out: list[Planned] = []  # O(1)
     for tid, t in plan.tasks.items():  # O(n) iterations
@@ -310,8 +342,8 @@ def planned_items(plan: Plan, task_ids: list[str] | None = None) -> list[Planned
             parsed = parse_sig(item)  # O(m) per iteration
             if parsed:  # O(1)
                 out.append(Planned(tid, item, parsed[0], parsed[1], parsed[2], t.start + 1))  # O(1)
-            elif by_declaration(plan, tid) and (nm := re.match(r"^`?([A-Za-z_][\w.]*)", item.strip())):  # non-Python signature: name only | O(m)
-                out.append(Planned(tid, item, nm.group(1), None, None, t.start + 1))  # O(1)
+            elif by_declaration(plan, tid):  # non-Python signature: one name-only Planned per symbol | O(m)
+                out.extend(Planned(tid, item, nm, None, None, t.start + 1) for nm in symbol_names(item))  # O(m)
     return out  # O(1)
 
 
@@ -528,7 +560,7 @@ def read_real(root: Path, located: list[tuple[str, list[str]]]) -> list[dict]:  
     results: list[dict] = []  # O(1)
     if todo:  # O(1)
         try:  # O(1)
-            proc = subprocess.run([sys.executable, "-c", _INTROSPECT, json.dumps(todo)], cwd=root,  # O(1)
+            proc = subprocess.run([pyrun.project_python(root), "-c", _INTROSPECT, json.dumps(todo)], cwd=root,  # O(1)
                                   env=project_env(root), capture_output=True, text=True,  # O(1)
                                   encoding="utf-8", errors="replace", timeout=60)  # O(1)
             line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("@@SIG@@")), None)  # O(1)
@@ -586,7 +618,7 @@ def find_declaration(root: Path, files: list[str], name: str) -> tuple[str, int]
         f = root / rel  # O(1)
         if not pat or is_test_path(rel) or not f.is_file():  # O(d)
             continue  # O(1)
-        rx = re.compile(pat.replace("{name}", re.escape(name)))  # O(m)
+        rx = re.compile(SWIFT_INIT_RE if name == "init" and f.suffix == ".swift" else pat.replace("{name}", re.escape(name)))  # a Swift init has no keyword before its name | O(m)
         for n, ln in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):  # O(B) iterations
             if ln.lstrip().startswith(("//", "#", "*", "/*")):  # O(1)
                 continue  # O(1)
@@ -878,7 +910,7 @@ class ServerHandle:  # O(1)
         self._out = open(self.out_path, "wb")  # O(1)
         self._err = open(self.err_path, "wb")  # O(1)
         self.proc = subprocess.Popen(  # O(1)
-            [sys.executable, "-c", _SERVER_RUNNER, json.dumps({"target": target, "args": args})],  # O(1)
+            [pyrun.project_python(root), "-c", _SERVER_RUNNER, json.dumps({"target": target, "args": args})],  # O(1)
             cwd=root, env=project_env(root), stdout=self._out, stderr=self._err, stdin=subprocess.DEVNULL)  # O(1)
         self.info: dict | None = None  # O(1)
         self.error: str | None = None  # O(1)
@@ -1085,7 +1117,9 @@ def cmd_contract(a: argparse.Namespace) -> int:  # O(parts above + Mm file opens
     if mismatches:  # O(1)
         print(f"FAIL: {label}: {len(mismatches)} mismatch(es)")  # O(1)
         if log:  # O(1)
-            known = [e for e in read_incidents(log) if e.get("agent") == "pt_review"  # O(K)
+            prior = read_incidents(log)  # O(K)
+            gone = superseded(prior)  # a fixed location's old open entries must not hide the mismatch coming back | O(K)
+            known = [e for e in prior if e.get("agent") == "pt_review" and (e["file"], e.get("line", 0)) not in gone  # O(K)
                      and str(e.get("resolution", "")).lower() not in RESOLVED]  # O(K)
             for m in mismatches:  # O(Mm) iterations
                 if any(e["file"] == m.file and (str(e.get("context", "")).endswith(m.msg) or  # O(K) duplicate of an open incident
@@ -1341,7 +1375,17 @@ class Item:  # O(1)
     line: int = 0  # O(1)
 
 
+def superseded(entries: list[dict]) -> set[tuple[str, int]]:  # O(K) total
+    """Locations whose newest non-verified entry (the log is append-only) is resolved."""
+    newest: dict[tuple[str, int], bool] = {}  # O(1)
+    for e in entries:  # O(K) iterations
+        if e.get("kind") != "verified":  # O(1)
+            newest[(e.get("file", ""), e.get("line", 0))] = str(e.get("resolution", "")).lower() in RESOLVED  # a later entry overwrites | O(1)
+    return {loc for loc, done in newest.items() if done}  # O(groups)
+
+
 def incident_items(entries: list[dict]) -> list[Item]:  # O(K) total
+    done = superseded(entries)  # O(K)
     groups: dict[tuple[str, int], list[dict]] = {}  # O(1)
     for e in entries:  # O(K) iterations
         if e.get("kind") != "verified":  # O(1)
@@ -1351,7 +1395,7 @@ def incident_items(entries: list[dict]) -> list[Item]:  # O(K) total
         seen: set[tuple] = set()  # identical entries (same kind, context, resolution, agent) count once | O(1)
         es = [e for e in es if not ((k := tuple(str(e.get(f, "")) for f in ("kind", "context", "resolution", "agent"))) in seen or seen.add(k))]  # O(entries)
         repeated = len(es) >= 2  # O(1)
-        unresolved = any(str(e.get("resolution", "")).lower() not in RESOLVED for e in es)  # O(entries at location)
+        unresolved = (file, line) not in done  # the newest entry decides, taken before the dedupe | O(1)
         low = any(str(e.get("confidence", "")).lower() == "low" for e in es)  # O(1)
         if not (repeated or unresolved or low):  # O(1)
             continue  # O(1)
@@ -1575,8 +1619,11 @@ def load_summary(path: Path) -> dict | None:  # O(file size) total
 
 
 def _failure_test(entry: dict) -> tuple[str, str]:  # O(m) total
-    m = re.search(r"\btest_\w+", str(entry.get("context", "")))  # O(m)
-    return str(entry.get("file", "")), m.group(0) if m else ""  # O(1)
+    """(file, test name) of a test-failure incident: the node id after `::` wins; else the first `test_x` outside any path."""
+    ctx = str(entry.get("context", ""))  # O(m)
+    m = re.search(r"\.py::(\w+(?:::\w+)*)", ctx)  # `tests/test_a.py::test_x failed`, `...::TestK::test_x` | O(m)
+    name = m.group(1) if m else (re.search(r"\btest_\w+", re.sub(r"[\w./\\-]*\.py\b\S*", " ", ctx)) or [""])[0]  # a `test_` inside a file path is not a test name | O(m)
+    return str(entry.get("file", "")), name  # O(1)
 
 
 def stale_test_failure(entry: dict, summary: dict | None) -> bool:  # O(F) total
