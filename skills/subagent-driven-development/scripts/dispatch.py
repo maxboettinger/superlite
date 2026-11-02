@@ -10,7 +10,8 @@ stdout, one line per batch of ready tasks (one agent, one message), longest pred
     Tn fresh             no eligible idle agent: start a primed implementer
     T0 wave0             synthesized Wave 0 skeleton still pending (`sl wave0`): its own agent, first line;
                          a ledger line `- Ruling: skip T0` silences it
-stderr: `evict=<id> <reason>` for each idle agent eligible for none of the ready tasks.
+stderr: `evict=<id> <reason>` for each idle agent eligible for none of the ready tasks; each is also removed
+from pool.json (`pool.remove`), so no later round offers it and the next run does not evict it again.
 
 Batching: `split.choose` picks how many new implementers and which ready tasks each holds (one tier per
 batch, a stable.json `critical_path` task alone, summed context within the tier's max_context_k).
@@ -241,11 +242,22 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=Non
     import wave0  # noqa: E402 | O(1) lazy
     w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy and not skip_t0(ledger, plan)  # synthesized Wave 0 still pending | O(1)
     lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0, sl_dir=Path(pool_path).parent, batch=batch)  # see plan_dispatch
+    drop_evicted(pool_path, evict)  # an evicted agent is never offered by a later round | O(pool bytes)
     if w0:  # first line, a haiku lane agent | O(R)
         cfg = routing.load_cfg()  # O(file)
         lt = (cfg.get("lane") or {}).get("tier", "haiku")  # O(1)
         lines = [("T0", f"wave0 tier={lt} agent={routing.tier_agent(cfg, lt)}")] + lines  # O(R)
     return lines, evict  # O(R)
+
+
+def drop_evicted(pool_path, evict):  # O(pool bytes + a*len(evict))
+    """Remove every evicted agent that is still idle from pool.json; one atomic save, only when something was removed."""
+    if not evict or not Path(pool_path).exists():  # O(1)
+        return  # O(1)
+    data = load_pool(pool_path)  # fresh read: narrows the window to a concurrent pool edit | O(pool bytes)
+    gone = [ag["id"] for ag in data.get("agents") or [] if ag.get("id") in evict and is_idle(ag)]  # one made busy since the plan stays | O(a)
+    if [poolmod.remove(data, aid) for aid in gone].count(True):  # O(a*len(gone))
+        poolmod.save(pool_path, data)  # O(pool bytes) atomic
 
 
 def main(argv=None):  # O(c + L + n + e + R*a*(F + o))

@@ -2,9 +2,10 @@
 """Pool bookkeeping by script: the coordinator never edits .superlite/pool.json by hand.
 
     pool.py add ID --tier T [--current Tn] [--pool .superlite/pool.json]
-    pool.py busy ID Tn | free ID | list | sync
+    pool.py busy ID Tn | free ID | remove ID | list | sync
 
 Each subcommand writes atomically and prints one line; an unknown agent exits 2 with one stderr line.
+`remove ID` drops the agent from the pool (`removed ID`); dispatch does this for every agent it evicts.
 `sync` fills per agent `context_k` (the transcript's last assistant message: input + cache read +
 cache write tokens, in thousands), `idle_min` (from its latest stop in metrics.jsonl) and clears `busy`
 when that stop is newer than `busy_since`. A missing or unreadable transcript keeps the old context_k.
@@ -15,6 +16,7 @@ An agent matches a stop when agent_id equals its id, else when the transcript is
 # a = agents in the pool, m = lines of metrics.jsonl, T = transcript bytes
 import argparse  # O(1)
 import json  # O(1)
+import os  # O(1)
 import sys  # O(1)
 import time  # O(1)
 from pathlib import Path  # O(1)
@@ -47,7 +49,7 @@ def load(path):  # O(pool bytes)
 def save(path, data):  # O(pool bytes), atomic
     p = Path(path)  # O(1)
     p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
-    tmp = p.with_name(p.name + ".tmp")  # O(1)
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")  # O(1) unique per process: dispatch and `sl pool` may save at once
     tmp.write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")  # O(pool bytes)
     tmp.replace(p)  # O(1) atomic rename
 
@@ -84,6 +86,16 @@ def free(data, aid):  # O(a)
     ag.pop("current", None)  # O(1)
     ag.pop("busy_since", None)  # O(1)
     return ag  # O(1)
+
+
+def remove(data, aid):  # O(a)
+    """Drop agent `aid` from data["agents"] in place. True when it was there, False (data untouched) when not."""
+    agents = data.get("agents") or []  # O(1)
+    keep = [ag for ag in agents if ag.get("id") != aid]  # O(a)
+    if len(keep) == len(agents):  # O(1)
+        return False  # O(1)
+    agents[:] = keep  # O(a) same list object
+    return True  # O(1)
 
 
 def context_k(transcript):  # O(T)
@@ -166,6 +178,8 @@ def main(argv=None):  # O(a*m + a*T)
     s.add_argument("task")  # O(1)
     s = sub.add_parser("free", parents=[common])  # O(1)
     s.add_argument("id")  # O(1)
+    s = sub.add_parser("remove", parents=[common])  # O(1)
+    s.add_argument("id")  # O(1)
     sub.add_parser("list", parents=[common])  # O(1)
     sub.add_parser("sync", parents=[common])  # O(1)
     a = ap.parse_args(argv)  # O(1)
@@ -179,6 +193,12 @@ def main(argv=None):  # O(a*m + a*T)
             ag = busy(data, a.id, a.task, now)  # O(a)
         elif a.cmd == "free":  # O(1)
             ag = free(data, a.id)  # O(a)
+        elif a.cmd == "remove":  # O(a)
+            if not remove(data, a.id):  # O(a)
+                raise KeyError(a.id)  # O(1)
+            save(a.pool, data)  # O(pool bytes)
+            print(f"removed {a.id}")  # O(1)
+            return 0  # O(1)
         elif a.cmd == "list":  # O(1)
             for ag in data.get("agents", []):  # O(a) iterations
                 print(line(ag))  # O(1)
