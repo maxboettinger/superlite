@@ -189,8 +189,8 @@ Write one stub per `produces` item below (only the signatures another task consu
 
 1. The project installs (the manifest is valid and dependencies resolve with the project's own tool).
 2. The project's own test command, or its compile/type-check, runs on the stub tree: the tree builds, and any test fails as "not implemented", never as an import, syntax or configuration error.
-3. You write and verify `.superlite/test-cmd.json` on the stub tree: `{{"language","test","test_file","junit","setup"}}` (JSON; `test` runs everything, `test_file` takes `{{files}}`, `junit` is the report path or `{{junit}}` for the one run_tests supplies, `setup` installs dependencies). When the package root is neither the repository root nor `src/`, add `"pythonpath": ["<repo-relative dir>", ...]` so every check can import it. Verify it by running `bash "$SL" run_tests --full`: it must report the stubs as failing, never "no test command found".
-4. Never run `git add`, `commit`, `switch` or `checkout`; the coordinator runs `bash "$SL" commit_task {tid} --plan PLAN`.
+3. You write and verify `.superlite/test-cmd.json` on the stub tree: `{{"language","test","test_file","junit","setup"}}` (JSON; `test` runs everything, `test_file` takes `{{files}}`, `junit` is the report path or `{{junit}}` for the one run_tests supplies, `setup` installs dependencies). When the package root is neither the repository root nor `src/`, add `"pythonpath": ["<repo-relative dir>", ...]` so every check can import it. Verify it by running `"$SL" run_tests --full`: it must report the stubs as failing, never "no test command found".
+4. Never run `git add`, `commit`, `switch` or `checkout`; the coordinator runs `"$SL" commit_task {tid} --plan PLAN`.
 
 Reply in at most 200 words: Status (DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED), files changed (paths only), test or build command and its result line, concerns.
 """  # O(L + q*s)
@@ -208,7 +208,7 @@ def synth_info(plan_path: str):  # O(1) + file read
 
 def agent_line(brief: Path, tid: str) -> str:  # O(1)
     sl = (SUPERLITE / "skills" / "subagent-driven-development" / "scripts" / "sl").as_posix()  # O(1)
-    prompt = (f"Your sl command is `bash {sl}`; type that absolute path in every command. This message is your whole task, not the shared plan: do not reply READY. "
+    prompt = (f"Your sl command is `{sl}`; type that absolute path in every command (on Permission denied, prefix bash to it). This message is your whole task, not the shared plan: do not reply READY. "
               f"Read {brief.as_posix()} and do it. Reply in the implementer report format.")  # O(1)
     return f'Agent(subagent_type="superlite:implementer-haiku", description="{tid} Wave 0 skeleton", prompt={json.dumps(prompt)})'  # O(1)
 

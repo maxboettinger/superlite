@@ -23,7 +23,7 @@ finishes it also publishes its summary to --summary, unless a newer run has star
 --wait blocks until the pointed run's own summary exists (an older summary never counts),
 prints it, and exits 0 green, 1 red, 2 on timeout or when no background run was started.
 --wait PATH waits on exactly that run's summary (the `summary:` line; --background also prints
-`wait: bash <abs>/sl run_tests --wait <path>` with the absolute path of the sl launcher, copy it verbatim); bare --wait uses the shared pointer.
+`wait: <abs>/sl run_tests --wait <path>` with the absolute path of the sl launcher, copy it verbatim); bare --wait uses the shared pointer.
 Put --wait last or before another flag: argparse takes a following word as its PATH.
 Stdlib only.
 """
@@ -126,7 +126,7 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
 
 def wait_line(path):  # O(1)
     sl = str(Path(__file__).resolve().with_name("sl"))  # O(1) absolute: shell variables do not persist between calls
-    return f'wait: bash {json.dumps(sl) if " " in sl else sl} run_tests --wait {path}'  # O(1)
+    return f'wait: {json.dumps(sl) if " " in sl else sl} run_tests --wait {path}'  # O(1)
 
 
 def wait_target(a):  # O(1)

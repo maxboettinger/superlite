@@ -145,7 +145,7 @@ def test_no_task_runs_in_place(repo, monkeypatch):
 def test_wait_line_has_absolute_sl_path():
     line = run_tests.wait_line("/x/s.json")
     assert "$SL" not in line
-    assert line.startswith("wait: bash ")
+    assert line.startswith("wait: ") and not line.startswith("wait: bash ")
     assert str(SCRIPTS.resolve() / "sl") in line.replace('"', "")
     assert line.endswith("run_tests --wait /x/s.json")
 

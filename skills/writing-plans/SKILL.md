@@ -158,8 +158,8 @@ These are plan failures: "TBD", "TODO", "add error handling", "handle edge cases
 Run both. Replace `PLAN` and `SPEC` with the paths. `<superlite-root>` is two levels above this skill's "Base directory for this skill: ..." path (run it through `cygpath -u` first if that exists).
 
 ```
-bash "<superlite-root>/skills/subagent-driven-development/scripts/sl" plan_tools prune --plan PLAN
-bash "<superlite-root>/skills/subagent-driven-development/scripts/sl" plan_tools lint --plan PLAN --spec SPEC --stable
+"<superlite-root>/skills/subagent-driven-development/scripts/sl" plan_tools prune --plan PLAN
+"<superlite-root>/skills/subagent-driven-development/scripts/sl" plan_tools lint --plan PLAN --spec SPEC --stable
 ```
 
 `prune` drops the edges that examples make removable (consumer not yet dispatched), except hard edges: mark an edge whose consumer needs the producer built (a compiled package, e.g. Swift) as `T1 -->|hard| T2` or list it in a `%% hard: T1->T2` line inside the taskgraph; prune and `EDGE:` skip it. Then it runs `schedule --insert`, which writes the Gantt, its summary line (critical path, peak width, predicted total) and a `shape:` line under a `%% schedule` marker. Never hand-edit that block. `CHAIN [chain-xxxx]` is silenced only by `Ruling: sequential [chain-xxxx] - <why>` with the id lint printed; a ruling written before lint never matches.

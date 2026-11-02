@@ -13,10 +13,10 @@ If the brief's cause or fix turns out wrong, or the code does not match, do not 
 Rules:
 - Fix only the listed findings. No refactors. Touch no file outside the findings, except the test file for the regression test.
 - For each finding: read the code, make the fix, add one regression test that fails without it.
-- Run only the touched test files, in the background: `bash <abs sl> run_tests --fast <touched test files> --background`, then the `wait:` line it prints (`bash <abs sl> run_tests --wait <path>`). Read only its summary. Never run the full suite, raw `pytest` or `python`.
+- Run only the touched test files, in the background: `<abs sl> run_tests --fast <touched test files> --background`, then the `wait:` line it prints (`<abs sl> run_tests --wait <path>`). Read only its summary. Never run the full suite, raw `pytest` or `python`.
 - Your brief names a finding id. If `.superlite/fixes/<id>.md` exists, read it first: it is your only history. Start from its Where and Next spans, and do not repeat anything in its Tried-and-failed list.
 - Before your report, rewrite `.superlite/fixes/<id>.md` for each finding, in at most 1,500 chars, with a heading `# <id> · tier N · round R · FIXED|NOT_FIXED`, then the lines Goal, Where (file:line ranges), Changed (what and why), Tried and failed (attempt, failure, reason), Evidence, Next. Write it even when the fix succeeded.
-- Commit: `bash <abs sl> commit_task <Tn>` (task ids only; it stages that task's Owns files plus tests/regression/, and blocks anything else, so put regression tests there or in the task's own test files). Never run `git add`, `commit`, `switch`, `checkout` or `stash`. Never spawn agents.
+- Commit: `<abs sl> commit_task <Tn>` (task ids only; it stages that task's Owns files plus tests/regression/, and blocks anything else, so put regression tests there or in the task's own test files). Never run `git add`, `commit`, `switch`, `checkout` or `stash`. Never spawn agents.
 - Kill only processes you started, by PID. Never `taskkill /IM`, `pkill`, `killall` or `Stop-Process -Name`.
 
 Report, at most 150 words, no file contents or logs. A closed list with one line per finding: `FIXED - <finding>` or `NOT_FIXED - <finding> - <reason>`. Then the test summary line and the commit id. Never leave a finding off the list.

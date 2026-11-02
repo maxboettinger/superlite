@@ -1,0 +1,119 @@
+- start 31d682d3fa49ea436ea9466ecfc61d84c6a7205a
+Ruling: git stash apply stays unguarded - main never guarded it and the same holds for stash pop - cost if wrong: a coordinator restores files through stash, as it can today.
+- unblocked: dispatched T1 T3 T4 at 12:51:47; waiting on fixes: none
+- tests fast passed=9 failed=7 skipped=0 seconds=1.3
+- tests fast passed=11 failed=5 skipped=0 seconds=1.2
+- tests fast passed=311 failed=0 skipped=0 seconds=9.0
+- commit T1 8618bf496c guard: quoted text is not an interpreter call
+- unblocked: dispatched T2 at 12:53:44; waiting on fixes: none
+Ruling: guard package review runs once over T1 and T2 after T2 commits - both touch one file, so a review of T1 would race T2 - cost if wrong: one review carries two diffs.
+- tests fast passed=15 failed=1 skipped=0 seconds=0.5
+- tests fast passed=16 failed=0 skipped=0 seconds=0.3
+- tests fast passed=48 failed=3 skipped=0 seconds=11.8
+- tests fast passed=9 failed=2 skipped=0 seconds=0.5
+- tests fast passed=8 failed=8 skipped=0 seconds=0.8
+- tests fast passed=11 failed=0 skipped=0 seconds=0.3
+- commit T3 b03a31f838 sl form: executable in every brief
+- tests fast passed=330 failed=0 skipped=0 seconds=20.3
+Ruling: scripts/bump-version.sh gets the exec bit (100644 to 100755) - AGENTS.md runs it as an executable, the worktree guard refuses the bash form, and the script writes only inside its own repo - cost if wrong: one mode change to revert.
+Ruling: F-T3-1 assertions in three tests outside T3 Owns change with commit_task --also - they pin the wording this batch changes on purpose - cost if wrong: none beyond the diff.
+- commit T2 ca150623cd guard: judge targets from where the shell is
+- tests fast passed=11 failed=0 skipped=0 seconds=0.2
+Ruling: audit hits under .superlite stay - they are ephemeral run prompts, gone after the run, and outside the batch - cost if wrong: one noisy audit during a run.
+- commit T4 eeb658289f docs: run detection and version 1.3.2
+- Ruling: T4 also commits package.json - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits .hermes-plugin/plugin.yaml - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits .claude-plugin/plugin.json - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits .cursor-plugin/plugin.json - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits .codex-plugin/plugin.json - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits .devin-plugin/plugin.json - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits .kimi-plugin/plugin.json - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits .muse-plugin/plugin.json - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits .claude-plugin/marketplace.json - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits .muse-plugin/marketplace.json - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits gemini-extension.json - version bump 1.3.2 and bump script exec bit
+- Ruling: T4 also commits scripts/bump-version.sh - version bump 1.3.2 and bump script exec bit
+- tests fast passed=51 failed=0 skipped=0 seconds=13.7
+- commit T3 e38559b85c sl form: executable in every brief
+- Ruling: T3 also commits tests/scripts/test_run_tests_wait.py - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits tests/scripts/test_0_3_1_scripts.py - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits tests/scripts/test_trees.py - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits package.json - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits .hermes-plugin/plugin.yaml - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits .claude-plugin/plugin.json - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits .cursor-plugin/plugin.json - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits .codex-plugin/plugin.json - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits .devin-plugin/plugin.json - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits .kimi-plugin/plugin.json - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits .muse-plugin/plugin.json - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits .claude-plugin/marketplace.json - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits .muse-plugin/marketplace.json - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits gemini-extension.json - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- Ruling: T3 also commits scripts/bump-version.sh - F-T3-1 assertions; bump files already in T4, repeated because checkpoint mode shows them dirty
+- tests fast passed=330 failed=0 skipped=0 seconds=7.9
+- tests fast passed=340 failed=1 skipped=0 seconds=8.6
+- tests fast passed=341 failed=0 skipped=0 seconds=6.7
+Ruling: writer roots outside the project with a dynamic tail stay allowed, and an interpreter name in a shell variable stays unscanned - the guard stops an honest coordinator, not an evasive one, and the plan requires the first - cost if wrong: a contrived write slips past the guard.
+- commit T2 31c9d7fe8b guard: judge targets from where the shell is
+- Ruling: T2 also commits tests/scripts/test_guard_quoted.py - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits tests/scripts/test_run_tests_wait.py - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits tests/scripts/test_0_3_1_scripts.py - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits tests/scripts/test_trees.py - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits package.json - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .hermes-plugin/plugin.yaml - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .claude-plugin/plugin.json - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .cursor-plugin/plugin.json - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .codex-plugin/plugin.json - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .devin-plugin/plugin.json - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .kimi-plugin/plugin.json - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .muse-plugin/plugin.json - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .claude-plugin/marketplace.json - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .muse-plugin/marketplace.json - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits gemini-extension.json - guard package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits scripts/bump-version.sh - guard package review fixes; earlier files repeated for checkpoint mode
+- tests fast passed=18 failed=2 skipped=0 seconds=0.2
+- tests fast passed=20 failed=0 skipped=0 seconds=0.2
+- commit T4 31a9dad5ff docs: run detection and version 1.3.2
+- Ruling: T4 also commits tests/scripts/test_guard_quoted.py - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits tests/scripts/test_guard_outside.py - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits hooks/block-coordinator-edits - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits tests/scripts/test_run_tests_wait.py - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits tests/scripts/test_0_3_1_scripts.py - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits tests/scripts/test_trees.py - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits package.json - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits .hermes-plugin/plugin.yaml - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits .claude-plugin/plugin.json - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits .cursor-plugin/plugin.json - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits .codex-plugin/plugin.json - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits .devin-plugin/plugin.json - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits .kimi-plugin/plugin.json - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits .muse-plugin/plugin.json - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits .claude-plugin/marketplace.json - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits .muse-plugin/marketplace.json - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits gemini-extension.json - docs package review fixes; earlier files repeated for checkpoint mode
+- Ruling: T4 also commits scripts/bump-version.sh - docs package review fixes; earlier files repeated for checkpoint mode
+- tests full passed=1402 failed=0 skipped=1 seconds=152.6
+Ruling: wave0 and brief fallback keep 'prefix bash' - sl is tracked 100755 and tested, the fallback only serves Permission denied or PowerShell, outside the worktree guard - cost if wrong: a stripped exec bit inside a worktree session needs a manual override.
+Ruling: skipped test_detached_helper_children_get_no_console_window is Windows-only by its skipif - cost if wrong: none on this machine.
+- tests fast passed=363 failed=0 skipped=0 seconds=3.9
+- tests fast passed=371 failed=0 skipped=0 seconds=3.8
+- commit T2 7bef26ec03 guard: judge targets from where the shell is
+- Ruling: T2 also commits docs/hooks.md - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits tests/scripts/test_hooks_doc.py - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits tests/scripts/test_guard_quoted.py - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits tests/scripts/test_run_tests_wait.py - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits tests/scripts/test_0_3_1_scripts.py - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits tests/scripts/test_trees.py - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits package.json - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .hermes-plugin/plugin.yaml - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .claude-plugin/plugin.json - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .cursor-plugin/plugin.json - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .codex-plugin/plugin.json - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .devin-plugin/plugin.json - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .kimi-plugin/plugin.json - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .muse-plugin/plugin.json - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .claude-plugin/marketplace.json - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits .muse-plugin/marketplace.json - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits gemini-extension.json - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- Ruling: T2 also commits scripts/bump-version.sh - final review fixes F-T2-1 rounds 1 and 2; earlier files repeated for checkpoint mode
+- tests full passed=1432 failed=0 skipped=1 seconds=128.4

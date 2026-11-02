@@ -1,0 +1,36 @@
+"""docs/hooks.md: the run-detection section and the block-coordinator-edits rules."""
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+HOOKS = (ROOT / "docs" / "hooks.md").read_text(encoding="utf-8")
+
+
+def section(text, heading):
+    m = re.search(rf"^{re.escape(heading)}\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    return m.group(1) if m else ""
+
+
+def test_run_detection_section():
+    assert "## Detecting an active run" in HOOKS
+    body = section(HOOKS, "## Detecting an active run")
+    for needle in ("~/.superlite/sessions/<session_id>", "pool.json", "prime.md", "stable.json", "sl orchestrator end"):
+        assert needle in body, needle
+
+
+def test_guard_line_names_new_rules():
+    line = next(x for x in HOOKS.splitlines() if x.startswith("- `block-coordinator-edits`"))
+    for needle in ("outside the project", "quoted", "`cd`"):
+        assert needle in line, needle
+
+
+def test_run_detection_matches_state_order():
+    body = section(HOOKS, "## Detecting an active run")
+    for needle in ("SUPERLITE_STATE_DIR", "`session` file", "Legacy", "CLAUDE_PROJECT_DIR"):
+        assert needle in body, needle
+
+
+def test_guard_line_names_cd_voiding():
+    line = next(x for x in HOOKS.splitlines() if x.startswith("- `block-coordinator-edits`"))
+    for needle in ("`pushd`", "`chdir`", "turns the outside base off"):
+        assert needle in line, needle

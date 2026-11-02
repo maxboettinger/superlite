@@ -13,7 +13,7 @@ First message, no mode named, not trivial: `/superlite:start`.
 
 **2+ tasks: `subagent-driven-development`,** loaded before the plan; no `general-purpose` builders or reviewers; inline only when small (a few files, one chain; say so). Non-trivial builds end with a fresh `superlite:final-reviewer` (review packet).
 
-**Tools.** `bash <skill-dir>/../subagent-driven-development/scripts/sl <tool>`, never `python`. Graphify only if `sl graphify_gate` allows.
+**Tools.** `<skill-dir>/../subagent-driven-development/scripts/sl <tool>`, never `python`. Graphify only if `sl graphify_gate` allows.
 
 **Superlite broke, slow, unclear, repetitive?** `sl feedback add "<what, where, expected>"`; don't fix it mid-task.
 

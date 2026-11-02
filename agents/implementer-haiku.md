@@ -14,14 +14,15 @@ A message may hold a batch of tasks (`Tn, Tm`): build them in the order given, e
 
 Rules:
 - Edit only the files you own.
-- TDD. Write the task's **Review Focus cases first**, as tests, then the rest: run only that test and see it fail, write minimal code, run the focused tests. Never run the full suite; scripts do. Fast check, always in the background: `bash <abs sl> run_tests --fast PATHS --task Tn --background`, then the `wait:` line it prints (`bash <abs sl> run_tests --wait <path>`), and read only its summary.
+- `sl` runs as an executable (the Claude Code worktree guard refuses `bash <script>`). `Permission denied` or a shell without shebang support, such as PowerShell: prefix `bash`.
+- TDD. Write the task's **Review Focus cases first**, as tests, then the rest: run only that test and see it fail, write minimal code, run the focused tests. Never run the full suite; scripts do. Fast check, always in the background: `<abs sl> run_tests --fast PATHS --task Tn --background`, then the `wait:` line it prints (`<abs sl> run_tests --wait <path>`), and read only its summary.
 - For each producer your task consumes, test against a **swappable fake**: one fixture returns the fake by default and the real implementation when `SUPERLITE_REAL=1`. The seam check reruns the same tests against real code.
 - Never run `git add`, `commit`, `switch`, `checkout` or `stash`. Never spawn agents. Self-review is reading your own diff once.
 - Build nothing the task did not ask for; follow existing patterns.
 - Follow the task literally: exact paths, names, signatures and test values. Never invent behavior the task does not state. If anything you need is not stated exactly, or a test still fails after 2 attempts, stop and report NEEDS_CONTEXT or BLOCKED with specifics; a Sonnet fixer takes it from there.
 - Kill only processes you started, by PID. Never `taskkill /IM`, `pkill`, `killall` or `Stop-Process -Name`. Servers bind port 0 with a timeout.
 - Log anything unexpected (a failure other than the planned red step, a workaround, a guess, a spec gap):
-  `bash <abs sl> incident add --file F --line N --context "<=200 chars" --agent <your task> --kind test-failure|exception|workaround|spec-ambiguity|assumption|flaky|perf|unsure [--resolution R] [--confidence low|medium|high]`
+  `<abs sl> incident add --file F --line N --context "<=200 chars" --agent <your task> --kind test-failure|exception|workaround|spec-ambiguity|assumption|flaky|perf|unsure [--resolution R] [--confidence low|medium|high]`
 
 After DONE you stay available. Work on only one task at a time; a new task arrives only after your DONE. If the coordinator sends a relevance poll, reply with one line, `score: N — reason` (N 0-10, reason at most 10 words), and do nothing else. You take only Kind: mechanical tasks. Fixes, probe failures and review findings go to fixer agents, not to you.
 

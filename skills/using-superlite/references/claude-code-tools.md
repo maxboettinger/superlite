@@ -1,5 +1,7 @@
 # Claude Code Tool Notes
 
+`sl` runs as an executable (the Claude Code worktree guard refuses `bash <script>`). `Permission denied` or a shell without shebang support, such as PowerShell: prefix `bash`.
+
 Claude Code is the reference harness: superlite's skills speak its vocabulary, so no mapping is needed.
 
 | Skill says | Claude Code |

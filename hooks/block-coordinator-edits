@@ -16,6 +16,11 @@
 # target (a literal, Path('...'), a name assigned one, or sys.argv[N] read off the interpreter's command line, directly
 # or through one VAR=literal); a writer whose target is unknown blocks. cp/mv/tee into a directory (trailing /, .,
 # or an existing one) are judged by <dir>/<basename of the first source>; mv also judges every source.
+# The interpreter scan runs only when the command, with quoted strings and heredoc bodies removed, still runs an
+# interpreter, a shell -c or eval wrapper, or a $(interpreter ...) substitution: text that only quotes code is not a call.
+# Relative targets are judged from the shell's directory: the JSON cwd, or a leading `cd <absolute>` that is the only
+# cd outside quotes; outside the project they are not project code (absolute paths into it still are). A writer whose
+# target is unknown but whose root is an absolute path outside the project passes.
 # Bash/PowerShell write detection is best-effort; when unsure, allow. Sessions without a .superlite
 # directory are never touched. Bash builtins only (no external process is spawned: each spawn costs
 # ~250 ms on Windows), cheap exits first. Exit 2 blocks (message on stderr); anything else,
@@ -46,8 +51,18 @@ norm() {
   NORM="$p"
 }
 
-# lower S: S in lower case (ASCII), into LOWER. bash 3.2 (stock macOS) has no ${var,,}.
-lower() { LOWER="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')"; }
+# lower S: S in lower case (ASCII), into LOWER. bash 3.2 (stock macOS) has no ${var,,}, and a `tr` spawn costs ~250 ms
+# on Windows: a string without capitals is returned as is, else one builtin substitution per letter.
+lower() {
+  local s="$1"
+  if [[ $s == *[[:upper:]]* ]]; then
+    s="${s//A/a}"; s="${s//B/b}"; s="${s//C/c}"; s="${s//D/d}"; s="${s//E/e}"; s="${s//F/f}"; s="${s//G/g}"
+    s="${s//H/h}"; s="${s//I/i}"; s="${s//J/j}"; s="${s//K/k}"; s="${s//L/l}"; s="${s//M/m}"; s="${s//N/n}"
+    s="${s//O/o}"; s="${s//P/p}"; s="${s//Q/q}"; s="${s//R/r}"; s="${s//S/s}"; s="${s//T/t}"; s="${s//U/u}"
+    s="${s//V/v}"; s="${s//W/w}"; s="${s//X/x}"; s="${s//Y/y}"; s="${s//Z/z}"
+  fi
+  LOWER="$s"
+}
 
 . "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
 superlite_state || exit 0
@@ -76,11 +91,28 @@ fi
 norm "$proj"; projn="$NORM"; lower "$projn"; projl="$LOWER"
 
 prot=0
+eff_out=0; effn=""
+# dotres PATH: absolute PATH with . and .. segments resolved lexically, into RES.
+dotres() {
+  local -a st=(); local s n IFS=/
+  set -f
+  for s in $1; do
+    case "$s" in ''|.) ;; ..) n=${#st[@]}; [ "$n" -gt 0 ] && unset "st[$((n - 1))]" ;; *) st[${#st[@]}]="$s" ;; esac
+  done
+  set +f
+  RES="/${st[*]}"
+}
 # project_code PATH: succeeds when writing PATH is denied (sets prot=1 for protected files).
 project_code() {
   local p rel pl
   norm "$1"; p="$NORM"; p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
   case "$p" in ''|*'$'*|'~'*|/dev/*|-*) return 1 ;; esac
+  if [ "$eff_out" = 1 ]; then   # the shell sits outside the project: a relative path is judged from there
+    case "$p" in /*) ;; *) p="$effn/${p#./}" ;; esac
+  fi
+  case "$p" in   # an absolute path with . or .. segments that does not start in the project is judged resolved
+    /*) case "$p/" in */../*|*/./*) lower "$p"; case "$LOWER" in "$projl"/*) ;; *) dotres "$p"; p="$RES" ;; esac ;; esac ;;
+  esac
   case "$p" in
     /*) lower "$p"; pl="$LOWER"
         case "$pl" in "$projl"/*) rel="${p:$((${#projn}+1))}" ;; *) return 1 ;; esac ;;
@@ -138,6 +170,55 @@ writer_target() {
   return 0
 }
 
+# abs_outside PATH: succeeds when PATH is absolute, has no . or .. segment and lies outside the project; NORM is it.
+abs_outside() {
+  norm "$1"
+  case "$NORM" in /*) ;; *) return 1 ;; esac
+  case "$NORM/" in */../*|*/./*) return 1 ;; esac
+  lower "$NORM"
+  case "$LOWER" in "$projl"|"$projl"/*) return 1 ;; esac
+  return 0
+}
+
+# writer_root EXPR: the root of a writer target expression that writer_target could not read, into TGT (empty if
+# unknown): the first string literal or identifier after dropping f, Path(, os.path.join(, ( and {; an identifier
+# resolves through writer_target's literal-assignment logic.
+writer_root() {
+  local e="$1" t re sq="'" dq='"'
+  TGT=""
+  e="${e#"${e%%[![:space:]]*}"}"
+  while :; do
+    case "$e" in
+      Path\(*) e="${e#Path(}" ;;
+      os.path.join\(*) e="${e#os.path.join(}" ;;
+      [fF]"$dq"*|[fF]"$sq"*|\(*|\{*|[[:space:]]*) e="${e#?}" ;;
+      "$dq"*|"$sq"*)
+        t="${e:1}"; t="${t%%[$sq$dq]*}"
+        case "$t" in \{*) e="${t:1}"; continue ;; esac
+        case "$t" in *\{*) t="${t%%\{*}"; t="${t%/*}/" ;; esac   # a `{` ends the known root, at the last / before it
+        TGT="$t"; return 0 ;;
+      *) break ;;
+    esac
+  done
+  re='^([A-Za-z_][A-Za-z_0-9]*)([[:space:]/)}+,]|$)'
+  [[ $e =~ $re ]] && writer_target "${BASH_REMATCH[1]}"
+  return 0
+}
+
+# resolve_target EXPR: writer_target, else writer_root; TGT is the path, or empty with RT_OUT=1 when only the root is
+# known and it is an absolute path outside the project (that writer cannot touch the project).
+resolve_target() {
+  RT_OUT=0
+  writer_target "$1"
+  if [ -z "$TGT" ]; then
+    writer_root "$1"
+    if [ -n "$TGT" ] && abs_outside "$TGT"; then
+      case "$projl/" in "${LOWER%/}"/*) ;; *) RT_OUT=1 ;; esac   # an ancestor of the project may hold it: unknown
+    fi
+    TGT=""
+  fi
+}
+
 # argv_arg N: the N-th positional argument (1-based) after the script spec of the first interpreter command, into TGT
 # (empty if unknown): flags are dropped, `-c CODE` takes CODE as the spec, a $VAR/"$VAR" token resolves through
 # exactly one VAR=literal assignment in the command.
@@ -185,12 +266,126 @@ argv_arg() {
   return 0
 }
 
+# strip_cmd: into `stripped`, $cmd without heredoc bodies and quoted strings, split into simple commands (one per
+# line). A double quote opened before a heredoc (body "$(cat <<'EOF' ... EOF)") closes at the first " after the
+# heredoc's tag line; the text after it stays.
+stripped=""; stripped_done=0
+strip_cmd() {
+  local sq="'" dq='"' line t skip=0 tag="" open="" hq=0 re_here re_quote
+  stripped_done=1
+  re_here="<<-?[[:space:]]*[$sq$dq]?([A-Za-z_][A-Za-z_0-9]*)"
+  re_quote="^((\\\\.|[^$dq$sq\\\\])*)($dq([^$dq\\\\]|\\\\.)*$dq|$sq[^$sq]*$sq)(.*)\$"
+  stripped_unsure=0
+  while IFS= read -r line; do
+    # A quote left open on the previous line continues on this one.
+    [ -n "$open" ] && { line="$open $line"; open=""; }
+    if [ "$skip" = 1 ]; then
+      t="${line#"${line%%[![:space:]]*}"}"; t="${t%"${t##*[![:space:]]}"}"
+      [ "$t" = "$tag" ] && skip=0
+      continue
+    fi
+    if [ "$hq" = 1 ]; then
+      case "$line" in *"$dq"*) line="${line#*"$dq"}"; hq=0 ;; *) continue ;; esac
+    fi
+    if [[ $line =~ $re_here ]]; then
+      tag="${BASH_REMATCH[1]}"; skip=1
+      while [[ $line =~ $re_quote ]]; do line="${BASH_REMATCH[1]}Q${BASH_REMATCH[5]}"; done
+      case "$line" in *"$dq"*) hq=1; line="${line%%"$dq"*}Q" ;; esac
+    fi
+    while [[ $line =~ $re_quote ]]; do line="${BASH_REMATCH[1]}Q${BASH_REMATCH[5]}"; done
+    line="${line//\\\\/B}"; line="${line//\\$sq/E}"; line="${line//\\$dq/E}"   # escaped backslash and quotes are plain text
+    case "$line" in *[$dq$sq]*) open="$line"; continue ;; esac
+    line="${line//&&/$'\n'}"; line="${line//||/$'\n'}"; line="${line//;/$'\n'}"; line="${line//|/$'\n'}"
+    stripped="$stripped$line"$'\n'
+  done <<< "$cmd"
+  # A quote still open at the end (an apostrophe in a comment, $'..', a stray quote) means the stripper cannot be trusted.
+  { [ -n "$open" ] || [ "$hq" = 1 ]; } && stripped_unsure=1
+}
+
+# scan_gate: succeeds when the stripped command (quotes and heredoc bodies gone) still runs an interpreter, a
+# shell -c or eval wrapper, or when the raw text substitutes $(interpreter ...).
+scan_gate() {
+  local l seg re_shc re_eval re_sub re_qint re_stdin wrap nl=$'\n'
+  [ "$stripped_done" = 1 ] || strip_cmd
+  [ "$stripped_unsure" = 1 ] && return 0
+  lower "$stripped"; l="$LOWER"
+  # Same-line wrappers that may sit between a command position and the interpreter.
+  wrap='((sudo|env|command|exec|time|nohup|timeout|nice|uv[[:space:]]+run|[A-Za-z_][A-Za-z_0-9]*=[^[:space:]]*|-[^[:space:]]*|[0-9.]+[smhd]?)[[:space:]]+)*'
+  # a quoted interpreter name still runs, but only at a command position (not inside a quoted argument)
+  re_qint='(^|[;&|(`'"$nl"']|\$\()[[:space:]]*'"$wrap"'["'"'"'](.*/)?(python[0-9.]*|node|ruby|php)["'"'"']'
+  re_shc='(^|[^[:alnum:]_])(bash|sh|zsh|dash)[[:space:]]+(-[-[:alnum:]]+[[:space:]]+)*-[[:alnum:]]*c'
+  re_eval='(^|[^[:alnum:]_])eval([[:space:]]|$)'
+  re_sub='\$\([[:space:]]*'"$wrap"'([^[:space:])]*/)?(python[0-9.]*|node|ruby|php)([[:space:]]|\))'
+  # a shell with no script argument reads its program from stdin (a heredoc, a here-string, a pipe)
+  re_stdin='^[[:space:]]*'"$wrap"'([^[:space:]]*/)?(bash|sh|zsh|dash)([[:space:]]+[-+][-[:alnum:]]*o[[:space:]]+[[:alnum:]_]+|[[:space:]]+[-+][-[:alnum:]]+)*([[:space:]]+[0-9]?[<>]+&?-?[[:space:]]*[^[:space:]]*)*[[:space:]]*$'
+  [[ $l =~ $re_interp || $l =~ $re_shc || $l =~ $re_eval || $lc =~ $re_sub || $lc =~ $re_qint ]] && return 0
+  while IFS= read -r seg; do
+    [[ $seg =~ $re_stdin ]] && return 0
+  done <<< "$l"
+  return 1
+}
+
+aip_base=""
+# args_in_proj ARGS...: succeeds when an argument (or the value of -d/-C/--directory=) is a path in the project: an
+# absolute one, or a relative one resolved from $aip_base (the outside directory the command runs in; none: skipped).
+args_in_proj() {
+  local a
+  for a in "$@"; do
+    a="${a#--directory=}"; a="${a#-d}"; a="${a#-C}"; a="${a%\"}"; a="${a#\"}"
+    case "$a" in
+      Q) return 0 ;;   # a quoted path, unreadable here
+      /*|[A-Za-z]:[/\\]*) ;;
+      '') continue ;;
+      *) [ -n "$aip_base" ] || continue; a="$aip_base/${a#./}" ;;
+    esac
+    norm "$a"; a="$NORM"
+    case "/$a/" in */../*|*/./*) dotres "$a"; a="$RES" ;; esac
+    lower "$a"
+    case "$LOWER" in "$projl"|"$projl"/*) return 0 ;; esac
+  done
+  return 1
+}
+
 # dir_target TARGET FIRST: into DT, the path judged for a cp/mv/tee target: TARGET/<basename FIRST> when TARGET
 # ends with /, is . or is an existing directory, else TARGET itself.
 dir_target() {
   local t="$1" b="${2%/}"
   b="${b##*/}"; DT="$t"
   if [[ $t == */ || $t == . || $t == */. || -d $t || ( $t != /* && $t != [A-Za-z]:* && -d "$proj/$t" ) ]]; then DT="${t%/}/${b:-x}"; fi
+}
+
+# git_apply_hit ARGS...: ARGS follow the git command word. Succeeds when they run `git apply` against the project:
+# the subcommand is the first word that is not a global option, and the last -C names the directory it runs in (a
+# relative one is taken from the outside directory, or stays in the project).
+git_apply_hit() {
+  local a gd="" sub="" gd_unknown=0
+  [ "$eff_out" = 1 ] && gd="$effn"
+  while [ $# -gt 0 ]; do
+    a="$1"; shift
+    case "$a" in
+      -C|--work-tree) [ $# -gt 0 ] || return 1; a="$1"; shift ;;
+      -C?*) a="${a#-C}" ;;
+      --work-tree=*) a="${a#--work-tree=}" ;;
+      -c|--git-dir|--namespace|--super-prefix|--config-env|--exec-path) shift; continue ;;
+      -*) continue ;;
+      *) sub="$a"; break ;;
+    esac
+    case "$a" in   # -C DIR / --work-tree=DIR
+      /*|[A-Za-z]:[/\\]*) gd="$a" ;;
+      Q|*'$'*|'~'*|'') gd=""; gd_unknown=1 ;;
+      *) [ -n "$gd" ] && gd="$gd/${a#./}" ;;
+    esac
+  done
+  [ "$sub" = apply ] || return 1
+  [ "$enforce" = 1 ] || return 1
+  [ "$gd_unknown" = 1 ] && return 0
+  [ -n "$gd" ] || return 0
+  if [ "$gd" != "$effn" ]; then
+    norm "$gd"; gd="$NORM"
+    case "/$gd/" in */../*|*/./*) dotres "$gd"; gd="$RES" ;; esac
+    abs_outside "$gd" || return 0
+  fi
+  aip_base="$gd"; args_in_proj "$@"
 }
 
 if [ -z "$hit" ] && [ "$tool" != Bash ] && [ "$tool" != PowerShell ]; then
@@ -205,6 +400,61 @@ elif [ -z "$hit" ]; then
   cmd="${cmd//\\\"/\"}"; cmd="${cmd//\\t/ }"; cmd="${cmd//\\r/}"; cmd="${cmd//\\n/$'\n'}"
   cmd="${cmd//$'\x01'/\\}"
   lower "$cmd"; lc="$LOWER"
+  # Effective directory: the JSON cwd, overridden by a leading `cd <absolute>` when it is the only cd outside quotes.
+  # Any other directory change (a second cd, cd .. / - / ~ / $VAR, pushd, popd, chdir, a subshell cd) voids an outside base.
+  jstr cwd
+  if [ -n "$REPLY" ] && abs_outside "$REPLY"; then eff_out=1; effn="$NORM"; fi
+  sq="'"; dq='"'
+  re_cd="^[[:space:]]*cd[[:space:]]+($dq([^$dq]+)$dq|$sq([^$sq]+)$sq|([^[:space:];&|<>()$dq$sq]+))"
+  cd_lead=""; cd_n=0; cd_abs=0; cd_bad=0; cd_rels=()
+  if [[ $lc == *cd* || $lc == *pushd* || $lc == *popd* || $lc == *chdir* ]]; then
+    [ "$stripped_done" = 1 ] || strip_cmd
+    [[ $lc == *chdir* ]] && cd_bad=1
+    re_cdw='(^|[^[:alnum:]_./-])(cd|pushd|popd)([[:space:]]+([^[:space:]]*))?(.*)$'
+    while IFS= read -r seg; do
+      while [[ $seg =~ $re_cdw ]]; do
+        seg="${BASH_REMATCH[5]}"; t="${BASH_REMATCH[4]}"; cd_n=$((cd_n + 1))
+        if [ "${BASH_REMATCH[2]}" != cd ] || [ -z "$t" ] || [ "$t" = - ]; then cd_bad=1
+        else
+          case "$t" in *'$'*|*'~'*|*'`'*) cd_bad=1 ;; esac
+          case "/$t/" in */../*) cd_bad=1 ;; esac
+          case "$t" in /*|[A-Za-z]:[/\\]*|Q) cd_abs=$((cd_abs + 1)) ;; *) cd_rels[${#cd_rels[@]}]="$t" ;; esac
+        fi
+      done
+    done <<< "$stripped"
+  fi
+  if [ "$cd_n" -gt 0 ] && [[ $cmd =~ $re_cd ]]; then
+    cdt="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+    case "$cdt" in
+      *'$'*|*'`'*|'') ;;
+      /*|[A-Za-z]:[/\\]*)
+        if [ "$cd_n" = 1 ] && [ "$cd_bad" = 0 ]; then
+          if abs_outside "$cdt"; then eff_out=1; effn="$NORM"; else eff_out=0; fi
+          cd_abs=0
+        fi ;;
+    esac
+  fi
+  # What is left is a cwd base plus relative plain `cd sub` steps; an absolute or unreadable cd left over voids it.
+  { [ "$cd_bad" = 1 ] || [ "$cd_abs" -gt 0 ] || [ "$stripped_unsure" = 1 ]; } && eff_out=0
+  # Each relative cd moves the outside base; one that lands in the project (or on it) ends the outside base.
+  if [ "$eff_out" = 1 ] && [ "${#cd_rels[@]}" -gt 0 ]; then
+    for t in "${cd_rels[@]}"; do
+      t="${t#./}"
+      if [ -z "$t" ] || [ "$t" = . ]; then continue; fi
+      if abs_outside "$effn/$t"; then effn="$NORM"; else eff_out=0; break; fi
+    done
+  fi
+  # Outside by spelling only: a symlinked cwd (/tmp vs /private/tmp) is the project's tree, or holds it. Rare, so the
+  # subshell `cd -P` (a builtin, no exec) is paid only here.
+  if [ "$eff_out" = 1 ]; then
+    PHYS="$(CDPATH= cd -P -- "$effn" 2>/dev/null && pwd -P)"; pe="$PHYS"
+    PHYS="$(CDPATH= cd -P -- "$projn" 2>/dev/null && pwd -P)"; pp="$PHYS"
+    if [ -n "$pe" ] && [ -n "$pp" ]; then
+      lower "$pe"; pe="$LOWER"; lower "$pp"; pp="$LOWER"; lower "$effn"; el="$LOWER"
+      case "$pe/" in "${pp%/}"/*) eff_out=0 ;; esac                                      # the same tree or inside it
+      case "$pp/" in "${pe%/}"/*) case "$projl/" in "${el%/}"/*) ;; *) eff_out=0 ;; esac ;; esac   # holds it, unseen lexically
+    fi
+  fi
   mentions=0
   [[ $lc == *human-replies.jsonl* || $lc == *orchestrator.json* ]] && mentions=1
   # sl tools that start a build are denied until the plan is approved.
@@ -213,21 +463,21 @@ elif [ -z "$hit" ]; then
   # Inline interpreter writers (checked on the full text, heredoc bodies included), judged by target: the
   # path-like quoted literals in the command are classified like any write; any denied one blocks, and a
   # writer with no path literal at all (a variable target) blocks while the guard is enforcing.
-  re_interp='(^|[^[:alnum:]_])(python[0-9.]*|node|ruby|php)([[:space:]]|$)'
-  re_writer="open\([^)]*,[[:space:]]*['\"][wax]b?\+?['\"]|\.(write_text|write_bytes)\(|writeFileSync|writeFile\(|appendFile(Sync)?\(|fs\.write"
-  if [ -z "$hit" ] && { [ "$enforce" = 1 ] || [ "$mentions" = 1 ]; } && [[ $lc =~ $re_interp && $cmd =~ $re_writer ]]; then
+  re_interp='(^|[^[:alnum:]_])(python[0-9.]*|node|ruby|php)([[:space:]"'"'"']|$)'
+  re_writer="open\(([^()]|\(([^()]|\([^()]*\))*\))*,[[:space:]]*(mode=)?['\"][wax]|\.(write_text|write_bytes)\(|writeFileSync|writeFile\(|appendFile(Sync)?\(|fs\.write"
+  if [ -z "$hit" ] && { [ "$enforce" = 1 ] || [ "$mentions" = 1 ]; } && [[ $lc =~ $re_interp && $cmd =~ $re_writer ]] && scan_gate; then
     if [ "$mentions" = 1 ]; then
       hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; prot=1
     else
       # Each writer call's own target: a literal, Path('...'), or a name assigned one of those in the command.
       # Every open( must read as a plain read or a parsed write; every other writer call must be parsed.
-      sq="'"; dq='"'; q="[$sq$dq]"; arg="([^,()]*|Path\([^()]*\))"
+      sq="'"; dq='"'; q="[$sq$dq]"; arg="([^,()]*|Path\([^()]*\)|os\.path\.join\([^()]*\))"
       re_open='(^|[^A-Za-z0-9_])open\('
       re_ow="^$arg,[[:space:]]*(mode=)?$q[wax]"
       re_or="^$arg(,[[:space:]]*((mode=)?${q}r[bt]?$q|(encoding|errors|newline|buffering)=[^,()]*))*\)"
       re_mr="^[[:space:]]*(\)|(mode=)?${q}r)"
       re_mw="^[[:space:]]*(mode=)?$q[wax]"
-      re_w2="(Path\([^()]*\)|[A-Za-z_][A-Za-z_0-9]*)\.(write_text|write_bytes)\("
+      re_w2="(Path\([^()]*\)|\(([^()]|Path\([^()]*\))*\)|[A-Za-z_][A-Za-z_0-9]*)\.(write_text|write_bytes)\("
       re_w3="(Path\([^()]*\)|[A-Za-z_][A-Za-z_0-9]*)\.open\([[:space:]]*(mode=)?$q[wax]"
       re_w4="(writeFileSync|writeFile|appendFileSync|appendFile)\(([^,()]*),"
       re_other='\.(write_text|write_bytes)\(|writeFileSync\(|writeFile\(|appendFileSync\(|appendFile\(|fs\.write(Sync)?\('
@@ -238,8 +488,8 @@ elif [ -z "$hit" ]; then
         if [ "$prev" = . ]; then                         # obj.open(...): Path.open, os.open, ...
           if [[ $rest =~ $re_mr ]]; then :; elif [[ $rest =~ $re_mw ]]; then want=$((want + 1)); else unknown=1; fi
         elif [[ $rest =~ $re_ow ]]; then
-          writer_target "${BASH_REMATCH[1]}"
-          if [ -z "$TGT" ]; then unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
+          resolve_target "${BASH_REMATCH[1]}"
+          if [ -z "$TGT" ]; then [ "$RT_OUT" = 1 ] || unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
         elif ! [[ $rest =~ $re_or ]]; then unknown=1
         fi
       done
@@ -251,8 +501,8 @@ elif [ -z "$hit" ]; then
           m="${BASH_REMATCH[0]}"
           if [ "$re_w" = "$re_w4" ]; then e="${BASH_REMATCH[2]}"; else e="${BASH_REMATCH[1]}"; fi
           rest="${rest#*"$m"}"; got=$((got + 1))
-          writer_target "$e"
-          if [ -z "$TGT" ]; then unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
+          resolve_target "$e"
+          if [ -z "$TGT" ]; then [ "$RT_OUT" = 1 ] || unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
         done
       done
       # A writer whose target is unknown (a variable, an f-string, a method chain, fs.write on a descriptor) blocks.
@@ -261,25 +511,7 @@ elif [ -z "$hit" ]; then
     fi
   fi
   if [ -z "$hit" ]; then
-    # Drop heredoc bodies and quoted strings, then split into simple commands.
-    sq="'"; dq='"'
-    re_here="<<-?[[:space:]]*[$sq$dq]?([A-Za-z_][A-Za-z_0-9]*)"
-    re_quote="^([^$dq$sq]*)($dq([^$dq\\\\]|\\\\.)*$dq|$sq[^$sq]*$sq)(.*)\$"
-    stripped=""; skip=0; tag=""; open=""
-    while IFS= read -r line; do
-      # A quote left open on the previous line continues on this one.
-      [ -n "$open" ] && { line="$open $line"; open=""; }
-      if [ "$skip" = 1 ]; then
-        t="${line#"${line%%[![:space:]]*}"}"; t="${t%"${t##*[![:space:]]}"}"
-        [ "$t" = "$tag" ] && skip=0
-        continue
-      fi
-      if [[ $line =~ $re_here ]]; then tag="${BASH_REMATCH[1]}"; skip=1; fi
-      while [[ $line =~ $re_quote ]]; do line="${BASH_REMATCH[1]}Q${BASH_REMATCH[4]}"; done
-      case "$line" in *[$dq$sq]*) open="$line"; continue ;; esac
-      line="${line//&&/$'\n'}"; line="${line//||/$'\n'}"; line="${line//;/$'\n'}"; line="${line//|/$'\n'}"
-      stripped="$stripped$line"$'\n'
-    done <<< "$cmd"
+    [ "$stripped_done" = 1 ] || strip_cmd
     re_redir='[0-9]?>>?[[:space:]]*([^[:space:]<>&|;()]+)(.*)$'
     while IFS= read -r seg; do
       case "$seg" in *'$SL'*|*'${SL}'*|*subagent-driven-development/scripts*) continue ;; esac
@@ -296,8 +528,8 @@ elif [ -z "$hit" ]; then
       args=(); for a in "$@"; do case "$a" in -*|*'>'*|*'<'*) ;; *) args+=("$a") ;; esac; done   # redirects are not operands
       n=${#args[@]}; last=""; [ "$n" -gt 0 ] && last="${args[n-1]}"
       case "$c" in
-        patch) [ "$enforce" = 1 ] && hit="patch" ;;
-        git) [ "$1" = apply ] && [ "$enforce" = 1 ] && hit="git apply" ;;
+        patch) aip_base="$effn"; [ "$enforce" = 1 ] && { [ "$eff_out" = 0 ] || args_in_proj "$@"; } && hit="patch" ;;
+        git) git_apply_hit "$@" && hit="git apply" ;;
         sed) case " $* " in *' -i'*|*' --in-place'*) [ -n "$last" ] && project_code "$last" && hit="sed -i $last" ;; esac ;;
         perl) case " $* " in *' -pi'*|*' -i'*|*' -ni'*) [ -n "$last" ] && project_code "$last" && hit="perl -i $last" ;; esac ;;
         tee) for a in "${args[@]}"; do dir_target "$a" "$a"; project_code "$DT" && { hit="tee $a"; break; }; done ;;

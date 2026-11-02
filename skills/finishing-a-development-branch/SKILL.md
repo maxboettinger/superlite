@@ -9,7 +9,7 @@ Never push, merge or publish without the human. The human's choice is the only a
 
 ## 1. Verify
 
-Run `bash <skill-dir>/../subagent-driven-development/scripts/sl run_tests --full` (it prints one line: `passed failed skipped seconds`). Skip it if the last full run was green and nothing has changed since (see `superlite:verification-before-completion`). If tests fail, report the failures and stop. Do not offer to merge failing work.
+Run `<skill-dir>/../subagent-driven-development/scripts/sl run_tests --full` (it prints one line: `passed failed skipped seconds`). Skip it if the last full run was green and nothing has changed since (see `superlite:verification-before-completion`). If tests fail, report the failures and stop. Do not offer to merge failing work.
 
 ## 2. Detect the base branch yourself
 
@@ -41,13 +41,13 @@ No further menus or typed confirmations. Act on the answer.
 
 ## 5. Execute the choice
 
-- **Merge locally:** if the work ran in a worktree, run the merge from the main checkout (where the base branch lives). Check out the base branch, merge the feature branch. If the merge was not a fast-forward or had conflicts, run `bash <skill-dir>/../subagent-driven-development/scripts/sl run_tests --full` again. Remove the worktree (step 6), then delete the feature branch with `git branch -d`.
+- **Merge locally:** if the work ran in a worktree, run the merge from the main checkout (where the base branch lives). Check out the base branch, merge the feature branch. If the merge was not a fast-forward or had conflicts, run `<skill-dir>/../subagent-driven-development/scripts/sl run_tests --full` again. Remove the worktree (step 6), then delete the feature branch with `git branch -d`.
 - **Push and PR:** `git push -u origin <branch>`, then `gh pr create` with a title and a body holding the summary and test evidence. Report the PR URL. Keep the branch.
 - **Keep:** report the branch name and any worktree path. Nothing else.
 
 ## 6. Worktree cleanup
 
-For a superlite build, first end the run in every case, while the worktree still exists: `bash <skill-dir>/../subagent-driven-development/scripts/sl orchestrator end --plan <absolute plan path>` (archives the run markers and logs; the coordinator guard stops).
+For a superlite build, first end the run in every case, while the worktree still exists: `<skill-dir>/../subagent-driven-development/scripts/sl orchestrator end --plan <absolute plan path>` (archives the run markers and logs; the coordinator guard stops).
 
 Only if the work ran in a worktree you created and the branch was merged: `git worktree remove <path>`. For push-and-PR or keep, leave it in place.
 
