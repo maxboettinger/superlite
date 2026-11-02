@@ -284,7 +284,11 @@ class Plan:  # O(1)
         p = Path(path)  # O(1)
         if not p.is_file():  # O(1) stat I/O
             raise PlanError(f"plan not found: {path}")  # O(1)
-        return cls(p.read_bytes().decode("utf-8-sig"), p)  # O(C) file read + decode + parse
+        try:  # O(1)
+            raw = p.read_bytes()  # O(C) file read
+            return cls(raw.decode("utf-8-sig"), p)  # O(C) decode + parse
+        except (OSError, UnicodeDecodeError) as exc:  # O(1)
+            raise PlanError(f"plan not readable: {path} ({exc.__class__.__name__})") from exc  # O(1)
 
     def _parse_tasks(self) -> list[Task]:  # O(C+L) total
         tasks: list[Task] = []  # O(1)
