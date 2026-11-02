@@ -195,6 +195,8 @@ def agent_records(sl_dir: Path) -> list:  # O(M + B)
         pass  # O(1)
     out = []  # O(1)
     for aid in sorted(set(launches) | set(stops)):  # O(A)
+        if aid not in launches and not any(s.get("type") for s in stops.get(aid, [])):  # O(stops) sidecar stop without a launch or type
+            continue  # O(1)
         la, sts = launches.get(aid, {}), stops.get(aid, [])  # O(1)
         desc = la.get("desc") or ""  # O(1)
         hint = pool.get(aid) or ([ "T" + TID.search(desc).group(1)] if TID.search(desc) else [])  # O(1)
