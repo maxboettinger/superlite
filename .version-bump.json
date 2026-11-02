@@ -21,6 +21,7 @@
       "node_modules",
       ".git",
       ".version-bump.json",
+      ".superlite",
       "scripts/bump-version.sh"
     ]
   }

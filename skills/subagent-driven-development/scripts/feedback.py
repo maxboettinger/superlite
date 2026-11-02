@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Superlite's own feedback inbox: friction agents hit while using superlite, triaged into issues later.
 
-    feedback.py add TEXT [--kind K] [--plan P]     log one finding (what, where, expected) and carry on
+    feedback.py add [TEXT | --file PATH|-] [--kind K] [--plan P]
+                                                   log one finding (what, where, expected) and carry on; the text
+                                                   comes from TEXT, a file, or stdin (`-`)
     feedback.py triage [--host H]... [--all] [--issues FILE | --repo OWNER/NAME]
                                                    untriaged entries of this machine and the listed hosts, duplicates
                                                    grouped, ranked by count, each matched against the open issues
@@ -204,7 +206,18 @@ def open_issues(a):  # O(t) + up to two git processes and one gh process (networ
 
 
 def cmd_add(a) -> int:  # O(i*w) + locked append
-    text = scrub(a.text)  # O(w)
+    if a.file is not None and a.text is not None:  # O(1)
+        print("error: give the text or --file, not both", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    if a.file is not None:  # O(1)
+        try:  # O(1)
+            raw = sys.stdin.read() if a.file == "-" else Path(a.file).read_text(encoding="utf-8")  # O(w)
+        except (OSError, ValueError) as e:  # O(1)
+            print(f"error: cannot read {a.file} ({e})", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+    else:  # O(1)
+        raw = a.text or ""  # O(w)
+    text = scrub(raw)  # O(w)
     if not text:  # O(1)
         print("error: feedback text is empty", file=sys.stderr)  # O(1)
         return 2  # O(1)
@@ -274,7 +287,8 @@ def main(argv=None) -> int:  # O(1) + the subcommand
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
     p = sub.add_parser("add", help="log one finding")  # O(1)
-    p.add_argument("text")  # O(1)
+    p.add_argument("text", nargs="?")  # O(1)
+    p.add_argument("--file", help="read the text from PATH, or from stdin with -")  # O(1)
     p.add_argument("--kind", choices=KINDS, default="other")  # O(1)
     p.add_argument("--plan")  # O(1)
     p = sub.add_parser("triage", help="group and rank untriaged entries")  # O(1)

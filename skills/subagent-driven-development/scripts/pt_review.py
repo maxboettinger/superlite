@@ -1573,12 +1573,29 @@ def git_diff_stat(root: Path, base: str | None) -> str:  # O(X) + up to 2 git su
 
 
 EXCERPT_FILE_LINES = 120  # O(1) cap on diff lines per hot-spot file
+EXCERPT_HOOK_LINES = 400  # O(1) cap on diff lines per changed hook file
 EXCERPT_TOTAL_LINES = 600  # O(1) cap on diff lines over the whole section
+
+
+def _is_hook(rel: str) -> bool:  # O(m) total
+    return rel.startswith("hooks/") or "/hooks/" in rel  # O(m)
+
+
+def _excerpt_order(changed: list[str], hot: list[str]) -> list[str]:  # O(F^2) total
+    """Hot files first, then changed hooks, other changed code, then tests and markdown."""
+    seen = set(hot)  # O(H)
+    rest = [f for f in changed if f not in seen]  # O(F)
+    hooks = [f for f in rest if _is_hook(f)]  # O(F)
+    tests = [f for f in rest if not _is_hook(f) and is_test_path(f)]  # O(F)
+    mds = [f for f in rest if not _is_hook(f) and f not in tests and f.endswith(".md")]  # O(F^2) membership on small lists
+    code = [f for f in rest if f not in hooks and f not in tests and f not in mds]  # O(F^2) membership on small lists
+    return list(hot) + hooks + code + tests + mds  # O(F)
 
 
 def source_excerpts(root: Path, base: str | None, files: list[str],  # O(X) + one git spawn per file shown
                     per_file: int = EXCERPT_FILE_LINES, total: int = EXCERPT_TOTAL_LINES) -> str:
-    """Changed hunks (`git diff <base> -- file`) of the hot-spot files, bounded per file and in total."""
+    """Changed hunks (`git diff <base> -- file`) of the hot-spot files and every other changed file, bounded per file and in total.
+    A first line `Left out: ...` names changed files whose hunks are not shown."""
     if not (root / ".git").exists():  # O(1)
         return "- (not a git repository)"  # O(1)
     if base is None:  # O(1)
@@ -1587,7 +1604,17 @@ def source_excerpts(root: Path, base: str | None, files: list[str],  # O(X) + on
         roots = first.stdout.split() if first.returncode == 0 else []  # O(1)
         base = roots[0] if roots else "HEAD"  # O(1)
     head = diff_head(root)  # O(file size)
+    changed: list[str] = []  # O(1)
+    try:  # O(1)
+        nm = subprocess.run(["git", "-C", str(root), "diff", "--name-only", base, *([head] if head else [])],  # O(X) + git spawn
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
+        changed = nm.stdout.split("\n") if nm.returncode == 0 else []  # O(X)
+    except (OSError, subprocess.TimeoutExpired):  # O(1)
+        pass  # O(1)
+    changed = [c.strip() for c in changed if c.strip()]  # O(F)
+    files = _excerpt_order(changed, files)  # O(F^2)
     out: list[str] = []  # O(1)
+    shown: set[str] = set()  # O(1)
     left = total  # O(1)
     for n, f in enumerate(files):  # O(files) iterations
         if left <= 0:  # O(1)
@@ -1601,12 +1628,17 @@ def source_excerpts(root: Path, base: str | None, files: list[str],  # O(X) + on
         lines = r.stdout.splitlines() if r.returncode == 0 else []  # O(X)
         if not lines:  # O(1)
             continue  # O(1)
-        take = lines[:min(per_file, left)]  # O(per_file)
+        cap_f = EXCERPT_HOOK_LINES if _is_hook(f) else per_file  # O(1)
+        take = lines[:min(cap_f, left)]  # O(per_file)
         left -= len(take)  # O(1)
+        shown.add(f)  # O(1)
         out.append(f"### {f}\n```diff\n" + "\n".join(take) + "\n```")  # O(per_file)
         if len(take) < len(lines):  # O(1)
-            why = "per-file" if len(take) == per_file else "total"  # O(1)
+            why = "per-file" if len(take) == cap_f else "total"  # O(1)
             out.append(f"(truncated: {len(take)} of {len(lines)} diff lines shown, {why} cap)")  # O(1)
+    skipped = [f for f in changed if f not in shown]  # O(F)
+    if skipped:  # O(1)
+        out.insert(0, "Left out: " + ", ".join(skipped))  # O(F)
     return "\n".join(out) or "- none (no changed hunks in the hot-spot files)"  # O(output)
 
 
@@ -1677,6 +1709,41 @@ def newest_summary_path(path: Path) -> Path:  # O(1) total
     return path  # O(1)
 
 
+def run_summaries(path: Path) -> list[dict]:  # O(S log S + S*file size) total
+    """Every readable test summary of the run, newest first: the one the packet reads, then `path` and `test-summary-*.json` by mtime."""
+    first = newest_summary_path(path)  # O(1)
+    rest = [path] + list(path.parent.glob("test-summary-*.json"))  # O(S)
+
+    def mtime(p: Path) -> float:  # O(1)
+        try:  # O(1)
+            return p.stat().st_mtime  # O(1)
+        except OSError:  # O(1)
+            return 0.0  # O(1)
+    rest.sort(key=mtime, reverse=True)  # O(S log S)
+    out: list[dict] = []  # O(1)
+    seen: set[Path] = set()  # O(1)
+    for p in [first] + rest:  # O(S)
+        if p in seen:  # O(1)
+            continue  # O(1)
+        seen.add(p)  # O(1)
+        d = load_summary(p)  # O(file size)
+        if d is not None:  # O(1)
+            out.append(d)  # O(1)
+    return out  # O(1)
+
+
+def stale_in_run(entry: dict, summaries: list[dict]) -> bool:  # O(S*F) total
+    """The newest summary that covers the entry's file decides; none covers it: not stale."""
+    if entry.get("kind") != "test-failure":  # O(1)
+        return False  # O(1)
+    file = str(entry.get("file", ""))  # O(1)
+    for s in summaries:  # O(S)
+        files = s.get("files") if isinstance(s, dict) else None  # O(1)
+        if isinstance(files, dict) and file in files:  # O(1)
+            return stale_test_failure(entry, s)  # O(F)
+    return False  # O(1)
+
+
 def read_test_summary(path: Path) -> tuple[str, int]:  # O(file size) total
     if not path.is_file():  # O(1)
         return "- no test summary recorded (`run_tests.py --full` runs alongside this review)", 0  # O(1)
@@ -1729,7 +1796,8 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     summary = load_summary(tests)  # O(file size)
     entries = read_incidents(log)  # O(file size)
     n_all = len(entries)  # O(1)
-    entries = [e for e in entries if not stale_test_failure(e, summary)]  # O(K*F)
+    runs = run_summaries(Path(a.tests) if a.tests else sl / "test-summary.json") or ([summary] if summary else [])  # O(S log S)
+    entries = [e for e in entries if not stale_in_run(e, runs)]  # O(K*S*F)
     n_stale = n_all - len(entries)  # O(1)
     items = incident_items(entries) + read_probe_failures(probes) + uncovered_items(plan, root, entries)  # O(K + R + pkgs*cats*...)
     mismatches, n_checked = check_interfaces(plan, root, None)  # O(P) + 1 subprocess
@@ -1752,7 +1820,9 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         rel = rel_to(root, root / it.file) if it.file else None  # O(d)
         if rel and rel not in hot:  # O(H)
             hot.append(rel)  # O(1)
-    excerpts = cap_text(source_excerpts(root, a.base, hot), max(2000, cap // 3))  # O(X) + git spawns
+    raw_ex = source_excerpts(root, a.base, hot)  # O(X) + git spawns
+    left_line = raw_ex.split("\n", 1)[0] if raw_ex.startswith("Left out: ") else ""  # O(1)
+    excerpts = cap_text(raw_ex, max(2000, cap // 3))  # O(X) + git spawns
 
     head = [  # O(1)
         f"# Review packet: {'FAST PATH' if fast else 'REVIEW REQUIRED'}",  # O(1)
@@ -1804,6 +1874,8 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     text = "\n".join(parts)  # O(output size)
     if len(text) > cap:  # O(1)
         text = cap_text(text, cap, "(packet truncated at the size cap)")  # O(output size)
+    if left_line and left_line not in text:  # the Left out line survives every cap | O(output size)
+        text = cap_text(text, max(0, cap - len(left_line) - 1), "(packet truncated at the size cap)") + "\n" + left_line  # O(output size)
     out.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     out.write_text(text, encoding="utf-8", newline="\n")  # O(1)
     print(f"wrote {out} ({len(text)} chars, ~{int(len(text) / CHARS_PER_TOKEN)} tokens) - "  # O(1)

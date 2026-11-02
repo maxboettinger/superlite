@@ -69,9 +69,17 @@ def load_test_summary(sl_dir):  # O(file) the newest test summary, as the review
     return pt.load_summary(pt.newest_summary_path(Path(sl_dir) / "test-summary.json"))  # O(file)
 
 
-def _stale(pt, entry, summary):  # O(F)
+def load_run_summaries(sl_dir):  # O(S*file) every test summary of the run, newest first; [] when none
+    pt = _pt_review()  # O(1)
+    if pt is None:  # O(1)
+        return []  # O(1)
+    return pt.run_summaries(Path(sl_dir) / "test-summary.json")  # O(S*file)
+
+
+def _stale(pt, entry, summary):  # O(S*F) summary: one summary dict, or a newest-first list of them
     try:  # O(1)
-        return pt.stale_test_failure(entry, summary)  # O(F)
+        runs = summary if isinstance(summary, list) else [summary]  # O(1)
+        return pt.stale_in_run(entry, [r for r in runs if r])  # O(S*F)
     except (TypeError, ValueError, AttributeError):  # a structurally malformed summary keeps the incident open | O(1)
         return False  # O(1)
 
@@ -210,7 +218,7 @@ def checkpoint_note(ledger):  # O(files) + git spawns; [] unless this run took h
 
 def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # O(R*w + I*w + C + G)
     rulings, commits, tests = read_ledger(ledger)  # O(R*w)
-    incidents = open_incidents(log, load_test_summary(sl_dir or Path(ledger).parent))  # O(I*w + I*F)
+    incidents = open_incidents(log, load_run_summaries(sl_dir or Path(ledger).parent))  # O(I*w + I*S*F)
     out = ["# superlite run summary", ""]  # O(1)
     cp = checkpoint_note(ledger)  # checkpoint mode: nothing was committed | O(1) + git spawns
     out.append(f"{'checkpoints' if cp else 'commits'}: {len(commits)}")  # O(1)

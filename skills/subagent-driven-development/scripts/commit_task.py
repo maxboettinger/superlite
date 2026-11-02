@@ -363,8 +363,31 @@ def changed_vs_parent(files):  # O(m) + 2 git spawns, batched
         if ln:  # O(1)
             meta, _, p = ln.partition("\t")  # O(len)
             have[p] = meta.split()[2]  # O(1)
-    live = git("hash-object", "--", *files).stdout.split()  # O(m) + process spawn
-    return [f for f, h in zip(files, live) if have.get(f) != h]  # O(m)
+    gone = [f for f in files if not os.path.lexists(f)]  # deleted: changed when the parent has it | O(m) stat
+    here = [f for f in files if f not in gone]  # O(m)
+    live = git("hash-object", "--", *here).stdout.split() if here else []  # O(m) + process spawn
+    now = dict(zip(here, live))  # O(m)
+    gone = set(gone)  # O(m)
+    return [f for f in files if (f in have if f in gone else f not in now or have.get(f) != now[f])]  # O(m) unreadable hash = changed
+
+
+def resolve_blocked(log, tid, files):  # O(log size) read + one append
+    """Files this commit takes in that an earlier run blocked get a resolved entry at the same location."""
+    newest = {}  # file -> newest entry | O(1)
+    try:  # O(1)
+        for ln in Path(log).read_text(encoding="utf-8").splitlines():  # O(log size)
+            try:  # O(1)
+                e = json.loads(ln)  # O(len)
+            except ValueError:  # O(1)
+                continue  # O(1)
+            if e.get("file") in files and e.get("line") == 0 and e.get("kind") != "verified":  # O(1)
+                newest[e["file"]] = e  # O(1)
+    except OSError:  # O(1)
+        return  # O(1)
+    todo = [f for f, e in newest.items() if "blocked by commit_task" in str(e.get("context", ""))  # O(f)
+            and str(e.get("resolution", "")).lower() in ("", "none", "open", "unresolved")]  # O(f)
+    nt.add_incidents(log, [(f, 0, f"{tid}: {f} committed with {tid}; earlier block resolved",  # O(f) one append
+                            "exception", "commit_task", "resolved") for f in sorted(todo)])
 
 
 def _rel(f):
@@ -376,6 +399,12 @@ def _rel(f):
     except ValueError:
         pass
     return os.path.normpath(f).replace("\\", "/")
+
+
+def docs_joins(f, owns):  # O(o)
+    """True when `f` (a docs.md) sits in the folder of an owned path, or is the root docs.md and the task owns anything."""
+    d = os.path.dirname(f)  # O(len)
+    return any(not d or o.replace("\\", "/").startswith(d + "/") for o in owns)  # O(o)
 
 
 def others_running(pool_path, tids):  # O(pool bytes)
@@ -435,9 +464,14 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
             continue  # another task's file, built in parallel in this tree: leave it alone | O(1)
         elif tid != "T0" and shared_test(f, code):  # a fixer's edit to a shared test joins this task | O(len path)
             cand.append(f)  # O(1)
+        elif os.path.basename(f) == "docs.md" and docs_joins(f, task["owns"]):  # a folder's docs.md joins the task owning a path in it | O(o)
+            mine.append(f)  # O(1)
         else:  # O(1)
             out_of_scope.append(f)  # O(1)
 
+    if out_of_scope and not autocommit.is_on():  # a file already in the parent checkpoint (an earlier --also) is no new change | O(1)
+        keep = set(changed_vs_parent(out_of_scope))  # O(m) + process spawns
+        out_of_scope = [f for f in out_of_scope if f in keep]  # O(m)
     if cand:  # a shared test already in the parent checkpoint is not this task's change | O(1)
         shared = changed_vs_parent(cand)  # O(m) + process spawns
         mine += shared  # O(m)
@@ -489,6 +523,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     append_ledger(a.ledger, f"- commit {tid} {sha[:10]} {task['title']}")  # O(1) file I/O
     for f in also:  # O(k) iterations
         append_ledger(a.ledger, f"- Ruling: {tid} also commits {named.get(f, f)} - {a.ruling}")  # O(1) file I/O
+    resolve_blocked(a.log, tid, set(mine))  # O(log size)
     launch_probes(sha, a.plan)  # O(L) + process spawn
     launch_seam_checks(a.plan, tid, a.ledger, a.log)  # O(c + s) + process spawn per seam (graph memoized)
     return 0, sha  # O(1)
@@ -496,7 +531,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
 
 def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for all tasks
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
-    ap.add_argument("task", nargs="+", help="one or more task ids, committed in order")  # O(1)
+    ap.add_argument("task", nargs="*", help="one or more task ids, committed in order")  # O(1)
     ap.add_argument("--plan", default=nt.DEFAULT_PLAN)  # O(1)
     ap.add_argument("--ledger", default=DEFAULT_LEDGER)  # O(1)
     ap.add_argument("--log", default=DEFAULT_LOG)  # O(1)
@@ -507,10 +542,15 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     ap.add_argument("--pool", default=".superlite/pool.json", help="pool for --dispatch")  # O(1)
     ap.add_argument("--running", help="running tasks for --dispatch (default: from the pool)")  # O(1)
     ap.add_argument("--cap", type=int, default=10, help="cap for --dispatch")  # O(1)
-    ap.add_argument("--also", action="append", default=[], metavar="FILE",  # O(1)
+    ap.add_argument("--also", action="extend", nargs="+", default=[], metavar="FILE",  # O(1)
                     help="commit FILE with the one named task even if another task owns it or nobody does")  # O(1)
     ap.add_argument("--ruling", help="why --also is needed; written to the ledger")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    ids = [x for x in a.also if re.fullmatch(r"T\d+", x) and not os.path.exists(x)]  # `--also F T1`: the greedy flag took the task id | O(k)
+    a.also = [x for x in a.also if x not in ids]  # O(k)
+    a.task = a.task + ids  # O(k)
+    if not a.task:  # O(1)
+        ap.error("the following arguments are required: task")  # O(1)
     if a.also and len(a.task) != 1:  # O(1)
         nt.die("--also takes exactly one task")  # O(1)
     if a.also and not a.ruling:  # O(1)

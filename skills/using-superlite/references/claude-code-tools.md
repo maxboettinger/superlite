@@ -2,6 +2,8 @@
 
 `sl` runs as an executable (the Claude Code worktree guard refuses `bash <script>`). `Permission denied` or a shell without shebang support, such as PowerShell: prefix `bash`.
 
+In a worktree session the guard also refuses `sl` inside a for loop and a long free-text argument: one call per command, and `sl feedback add --file -` for long text.
+
 Claude Code is the reference harness: superlite's skills speak its vocabulary, so no mapping is needed.
 
 | Skill says | Claude Code |
@@ -13,6 +15,7 @@ Claude Code is the reference harness: superlite's skills speak its vocabulary, s
 | Plan or todo list | the harness's plan/todo tools (one item per wave) |
 
 Plugin agents exist here, so use `superlite:*` subagent types directly. `model` and `effort` on the call override the agent's frontmatter.
+Agent types missing (plugin installed mid-session): `general-purpose` with the full text of `agents/<name>.md` (from this plugin's root, minus the frontmatter), on the tier from its frontmatter.
 
 ## Cheaper orchestration for subagent-driven development
 

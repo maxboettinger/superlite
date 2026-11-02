@@ -1,0 +1,76 @@
+- start c8dbe4b
+- unblocked: dispatched T1 T2 T3 T4 T5 at 13:56:35; waiting on fixes: none
+- tests fast passed=20 failed=5 skipped=0 seconds=2.4
+- tests fast passed=0 failed=4 skipped=0 seconds=0.2
+- tests fast passed=25 failed=0 skipped=0 seconds=2.8
+- tests fast passed=6 failed=5 skipped=0 seconds=3.8
+- commit T4 fdfc4e4c8a feedback add reads its text from a file or stdin
+- tests fast passed=12 failed=1 skipped=0 seconds=0.2
+- tests fast passed=23 failed=0 skipped=0 seconds=5.3
+- Ruling: F-T5-1 keep the literal `--also F --ruling` in SKILL.md and name several files in words - existing tests stay unchanged is a global constraint, the plan text was the defect - cost if wrong: none
+- tests fast passed=42 failed=3 skipped=0 seconds=4.7
+- tests fast passed=13 failed=0 skipped=0 seconds=0.2
+- tests fast passed=2 failed=6 skipped=0 seconds=0.7
+- commit T5 d8959cf949 docs, audit exclude and version 1.3.3
+- tests fast passed=45 failed=0 skipped=0 seconds=4.7
+- tests fast passed=34 failed=2 skipped=0 seconds=2.2
+- commit T3 42e0c19db5 packet: hunks of changed files, summaries of the whole run
+- tests fast passed=36 failed=0 skipped=0 seconds=2.3
+- commit T1 3248ec2900 commit_task: recorded files stay accepted, docs.md joins its folder's task
+- commit T2 75e367a645 lint: DISPATCH NOW names startable tasks, freeze keys on dispatch
+- tests fast passed=36 failed=0 skipped=0 seconds=2.3
+- tests fast passed=38 failed=0 skipped=0 seconds=1.8
+- tests fast passed=44 failed=1 skipped=0 seconds=4.8
+- tests fast passed=46 failed=0 skipped=0 seconds=4.6
+- tests fast passed=42 failed=0 skipped=0 seconds=1.8
+- tests fast passed=92 failed=0 skipped=0 seconds=5.4
+- tests fast passed=12 failed=1 skipped=0 seconds=2.0
+- tests fast passed=10 failed=3 skipped=0 seconds=2.0
+- tests fast passed=9 failed=0 skipped=0 seconds=0.8
+- tests fast passed=48 failed=2 skipped=0 seconds=11.2
+- tests fast passed=10 failed=3 skipped=0 seconds=2.1
+- unblocked: dispatched T6 T7 T8 at 14:02:23; waiting on fixes: none
+- tests fast passed=11 failed=2 skipped=0 seconds=1.8
+- tests fast passed=13 failed=0 skipped=0 seconds=1.9
+- tests fast passed=12 failed=1 skipped=0 seconds=2.1
+- tests fast passed=50 failed=0 skipped=0 seconds=11.1
+- tests fast passed=52 failed=0 skipped=0 seconds=5.2
+- commit T3 9aae9ad04a packet: hunks of changed files, summaries of the whole run
+- Ruling: T3 also commits skills/subagent-driven-development/scripts/report.py - T3 review: report counts open incidents as the packet does
+- commit T1 a5a65daf2d commit_task: recorded files stay accepted, docs.md joins its folder's task
+- commit T2 01f16e22aa lint: DISPATCH NOW names startable tasks, freeze keys on dispatch
+- commit T4 db555f2ca0 feedback add reads its text from a file or stdin
+- commit T5 8210cb27b0 docs, audit exclude and version 1.3.3
+- tests fast passed=0 failed=6 skipped=0 seconds=0.4
+- tests fast passed=391 failed=1 skipped=0 seconds=3.7
+- tests fast passed=391 failed=1 skipped=0 seconds=3.7
+- tests fast passed=392 failed=0 skipped=0 seconds=3.6
+- commit T6 66ba08b65d guard: judge real targets
+- Ruling: coordinator uses the worktree sl after T6 - the main checkout still has bug #61 and blocked T6 on a recorded file - cost if wrong: a defect in the new tool hits this run
+- tests fast passed=1 failed=7 skipped=0 seconds=0.6
+- tests fast passed=399 failed=2 skipped=0 seconds=4.0
+- tests fast passed=401 failed=0 skipped=0 seconds=4.0
+- commit T7 ae7e4967d1 guard: every command segment is judged
+- Ruling: T7 also commits hooks/block-coordinator-edits - guard review, hard edge
+- tests fast passed=397 failed=16 skipped=0 seconds=3.9
+- tests fast passed=413 failed=0 skipped=0 seconds=4.1
+- commit T8 2ae4f6119d guard: more writers
+- Ruling: T8 also commits hooks/block-coordinator-edits - guard review, hard edge
+- tests fast passed=413 failed=0 skipped=0 seconds=4.4
+- tests fast passed=416 failed=0 skipped=0 seconds=4.3
+- commit T8 c6cab761b1 guard: more writers
+- Ruling: T8 also commits hooks/block-coordinator-edits - guard package review
+- tests full passed=1517 failed=2 skipped=1 seconds=127.0
+- tests fast passed=43 failed=0 skipped=0 seconds=10.0
+- commit T1 e9daab01af commit_task: recorded files stay accepted, docs.md joins its folder's task
+- tests fast passed=10 failed=6 skipped=0 seconds=0.5
+- tests fast passed=421 failed=1 skipped=0 seconds=5.2
+- tests fast passed=422 failed=0 skipped=0 seconds=4.5
+- commit T8 b1b412752b guard: more writers
+- Ruling: T8 also commits hooks/block-coordinator-edits - final review F-T8-1
+- tests full passed=1524 failed=2 skipped=1 seconds=128.0
+- tests fast passed=102 failed=0 skipped=0 seconds=6.0
+- commit T2 4537d5c49f lint: DISPATCH NOW names startable tasks, freeze keys on dispatch
+- tests fast passed=103 failed=0 skipped=0 seconds=6.0
+- commit T2 2d4b4c5483 lint: DISPATCH NOW names startable tasks, freeze keys on dispatch
+- tests full passed=1527 failed=0 skipped=1 seconds=128.9

@@ -181,6 +181,8 @@ def _two(tmp_path, produces):
 
 def test_frozen_interface_change_is_reported_and_old_entry_kept(tmp_path):
     assert pt("lint", "--stable", "--plan", _two(tmp_path, PROD)).returncode == 0
+    (tmp_path / ".superlite" / "progress.md").write_text(  # the freeze keys on dispatch, not on being listed
+        "# Progress ledger\n\n- unblocked: dispatched T1 at 10:00:00; waiting on fixes: none\n", encoding="utf-8")
     cp = pt("lint", "--stable", "--plan", _two(tmp_path, "f(x: int, y: int) -> int"))
     assert cp.returncode == 1
     assert ("FROZEN: T1 interface changed after dispatch: Produces: f(x: int) -> int; Consumes: - -> "

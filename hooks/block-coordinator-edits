@@ -91,7 +91,7 @@ fi
 norm "$proj"; projn="$NORM"; lower "$projn"; projl="$LOWER"
 
 prot=0
-eff_out=0; effn=""
+eff_out=0; effn=""; basen=""
 # dotres PATH: absolute PATH with . and .. segments resolved lexically, into RES.
 dotres() {
   local -a st=(); local s n IFS=/
@@ -104,14 +104,21 @@ dotres() {
 }
 # project_code PATH: succeeds when writing PATH is denied (sets prot=1 for protected files).
 project_code() {
-  local p rel pl
-  norm "$1"; p="$NORM"; p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
+  local p rel pl v1='$CLAUDE_PROJECT_DIR' v2='${CLAUDE_PROJECT_DIR}'
+  norm "${1//$'\x05'/Q}"; p="$NORM"; p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
+  p="${p//$'\x03'/ }"
+  case "$p" in *$'\x06'*) [ "$enforce" = 1 ] && return 0; return 1 ;; esac   # an unreadable quoted word: unknown
+  p="${p//"$v2"/$projn}"; p="${p//"$v1"/$projn}"
   case "$p" in ''|*'$'*|'~'*|/dev/*|-*) return 1 ;; esac
   if [ "$eff_out" = 1 ]; then   # the shell sits outside the project: a relative path is judged from there
     case "$p" in /*) ;; *) p="$effn/${p#./}" ;; esac
+  elif [ -n "$basen" ]; then   # inside: a path with dots is judged from the directory the cd steps reached
+    case "$p" in /*|[A-Za-z]:[/\\]*) ;; *) case "/$p/" in */../*|*/./*) p="$basen/${p#./}" ;; esac ;; esac
+  else
+    case "$p" in /*|[A-Za-z]:[/\\]*) ;; *) case "/$p/" in */../*|*/./*) p="$projn/${p#./}" ;; esac ;; esac
   fi
-  case "$p" in   # an absolute path with . or .. segments that does not start in the project is judged resolved
-    /*) case "$p/" in */../*|*/./*) lower "$p"; case "$LOWER" in "$projl"/*) ;; *) dotres "$p"; p="$RES" ;; esac ;; esac ;;
+  case "$p" in   # any absolute path with . or .. segments is judged resolved
+    /*) case "$p/" in */../*|*/./*) dotres "$p"; p="$RES" ;; esac ;;
   esac
   case "$p" in
     /*) lower "$p"; pl="$LOWER"
@@ -196,26 +203,48 @@ writer_root() {
         t="${e:1}"; t="${t%%[$sq$dq]*}"
         case "$t" in \{*) e="${t:1}"; continue ;; esac
         case "$t" in *\{*) t="${t%%\{*}"; t="${t%/*}/" ;; esac   # a `{` ends the known root, at the last / before it
-        TGT="$t"; return 0 ;;
+        TGT="$t"; WR_LIT=1; return 0 ;;
       *) break ;;
     esac
   done
   re='^([A-Za-z_][A-Za-z_0-9]*)([[:space:]/)}+,]|$)'
-  [[ $e =~ $re ]] && writer_target "${BASH_REMATCH[1]}"
+  [[ $e =~ $re ]] && { WR_ID="${BASH_REMATCH[1]}"; writer_target "$WR_ID"; }
+  return 0
+}
+
+# rt_parts_ok EXPR: succeeds when no part of a writer target expression after its known root can leave that root: no
+# later string literal is absolute, has .. or { or $, and no later part is a name other than the root's own.
+rt_parts_ok() {
+  local e="$1" first="$WR_LIT" left="" pre q lit sq="'" dq='"' re
+  re="^([^$sq$dq]*)([$sq$dq])(.*)\$"
+  while [[ $e =~ $re ]]; do
+    pre="${BASH_REMATCH[1]}"; q="${BASH_REMATCH[2]}"; e="${BASH_REMATCH[3]}"
+    [[ $e == *"$q"* ]] || return 1
+    lit="${e%%"$q"*}"; e="${e#*"$q"}"
+    pre="${pre%[fFrRbBuU]}"; left="$left$pre"
+    if [ "$first" = 1 ]; then first=0; continue; fi
+    case "$lit" in /*|[A-Za-z]:*|\\*|*..*|*'{'*|*'$'*) return 1 ;; esac
+  done
+  left="$left$e"; left="${left//os.path.join/}"; left="${left//Path/}"
+  [ -n "$WR_ID" ] && left="${left//"$WR_ID"/}"
+  re='[A-Za-z0-9_]'
+  [[ $left =~ $re ]] && return 1
   return 0
 }
 
 # resolve_target EXPR: writer_target, else writer_root; TGT is the path, or empty with RT_OUT=1 when only the root is
-# known and it is an absolute path outside the project (that writer cannot touch the project).
+# known and it is an absolute path outside the project with no later part that could leave it.
 resolve_target() {
   RT_OUT=0
   writer_target "$1"
   if [ -z "$TGT" ]; then
+    WR_LIT=0; WR_ID=""
     writer_root "$1"
     if [ -n "$TGT" ] && abs_outside "$TGT"; then
       case "$projl/" in "${LOWER%/}"/*) ;; *) RT_OUT=1 ;; esac   # an ancestor of the project may hold it: unknown
     fi
     TGT=""
+    [ "$RT_OUT" = 1 ] && { rt_parts_ok "$1" || RT_OUT=0; }   # a later absolute or .. part may leave the root
   fi
 }
 
@@ -270,36 +299,117 @@ argv_arg() {
 # line). A double quote opened before a heredoc (body "$(cat <<'EOF' ... EOF)") closes at the first " after the
 # heredoc's tag line; the text after it stays.
 stripped=""; stripped_done=0
+# qflush: the quoted texts found right-to-left in lqn join lq in left-to-right order.
+qflush() {
+  local i
+  if [ "$qltr" = 1 ]; then   # this regex engine matched the leftmost quoted text first: already in order
+    for ((i = 0; i < ${#lqn[@]}; i++)); do lq[${#lq[@]}]="${lqn[i]}"; done
+  else
+    for ((i = ${#lqn[@]} - 1; i >= 0; i--)); do lq[${#lq[@]}]="${lqn[i]}"; done
+  fi
+  lqn=()
+}
+# qdecode SEG: SEG with each Q mark replaced by the quoted text it stood for, into QSEG (qi counts marks used): spaces and
+# shell operators inside become \x03, a text holding $ (other than $CLAUDE_PROJECT_DIR), a backtick or a newline, and any
+# mark without a reliable text, become \x06 (unknown).
+qi=0; QRAW=()   # QRAW: the quoted texts of the last qdecode, quotes kept
+qdecode() {
+  local rest="$1" out="" t tt v1='$CLAUDE_PROJECT_DIR' v2='${CLAUDE_PROJECT_DIR}' sp=$'\x03' c
+  while [[ $rest == *Q* ]]; do
+    out="$out${rest%%Q*}"; rest="${rest#*Q}"
+    t=$'\x06'
+    if [ "$qs_ok" = 1 ] && [ "$qi" -lt "${#qs[@]}" ]; then
+      t="${qs[qi]}"
+      if [ "${#t}" -ge 2 ]; then
+        t="${t:1:${#t}-2}"; tt="${t//"$v1"/}"; tt="${tt//"$v2"/}"
+        case "$tt" in ''|*'$'*|*'`'*|*$'\n'*|*$'\x06'*) t=$'\x06' ;; esac
+      else t=$'\x06'
+      fi
+    fi
+    QRAW[${#QRAW[@]}]=$'\x06'; [ "$qs_ok" = 1 ] && [ "$qi" -lt "${#qs[@]}" ] && QRAW[${#QRAW[@]}-1]="${qs[qi]}"
+    qi=$((qi + 1))
+    t="${t//[[:space:]]/$sp}"
+    for c in '<' '>' '&' '|' ';' '(' ')'; do t="${t//"$c"/$sp}"; done
+    out="$out$t"
+  done
+  QSEG="$out$rest"
+}
+# emit_line LINE: LINE (quotes already marked) split into simple commands, one per line, onto `stripped`; `>|` is a plain
+# redirect, so its | does not split.
+emit_line() {
+  local line="$1" nl=$'\n' bar=$'\x08'
+  line="${line//>|/>$bar}"
+  line="${line//&&/$nl}"; line="${line//||/$nl}"; line="${line//;/$nl}"; line="${line//|/$nl}"
+  stripped="$stripped${line//>$bar/>}$nl"
+  qs+=("${lq[@]}"); lq=()
+}
 strip_cmd() {
-  local sq="'" dq='"' line t skip=0 tag="" open="" hq=0 re_here re_quote
+  local sq="'" dq='"' line t skip=0 tag="" open="" hq=0 cut=0 re_here re_here2 re_quote atoms text="$cmd" pass=0 hbody="" nl=$'\n'
   stripped_done=1
-  re_here="<<-?[[:space:]]*[$sq$dq]?([A-Za-z_][A-Za-z_0-9]*)"
+  # a heredoc starts at a << outside quotes that is not part of <<<; a double quote opened before it counts only inside a
+  # "$(cat <<'EOF' substitution.
+  atoms="(\\\\.|[^$dq$sq\\\\]|$dq([^$dq\\\\]|\\\\.)*$dq|$sq[^$sq]*$sq)*"
+  re_here="^($atoms)(^|[^<])<<-?[[:space:]]*[$sq$dq]?([A-Za-z_][A-Za-z_0-9]*)"
+  re_here2="^($atoms)$dq[^$dq]*\\\$\\([^$dq]*[^<$dq]<<-?[[:space:]]*[$sq$dq]?([A-Za-z_][A-Za-z_0-9]*)"
   re_quote="^((\\\\.|[^$dq$sq\\\\])*)($dq([^$dq\\\\]|\\\\.)*$dq|$sq[^$sq]*$sq)(.*)\$"
-  stripped_unsure=0
+  stripped_unsure=0; qs=(); lq=(); lqn=(); qs_ok=0
+  # the engine may match the leftmost (macOS) or the rightmost (glibc) quoted text first; probe which
+  qltr=0; line='"1" "2"'
+  [[ $line =~ $re_quote ]] && [ "${BASH_REMATCH[3]}" = '"1"' ] && qltr=1
+  while :; do
   while IFS= read -r line; do
     # A quote left open on the previous line continues on this one.
-    [ -n "$open" ] && { line="$open $line"; open=""; }
+    # the Q marks of the earlier lines are real; only this line's own Q is a literal (\x0e carries them past the escape)
+    [ -n "$open" ] && { line="${open//Q/$'\x0e'} $line"; open=""; }
     if [ "$skip" = 1 ]; then
       t="${line#"${line%%[![:space:]]*}"}"; t="${t%"${t##*[![:space:]]}"}"
-      [ "$t" = "$tag" ] && skip=0
+      if [ "$t" = "$tag" ]; then skip=0; hbody=""; else hbody="$hbody$line$nl"; fi
       continue
     fi
     if [ "$hq" = 1 ]; then
       case "$line" in *"$dq"*) line="${line#*"$dq"}"; hq=0 ;; *) continue ;; esac
     fi
-    if [[ $line =~ $re_here ]]; then
-      tag="${BASH_REMATCH[1]}"; skip=1
-      while [[ $line =~ $re_quote ]]; do line="${BASH_REMATCH[1]}Q${BASH_REMATCH[5]}"; done
-      case "$line" in *"$dq"*) hq=1; line="${line%%"$dq"*}Q" ;; esac
+    here=0
+    if [[ $line =~ $re_here ]]; then tag="${BASH_REMATCH[5]}"; skip=1; here=1
+    elif [[ $line =~ $re_here2 ]]; then tag="${BASH_REMATCH[4]}"; skip=1; here=1
     fi
-    while [[ $line =~ $re_quote ]]; do line="${BASH_REMATCH[1]}Q${BASH_REMATCH[5]}"; done
+    line="${line//Q/$'\x05'}"; line="${line//$'\x0e'/Q}"   # a literal Q must not read as a quoted-word mark
+    if [ "$here" = 1 ]; then
+      while [[ $line =~ $re_quote ]]; do lqn[${#lqn[@]}]="${BASH_REMATCH[3]}"; line="${BASH_REMATCH[1]}Q${BASH_REMATCH[5]}"; done
+      qflush
+      case "$line" in *"$dq"*) hq=1; line="${line%%"$dq"*}Q"; lq[${#lq[@]}]=$'\x06' ;; esac
+    fi
+    while [[ $line =~ $re_quote ]]; do lqn[${#lqn[@]}]="${BASH_REMATCH[3]}"; line="${BASH_REMATCH[1]}Q${BASH_REMATCH[5]}"; done
+    qflush
+    # a comment runs from an unquoted # at a word start; a # after a stray quote may still sit inside a string
+    # (the quoted texts that sat in the dropped comment leave lq with it)
+    cut=0
+    case "$line" in
+      '#'*) line=""; cut=1 ;;
+      *[[:space:]]'#'*) t="${line%%[[:space:]]#*}"; case "$t" in *[$dq$sq]*) ;; *) line="$t"; cut=1 ;; esac ;;
+    esac
+    if [ "$cut" = 1 ]; then
+      here="$line"; t=0
+      while [[ $here == *Q* ]]; do t=$((t + 1)); here="${here#*Q}"; done
+      while [ "${#lq[@]}" -gt "$t" ]; do unset "lq[${#lq[@]}-1]"; done
+    fi
     line="${line//\\\\/B}"; line="${line//\\$sq/E}"; line="${line//\\$dq/E}"   # escaped backslash and quotes are plain text
     case "$line" in *[$dq$sq]*) open="$line"; continue ;; esac
-    line="${line//&&/$'\n'}"; line="${line//||/$'\n'}"; line="${line//;/$'\n'}"; line="${line//|/$'\n'}"
-    stripped="$stripped$line"$'\n'
-  done <<< "$cmd"
-  # A quote still open at the end (an apostrophe in a comment, $'..', a stray quote) means the stripper cannot be trusted.
-  { [ -n "$open" ] || [ "$hq" = 1 ]; } && stripped_unsure=1
+    emit_line "$line"
+  done <<< "$text"
+  # a quote still open at the end: the line is still judged, as it stands
+  if [ -n "$open" ]; then stripped_unsure=1; emit_line "$open"; open=""; fi
+  # a heredoc with no terminator: its body may be commands, and is judged as such
+  if [ "$skip" = 1 ]; then
+    stripped_unsure=1
+    if [ "$pass" = 0 ] && [ -n "$hbody" ]; then text="$hbody"; skip=0; pass=1; hq=0; continue; fi
+  fi
+  break
+  done
+  here="$stripped"; line=0   # the quoted texts line up with the Q marks only when both counts agree
+  while [[ $here == *Q* ]]; do line=$((line + 1)); here="${here#*Q}"; done
+  [ "$line" = "${#qs[@]}" ] && qs_ok=1
+  [ "$hq" = 1 ] && stripped_unsure=1
 }
 
 # scan_gate: succeeds when the stripped command (quotes and heredoc bodies gone) still runs an interpreter, a
@@ -313,11 +423,11 @@ scan_gate() {
   wrap='((sudo|env|command|exec|time|nohup|timeout|nice|uv[[:space:]]+run|[A-Za-z_][A-Za-z_0-9]*=[^[:space:]]*|-[^[:space:]]*|[0-9.]+[smhd]?)[[:space:]]+)*'
   # a quoted interpreter name still runs, but only at a command position (not inside a quoted argument)
   re_qint='(^|[;&|(`'"$nl"']|\$\()[[:space:]]*'"$wrap"'["'"'"'](.*/)?(python[0-9.]*|node|ruby|php)["'"'"']'
-  re_shc='(^|[^[:alnum:]_])(bash|sh|zsh|dash)[[:space:]]+(-[-[:alnum:]]+[[:space:]]+)*-[[:alnum:]]*c'
+  re_shc='(^|[^[:alnum:]_])(bash|sh|zsh|ksh|dash)[[:space:]]+(-[-[:alnum:]]+[[:space:]]+([[:alnum:]_]+[[:space:]]+)?)*-[[:alnum:]]*c'
   re_eval='(^|[^[:alnum:]_])eval([[:space:]]|$)'
-  re_sub='\$\([[:space:]]*'"$wrap"'([^[:space:])]*/)?(python[0-9.]*|node|ruby|php)([[:space:]]|\))'
+  re_sub='\$\(([^)]*[;&|])?[[:space:]]*'"$wrap"'([^[:space:])]*/)?(python[0-9.]*|node|ruby|php)([[:space:]]|\))'
   # a shell with no script argument reads its program from stdin (a heredoc, a here-string, a pipe)
-  re_stdin='^[[:space:]]*'"$wrap"'([^[:space:]]*/)?(bash|sh|zsh|dash)([[:space:]]+[-+][-[:alnum:]]*o[[:space:]]+[[:alnum:]_]+|[[:space:]]+[-+][-[:alnum:]]+)*([[:space:]]+[0-9]?[<>]+&?-?[[:space:]]*[^[:space:]]*)*[[:space:]]*$'
+  re_stdin='^[[:space:]]*'"$wrap"'([^[:space:]]*/)?(bash|sh|zsh|ksh|dash)([[:space:]]+[-+][-[:alnum:]]*o[[:space:]]+[[:alnum:]_]+|[[:space:]]+[-+][-[:alnum:]]+)*([[:space:]]+[0-9]?[<>]+&?-?[[:space:]]*[^[:space:]]*)*[[:space:]]*$'
   [[ $l =~ $re_interp || $l =~ $re_shc || $l =~ $re_eval || $lc =~ $re_sub || $lc =~ $re_qint ]] && return 0
   while IFS= read -r seg; do
     [[ $seg =~ $re_stdin ]] && return 0
@@ -333,7 +443,7 @@ args_in_proj() {
   for a in "$@"; do
     a="${a#--directory=}"; a="${a#-d}"; a="${a#-C}"; a="${a%\"}"; a="${a#\"}"
     case "$a" in
-      Q) return 0 ;;   # a quoted path, unreadable here
+      Q|*$'\x06'*) return 0 ;;   # a quoted path, unreadable here
       /*|[A-Za-z]:[/\\]*) ;;
       '') continue ;;
       *) [ -n "$aip_base" ] || continue; a="$aip_base/${a#./}" ;;
@@ -372,7 +482,7 @@ git_apply_hit() {
     esac
     case "$a" in   # -C DIR / --work-tree=DIR
       /*|[A-Za-z]:[/\\]*) gd="$a" ;;
-      Q|*'$'*|'~'*|'') gd=""; gd_unknown=1 ;;
+      Q|*$'\x06'*|*'$'*|'~'*|'') gd=""; gd_unknown=1 ;;
       *) [ -n "$gd" ] && gd="$gd/${a#./}" ;;
     esac
   done
@@ -386,6 +496,151 @@ git_apply_hit() {
     abs_outside "$gd" || return 0
   fi
   aip_base="$gd"; args_in_proj "$@"
+}
+
+# judge_segs: judges each simple command of `stripped` (set by strip_cmd) for writes into project code, setting `hit`.
+# `&` ends a command (not in && or a redirect), ( ) and backticks split commands, and a leading keyword is dropped. The
+# body of a shell -c and of a $( ) or backtick substitution in double quotes is judged by judge_body, one level deep.
+jdepth=0
+judge_segs() {
+  local seg seg0 rest t c args a n last segs raw b1 b2 inpl skip i re_redir='[0-9]?>>?[[:space:]]*([^[:space:]<>&|;()]+)(.*)$'
+  local -a qr
+  local amp=$'\x07' nl=$'\n' and='&'
+  segs="${stripped//>&/>$amp}"; segs="${segs//&>/$amp>}"; segs="${segs//<&/<$amp}"
+  segs="${segs//&/$nl}"; segs="${segs//$amp/"$and"}"; segs="${segs//[()]/$nl}"; segs="${segs//\`/$nl}"
+  while IFS= read -r seg; do
+    seg0="$seg"; QRAW=()
+    if [[ $seg == *Q* ]]; then qdecode "$seg"; seg="$QSEG"; fi
+    if [ "$jdepth" = 0 ] && [ "${#QRAW[@]}" -gt 0 ]; then   # $( ) and backticks inside double quotes run
+      qr=("${QRAW[@]}")
+      for raw in "${qr[@]}"; do
+        case "$raw" in \"*) ;; *) continue ;; esac
+        b1="${raw%\"}"; b1="${b1#\"}"
+        b1="${b1//\\\\/B}"; b1="${b1//\\\$/}"; b1="${b1//\\\`/}"; b2="$b1"   # an escaped \` or \$ is text, not a substitution
+        while [[ $b1 == *'$('* ]]; do b1="${b1#*'$('}"; judge_body "${b1%%)*}"; [ -n "$hit" ] && return 0; done
+        while [[ $b2 == *'`'* ]]; do
+          b2="${b2#*'`'}"; judge_body "${b2%%'`'*}"; [ -n "$hit" ] && return 0
+          [[ $b2 == *'`'* ]] || break
+          b2="${b2#*'`'}"
+        done
+      done
+      QRAW=("${qr[@]}")
+    fi
+    case "$seg0" in *'$SL'*|*'${SL}'*|*subagent-driven-development/scripts*) continue ;; esac   # the raw segment: a quoted text is no sl call
+    rest="$seg"
+    while [[ $rest =~ $re_redir ]]; do
+      t="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
+      project_code "$t" && { hit="> $t"; break; }
+    done
+    [ -n "$hit" ] && break
+    set -f; set -- $seg; set +f
+    while [ $# -gt 0 ]; do case "$1" in *=*|sudo|command|env|time|then|do|else|elif|if|while|until|'!'|'{') shift ;; *) break ;; esac; done
+    [ $# -gt 0 ] || continue
+    c="${1##*/}"; c="${c%.exe}"; shift
+    args=(); for a in "$@"; do case "$a" in -*|*'>'*|*'<'*) ;; *) args+=("$a") ;; esac; done   # redirects are not operands
+    n=${#args[@]}; last=""; [ "$n" -gt 0 ] && last="${args[n-1]}"
+    case "$c" in
+      sh|bash|zsh|ksh|dash) shell_body "$seg0" ;;
+      eval) for raw in "${QRAW[@]}"; do   # each quoted word is shell text
+              case "$raw" in \"*|\'*) judge_body "${raw:1:${#raw}-2}"; [ -n "$hit" ] && break ;; esac
+            done
+            [ -z "$hit" ] && eval_body "$seg0" ;;
+      patch) aip_base="$effn"; [ "$enforce" = 1 ] && { [ "$eff_out" = 0 ] || args_in_proj "$@"; } && hit="patch" ;;
+      git) git_apply_hit "$@" && hit="git apply" ;;
+      sed|perl) inpl=0; skip=0; hasscr=0   # -i anywhere in a flag cluster; every operand after the script is a file
+          for a in "$@"; do
+            case "$a" in
+              --in-place*) inpl=1 ;;
+              --expression=*|--file=*) hasscr=1 ;;
+              --expression|--file) skip=$((skip + 1)); hasscr=1 ;;
+              --*|-[MmIdDxXwW]*) ;;
+              -*) # scan the cluster: i takes the rest as a suffix; e/f (perl: E too) take the rest, or the next word, as the script
+                  for ((i = 1; i < ${#a}; i++)); do
+                    case "${a:i:1}" in
+                      i) inpl=1; break ;;
+                      e|f) hasscr=1; [ $((i + 1)) -ge ${#a} ] && skip=$((skip + 1)); break ;;
+                      E) [ "$c" = perl ] || continue; hasscr=1; [ $((i + 1)) -ge ${#a} ] && skip=$((skip + 1)); break ;;
+                    esac
+                  done ;;
+            esac
+          done
+          [ "$hasscr" = 1 ] || skip=1
+          [ "$c" = sed ] && [ "$inpl" = 1 ] && sed_empty_suffix "$seg0" && skip=$((skip + 1))   # BSD: -i '' is not an operand
+          if [ "$inpl" = 1 ]; then
+            for ((i = skip; i < n; i++)); do project_code "${args[i]}" && { hit="$c -i ${args[i]}"; break; }; done
+          fi ;;
+      tee) for a in "${args[@]}"; do dir_target "$a" "$a"; project_code "$DT" && { hit="tee $a"; break; }; done ;;
+      rm) for a in "${args[@]}"; do project_code "$a" && { hit="$c $a"; break; }; done ;;
+      mv) dir_target "$last" "${args[0]}"
+          for a in "${args[@]:0:n-1}"; do project_code "$a" && { hit="$c $a"; break; }; done
+          [ -z "$hit" ] && project_code "$DT" && hit="mv $last" ;;
+      cp) if [ "$n" -gt 1 ]; then dir_target "$last" "${args[0]}"; project_code "$DT" && hit="cp $last"; fi ;;
+    esac
+    [ -n "$hit" ] && break
+  done <<< "$segs"
+}
+
+# judge_body TEXT: judges TEXT as a command line of its own (a shell -c body, a substitution), one level deep.
+judge_body() {
+  [ "$jdepth" = 0 ] || return 0
+  local sv_cmd="$cmd" sv_str="$stripped" sv_uns="$stripped_unsure" sv_ok="$qs_ok" sv_qi="$qi"
+  local -a sv_qs=("${qs[@]}") sv_raw=("${QRAW[@]}")
+  jdepth=1; cmd="$1"; strip_cmd; qi=0
+  judge_segs
+  jdepth=0; cmd="$sv_cmd"; stripped="$sv_str"; stripped_unsure="$sv_uns"; qs_ok="$sv_ok"; qi="$sv_qi"
+  qs=("${sv_qs[@]}"); QRAW=("${sv_raw[@]}")
+}
+
+# sed_empty_suffix SEG0: succeeds when a sed flag cluster ending in i is followed by an empty quoted word (-i ''), the
+# macOS spelling of "no backup suffix". QRAW holds SEG0's quoted texts.
+sed_empty_suffix() {
+  local -a w; local i x t m=0
+  set -f; w=($1); set +f
+  for ((i = 0; i < ${#w[@]} - 1; i++)); do
+    case "${w[i]}" in
+      -i|-[nEr]*i) [ "${w[i+1]}" = Q ] || continue
+        m=0; for ((x = 0; x <= i; x++)); do t="${w[x]//[!Q]/}"; m=$((m + ${#t})); done
+        case "${QRAW[m]}" in "''"|'""') return 0 ;; esac ;;
+    esac
+  done
+  return 1
+}
+
+# eval_body SEG0: eval joins its words into one command line: the words after eval (a quoted one without its quotes)
+# are judged as such, so unquoted words (eval rm src/a.py) are read too. QRAW holds SEG0's quoted texts.
+eval_body() {
+  local -a w; local i m=0 x body="" word out raw found=0
+  set -f; w=($1); set +f
+  for ((i = 0; i < ${#w[@]}; i++)); do
+    word="${w[i]}"; out=""
+    while [[ $word == *Q* ]]; do
+      out="$out${word%%Q*}"; word="${word#*Q}"; raw="${QRAW[m]}"; m=$((m + 1))
+      case "$raw" in \"*|\'*) out="$out${raw:1:${#raw}-2}" ;; *) out="$out$raw" ;; esac
+    done
+    if [ "$found" = 1 ]; then body="$body $out$word"
+    else case "${word##*/}" in eval) found=1 ;; esac
+    fi
+  done
+  [ -n "$body" ] && judge_body "$body"
+}
+
+# shell_body SEG0: SEG0 (before qdecode) runs a shell with -c: the quoted word after the flag is judged. QRAW holds
+# SEG0's quoted texts.
+shell_body() {
+  local -a w; local i m=0 x raw t
+  set -f; w=($1); set +f
+  for ((i = 0; i < ${#w[@]} - 1; i++)); do
+    case "${w[i]}" in
+      -[a-z]*c*|-c) [ "${w[i+1]}" = Q ] || return 0
+        for ((x = 0; x <= i; x++)); do t="${w[x]//[!Q]/}"; m=$((m + ${#t})); done
+        raw="${QRAW[m]}"
+        case "$raw" in
+          \"*|\'*) raw="${raw:1:${#raw}-2}"; judge_body "$raw" ;;
+          *) [ "$enforce" = 1 ] && [ "$jdepth" = 0 ] && hit="${w[i]} (unreadable body)" ;;   # the quoted texts do not line up: deny
+        esac
+        return 0 ;;
+    esac
+  done
 }
 
 if [ -z "$hit" ] && [ "$tool" != Bash ] && [ "$tool" != PowerShell ]; then
@@ -423,12 +678,15 @@ elif [ -z "$hit" ]; then
       done
     done <<< "$stripped"
   fi
+  # a cd in a pipeline runs in a subshell and moves nothing the later commands see
+  re_cdpipe='(^|[^|])[|][[:space:]]*(cd|pushd)([[:space:]]|$)|(^|[;&|(])[[:space:]]*(cd|pushd)[[:space:]]+[^;&|]*[|]([^|]|$)'
+  [[ $lc =~ $re_cdpipe ]] && cd_bad=1
   if [ "$cd_n" -gt 0 ] && [[ $cmd =~ $re_cd ]]; then
     cdt="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
     case "$cdt" in
       *'$'*|*'`'*|'') ;;
       /*|[A-Za-z]:[/\\]*)
-        if [ "$cd_n" = 1 ] && [ "$cd_bad" = 0 ]; then
+        if [ "$cd_n" = 1 ] && [ "$cd_bad" = 0 ] && [ -d "$cdt" ]; then   # a cd to a missing folder moves nowhere
           if abs_outside "$cdt"; then eff_out=1; effn="$NORM"; else eff_out=0; fi
           cd_abs=0
         fi ;;
@@ -441,7 +699,19 @@ elif [ -z "$hit" ]; then
     for t in "${cd_rels[@]}"; do
       t="${t#./}"
       if [ -z "$t" ] || [ "$t" = . ]; then continue; fi
-      if abs_outside "$effn/$t"; then effn="$NORM"; else eff_out=0; break; fi
+      if abs_outside "$effn/$t"; then   # a cd to a missing folder moves nowhere
+        [ -d "$effn/$t" ] && effn="$NORM"
+      else eff_out=0; break   # into the project, or onto it, or not readable: no outside base any more
+      fi
+    done
+  fi
+  # Inside the project: the directory the relative cd steps reached, for judging paths with . and .. segments.
+  if [ "$eff_out" = 0 ] && [ "$cd_bad" = 0 ] && [ "$cd_abs" = 0 ] && [ "${#cd_rels[@]}" -gt 0 ]; then
+    basen="$projn"
+    for t in "${cd_rels[@]}"; do
+      t="${t#./}"
+      if [ -z "$t" ] || [ "$t" = . ]; then continue; fi
+      if [ -d "$basen/$t" ]; then basen="$basen/$t"; else basen=""; break; fi
     done
   fi
   # Outside by spelling only: a symlinked cwd (/tmp vs /private/tmp) is the project's tree, or holds it. Rare, so the
@@ -464,7 +734,7 @@ elif [ -z "$hit" ]; then
   # path-like quoted literals in the command are classified like any write; any denied one blocks, and a
   # writer with no path literal at all (a variable target) blocks while the guard is enforcing.
   re_interp='(^|[^[:alnum:]_])(python[0-9.]*|node|ruby|php)([[:space:]"'"'"']|$)'
-  re_writer="open\(([^()]|\(([^()]|\([^()]*\))*\))*,[[:space:]]*(mode=)?['\"][wax]|\.(write_text|write_bytes)\(|writeFileSync|writeFile\(|appendFile(Sync)?\(|fs\.write"
+  re_writer="open\(([^()]|\(([^()]|\([^()]*\))*\))*,[[:space:]]*(mode=)?['\"]([wax]|r[bt]?\+)|\.(write_text|write_bytes)\(|writeFileSync|writeFile\(|appendFile(Sync)?\(|fs\.write|File\.(bin)?write\(|file_put_contents\("
   if [ -z "$hit" ] && { [ "$enforce" = 1 ] || [ "$mentions" = 1 ]; } && [[ $lc =~ $re_interp && $cmd =~ $re_writer ]] && scan_gate; then
     if [ "$mentions" = 1 ]; then
       hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; prot=1
@@ -473,14 +743,14 @@ elif [ -z "$hit" ]; then
       # Every open( must read as a plain read or a parsed write; every other writer call must be parsed.
       sq="'"; dq='"'; q="[$sq$dq]"; arg="([^,()]*|Path\([^()]*\)|os\.path\.join\([^()]*\))"
       re_open='(^|[^A-Za-z0-9_])open\('
-      re_ow="^$arg,[[:space:]]*(mode=)?$q[wax]"
+      re_ow="^$arg,[[:space:]]*(mode=)?$q([wax]|r[bt]?\+)"
       re_or="^$arg(,[[:space:]]*((mode=)?${q}r[bt]?$q|(encoding|errors|newline|buffering)=[^,()]*))*\)"
       re_mr="^[[:space:]]*(\)|(mode=)?${q}r)"
-      re_mw="^[[:space:]]*(mode=)?$q[wax]"
+      re_mw="^[[:space:]]*(mode=)?$q([wax]|r[bt]?\+)"
       re_w2="(Path\([^()]*\)|\(([^()]|Path\([^()]*\))*\)|[A-Za-z_][A-Za-z_0-9]*)\.(write_text|write_bytes)\("
-      re_w3="(Path\([^()]*\)|[A-Za-z_][A-Za-z_0-9]*)\.open\([[:space:]]*(mode=)?$q[wax]"
-      re_w4="(writeFileSync|writeFile|appendFileSync|appendFile)\(([^,()]*),"
-      re_other='\.(write_text|write_bytes)\(|writeFileSync\(|writeFile\(|appendFileSync\(|appendFile\(|fs\.write(Sync)?\('
+      re_w3="(Path\([^()]*\)|[A-Za-z_][A-Za-z_0-9]*)\.open\([[:space:]]*(mode=)?$q([wax]|r[bt]?\+)"
+      re_w4="(writeFileSync|writeFile|appendFileSync|appendFile|File\.write|File\.binwrite|file_put_contents)\(([^,()]*),"
+      re_other='\.(write_text|write_bytes)\(|writeFileSync\(|writeFile\(|appendFileSync\(|appendFile\(|fs\.write(Sync)?\(|File\.(bin)?write\(|file_put_contents\('
       unknown=0; want=0; got=0
       rest="$cmd"
       while [ -z "$hit" ] && [ "$unknown" = 0 ] && [[ $rest =~ $re_open ]]; do
@@ -512,35 +782,8 @@ elif [ -z "$hit" ]; then
   fi
   if [ -z "$hit" ]; then
     [ "$stripped_done" = 1 ] || strip_cmd
-    re_redir='[0-9]?>>?[[:space:]]*([^[:space:]<>&|;()]+)(.*)$'
-    while IFS= read -r seg; do
-      case "$seg" in *'$SL'*|*'${SL}'*|*subagent-driven-development/scripts*) continue ;; esac
-      rest="$seg"
-      while [[ $rest =~ $re_redir ]]; do
-        t="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
-        project_code "$t" && { hit="> $t"; break; }
-      done
-      [ -n "$hit" ] && break
-      set -f; set -- $seg; set +f
-      while [ $# -gt 0 ]; do case "$1" in *=*|sudo|command|env|time) shift ;; *) break ;; esac; done
-      [ $# -gt 0 ] || continue
-      c="${1##*/}"; c="${c%.exe}"; shift
-      args=(); for a in "$@"; do case "$a" in -*|*'>'*|*'<'*) ;; *) args+=("$a") ;; esac; done   # redirects are not operands
-      n=${#args[@]}; last=""; [ "$n" -gt 0 ] && last="${args[n-1]}"
-      case "$c" in
-        patch) aip_base="$effn"; [ "$enforce" = 1 ] && { [ "$eff_out" = 0 ] || args_in_proj "$@"; } && hit="patch" ;;
-        git) git_apply_hit "$@" && hit="git apply" ;;
-        sed) case " $* " in *' -i'*|*' --in-place'*) [ -n "$last" ] && project_code "$last" && hit="sed -i $last" ;; esac ;;
-        perl) case " $* " in *' -pi'*|*' -i'*|*' -ni'*) [ -n "$last" ] && project_code "$last" && hit="perl -i $last" ;; esac ;;
-        tee) for a in "${args[@]}"; do dir_target "$a" "$a"; project_code "$DT" && { hit="tee $a"; break; }; done ;;
-        rm) for a in "${args[@]}"; do project_code "$a" && { hit="$c $a"; break; }; done ;;
-        mv) dir_target "$last" "${args[0]}"
-            for a in "${args[@]:0:n-1}"; do project_code "$a" && { hit="$c $a"; break; }; done
-            [ -z "$hit" ] && project_code "$DT" && hit="mv $last" ;;
-        cp) if [ "$n" -gt 1 ]; then dir_target "$last" "${args[0]}"; project_code "$DT" && hit="cp $last"; fi ;;
-      esac
-      [ -n "$hit" ] && break
-    done <<< "$stripped"
+    qi=0
+    judge_segs
   fi
 fi
 
