@@ -1,5 +1,10 @@
 """Shared helpers for running pytest from the superlite scripts. Stdlib only.
 
+project_python(root): the project's own interpreter, found by file lookup and never run:
+`root/.venv/bin/python` (Windows `root/.venv/Scripts/python.exe`), else the same layout under
+the `VIRTUAL_ENV` environment variable, else `sys.executable`. Checks run in it so they see the
+project's packages, not only superlite's.
+
 pytest_cmd(): command prefix that runs pytest. Uses the current interpreter when it can
 import pytest, else `uv run --no-project --with pytest python -m pytest`, else raises
 PytestUnavailable with a clear message (`sl` may have fallen back to a bare
@@ -21,6 +26,30 @@ import shutil  # O(1)
 import signal  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
+from pathlib import Path  # O(1)
+
+
+VENV_PYTHONS = (("bin", "python"), ("Scripts", "python.exe"))  # O(1) POSIX layout, then Windows layout
+
+
+def venv_python(venv):  # O(1) two stat calls
+    """The interpreter file inside the venv folder, or None."""  # O(1)
+    layouts = VENV_PYTHONS[::-1] if os.name == "nt" else VENV_PYTHONS  # O(1) native layout first
+    for folder, name in layouts:  # O(1) two layouts
+        cand = Path(venv) / folder / name  # O(1)
+        if cand.is_file():  # O(1) stat; the file is never run
+            return str(cand)  # O(1)
+    return None  # O(1)
+
+
+def project_python(root):  # O(1) up to four stat calls
+    """root/.venv's interpreter, else the VIRTUAL_ENV one, else sys.executable."""  # O(1)
+    found = venv_python(Path(root) / ".venv")  # O(1)
+    if found:  # O(1)
+        return found  # O(1)
+    env = os.environ.get("VIRTUAL_ENV")  # O(1)
+    found = venv_python(env) if env else None  # O(1)
+    return found or sys.executable  # O(1)
 
 
 class PytestUnavailable(RuntimeError):  # O(1)
