@@ -4,12 +4,14 @@
     finish.py [--ledger .superlite/progress.md] [--log .superlite/incidents.jsonl]
 
 Collects, from the progress ledger, every `Ruling:` line (in order), the
-commits and the last test counts, plus the open incidents from the log.
+commits and the last test counts, plus the open incidents from the log. Open means what the
+review packet counts: a location whose newest entry is resolved, and a test-failure the newest
+test summary shows green, are not open.
 Deterministic: the same files give the same text. Stdlib only.
 """
 # Complexity notation:
 #   R = lines in the progress ledger, I = lines in the incident log, C = commits and G = rulings found,
-#   w = width of one line
+#   w = width of one line, F = failures listed in the newest test summary
 import argparse  # O(1)
 import json  # O(1)
 from datetime import datetime, timedelta  # O(1)
@@ -48,7 +50,33 @@ def read_ledger(path):  # O(R*w)
     return rulings, commits, tests  # O(1)
 
 
-def open_incidents(path):  # O(I*w)
+def _pt_review():  # O(1) after the first import; None when pt_review cannot be imported
+    """pt_review (it pulls in plan_tools and more), or None: the closing summary must not die over its filter."""
+    here = str(Path(__file__).resolve().parent)  # O(1)
+    if here not in sys.path:  # O(path entries)
+        sys.path.insert(0, here)  # O(1)
+    try:  # O(1)
+        import pt_review  # lazy | O(1)
+    except Exception:  # noqa: BLE001 (ImportError, or any error raised while it loads) | O(1)
+        return None  # O(1)
+    return pt_review  # O(1)
+
+
+def load_test_summary(sl_dir):  # O(file) the newest test summary, as the review packet reads it; None when absent or unreadable
+    pt = _pt_review()  # O(1)
+    if pt is None:  # O(1)
+        return None  # O(1)
+    return pt.load_summary(pt.newest_summary_path(Path(sl_dir) / "test-summary.json"))  # O(file)
+
+
+def _stale(pt, entry, summary):  # O(F)
+    try:  # O(1)
+        return pt.stale_test_failure(entry, summary)  # O(F)
+    except (TypeError, ValueError, AttributeError):  # a structurally malformed summary keeps the incident open | O(1)
+        return False  # O(1)
+
+
+def _logged_open(path):  # O(I*w) the plain filter, used when pt_review cannot be imported
     p = Path(path)  # O(1)
     out = []  # O(1)
     if not p.exists():  # O(1) stat
@@ -62,6 +90,20 @@ def open_incidents(path):  # O(I*w)
                 and e.get("resolution") in (None, "open", "unresolved")):  # O(1)
             out.append(e)  # O(1)
     return out  # O(1)
+
+
+def open_incidents(path, summary=None):  # O(I*w + I*F)
+    """Open incidents as the review packet counts them: a location whose newest entry is resolved is not open,
+    and (with a test summary) neither is a test-failure the newest run shows green."""
+    pt = _pt_review()  # O(1)
+    if pt is None:  # O(1)
+        return _logged_open(path)  # O(I*w)
+    entries = pt.read_incidents(Path(path))  # O(I) every parsed entry, resolved ones included
+    entries = [e for e in entries if not _stale(pt, e, summary)]  # the packet drops stale test failures before it looks for superseded locations | O(I*F)
+    gone = pt.superseded(entries)  # O(I) before the open filter
+    return [e for e in entries  # O(I) iterations
+            if e.get("kind") != "verified" and e.get("resolution") in (None, "open", "unresolved")  # O(1)
+            and (e["file"], e["line"]) not in gone]  # O(1)
 
 
 def ranked_incidents(incidents):  # O(I) hashing + O(G log G) sort
@@ -168,7 +210,7 @@ def checkpoint_note(ledger):  # O(files) + git spawns; [] unless this run took h
 
 def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # O(R*w + I*w + C + G)
     rulings, commits, tests = read_ledger(ledger)  # O(R*w)
-    incidents = open_incidents(log)  # O(I*w)
+    incidents = open_incidents(log, load_test_summary(sl_dir or Path(ledger).parent))  # O(I*w + I*F)
     out = ["# superlite run summary", ""]  # O(1)
     cp = checkpoint_note(ledger)  # checkpoint mode: nothing was committed | O(1) + git spawns
     out.append(f"{'checkpoints' if cp else 'commits'}: {len(commits)}")  # O(1)

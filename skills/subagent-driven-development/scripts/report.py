@@ -125,7 +125,7 @@ def collect(plan_path, sl_dir) -> dict:  # O(M + B + n*(n + e))
         m["cost_usd"] += r["cost_usd"] + (r["rework_cost"] or 0)  # O(1)
     tests = _read_json(sl / "test-summary.json")  # O(file)
     import finish  # O(1)
-    incidents = finish.open_incidents(sl / "incidents.jsonl")  # O(I)
+    incidents = finish.open_incidents(sl / "incidents.jsonl", finish.load_test_summary(sl))  # O(I*F) same filter as the packet
     ftp = [r["first_time_pass"] for r in rows if r["first_time_pass"] is not None]  # O(n)
     per = []  # O(n)
     for r in rows:  # O(n)
