@@ -139,6 +139,8 @@ def now() -> str:  # O(1)
 def end(sd: Path) -> str:  # O(files)
     """Archive the run's markers, gate files and logs into sd/runs/<time>/ and release the session; one line."""
     present = [f for f in RUN_FILES if (sd / f).exists()]  # O(1)
+    present += sorted({p.name for pat in ("test-summary-*.json", "test-summary-*.log", "test-summary.latest")  # per-run summaries | O(files)
+                       for p in sd.glob(pat)})  # O(files)
     state.unbind(sd)  # O(d)
     if not present:  # O(1)
         return f"orchestrator: nothing to end in {sd}"  # O(1)
