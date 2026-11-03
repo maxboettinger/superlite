@@ -1683,7 +1683,48 @@ def diff_range(root: Path, base: str) -> list[str]:  # O(file size) total
     return [f"{base}...{head}"] if head else [base]  # O(1)
 
 
-def git_diff_stat(root: Path, base: str | None) -> str:  # O(X) + up to 2 git subprocess spawns total
+STAT_BAR = 50  # O(1) widest +/- bar of one diff stat row
+
+
+def _numstat(out: str) -> dict[str, tuple[int, int] | None]:  # O(X) total
+    """`git diff --numstat` output as {path: (added, deleted)}, None for a binary file."""
+    rows: dict[str, tuple[int, int] | None] = {}  # O(1)
+    for ln in out.splitlines():  # O(F) iterations
+        parts = ln.split("\t", 2)  # O(m)
+        if len(parts) == 3:  # O(1)
+            rows[parts[2]] = (int(parts[0]), int(parts[1])) if parts[0].isdigit() and parts[1].isdigit() else None  # O(m)
+    return rows  # O(1)
+
+
+def _format_stat(rows: dict[str, tuple[int, int] | None]) -> str:  # O(F log F + F*STAT_BAR) total
+    """Rows in `git diff --stat` layout, ` path | n ++--` with bars scaled to STAT_BAR, then git's summary line."""
+    if not rows:  # O(1)
+        return ""  # O(1)
+    nums = [a + d for a, d in (v for v in rows.values() if v)]  # O(F)
+    top = max(nums, default=0)  # O(F)
+    w = max(len(f) for f in rows)  # O(F)
+    k = max([len(str(n)) for n in nums] + ([3] if None in rows.values() else []))  # width of the count or "Bin" | O(F)
+    out: list[str] = []  # O(1)
+    for f in sorted(rows):  # O(F log F) sort + O(F) iterations
+        v = rows[f]  # O(1)
+        if v is None:  # O(1)
+            out.append(f" {f:<{w}} | {'Bin':>{k}}")  # O(m)
+            continue  # O(1)
+        a, d = ((n * STAT_BAR + top - 1) // top for n in v) if top > STAT_BAR else v  # ceil keeps a nonzero side visible | O(1)
+        out.append(f" {f:<{w}} | {sum(v):>{k}} {'+' * a}{'-' * d}".rstrip())  # O(m + STAT_BAR)
+    ins = sum(v[0] for v in rows.values() if v)  # O(F)
+    dels = sum(v[1] for v in rows.values() if v)  # O(F)
+    summary = [f"{len(rows)} file{'s' * (len(rows) != 1)} changed"]  # O(1)
+    if ins or not dels:  # O(1)
+        summary.append(f"{ins} insertion{'s' * (ins != 1)}(+)")  # O(1)
+    if dels or not ins:  # O(1)
+        summary.append(f"{dels} deletion{'s' * (dels != 1)}(-)")  # O(1)
+    return "\n".join(out + [" " + ", ".join(summary)])  # O(F)
+
+
+def git_diff_stat(root: Path, base: str | None) -> str:  # O(X) + up to 4 git subprocess spawns total
+    """The run's diff stat. A file HEAD also changed since the run started counts HEAD against the checkpoint,
+    the same lines as its hunk in changed_diffs, not the merged lines (#109)."""
     def git(*args: str) -> subprocess.CompletedProcess | None:  # O(X) + 1 git subprocess spawn
         try:  # O(X)
             return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,  # O(X) + git process spawn
@@ -1696,10 +1737,20 @@ def git_diff_stat(root: Path, base: str | None) -> str:  # O(X) + up to 2 git su
     if base is None:  # O(1)
         first = git("rev-list", "--max-parents=0", "HEAD")  # O(1)
         base = first.stdout.split()[0] if first and first.returncode == 0 and first.stdout.split() else "HEAD"  # O(1)
-    r = git("diff", "--stat", *diff_range(root, base))  # O(1)
+    r = git("diff", "--numstat", *diff_range(root, base))  # O(X)
     if not r or r.returncode != 0:  # O(1)
         return "(diff stat unavailable)"  # O(1)
-    return r.stdout.strip() or "(no changes)"  # O(1)
+    rows = _numstat(r.stdout)  # O(X)
+    cp = diff_head(root)  # O(file size)
+    moved = sorted(set(rows) & moved_files(root)) if rows and cp else []  # O(F log F) + git spawn
+    if moved:  # O(1)
+        m = git("diff", "--numstat", "HEAD", cp, "--", *moved)  # O(X)
+        if not m or m.returncode != 0:  # O(1)
+            return "(diff stat unavailable)"  # O(1)
+        for f in moved:  # O(F) iterations
+            rows.pop(f)  # a moved file with no run lines left has no hunk either | O(1)
+        rows.update(_numstat(m.stdout))  # O(X)
+    return _format_stat(rows) or "(no changes)"  # O(F log F)
 
 
 EXCERPT_FILE_LINES = 120  # O(1) cap on diff lines per hot-spot file

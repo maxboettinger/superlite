@@ -51,6 +51,13 @@ def test_diff_stat_and_excerpts_show_only_task_files(ff_repo, pt_review, which):
     assert sorted(f for f, _ in diffs) == TASK_FILES
 
 
+def test_diff_stat_without_moved_run_file_matches_git(ff_repo, pt_review):
+    """#109: the stat is built from --numstat; with no run file the merge changed it reads as git's own --stat."""
+    repo, _ = ff_repo
+    native = git(repo, "diff", "--stat", *pt_review.diff_range(repo, "HEAD"))
+    assert pt_review.git_diff_stat(repo, "HEAD").strip() == native  # the helper strips the leading space
+
+
 @pytest.fixture()
 def ff_shared(tmp_path):
     """T1 checkpoint on A, HEAD fast-forwarded to B (changes src/b.py), T2 edits src/b.py and checkpoints (#104)."""
@@ -84,6 +91,16 @@ def test_owned_file_the_merge_changed_shows_only_run_lines(ff_shared, pt_review,
     changed, diffs = pt_review.changed_diffs(repo, "HEAD" if which == "HEAD" else start, [])
     assert sorted(changed) == ["src/a.py", "src/b.py"]
     assert added(dict(diffs)["src/b.py"]) == ["+RUN_LINE = 2"]
+
+
+@pytest.mark.parametrize("which", ["HEAD", "start"])
+def test_diff_stat_counts_only_run_lines_of_merged_owned_file(ff_shared, pt_review, which):
+    """#109: the stat counts the same lines as the hunk: T2's 3 lines in src/b.py, not the 3 merged ones too."""
+    repo, start = ff_shared
+    stat = pt_review.git_diff_stat(repo, "HEAD" if which == "HEAD" else start)
+    rows = {ln.split("|")[0].strip(): ln.split("|")[1].strip() for ln in stat.splitlines() if "|" in ln}
+    assert rows == {"src/a.py": "2 ++", "src/b.py": "3 +++"}
+    assert stat.splitlines()[-1].strip() == "2 files changed, 5 insertions(+)"
 
 
 def test_packet_hunk_of_merged_owned_file_has_no_merged_lines(ff_shared):
