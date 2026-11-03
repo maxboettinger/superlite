@@ -32,6 +32,18 @@ def test_project_root(tmp_path):
     assert rt.project_root(tmp_path.resolve() / "nowhere-under-no-superlite") is None
 
 
+def test_project_root_stops_at_git_toplevel(tmp_path):
+    outer = tmp_path.resolve() / "outer"
+    inner = outer / "wt" / "inner"
+    (outer / ".superlite").mkdir(parents=True)
+    (outer / ".git").mkdir()
+    (inner / "sub").mkdir(parents=True)
+    (inner / ".git").write_text("gitdir: x\n", encoding="utf-8")
+    assert rt.project_root(inner / "sub") is None
+    (inner / ".superlite").mkdir()
+    assert rt.project_root(inner / "sub") == inner
+
+
 def test_fast_from_subdirectory(tmp_path):
     root, sub = proj(tmp_path)
     cp = go(sub, "--fast", "tests/test_a.py")

@@ -57,11 +57,16 @@ DEFAULT_WAIT = 600.0  # O(1)
 
 
 def project_root(start):  # O(d) stats, d = depth of start
-    """Nearest ancestor-or-self of start holding a `.superlite/` directory, else None."""
+    """Nearest ancestor-or-self of start holding a `.superlite/` directory, else None.
+
+    The walk stops at the first directory holding `.git` (file or directory): a nested
+    worktree without its own `.superlite/` does not adopt the enclosing checkout's."""
     p = Path(start).resolve()  # O(d)
     for d in (p, *p.parents):  # O(d) iterations
         if (d / ".superlite").is_dir():  # O(1)
             return d  # O(1)
+        if (d / ".git").exists():  # O(1) git toplevel reached without .superlite
+            return None  # O(1)
     return None  # O(1)
 
 
