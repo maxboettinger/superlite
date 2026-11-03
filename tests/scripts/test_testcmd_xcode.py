@@ -63,3 +63,30 @@ def test_missing_reason_xcode_hint(tmp_path):
     (tmp_path / "App.xcodeproj").mkdir()
     r = testcmd.missing_reason(tmp_path)
     assert "xcodebuild test -scheme" in r and "{only_testing}" in r
+
+
+def test_swift_testing_bundles_summed():
+    b = ("Test Suite 'All tests' started at 2026-01-01 10:00:00.000.\n"
+         "Test Suite 'All tests' passed at 2026-01-01 10:00:00.001.\n"
+         "\t Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds\n"
+         "✔ Test run with {n} tests in 6 suites passed after 0.033 seconds.\n")
+    r = testcmd.parse_output(b.format(n=119) + b.format(n=29), 0)
+    assert (r["passed"], r["failed"]) == (148, 0)
+
+
+def test_xctest_bundles_summed_from_top_level_suites():
+    a = ("Test Suite 'AFooTests' passed at x.\n"
+         "\t Executed 2 tests, with 0 failures (0 unexpected) in 0.1 (0.1) seconds\n"
+         "Test Suite 'A.xctest' passed at x.\n"
+         "\t Executed 2 tests, with 0 failures (0 unexpected) in 0.1 (0.1) seconds\n"
+         "Test Suite 'Selected tests' passed at x.\n"
+         "\t Executed 2 tests, with 0 failures (0 unexpected) in 0.1 (0.1) seconds\n")
+    b = ("Test Case '-[B.FooTests testBar]' failed (0.01 seconds).\n"
+         "Test Suite 'FooTests' failed at x.\n"
+         "\t Executed 3 tests, with 1 failure (0 unexpected) in 0.1 (0.1) seconds\n"
+         "Test Suite 'B.xctest' failed at x.\n"
+         "\t Executed 3 tests, with 1 failure (0 unexpected) in 0.1 (0.1) seconds\n"
+         "Test Suite 'Selected tests' failed at x.\n"
+         "\t Executed 3 tests, with 1 failure (0 unexpected) in 0.1 (0.1) seconds\n")
+    r = testcmd.parse_output(a + b, 65)
+    assert (r["passed"], r["failed"]) == (4, 1)
