@@ -58,16 +58,37 @@ def swift_plan(tmp_path: Path, produces: str, owns: str = "Sources/Kit/Foo.swift
 
 # ---- symbol_names
 
-def test_backticked_symbols_only():
+def test_backticked_signatures_only():
     names = pt_review.symbol_names
-    assert names("`Theme.Symbol.libraryTag`") == ["Theme.Symbol.libraryTag"]
-    assert names("`Foo.bar` and `Baz`") == ["Foo.bar", "Baz"]
-    assert names("Foo.bar and `Baz`") == ["Baz"]
+    assert names("`Theme.Symbol.libraryTag: String`") == ["Theme.Symbol.libraryTag"]
+    assert names("`Foo.bar()` and `Baz<T>`") == ["Foo.bar", "Baz"]
+    assert names("Foo.bar() and `Baz()`") == ["Baz"]
     assert names("`LibraryView: View`") == ["LibraryView"]
     assert names("`Strings.libraryMoreTags(_ n: Int) -> String`") == ["Strings.libraryMoreTags"]
     assert names("`Box<T> wraps a value`") == ["Box"]
+    assert names("`Foo -> Bar`") == ["Foo"]
     assert names("`.iOS(.v17)`") == []
-    assert names("`Foo` and `Foo`") == ["Foo"]
+    assert names("`Foo()` and `Foo()`") == ["Foo"]
+
+
+def test_bare_names_are_not_signatures():
+    """#78: a bare name, backticked or not, is prose (a command, an SDK name, a word), never a Produces symbol."""
+    names = pt_review.symbol_names
+    for item in ("`xcodebuild`", "`swift test`", "`NSHomeDirectory`", "`translated`", "`AppModel`",
+                 "`Theme.Symbol.libraryTag`", "`static`", "Foo.bar", "AppModel", "xcodebuild"):
+        assert names(item) == [], item
+    assert names("builds with `xcodebuild`, tests with `swift test` under `NSHomeDirectory`, strings `translated`") == []
+    assert names("`AppModel(store:)` built with `xcodebuild`") == ["AppModel"]
+
+
+def test_case_list_declares_every_name():
+    """#78: `case small, medium, large` declares three names, with or without payloads and raw values."""
+    names = pt_review.symbol_names
+    assert names("`case small, medium, large`") == ["small", "medium", "large"]
+    assert names("case small, medium, large") == ["small", "medium", "large"]
+    assert names("`case ok(Int), failed(code: Int, msg: String)`") == ["ok", "failed"]
+    assert names('`case a = "x", b = "y"`') == ["a", "b"]
+    assert names("`indirect case node(Tree)`") == ["node"]
 
 
 def test_unquoted_leading_identifier_only():
@@ -76,7 +97,7 @@ def test_unquoted_leading_identifier_only():
     assert names("LibraryView: View") == ["LibraryView"]
     assert names("Box<T>") == ["Box"]
     assert names("Foo -> Bar") == ["Foo"]
-    assert names("Foo.bar") == ["Foo.bar"]
+    assert names("Foo.bar") == []
 
 
 def test_prose_item_yields_nothing(tmp_path):
@@ -98,8 +119,8 @@ def test_file_name_is_not_a_symbol():
     assert names("Package.swift") == []
     assert names("`Theme.md`") == []
     assert names("`data.json`") == []
-    assert names("`Foo` in `Foo.swift`") == ["Foo"]
-    assert names("`Foo.swiftUI`") == ["Foo.swiftUI"]
+    assert names("`Foo()` in `Foo.swift`") == ["Foo"]
+    assert names("`Foo.swiftUI()`") == ["Foo.swiftUI"]
 
 
 def test_declaration_keywords_are_not_symbols():
@@ -108,7 +129,10 @@ def test_declaration_keywords_are_not_symbols():
     assert names("`public final class Foo: Bar`") == ["Foo"]
     assert names("`static func make(_ x: Int) -> Foo`") == ["make"]
     assert names("`enum Mode: String`") == ["Mode"]
-    assert names("`static`") == ["static"]
+    assert names("`func make`") == ["make"]
+    assert names("`var count: Int`") == ["count"]
+    assert names("`let x = 1`") == ["x"]
+    assert names("`static`") == []  # a lone keyword declares nothing
     assert names("struct Foo") == ["Foo"]
     assert names("enum Mode: String") == ["Mode"]
     assert names("func make(x: Int)") == ["make"]
@@ -146,7 +170,7 @@ def test_swift_init_is_declared_by_init_signature(tmp_path):
 
 
 def test_planned_items_one_per_name(tmp_path):
-    plan = swift_plan(tmp_path, "`Foo.bar` and `Baz`")
+    plan = swift_plan(tmp_path, "`Foo.bar()` and `Baz: View`")
     assert [(p.task, p.qual, p.args_src) for p in pt_review.planned_items(plan)] == \
         [("T1", "Foo.bar", None), ("T1", "Baz", None)]
 
@@ -161,6 +185,28 @@ def test_signature_item_still_checked(tmp_path):
     plan = swift_plan(tmp_path, "Foo.missing(_ x: Int) -> Int")  # not a Python signature: name-only branch
     msgs, _ = pt_review.check_interfaces(plan, tmp_path, ["T1"])
     assert len(msgs) == 1 and "`missing`" in msgs[0].msg
+
+
+def test_prose_produces_gives_no_mismatch(tmp_path):
+    """#78: the prose of a Swift Produces line (commands, SDK names, words) is not checked; the signature is."""
+    (tmp_path / "Sources" / "Kit").mkdir(parents=True)
+    (tmp_path / "Sources" / "Kit" / "Foo.swift").write_text(
+        "struct AppModel {\n    init(store: Int) {}\n}\n", encoding="utf-8")
+    plan = swift_plan(tmp_path, "`AppModel(store:)`, built with `xcodebuild` and `swift test`, "
+                                "writes under `NSHomeDirectory`, strings `translated`")
+    assert pt_review.check_interfaces(plan, tmp_path, ["T1"]) == ([], 1)
+
+
+def test_case_list_produces_checked_per_case(tmp_path):
+    """#78: every case of a one-line case list is declared; a missing one is still a mismatch."""
+    (tmp_path / "Sources" / "Kit").mkdir(parents=True)
+    (tmp_path / "Sources" / "Kit" / "Foo.swift").write_text(
+        "enum Size {\n    case small, medium, large\n}\n", encoding="utf-8")
+    for produces in ("`case medium`", "`case large`", "`enum Size`: `case small, medium, large`"):
+        msgs, _ = pt_review.check_interfaces(swift_plan(tmp_path, produces), tmp_path, ["T1"])
+        assert msgs == [], produces
+    msgs, checked = pt_review.check_interfaces(swift_plan(tmp_path, "`case small, huge`"), tmp_path, ["T1"])
+    assert checked == 2 and len(msgs) == 1 and "`huge`" in msgs[0].msg
 
 
 # ---- superseded and incident_items

@@ -68,7 +68,8 @@ HTTP_LINE_RE = re.compile(r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S*)\s
 TEST_PATH_RE = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$)")  # O(1)
 _DECL_GENERIC = r"(class|interface|enum|fun|func|def|function|struct|record|trait)\s+{name}\b"  # O(1)
 DECL_PATTERNS = {  # extension -> declaration regex with a {name} slot | O(1)
-    ".swift": r"(struct|class|enum|actor|protocol|func|typealias|let|var|extension|case)\s+(?:\w+\.)*{name}\b",  # O(1)
+    ".swift": r"(struct|class|enum|actor|protocol|func|typealias|let|var|extension|case)\s+(?:\w+\.)*{name}\b"  # O(1)
+              r"|\bcase\s+(?:\w+\s*(?:\([^)]*\))?\s*(?:=\s*[^,]*)?,\s*)+{name}\b",  # a later name of `case a, b(Int), c = 1` | O(1)
     **{e: r"(class|function|interface|type|enum|const|let|var)\s+{name}\b" for e in (".ts", ".tsx", ".js", ".mjs", ".jsx")},  # O(1)
     ".go": r"(func(\s*\([^)]*\))?|type|var|const)\s+{name}\b",  # O(1)
     ".rs": r"(fn|struct|enum|trait|type|const|static|mod)\s+{name}\b",  # O(1)
@@ -77,6 +78,9 @@ DECL_PATTERNS = {  # extension -> declaration regex with a {name} slot | O(1)
 SWIFT_INIT_RE = r"(?<![\w.])init[?!]?\s*[(<]"  # `init(`, `init?(`, `init!(`, `init<T>(`; `self.init(` is a call, not a declaration | O(1)
 NAME_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")  # leading dotted identifier | O(1)
 NAME_END_RE = re.compile(r"$|[(:<]| ->")  # what may follow an unquoted symbol name; anything else is prose | O(1)
+SIG_END_RE = re.compile(r"\s*(?:[(<:]|->)")  # what follows a name in a signature: `(`, `<`, `:` or `->` | O(1)
+DECL_END_RE = re.compile(r"\s*(?:$|[=,{])")  # what may follow a keyword-declared name: the end, `= value`, `{` | O(1)
+CASE_ITEM_RE = re.compile(r"([A-Za-z_]\w*)\s*(?:\(.*\))?\s*(?:=.*)?")  # one element of a `case` list: `a`, `b(Int)`, `c = 1` | O(1)
 DECL_PREFIX_RE = re.compile(r"(?:(?:public|private|internal|fileprivate|open|final|static|export|default|async|abstract|override|mutating|indirect|lazy|convenience|required"  # O(1)
                             r"|struct|class|enum|actor|protocol|typealias|extension|interface|trait|func|fn|def|fun|function|type|let|var|const|case|record|mod)\s+)+")  # leading modifiers and declaration keywords | O(1)
 FILE_SUFFIXES = {e.lstrip(".") for e in DECL_PATTERNS} | {"py", "md", "json", "yml", "yaml", "toml", "txt"}  # a name ending in one is a file name | O(1)
@@ -308,9 +312,11 @@ def parse_sig(item: str) -> tuple[str, str | None, str | None] | None:  # O(m) t
 
 
 def symbol_names(item: str) -> list[str]:  # O(m) total
-    """The symbol names a Produces item declares: backticked spans win, else a leading dotted name; prose gives none.
-    Leading modifiers and declaration keywords (`struct Foo`, `static func make()`) are skipped; unquoted, the name
-    after them must look like a symbol (capitalised, or followed by `(` or `:`) so `class hierarchy` stays prose."""
+    """The symbol names a Produces item declares, signatures only (#78): a name counts when `(`, `<`, `:` or `->`
+    follows it, or a declaration keyword precedes it (`struct Foo`, `func make`); a `case a, b(Int), c = 1` list
+    gives every case. A bare name (`xcodebuild`, `NSHomeDirectory`, `Foo.bar`) is prose. Backticked spans win over
+    the unquoted text; unquoted, a keyword-led name must look like a symbol (capitalised, or followed by `(` or `:`)
+    so `class hierarchy` stays prose."""
     text = item.strip()  # O(m)
     spans = re.findall(r"`([^`]*)`", text)  # O(m)
     cands: list[str] = []  # O(1)
@@ -318,10 +324,17 @@ def symbol_names(item: str) -> list[str]:  # O(m) total
         s = s.strip()  # O(m)
         kw = DECL_PREFIX_RE.match(s)  # O(m)
         rest = s[kw.end():] if kw else s  # O(m)
+        if kw and kw.group(0).split()[-1] == "case":  # a case list declares every name in it | O(m)
+            cands += [c.group(1) for part in split_top(rest, ",") if (c := CASE_ITEM_RE.fullmatch(part.strip()))]  # O(m)
+            continue  # O(1)
         m = NAME_RE.match(rest)  # O(m)
         if not m:  # O(1)
             continue  # O(1)
-        if not spans and not (NAME_END_RE.match(rest, m.end()) and (not kw or rest[0].isupper() or rest[m.end():m.end() + 1] in ("(", ":"))):  # unquoted: end marker needed | O(1)
+        sig = SIG_END_RE.match(rest, m.end())  # O(1)
+        if spans and not (sig or (kw and DECL_END_RE.match(rest, m.end()))):  # a bare backticked word is prose | O(1)
+            continue  # O(1)
+        if not spans and not (NAME_END_RE.match(rest, m.end()) and (sig or kw)  # unquoted: a signature or a declaration | O(1)
+                              and (not kw or rest[0].isupper() or rest[m.end():m.end() + 1] in ("(", ":"))):  # O(1)
             continue  # O(1)
         cands.append(m.group(0))  # O(1)
     out: list[str] = []  # O(1)

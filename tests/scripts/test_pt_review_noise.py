@@ -35,7 +35,7 @@ def mismatch_lines(out: str) -> list[str]:
 def test_eg_lines_not_produces(tmp_path, capsys):
     p = proj(tmp_path)
     plan = pt_review.parse_plan(p / "plan.md")
-    assert plan.tasks["T1"].produces() == ["Strings.libraryMoreTags(_ n: Int) -> String", "Theme.Symbol.libraryTag"]
+    assert plan.tasks["T1"].produces() == ["Strings.libraryMoreTags(_ n: Int) -> String", "Theme.Symbol.libraryTag: String"]
     assert contract(p, "--seam", "T1,T2") == 0
     out = capsys.readouterr().out
     assert mismatch_lines(out) == []

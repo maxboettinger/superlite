@@ -9,7 +9,7 @@ T3 --> T2
 
 ### T1 strings and symbols · Complexity 3
 **Owns:** Sources/Kit/Strings.swift, Sources/Kit/ThemeSymbol.swift, Tests/KitTests/StringsTests.swift
-**Produces:** Strings.libraryMoreTags(_ n: Int) -> String · Theme.Symbol.libraryTag
+**Produces:** Strings.libraryMoreTags(_ n: Int) -> String · Theme.Symbol.libraryTag: String
   e.g. Strings.libraryMoreTags(2) -> "+2"
   e.g. Theme.Symbol.libraryTag -> "tag"
 
