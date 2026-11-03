@@ -80,6 +80,8 @@ NAME_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")  # leading dotted ident
 NAME_END_RE = re.compile(r"$|[(:<]| ->")  # what may follow an unquoted symbol name; anything else is prose | O(1)
 SIG_END_RE = re.compile(r"\s*(?:[(<]|:(?!//)(?=\s*\S)|->)")  # what follows a name in a signature: `(`, `<`, `: Type` or `->`; not a URL or a lone `label:` | O(1)
 DECL_END_RE = re.compile(r"\s*(?:$|[=,{])")  # what may follow a keyword-declared name: the end, `= value`, `{` | O(1)
+CALL_RE = re.compile(r"\s*\(\s*(?:[A-Za-z_]\w*\s*:\s*)*\)\s*")  # a call's tail, nothing typed: `()`, `(for:in:)` | O(1)
+LIST_GLUE_RE = re.compile(r"[,;&]|\b(?:and|or)\b")  # what joins the spans of a leading list | O(1)
 CASE_ITEM_RE = re.compile(r"([A-Za-z_]\w*)\s*(?:\(.*\))?\s*(?:=.*)?")  # one element of a `case` list: `a`, `b(Int)`, `c = 1` | O(1)
 DECL_PREFIX_RE = re.compile(r"(?:(?:public|private|internal|fileprivate|open|final|static|export|default|async|abstract|override|mutating|indirect|lazy|convenience|required"  # O(1)
                             r"|struct|class|enum|actor|protocol|typealias|extension|interface|trait|func|fn|def|fun|function|type|let|var|const|case|record|mod)\s+)+")  # leading modifiers and declaration keywords | O(1)
@@ -331,15 +333,31 @@ def _span_names(s: str, quoted: bool) -> list[str]:  # O(m) total
     return [m.group(0)] if ok else []  # O(1)
 
 
+def _is_use(span: str, before: str) -> bool:  # O(m) total
+    """A backticked call (`NSHomeDirectory()`, `urls(for:in:)`: empty parens or bare labels, nothing typed after) that
+    prose precedes uses a name, it does not declare one (#102); `before` is the item text ahead of the span."""
+    s = span.strip()  # O(m)
+    m = NAME_RE.match(s)  # O(m)
+    if not m or not CALL_RE.fullmatch(s, m.end()):  # O(m)
+        return False  # O(1)
+    before = re.sub(r"`[^`]*`", " ", before).strip()  # earlier spans are list members | O(m)
+    lead = NAME_RE.match(before)  # an unquoted call leading the item (`Foo.bar() and `Baz()``) is one too | O(m)
+    tail = lead and CALL_RE.match(before, lead.end())  # O(m)
+    return bool(LIST_GLUE_RE.sub(" ", before[tail.end():] if tail else before).strip())  # O(m)
+
+
 def symbol_names(item: str) -> list[str]:  # O(m) total
     """The symbol names a Produces item declares, signatures only (#78): a name counts when `(`, `<`, `: Type` or `->`
     follows it, or a declaration keyword precedes it (`struct Foo`, `func make`); a `case a, b(Int), c = 1` list
-    gives every case. A bare name (`xcodebuild`, `NSHomeDirectory`, `Foo.bar`) is prose. Backticked spans win; when
-    none names a symbol the unquoted item is read, where a keyword-led name must look like a symbol (capitalised, or
-    followed by `(` or `:`) so `class hierarchy` stays prose."""
+    gives every case. A bare name (`xcodebuild`, `NSHomeDirectory`, `Foo.bar`) is prose. The unquoted item's leading
+    name is read next to the backticked spans; there a keyword-led name must look like a symbol (capitalised, or
+    followed by `(` or `:`) so `class hierarchy` stays prose. A backticked call with nothing typed (`NSHomeDirectory()`,
+    `urls(for:in:)`) declares only in the item's leading list of spans; after prose it is a use (#102)."""
     text = item.strip()  # O(m)
-    spans = re.findall(r"`([^`]*)`", text)  # O(m)
-    cands = [n for sp in spans for n in _span_names(sp, True)] or _span_names(text, False)  # O(m)
+    cands = _span_names(text, False)  # O(m)
+    for sp in re.finditer(r"`([^`]*)`", text):  # O(s) iterations
+        if not _is_use(sp.group(1), text[:sp.start()]):  # O(m)
+            cands += _span_names(sp.group(1), True)  # O(m)
     out: list[str] = []  # O(1)
     for name in cands:  # O(c) iterations
         if "." in name and name.rsplit(".", 1)[1].lower() in FILE_SUFFIXES:  # a file name, not a symbol | O(len(name))

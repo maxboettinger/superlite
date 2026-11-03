@@ -62,7 +62,7 @@ def test_backticked_signatures_only():
     names = pt_review.symbol_names
     assert names("`Theme.Symbol.libraryTag: String`") == ["Theme.Symbol.libraryTag"]
     assert names("`Foo.bar()` and `Baz<T>`") == ["Foo.bar", "Baz"]
-    assert names("Foo.bar() and `Baz()`") == ["Baz"]
+    assert names("Foo.bar() and `Baz()`") == ["Foo.bar", "Baz"]  # #102: the unquoted signature is read too
     assert names("`LibraryView: View`") == ["LibraryView"]
     assert names("`Strings.libraryMoreTags(_ n: Int) -> String`") == ["Strings.libraryMoreTags"]
     assert names("`Box<T> wraps a value`") == ["Box"]
@@ -208,6 +208,35 @@ def test_prose_produces_gives_no_mismatch(tmp_path):
     plan = swift_plan(tmp_path, "`AppModel(store:)`, built with `xcodebuild` and `swift test`, "
                                 "writes under `NSHomeDirectory`, strings `translated`")
     assert pt_review.check_interfaces(plan, tmp_path, ["T1"]) == ([], 1)
+
+
+def test_sdk_call_is_a_use_not_a_declaration():
+    """#102: a backticked call (empty `()` or bare labels, nothing typed) after prose uses a name; the task's own
+    signature next to it is still read, and a call in the item's leading list still declares."""
+    names = pt_review.symbol_names
+    assert names("Paths.base() -> URL, built on `NSHomeDirectory()`") == ["Paths.base"]
+    assert names("Paths.base(for kind: Kind) -> URL, built on `NSHomeDirectory()`") == ["Paths.base"]
+    assert names("reads `NSHomeDirectory()`") == []
+    assert names("uses `FileManager.default.urls(for:in:)`") == []
+    assert names("`Paths.base()` built on `NSHomeDirectory()`") == ["Paths.base"]
+    assert names("`load()`, `save()` and `reset(to:)`, built on `FileManager.default.removeItem(at:)`") == \
+        ["load", "save", "reset"]
+    assert names("reads `Config.path: String` via `NSHomeDirectory()`") == ["Config.path"]  # typed: declares
+
+
+def test_sdk_call_gives_no_mismatch_signature_still_checked(tmp_path):
+    """#102: an SDK call in a Swift Produces line is no false mismatch, and a missing own signature is caught."""
+    (tmp_path / "Sources" / "Kit").mkdir(parents=True)
+    swift = tmp_path / "Sources" / "Kit" / "Foo.swift"
+    swift.write_text("enum Paths {\n    static func base(for kind: Kind) -> URL { URL(fileURLWithPath: "
+                     "NSHomeDirectory()) }\n}\n", encoding="utf-8")
+    for produces in ("Paths.base(for kind: Kind) -> URL, built on `NSHomeDirectory()`",
+                     "`Paths.base(for:)` reads `NSHomeDirectory()` and uses `FileManager.default.urls(for:in:)`"):
+        assert pt_review.check_interfaces(swift_plan(tmp_path, produces), tmp_path, ["T1"]) == ([], 1), produces
+    swift.write_text("enum Paths {}\n", encoding="utf-8")
+    msgs, checked = pt_review.check_interfaces(
+        swift_plan(tmp_path, "Paths.base(for kind: Kind) -> URL, built on `NSHomeDirectory()`"), tmp_path, ["T1"])
+    assert checked == 1 and [m.msg for m in msgs] == ["T1 Produces: `base` not declared in Sources/Kit/Foo.swift"]
 
 
 def test_case_list_produces_checked_per_case(tmp_path):
