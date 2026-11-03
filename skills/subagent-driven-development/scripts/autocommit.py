@@ -92,15 +92,21 @@ def message(tid, title, plan):
     return f"{key} {tid}: {title}" if key else f"{tid}: {title}"
 
 
+def plan_key(plan):
+    """The plan as an absolute path: `plan.md`, `./plan.md` and `/abs/plan.md` name one run."""
+    return str(Path(plan).resolve()) if plan else plan
+
+
 def checkpoint(tid, title, files, plan):
     """Shadow-commit `files` on top of the previous checkpoint (HEAD for the first); return the sha.
 
     A temporary index holds the parent's tree plus the owned files, so HEAD, the branch,
-    the user's index and the working tree are not touched."""
+    the user's index and the working tree are not touched. A file gone from disk and from
+    the parent (moved away in an earlier checkpoint) has nothing left to stage."""
     st = load_state()
-    if not st or st.get("plan") != plan:
+    if not st or plan_key(st.get("plan")) != plan_key(plan):
         stem = Path(plan).stem if plan else "run"
-        st = {"plan": plan, "run": f"{stem}-{date.today():%Y%m%d}", "head": head_sha(),
+        st = {"plan": plan_key(plan), "run": f"{stem}-{date.today():%Y%m%d}", "head": head_sha(),
               "branch": git("symbolic-ref", "-q", "HEAD", check=False).stdout.strip(),
               "entries": []}
     parent = st["entries"][-1]["sha"] if st["entries"] else st["head"]
@@ -110,7 +116,10 @@ def checkpoint(tid, title, files, plan):
     env = {"GIT_INDEX_FILE": idx}
     try:
         git("read-tree", parent, env=env) if parent else git("read-tree", "--empty", env=env)
-        git("add", "-A", "--", *files, env=env)
+        indexed = set(git("ls-files", "-z", "--", *files, env=env).stdout.split("\0")) if files else set()
+        staged = [f for f in files if os.path.lexists(f) or f in indexed]
+        if staged:
+            git("add", "-A", "--", *staged, env=env)
         tree = git("write-tree", env=env).stdout.strip()
     finally:
         Path(idx).unlink(missing_ok=True)
