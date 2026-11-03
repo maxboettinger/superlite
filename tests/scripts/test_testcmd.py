@@ -95,8 +95,8 @@ def test_no_test_command_exits_2_with_a_clear_summary(tmp_path):
     cp = rt(tmp_path, "--full")
     assert cp.returncode == 2 and cp.out.strip() == "0 0 0 0.0" and "no test command found" in cp.err
     s = summary(tmp_path)
-    assert set(s) == {"passed", "failed", "skipped", "seconds", "mode", "failures", "skipped_tests", "files"}
-    assert s["failed"] == 1 and "no test command found" in s["failures"][0]
+    assert set(s) == {"passed", "failed", "skipped", "seconds", "mode", "failures", "skipped_tests", "files", "error"}
+    assert s["failed"] == 1 and "no test command found" in s["failures"][0] and "no test command found" in s["error"]
 
 
 def test_junit_from_a_node_runner_keeps_the_summary_shape(tmp_path):

@@ -53,6 +53,17 @@ def test_summary_has_files(tmp_path):
     assert summary(tmp_path)["files"] == {"test_x.py": [1, 1]}
 
 
+def test_summary_error_key(tmp_path):
+    """#81 review: a crashed run names its error in its own key, so the packet never reads it as a test run."""
+    import run_tests
+    run_tests.write_summary(tmp_path / "a.json", "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []},
+                            [], 0.0, error="error: Foo::bar panicked")
+    d = json.loads((tmp_path / "a.json").read_text(encoding="utf-8"))
+    assert d["error"] == "error: Foo::bar panicked" and d["failed"] == 1
+    run_tests.write_summary(tmp_path / "b.json", "full", {"passed": 1, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0)
+    assert "error" not in json.loads((tmp_path / "b.json").read_text(encoding="utf-8"))
+
+
 def test_pointer_records_mode(tmp_path):
     (tmp_path / "test_x.py").write_text("def test_a():\n    assert True\n")
     for args, mode in ((("--fast", "test_x.py"), "fast"), (("--full",), "full")):

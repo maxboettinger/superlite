@@ -1863,16 +1863,30 @@ def run_summaries(path: Path) -> list[dict]:  # O(S log S + S*file size) total
     return out  # O(1)
 
 
-def _listed(entry: dict, summary: dict) -> bool:  # O(F) total
-    """The summary lists this failure: a `file::test` failure line whose test is the entry's (`test: message`)."""
-    head = f"{entry.get('file', '')}::{str(entry.get('context', '')).split(': ', 1)[0]}"  # O(m)
-    return any(str(f) == head or str(f).startswith(head + ":") for f in (summary.get("failures") or []))  # O(F)
+def _listed(entry: dict, summary: dict) -> bool:  # O(F*m) total
+    """The summary lists this failure: a `file::test: message` line for the entry's test, under the entry's file or,
+    for a run_tests entry, under any file key (runs may key a JUnit file differently). The 200-char cuts of
+    make_entry (an ellipsis) and write_summary (a short line) still match."""
+    tid = str(entry.get("context", "")).split(": ", 1)[0]  # O(m)
+    cut = tid.endswith("\u2026")  # O(1)
+    tid = tid.rstrip("\u2026")  # O(m)
+    want = tid if cut else tid + ":"  # O(m)
+    file, any_file = str(entry.get("file", "")), entry.get("agent") == "run_tests"  # O(1)
+    for f in summary.get("failures") or []:  # O(F) iterations
+        line = str(f)  # O(m)
+        where, sep, rest = line.partition("::")  # O(m)
+        if not sep or (where != file and not any_file):  # O(1)
+            continue  # O(1)
+        if rest == tid or rest.startswith(want) or (len(line) >= 200 and want.startswith(rest)):  # O(m)
+            return True  # O(1)
+    return False  # O(1)
 
 
 def _full_ran(summary: dict) -> bool:  # O(F) total
-    """A full run that ran tests: a crash adds a bare error line (no `::`) and decides nothing."""
+    """A full run that ran tests: a crash (an `error` key; older summaries: a bare error line without `::`) decides nothing."""
     fails = summary.get("failures") or []  # O(1)
-    return (summary.get("mode") == "full" and isinstance(fails, list) and all("::" in str(f) for f in fails)  # O(F)
+    return (summary.get("mode") == "full" and not summary.get("error") and isinstance(fails, list)  # O(1)
+            and all("::" in str(f) for f in fails)  # O(F)
             and any(isinstance(summary.get(k), int) and summary[k] > 0 for k in ("passed", "failed", "skipped")))  # O(1)
 
 

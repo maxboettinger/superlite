@@ -188,6 +188,33 @@ def test_full_run_rule_only_for_run_tests_entries():
     assert not pt.stale_in_run(rt("frontend: failed"), [crashed])
 
 
+def test_listed_survives_200_char_cuts():
+    """#81 review: a red full run whose failure line was cut at 200 chars still lists a long test."""
+    name = "test_" + "x" * 210
+    cut = rt((name + ": AssertionError")[:199] + "\u2026", file="tests/test_long.py")  # make_entry's 200-char cut
+    line = f"tests/test_long.py::{name}: AssertionError"[:200]  # write_summary's 200-char cut
+    assert not pt.stale_in_run(cut, [full(failed=1, failures=[line])])
+    deep = "/".join(["pkg"] * 15) + "/test_deep.py"
+    long_head = rt("test_" + "y" * 140 + ": boom", file=deep)
+    line = f"{deep}::test_{'y' * 140}: boom"[:200]
+    assert len(line) == 200
+    assert not pt.stale_in_run(long_head, [full(failed=1, failures=[line])])
+    assert pt.stale_in_run(long_head, [full()])
+
+
+def test_listed_under_another_file_key():
+    """#81 review: a red full run that keys the same test under another file keeps it open."""
+    e = rt("testBar(): XCTAssertEqual failed", file="Tests/AppTests/FooTests.swift", line=12)
+    red = full(failed=1, failures=["AppTests.FooTests::testBar(): XCTAssertEqual failed"], files={"AppTests.FooTests": [9, 1]})
+    assert not pt.stale_in_run(e, [red])
+
+
+def test_crash_with_double_colons_decides_nothing():
+    """#81 review: a crashed full run is known by its error key, even when the message holds `::`."""
+    msg = "error: Foo::bar panicked"
+    assert not pt.stale_in_run(rt("frontend: failed"), [full(passed=0, failed=1, failures=[msg], error=msg)])
+
+
 def test_packet_drops_unfiled_failure_after_green_full_run(proj):
     """#81 end to end: a mid-build `-` failure from a run without JUnit is dropped once a full run is green."""
     write_log(proj, [rt("frontend: failed"), inc("exception", "boom happened", file="src/a.py", line=7)])

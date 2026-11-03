@@ -13,7 +13,7 @@ a `tests` line to the progress ledger. On every run it also writes
 `{"passed": N, "failed": N, "skipped": N, "seconds": S, "mode": "fast|full",
 "failures": ["file::test: message", ...], "skipped_tests": ["file::test", ...],
 "files": {"file": [passed, failed], ...}}` (the background pointer also records `"mode"`)
-(a run where pytest produced nothing records failed=1 and the reason). Exit 0 when nothing failed, 1 when a
+(a run where pytest produced nothing records failed=1 and the reason, also as `"error"`). Exit 0 when nothing failed, 1 when a
 test failed or none ran, 2 when pytest could not run.
 
 --background starts a detached run of the same command, prints `summary: <path>` and exits 0
@@ -279,6 +279,8 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None)
             + ([error[:200]] if error else []),  # O(k) list concat
             "skipped_tests": counts["skipped_tests"],  # O(1)
             "files": {k: list(v) for k, v in (files or {}).items()}}  # O(F)
+    if error:  # a crashed run says so, so the packet never reads it as a test run (#81) | O(1)
+        data["error"] = error[:200]  # O(1)
     p = Path(path)  # O(1)
     p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     tmp = p.with_name(p.name + ".tmp")  # O(1)
