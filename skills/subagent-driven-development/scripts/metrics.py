@@ -9,9 +9,10 @@ Hook lines (one JSON object per line, `t` in epoch ms):
 Launch and stop are joined by agent_id. The agent's own transcript (JSONL, `agent_transcript_path`) gives
 usage per assistant message (deduplicated by message id), tool calls and timestamps; prices come from
 config/models.json. An agent is mapped to its task through `.superlite/pool.json` (agent id -> tasks) or the
-`Tn` in its launch description; an agent reused for several tasks is split at the user messages that name a
-`Tn`. Output fields reuse the names of bench/mechanical.py: task, kind, model, tier_planned, agent,
-agent_model_used, dispatches, start_s, end_s, duration_s, tokens {in,out,cache_read,cache_write,...},
+`Tn` in its launch description; an agent reused for several tasks is split at the user messages that hand over a
+task (`Task Tn`, `Next: … Tn`, a batch's `Tasks`/`Batch` heading). A batch splits evenly over its tasks, in order;
+the final build is the latest by time; reviewers count neither as builds nor as rework. Output fields reuse the
+names of bench/mechanical.py: task, kind, model, tier_planned, agent, agent_model_used, dispatches, start_s, end_s, duration_s, tokens {in,out,cache_read,cache_write,...},
 cost_usd, tool_calls, status, complete, rework_dispatches, rework_s, rework_cost, kind_miss_incidents,
 fix_notes, first_time_pass, done_s, start_lag_s, slack_s, on_critical_path. Offline, stdlib only; one parse
 of each file, well under a second for a normal run.
@@ -33,6 +34,30 @@ RED = re.compile(r"\b(?:tests?|suite)\b[^\n]{0,40}\b(?:red|failing|failed)\b|\b\
 LEAD = re.compile(r"\A\s*[^\n]{0,80}?\b(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b")  # unlabelled first line: `T4 gallery: DONE` | O(1)
 HANDBACK = "SubagentHandback"  # Claude Code delivers a subagent's report as this tool call's input.message, not as text | O(1)
 CHARS_PER_TOKEN = 3.5  # output_tokens in a transcript is an early snapshot of a streamed message; text length bounds it below
+CUE = re.compile(r"(?:^[\s#>*_-]*|[.!?;]\s+)(?:(tasks|batch)|task|next)\b", re.I)  # at a line or sentence start; group 1: a batch | O(1)
+POLL = re.compile(r"\bRelevance\s+0-10\s+for\b", re.I)  # dispatch's relevance poll: names a task it does not hand over | O(1)
+
+
+def handover(text) -> list | None:  # O(400)
+    """Task ids a user message hands over, in order, read from its first line that names a Tn (first 400 characters).
+    A cue counts at the start of the line or of a sentence: every id after `Tasks`/`Batch` (a batch; ids in a `(…)`
+    aside or possessive `T4's` are dependencies, not members), else the first id after `Task`/`Next` (`T1 recorded.
+    Next: Task T2` -> T2); no cue: the line's first id (`T6 retry: … task T9` -> T6). [] for a relevance poll; None
+    when no Tn is named."""
+    head = (text or "")[:400]  # O(1)
+    if POLL.search(head):  # O(400)
+        return []  # O(1)
+    for line in head.splitlines():  # O(400)
+        ids = TID.findall(line)  # O(len)
+        if not ids:  # O(1)
+            continue  # O(1)
+        for c in CUE.finditer(line):  # O(len)
+            rest = re.sub(r"\([^)]*\)", " ", line[c.end():]) if c.group(1) else line[c.end():]  # a batch: no (…) asides | O(len)
+            after = [m.group(1) for m in TID.finditer(rest) if not c.group(1) or not rest.startswith(("'s", "’s"), m.end())]  # nor T4's | O(len)
+            if after:  # O(1)
+                return list(dict.fromkeys("T" + x for x in (after if c.group(1) else after[:1])))  # O(ids)
+        return ["T" + ids[0]]  # O(1)
+    return None  # O(1)
 
 
 def status_of(text) -> str | None:  # O(len)
@@ -54,6 +79,36 @@ def msg_chars(msg) -> int:  # O(content)
 
 
 FIXER = re.compile(r"fixer|\bfix(?:es|ed)?\b|F-T\d+-\d+|re-?dispatch|rework", re.I)  # O(1)
+REVIEWER_TYPE = re.compile(r"reviewer\Z", re.I)  # superlite:package-reviewer, superlite:final-reviewer | O(1)
+REVIEWER_DESC = re.compile(r"\A\s*(?:package|final) review\b", re.I)  # `Package review …`; not when it names a fix | O(1)
+
+
+def is_reviewer(agent_type, desc) -> bool:  # O(len)
+    """A reviewer by type, or by a description that starts `Package review`/`Final review` and is no fixer's
+    (`Final review fixes T1` is rework)."""
+    return bool(REVIEWER_TYPE.search(agent_type or "")  # O(len)
+                or (REVIEWER_DESC.search(desc or "") and not FIXER.search(f"{agent_type} {desc}")))
+TASK_STATUS = r"\b{}\b(?:(?!\bT\d)[^\n]){{0,80}}?\b(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b"  # `T4: DONE. T5: …` | O(1)
+
+
+def own_status(tid, report) -> str:  # O(len)
+    """A batch report as one task reads it: `Status: <its own status>` first when the report gives it one on the
+    task's line (`T4: DONE. T5: DONE_WITH_CONCERNS.`), else the report unchanged (its overall status)."""
+    m = re.search(TASK_STATUS.format(re.escape(tid)), report or "")  # upper-case tokens only, as LEAD: `could not be done` is none | O(len)
+    return f"Status: {m.group(1).upper()}\n{report}" if m else report  # O(len)
+
+
+def split_batch(tids, tok, calls, start, end, text, reports) -> list:  # O(k * (len(text) + reports))
+    """One build per task of a segment, in order. A batch (k tasks) gives each 1/k of the tokens and tool calls (the
+    remainder to the first ones, so sums stay exact), the i-th slice of its time window and its own status
+    (`own_status`)."""
+    k = len(tids)  # O(1)
+    if k == 1:  # O(1)
+        return [{"tid": tids[0], "tok": tok, "calls": calls, "start": start, "end": end, "text": text, "reports": reports}]  # O(1)
+    return [{"tid": tid, "tok": {key: v // k + (1 if i < v % k else 0) for key, v in tok.items()},  # O(k * (len + reports))
+             "calls": calls // k + (1 if i < calls % k else 0),
+             "start": start + (end - start) * i / k, "end": start + (end - start) * (i + 1) / k,
+             "text": own_status(tid, text), "reports": [own_status(tid, r) for r in reports]} for i, tid in enumerate(tids)]
 
 
 def family(model) -> str | None:  # O(1)
@@ -127,10 +182,17 @@ def read_jsonl(path) -> list:  # O(bytes)
     return out  # O(1)
 
 
+def _segment(tids, t, **flags) -> dict:  # O(1)
+    return {"tids": tids, "tok": _empty(), "calls": set(), "first": t, "last": t, "model": "", "text": "", "reports": [], **flags}  # O(1)
+
+
 def transcript_segments(path, tasks_hint: list) -> list:  # O(bytes of one transcript)
-    """[{tid, tokens, tool_calls, first, last, model, text, reports}] split at user messages that name a Tn.
-    reports: the segment's SubagentHandback messages in order; text is the last of them, else the last assistant text.
-    Output tokens are the message's own count (the maximum seen per message id)."""
+    """[{tids, tokens, tool_calls, first, last, model, text, reports}] split at user messages that hand over a task
+    (`handover`): a message whose tasks are all in the current segment's continues it; a batch gives one segment with
+    several tids. The prime (work before the first handover, on tasks_hint[0] until then) takes the first tasks handed
+    over. A relevance poll opens a segment with none and pauses the one before it: a handover of that one's tasks
+    resumes it. reports: the segment's SubagentHandback messages in order; text is the last of them, else the last
+    assistant text. Output tokens are the message's own count (the maximum seen per message id)."""
     segs: list[dict] = []  # O(1)
     cur = None  # O(1)
     seen: dict[str, dict] = {}  # message id -> its segment record | O(1)
@@ -139,14 +201,23 @@ def transcript_segments(path, tasks_hint: list) -> list:  # O(bytes of one trans
         t = _ts(e)  # O(1)
         if e.get("type") == "user" and not any(isinstance(b, dict) and b.get("type") == "tool_result"  # O(content)
                                                 for b in (msg.get("content") if isinstance(msg.get("content"), list) else [])):
-            m = TID.search(_text_of(msg.get("content"))[:400])  # O(400)
-            if m and (cur is None or cur["tid"] != "T" + m.group(1)):  # O(1)
-                cur = {"tid": "T" + m.group(1), "tok": _empty(), "calls": set(), "first": t, "last": t, "model": "", "text": "", "reports": []}  # O(1)
+            ids = handover(_text_of(msg.get("content")))  # O(400)
+            base = cur.get("prev") if cur is not None and cur.get("poll") else cur  # a poll pauses the segment before it | O(1)
+            if ids == []:  # a relevance poll: its own segment, no task's | O(1)
+                if not (cur is not None and cur.get("poll")):  # O(1)
+                    cur = _segment([], t, poll=True, prev=cur)  # O(1)
+                    segs.append(cur)  # O(1)
+            elif ids and base is not None and base.get("prime"):  # the prime takes the first tasks handed over | O(1)
+                base["tids"], base["prime"], cur = ids, False, base  # O(1)
+            elif ids and base is not None and set(ids) <= set(base["tids"]):  # the same task(s): continue | O(ids)
+                cur = base  # O(1)
+            elif ids:  # O(1)
+                cur = _segment(ids, t)  # O(1)
                 segs.append(cur)  # O(1)
         if e.get("type") != "assistant":  # O(1)
             continue  # O(1)
-        if cur is None:  # work before any task message (the prime): belongs to the first task | O(1)
-            cur = {"tid": tasks_hint[0] if tasks_hint else None, "tok": _empty(), "calls": set(), "first": t, "last": t, "model": "", "text": "", "reports": []}  # O(1)
+        if cur is None:  # work before any task message (the prime): the first task handed over takes it | O(1)
+            cur = _segment(tasks_hint[:1], t, prime=True)  # O(1)
             segs.append(cur)  # O(1)
         mid = msg.get("id") or f"anon{len(seen)}"  # O(1)
         u = msg.get("usage") or {}  # O(1)
@@ -335,6 +406,8 @@ def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n
         return recs.setdefault(tid, {"task": tid, "builds": [], "fixes": []})  # O(1)
 
     for a in agents:  # O(A)
+        if is_reviewer(a["type"], a["desc"]):  # neither a build nor rework; its cost stays in agents_cost | O(1)
+            continue  # O(1)
         fixer = bool(FIXER.search(a["type"] + " " + a["desc"]))  # O(1)
         segs = a["segments"]  # O(1)
         if not segs:  # no transcript: one segment from launch and stop times | O(1)
@@ -342,9 +415,9 @@ def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n
             if tid:  # O(1)
                 st = (a["start_ms"] or 0) / 1000.0  # O(1)
                 en = (a["stop_ms"] or a["start_ms"] or 0) / 1000.0  # O(1)
-                segs = [{"tid": tid, "tok": _empty(), "calls": set(), "first": st, "last": en, "model": a["model"], "text": a["last"], "reports": []}]  # O(1)
+                segs = [{"tids": [tid], "tok": _empty(), "calls": set(), "first": st, "last": en, "model": a["model"], "text": a["last"], "reports": []}]  # O(1)
         for i, s in enumerate(segs):  # O(segments)
-            if not s["tid"]:  # O(1)
+            if not s["tids"]:  # O(1)
                 continue  # O(1)
             fam = family(s["model"]) or family(a["model"]) or family(a["type"]) or fam_key(s["model"] or a["model"])  # O(1)
             # the transcript's own first and last message times; the hook times (launch can be logged after the
@@ -353,9 +426,9 @@ def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n
             en = s["last"] if s["last"] is not None else (a["stop_ms"] or a["start_ms"] or 0) / 1000.0  # O(1)
             en = max(en, st)  # never a negative duration | O(1)
             text = s["text"] or (a["last"] if i == len(segs) - 1 else "")  # O(1)
-            (rec(s["tid"])["fixes" if fixer else "builds"]).append(
-                {"agent": a["agent"], "type": a["type"], "fam": fam, "tok": s["tok"], "calls": len(s["calls"]),
-                 "start": st, "end": en, "text": text, "reports": s.get("reports") or [], "complete": a["complete"]})  # O(1)
+            for b in split_batch(s["tids"], s["tok"], len(s["calls"]), st, en, text, s.get("reports") or []):  # O(k)
+                (rec(b.pop("tid"))["fixes" if fixer else "builds"]).append(
+                    {"agent": a["agent"], "type": a["type"], "fam": fam, "complete": a["complete"], **b})  # O(1)
     starts = [b["start"] for x in recs.values() for b in x["builds"] + x["fixes"]]  # O(n)
     t0 = min(starts) if starts else 0.0  # run time zero = the earliest agent start | O(n)
     incidents = read_jsonl(sl_dir / "incidents.jsonl")  # O(I)
@@ -371,6 +444,7 @@ def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n
             for k in tok:  # O(5)
                 tok[k] += b["tok"][k]  # O(1)
             cost += cost_of(b["tok"], price_for(prices, b["fam"]))  # O(1)
+        builds.sort(key=lambda b: (b["start"], b["end"]))  # the final build is the latest by time, not by agent id | O(b log b)
         last = builds[-1] if builds else None  # O(1)
         status = status_of(last["text"]) if last else None  # O(1)
         earlier = [st for b in builds for x in b["reports"] for st in [status_of(x)] if st]  # O(reports)
