@@ -39,3 +39,14 @@ Agents using superlite log its own friction with `sl feedback add` into `~/.supe
 | Hermes Agent | `.hermes-plugin/` |
 | OpenCode | `.opencode/`, `index.js`, `package.json` |
 | Pi | `.pi/extensions/superlite.ts`, `package.json` |
+
+## Testing layers
+
+| Layer | Runs | Required when a change touches |
+|---|---|---|
+| unit | `sl run_tests --full` | `skills/**/scripts/**`, `hooks/**`, `tests/scripts/**`, `tests/bench/**`, `bench/*.py`, `scripts/*.py` |
+| headless | `SUPERLITE_E2E=1 python3 -m pytest tests/e2e -k headless -q` | `hooks/**`, `skills/**` (not `scripts/`), `agents/**`, `commands/**`, `.claude-plugin/**`, `tests/e2e/harness.py`, `tests/e2e/test_headless.py` |
+| tui | `SUPERLITE_E2E=1 python3 -m pytest tests/e2e -k tui -q` | `hooks/session-start`, `hooks/hooks.json`, `tests/e2e/tui_driver.py`, `tests/e2e/test_tui.py`, and any file whose diff mentions `CLAUDE_CODE_FORK_SUBAGENT` or `agent_summary` |
+| evals | `scripts/evals.sh` | `skills/*/SKILL.md`, `commands/**`, `agents/**`, `evals/**` |
+
+A change is done only when every layer its paths require ran green since the change, or `python3 scripts/test_layers.py stamp <layer> --ruling "<why>"` recorded why not. The Stop hook enforces it; e2e and evals spend quota, so run them once per change, not per edit. Details: [docs/testing.md](docs/testing.md).

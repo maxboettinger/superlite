@@ -26,14 +26,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 
 WARN_AT = 0.70  # O(1)
 SUMMARIES_OFF = ("0", "false")  # the values Claude Code reads as `false` for CLAUDE_CODE_FORK_SUBAGENT | O(1)
-SUMMARIES_NOTE = ("SUMMARIES ON: Claude Code re-sends each background agent's transcript to its model every 30 s for a "  # O(1)
-                  "3-5 word status line (about 5-12% of agent spend, never in a transcript, so not in this budget); "
+SUMMARIES_NOTE = ("SUMMARIES ON: Claude Code asks every background agent's model for a 3-5 word status line every 30 s, "  # O(1)
+                  "sending the agent's transcript, or a few hundred characters of notes when the server serves the short mode; "
+                  "superlite never reads it and the requests appear in no transcript, so the budget cannot count them; "
                   "set env CLAUDE_CODE_FORK_SUBAGENT=0 in settings, see /superlite:setup")
 
 
 def summaries_note(env=None) -> str | None:  # O(1)
     """The interactive Claude Code CLI (CLAUDE_CODE_ENTRYPOINT=cli) summarizes every background agent every 30 s with a
-    `query_source=agent_summary` request that re-reads the agent's whole transcript (anthropics/claude-code#86879). Those
+    `query_source=agent_summary` request that sends the agent's transcript, or notes in the server-served short mode (anthropics/claude-code#86879). Those
     requests are not written to any transcript, so metrics.py cannot count them. CLAUDE_CODE_FORK_SUBAGENT=0 closes the
     gate (superlite uses no fork agents); headless runs (`-p`, entrypoint sdk-cli) never arm the timer."""
     env = os.environ if env is None else env  # O(1)

@@ -1,0 +1,1 @@
+{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/test_layers.py\" check --hook", "timeout": 20}]}]}}

@@ -9,6 +9,7 @@ Start a superlite session. Arguments: $ARGUMENTS
 2. Ask what is still unset, in ONE AskUserQuestion (up to 2 questions):
    - Mode, if unset: Regular (size the request, then brainstorm, plan, build, review), MVP (smallest working version first), Feature (a change to existing code), Debug (find the cause, fix with a regression test).
    - Orchestrator, always unless the user already said: Human (you approve a plain-language review plan before anything is built) or AI (hands off). Then run `sl orchestrator set human|ai`.
+   If AskUserQuestion is unavailable (tool error, headless, or the user said they are away), do not ask: mode Regular unless the arguments name one, orchestrator AI (`sl orchestrator set ai`, one `Ruling:` line), then step 4 at once, loading `superlite:brainstorming`. A new app or project is architectural, never trivial: no direct build.
 3. If there is no request text yet, ask for it in one line.
 4. Load the skill for the mode and follow it:
    - Regular: `superlite:using-superlite` sizing, then `superlite:brainstorming`.

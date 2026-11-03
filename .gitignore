@@ -11,3 +11,4 @@ bench/results/*.runlog
 .claude/worktrees/
 .claude/settings.local.json
 .maxapp
+evals/results/

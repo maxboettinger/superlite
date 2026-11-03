@@ -122,6 +122,23 @@ def test_plugin_dir_defaults_to_repo_root_and_honours_the_override(monkeypatch, 
         importlib.reload(harness)
 
 
+def test_e2e_test_modules_leave_bench_harness_first_on_sys_path(monkeypatch):
+    """Regression: tests/e2e put its own folder on sys.path, so reload(harness) loaded tests/e2e/harness.py."""
+    import importlib
+    import importlib.machinery
+
+    import pytest
+
+    monkeypatch.setattr(sys, "path", sys.path[:])  # undo whatever the imports below add
+    for name in ("test_tui_driver_parse", "test_tui"):
+        try:
+            importlib.import_module(f"tests.e2e.{name}")
+        except pytest.skip.Exception:  # test_tui skips at module level without SUPERLITE_E2E or tmux
+            pass
+    spec = importlib.machinery.PathFinder.find_spec("harness", sys.path)
+    assert Path(spec.origin).resolve() == ROOT / "bench" / "harness.py"
+
+
 def test_prompt_suffix_is_appended_only_when_set(monkeypatch):
     monkeypatch.delenv("BENCH_PROMPT_SUFFIX", raising=False)
     assert harness.with_suffix("Build it.\n") == "Build it.\n"
