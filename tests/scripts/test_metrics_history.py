@@ -159,6 +159,24 @@ def test_budget_changed_prints_once(tmp_path):
     assert first.startswith("budget:") and second == ""
 
 
+def test_budget_notes_agent_summaries_only_in_the_interactive_cli(tmp_path, monkeypatch):
+    p = mech_plan(tmp_path, 2)
+    setup_run(tmp_path)
+    args = (BUDGET, "--plan", p, "--dir", tmp_path / ".superlite")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")  # the interactive CLI arms the agent_summary timer
+    monkeypatch.delenv("CLAUDE_CODE_FORK_SUBAGENT", raising=False)
+    on = run(*args, cwd=tmp_path).out
+    assert "SUMMARIES ON" in on and "CLAUDE_CODE_FORK_SUBAGENT=0" in on
+    monkeypatch.setenv("CLAUDE_CODE_FORK_SUBAGENT", "0")  # the switch closes the gate
+    assert "SUMMARIES ON" not in run(*args, cwd=tmp_path).out
+    monkeypatch.setenv("CLAUDE_CODE_FORK_SUBAGENT", "false")
+    assert "SUMMARIES ON" not in run(*args, cwd=tmp_path).out
+    monkeypatch.delenv("CLAUDE_CODE_FORK_SUBAGENT")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-cli")  # headless never arms it
+    assert "SUMMARIES ON" not in run(*args, cwd=tmp_path).out
+    assert json.loads(run(*args, "--json", cwd=tmp_path).out)["summaries"] is None
+
+
 def test_budget_names_the_late_critical_path(tmp_path):
     p = mixed(tmp_path)
     text = p.read_text(encoding="utf-8").replace("**Goal:** x.", "**Goal:** x.\n**Target-min:** 0.5")

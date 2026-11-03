@@ -16,6 +16,7 @@ from the last printed one (`.superlite/budget.state`), for dispatch and lint. Al
 #   n = tasks, e = edges, M = metrics lines
 import argparse  # O(1)
 import json  # O(1)
+import os  # O(1)
 import re  # O(1)
 import sys  # O(1)
 import time  # O(1)
@@ -24,6 +25,23 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 
 WARN_AT = 0.70  # O(1)
+SUMMARIES_OFF = ("0", "false")  # the values Claude Code reads as `false` for CLAUDE_CODE_FORK_SUBAGENT | O(1)
+SUMMARIES_NOTE = ("SUMMARIES ON: Claude Code re-sends each background agent's transcript to its model every 30 s for a "  # O(1)
+                  "3-5 word status line (about 5-12% of agent spend, never in a transcript, so not in this budget); "
+                  "set env CLAUDE_CODE_FORK_SUBAGENT=0 in settings, see /superlite:setup")
+
+
+def summaries_note(env=None) -> str | None:  # O(1)
+    """The interactive Claude Code CLI (CLAUDE_CODE_ENTRYPOINT=cli) summarizes every background agent every 30 s with a
+    `query_source=agent_summary` request that re-reads the agent's whole transcript (anthropics/claude-code#86879). Those
+    requests are not written to any transcript, so metrics.py cannot count them. CLAUDE_CODE_FORK_SUBAGENT=0 closes the
+    gate (superlite uses no fork agents); headless runs (`-p`, entrypoint sdk-cli) never arm the timer."""
+    env = os.environ if env is None else env  # O(1)
+    if env.get("CLAUDE_CODE_ENTRYPOINT") != "cli":  # O(1)
+        return None  # O(1)
+    if env.get("CLAUDE_CODE_FORK_SUBAGENT", "").strip().lower() in SUMMARIES_OFF:  # O(1)
+        return None  # O(1)
+    return SUMMARIES_NOTE  # O(1)
 
 
 def header_budget(plan) -> float | None:  # O(C)
@@ -103,6 +121,7 @@ def compute(plan_path, sl_dir=".superlite", now=None) -> dict:  # O(M + B + n*(n
         out["hint"] = (f"HINT: the coordinator is {100 * co_usd / spent:.0f}% of the cost ({co['turns']} turns, median context "  # O(1)
                        f"{co['context_median'] // 1000}k): fewer, larger turns (batch dispatches, no polling) cut it")
     out["late"] = bool(target and projected > target + 1e-9)  # O(1)
+    out["summaries"] = summaries_note()  # O(1)
     return out  # O(1)
 
 
@@ -126,6 +145,8 @@ def line(b: dict) -> str:  # O(1)
               "finish the tasks in flight, commit, run finish")
     if b["late"] and b["late_path"]:  # O(1)
         s += f" LATE: critical path {' -> '.join(b['late_path'])}"  # O(1)
+    if b.get("summaries"):  # O(1)
+        s += " " + b["summaries"]  # O(1)
     return s  # O(1)
 
 

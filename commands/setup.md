@@ -8,5 +8,6 @@ Check and report, changing nothing without a yes:
 - Python 3.10+ for the `sl` tools;
 - the model tiers in `config/models.json` and `config/routing.json`;
 - whether superpowers is also enabled (two process skills compete: suggest disabling one for this project);
-- whether `.superlite/` is gitignored.
+- whether `.superlite/` is gitignored;
+- in Claude Code's interactive CLI only (`CLAUDE_CODE_ENTRYPOINT=cli`): whether `CLAUDE_CODE_FORK_SUBAGENT` is `0`. Otherwise Claude Code re-sends every background agent's transcript to its model every 30 s for a 3-5 word status line (`agent_summary`, about 5-12% of agent spend, in no transcript, so superlite's budget cannot see it; anthropics/claude-code#86879). The fix line offers to add `"CLAUDE_CODE_FORK_SUBAGENT": "0"` to the `env` map of the user settings (`$CLAUDE_CONFIG_DIR/settings.json`, default `~/.claude/settings.json`; keep the other keys). It takes effect in the next session and removes only the `fork` subagent type, which superlite never uses.
 Give a pass or fix line for each.
