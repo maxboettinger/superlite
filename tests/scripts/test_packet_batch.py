@@ -206,3 +206,19 @@ def test_report_counts_open_over_whole_run(tmp_path):
     summ(sl / "test-summary-1.json", {"tests/a.py": [3, 0]}, mtime=1000)
     summ(sl / "test-summary.json", {"tests/b.py": [1, 0]}, mtime=2000)
     assert report.collect(plan, sl)["quality"]["open_incidents"] == 0
+
+
+def _tool(res, ctx):
+    return {"kind": "exception", "file": "hooks/x.sh", "line": 0, "context": ctx, "resolution": res, "agent": "commit_task"}
+
+
+def test_resolved_tool_refusal_not_open(proj):
+    log(proj, [_tool("open", "T1 out-of-scope block"), _tool("fixed", "committed with T3; earlier block resolved")])
+    t = packet(proj)
+    assert "FAST PATH" in t and "hooks/x.sh:0" not in t
+
+
+def test_resolved_repeat_from_reviewer_still_listed(proj):
+    es = [dict(_tool("open", "a"), agent="package-reviewer"), dict(_tool("fixed", "b"), agent="package-reviewer")]
+    log(proj, es)
+    assert "hooks/x.sh:0" in packet(proj)

@@ -1367,7 +1367,7 @@ def excerpt(root: Path, file: str, line: int, ctx: int = 12) -> str:  # O(B) per
 
 @dataclass  # O(1)
 class Item:  # O(1)
-    section: str  # incidents | probes | uncovered | contract | O(1)
+    section: str  # incidents | probes | uncovered | contract | claimed | O(1)
     rank: tuple  # O(1)
     title: str  # O(1)
     body: str  # O(1)
@@ -1384,6 +1384,52 @@ def superseded(entries: list[dict]) -> set[tuple[str, int]]:  # O(K) total
     return {loc for loc, done in newest.items() if done}  # O(groups)
 
 
+def changed_since(root: Path, base: str) -> set[str] | None:  # O(F) + 2 git subprocesses
+    """Paths (relative to root) that differ between base and the working tree, plus untracked files; None on any git failure (unknown, not "nothing changed")."""
+    def lines(*args: str) -> set[str] | None:  # O(F) + 1 git subprocess
+        try:  # O(F)
+            r = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=off", *args], capture_output=True, text=True,  # O(F) + git spawn
+                               encoding="utf-8", errors="replace", timeout=30)  # O(F)
+        except (OSError, subprocess.TimeoutExpired):  # O(1)
+            return None  # O(1)
+        return {x.strip() for x in r.stdout.splitlines() if x.strip()} if r.returncode == 0 else None  # O(F)
+
+    tracked = lines("diff", "--name-only", "--no-renames", "--relative", base)  # both sides of a rename, paths relative to root | O(F)
+    fresh = lines("ls-files", "--others", "--exclude-standard")  # O(F)
+    if tracked is None or fresh is None:  # O(1)
+        return None  # O(1)
+    return tracked | fresh  # O(F)
+
+
+def _rel(file: str, root: Path | None) -> str:  # O(len(file))
+    f = str(file).replace("\\", "/")  # O(len(file))
+    if root is not None:  # O(len(file))
+        for pre in (root.resolve().as_posix().rstrip("/"), root.as_posix().rstrip("/")):  # resolved and symlinked root prefixes | O(1)
+            if f.startswith(pre + "/"):  # O(len(file))
+                f = f[len(pre) + 1:]  # absolute -> repo-relative | O(len(file))
+                break  # O(1)
+    while f.startswith("./"):  # O(len(file))
+        f = f[2:]  # O(len(file))
+    return f  # O(len(file))
+
+
+def claimed_fix_items(entries: list[dict], changed: set[str], root: Path | None = None) -> list[Item]:  # O(K) total
+    """Locations whose newest entry says fixed while the file shows no change since base."""
+    newest: dict[tuple[str, int], dict] = {}  # O(1)
+    for e in entries:  # O(K) iterations
+        if e.get("kind") != "verified":  # O(1)
+            newest[(_rel(e.get("file", ""), root), e.get("line", 0))] = e  # a later entry overwrites | O(1)
+    items: list[Item] = []  # O(1)
+    for (file, line), e in newest.items():  # O(groups) iterations
+        if str(e.get("resolution", "")).lower() != "fixed" or not file or file in changed:  # O(1)
+            continue  # O(1)
+        agent = e.get("agent") or "unknown"  # O(1)
+        items.append(Item("claimed", (3, "\uffff", file, line),  # O(1)
+                          f"{file}:{line}  claimed fixed by {agent}, file unchanged since base",  # O(1)
+                          f"- [{agent}] {str(e.get('context', ''))[:200]}", file, line))  # O(1)
+    return items  # O(groups)
+
+
 def incident_items(entries: list[dict]) -> list[Item]:  # O(K) total
     done = superseded(entries)  # O(K)
     groups: dict[tuple[str, int], list[dict]] = {}  # O(1)
@@ -1395,6 +1441,8 @@ def incident_items(entries: list[dict]) -> list[Item]:  # O(K) total
         seen: set[tuple] = set()  # identical entries (same kind, context, resolution, agent) count once | O(1)
         es = [e for e in es if not ((k := tuple(str(e.get(f, "")) for f in ("kind", "context", "resolution", "agent"))) in seen or seen.add(k))]  # O(entries)
         repeated = len(es) >= 2  # O(1)
+        if (file, line) in done and all(e.get("agent") == "commit_task" for e in es):  # a resolved tool refusal is not a finding | O(entries)
+            continue  # O(1)
         unresolved = (file, line) not in done  # the newest entry decides, taken before the dedupe | O(1)
         low = any(str(e.get("confidence", "")).lower() == "low" for e in es)  # O(1)
         if not (repeated or unresolved or low):  # O(1)
@@ -1800,12 +1848,22 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     entries = [e for e in entries if not stale_in_run(e, runs)]  # O(K*S*F)
     n_stale = n_all - len(entries)  # O(1)
     items = incident_items(entries) + read_probe_failures(probes) + uncovered_items(plan, root, entries)  # O(K + R + pkgs*cats*...)
+    base_ok = False  # O(1)
+    if a.base:  # O(1)
+        try:  # O(1)
+            base_ok = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "-q", a.base + "^{commit}"],  # O(1) + 1 git spawn
+                                     capture_output=True, timeout=30).returncode == 0  # O(1)
+        except (OSError, subprocess.TimeoutExpired):  # git missing or hanging: treat as no base | O(1)
+            base_ok = False  # O(1)
+    changed = changed_since(root, a.base) if base_ok else None  # O(F)
+    if changed is not None:  # O(1)
+        items += claimed_fix_items(entries, changed, root)  # O(K + F)
     mismatches, n_checked = check_interfaces(plan, root, None)  # O(P) + 1 subprocess
     for m in mismatches:  # O(Mm) iterations
         items.append(Item("contract", (2, m.file, m.line, m.msg), f"{m.file}:{m.line}  part1 {m.task}",  # O(1)
                           f"- {m.msg}", m.file, m.line))  # O(1)
     items.sort(key=lambda i: i.rank)  # O(I log I)
-    counts = {s: sum(1 for i in items if i.section == s) for s in ("incidents", "probes", "uncovered", "contract")}  # O(4*I)
+    counts = {s: sum(1 for i in items if i.section == s) for s in ("incidents", "probes", "uncovered", "contract", "claimed")}  # O(5*I)
     tests_text, nfail = read_test_summary(tests)  # O(1)
     n_open = sum(counts.values()) + (1 if nfail else 0)  # O(1)
     fast = n_open == 0  # O(1)
@@ -1832,7 +1890,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         ("Nothing is open: no open incidents, probe failures, unverified categories, contract mismatches or "  # O(1)
          "failing tests. Reply with a short APPROVED (about 10 s)." if fast else  # O(1)
          f"Open items: {n_open} (incidents {counts['incidents']}, probe failures {counts['probes']}, "  # O(1)
-         f"unverified categories {counts['uncovered']}, contract mismatches {counts['contract']}, "  # O(1)
+         f"unverified categories {counts['uncovered']}, contract mismatches {counts['contract']}, claimed fixes {counts['claimed']}, "  # O(1)
          f"failing tests {nfail}). Excerpts are +-12 lines."),  # O(1)
         "",  # O(1)
     ]  # O(1)
@@ -1845,6 +1903,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         "incidents": "## 1. Open incidents (repeated file:line first, then unresolved, then low confidence)"  # O(1)
                      + (f"\ndropped {n_stale} stale test-failure incident(s)" if n_stale else ""),  # O(1)
         "probes": "## 2. Probe results: failures still open and unverified categories",  # O(1)
+        "claimed": "## 3b. Claimed fixes not on disk (a reviewer logged these fixed, the file is unchanged since base)",  # O(1)
         "contract": f"## 3. Contract check: real signatures vs the plan's Produces ({n_checked} checked, "  # O(1)
                     f"{len(mismatches)} mismatch(es))",  # O(1)
     }  # O(1)
@@ -1863,7 +1922,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         chosen.append((it, text))  # O(1)
         used += len(text)  # O(1)
     parts = list(head)  # O(1)
-    for sec in ("incidents", "probes", "contract"):  # O(3) iterations
+    for sec in ("incidents", "probes", "contract", "claimed"):  # O(3) iterations
         parts.append(sec_titles[sec])  # O(1)
         sec_items = [t for it, t in chosen if it.section == sec or (sec == "probes" and it.section == "uncovered")]  # O(I) per section
         parts.extend(sec_items or ["- none\n"])  # O(1)
