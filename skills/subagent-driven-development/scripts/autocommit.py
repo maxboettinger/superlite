@@ -117,7 +117,8 @@ def checkpoint(tid, title, files, plan):
     try:
         git("read-tree", parent, env=env) if parent else git("read-tree", "--empty", env=env)
         indexed = set(git("ls-files", "-z", "--", *files, env=env).stdout.split("\0")) if files else set()
-        staged = [f for f in files if os.path.lexists(f) or f in indexed]
+        staged = [f for f in files if os.path.lexists(f) or f in indexed
+                  or any(i.startswith(f.rstrip("/") + "/") for i in indexed)]  # a removed directory stays staged
         if staged:
             git("add", "-A", "--", *staged, env=env)
         tree = git("write-tree", env=env).stdout.strip()

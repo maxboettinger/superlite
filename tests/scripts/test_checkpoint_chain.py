@@ -50,3 +50,17 @@ def test_second_checkpoint_after_git_mv_of_owned_file(tmp_path):
     assert git(repo, "rev-parse", f"{s2}^") == s1
     assert "pkg/d.py" not in files_in(repo, s2)
     assert git(repo, "show", f"{s2}:pkg/e.py") == "E = 2"
+
+
+def test_removed_owned_directory_is_staged_as_deletion(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    write(repo, "pkg/d.py", "D = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "add d")
+    (repo / "pkg" / "d.py").unlink()
+    (repo / "pkg").rmdir()
+    monkeypatch.chdir(repo)
+    sys.path.insert(0, str(HERE.parent.parent / "skills" / "subagent-driven-development" / "scripts"))
+    import autocommit
+    sha = autocommit.checkpoint("T1", "rm", ["pkg"], "plan.md")
+    assert "pkg/d.py" not in files_in(repo, sha)
