@@ -91,6 +91,19 @@ def test_case_list_declares_every_name():
     assert names("`indirect case node(Tree)`") == ["node"]
 
 
+def test_review_findings_symbol_rules():
+    """#78 review: unquoted text is the fallback when no span names a symbol; a case list must parse whole;
+    a URL or a lone `label:` is not a signature."""
+    names = pt_review.symbol_names
+    assert names("Strings.make(_ n: Int) -> String, built with `xcodebuild`") == ["Strings.make"]
+    assert names("case folding, normalisation of names") == []
+    assert names("`case small, large for sizes`") == []
+    assert names("`case ok((Int, Int)), failed`") == ["ok", "failed"]
+    assert names("`https://api.example.com`") == []
+    assert names("`store:`") == []
+    assert names("`Foo: View`") == ["Foo"]
+
+
 def test_unquoted_leading_identifier_only():
     names = pt_review.symbol_names
     assert names("Strings.libraryMoreTags(_ n: Int) -> String") == ["Strings.libraryMoreTags"]

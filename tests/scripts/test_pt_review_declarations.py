@@ -95,6 +95,22 @@ def test_swift_case_list_declares_every_case(tmp_path):
     assert find(tmp_path, ["A.swift"], "huge") is None  # a switch pattern is not a declaration
 
 
+def test_swift_case_list_nested_payload_and_wrapped_lines(tmp_path):
+    """#78 review: nested payload parentheses and a list wrapped across lines still declare every case."""
+    (tmp_path / "A.swift").write_text(
+        "enum E {\n"
+        "    case ok((Int, Int)), run(handler: (Int) -> Void), stop\n"
+        "    case small,\n"
+        "         medium,\n"
+        "         large\n"
+        "}\n", encoding="utf-8")
+    find = pt_review.find_declaration
+    assert find(tmp_path, ["A.swift"], "run") == ("A.swift", 2)
+    assert find(tmp_path, ["A.swift"], "stop") == ("A.swift", 2)
+    assert find(tmp_path, ["A.swift"], "medium") == ("A.swift", 3)
+    assert find(tmp_path, ["A.swift"], "large") == ("A.swift", 3)
+
+
 def test_declaration_skips_test_files(tmp_path):
     (tmp_path / "Tests").mkdir()
     (tmp_path / "Tests" / "T.swift").write_text("struct Foo {}\n", encoding="utf-8")

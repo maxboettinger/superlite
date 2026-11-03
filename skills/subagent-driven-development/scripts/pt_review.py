@@ -69,7 +69,7 @@ TEST_PATH_RE = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$)")  # O(1)
 _DECL_GENERIC = r"(class|interface|enum|fun|func|def|function|struct|record|trait)\s+{name}\b"  # O(1)
 DECL_PATTERNS = {  # extension -> declaration regex with a {name} slot | O(1)
     ".swift": r"(struct|class|enum|actor|protocol|func|typealias|let|var|extension|case)\s+(?:\w+\.)*{name}\b"  # O(1)
-              r"|\bcase\s+(?:\w+\s*(?:\([^)]*\))?\s*(?:=\s*[^,]*)?,\s*)+{name}\b",  # a later name of `case a, b(Int), c = 1` | O(1)
+              r"|\bcase\s+(?:\w+\s*(?:\((?:[^()]|\([^()]*\))*\))?\s*(?:=\s*[^,]*)?,\s*)+{name}\b",  # a later name of `case a, b((Int, Int)), c = 1` | O(1)
     **{e: r"(class|function|interface|type|enum|const|let|var)\s+{name}\b" for e in (".ts", ".tsx", ".js", ".mjs", ".jsx")},  # O(1)
     ".go": r"(func(\s*\([^)]*\))?|type|var|const)\s+{name}\b",  # O(1)
     ".rs": r"(fn|struct|enum|trait|type|const|static|mod)\s+{name}\b",  # O(1)
@@ -78,7 +78,7 @@ DECL_PATTERNS = {  # extension -> declaration regex with a {name} slot | O(1)
 SWIFT_INIT_RE = r"(?<![\w.])init[?!]?\s*[(<]"  # `init(`, `init?(`, `init!(`, `init<T>(`; `self.init(` is a call, not a declaration | O(1)
 NAME_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")  # leading dotted identifier | O(1)
 NAME_END_RE = re.compile(r"$|[(:<]| ->")  # what may follow an unquoted symbol name; anything else is prose | O(1)
-SIG_END_RE = re.compile(r"\s*(?:[(<:]|->)")  # what follows a name in a signature: `(`, `<`, `:` or `->` | O(1)
+SIG_END_RE = re.compile(r"\s*(?:[(<]|:(?!//)(?=\s*\S)|->)")  # what follows a name in a signature: `(`, `<`, `: Type` or `->`; not a URL or a lone `label:` | O(1)
 DECL_END_RE = re.compile(r"\s*(?:$|[=,{])")  # what may follow a keyword-declared name: the end, `= value`, `{` | O(1)
 CASE_ITEM_RE = re.compile(r"([A-Za-z_]\w*)\s*(?:\(.*\))?\s*(?:=.*)?")  # one element of a `case` list: `a`, `b(Int)`, `c = 1` | O(1)
 DECL_PREFIX_RE = re.compile(r"(?:(?:public|private|internal|fileprivate|open|final|static|export|default|async|abstract|override|mutating|indirect|lazy|convenience|required"  # O(1)
@@ -311,32 +311,35 @@ def parse_sig(item: str) -> tuple[str, str | None, str | None] | None:  # O(m) t
     return m.group(1), args, ret  # O(m)
 
 
+def _span_names(s: str, quoted: bool) -> list[str]:  # O(m) total
+    """The names one backticked span (quoted) or one unquoted item declares; see symbol_names."""
+    s = s.strip()  # O(m)
+    kw = DECL_PREFIX_RE.match(s)  # O(m)
+    rest = s[kw.end():] if kw else s  # O(m)
+    if kw and kw.group(0).split()[-1] == "case":  # a case list declares every name in it, and must parse whole | O(m)
+        items = [CASE_ITEM_RE.fullmatch(part.strip()) for part in split_top(rest, ",")]  # O(m)
+        return [c.group(1) for c in items] if items and all(items) else []  # O(m)
+    m = NAME_RE.match(rest)  # O(m)
+    if not m:  # O(1)
+        return []  # O(1)
+    sig = SIG_END_RE.match(rest, m.end())  # O(1)
+    if quoted:  # a bare backticked word is prose | O(1)
+        ok = sig or (kw and DECL_END_RE.match(rest, m.end()))  # O(1)
+    else:  # unquoted: a signature or a declaration whose name looks like a symbol | O(1)
+        ok = (NAME_END_RE.match(rest, m.end()) and (sig or kw)  # O(1)
+              and (not kw or rest[0].isupper() or rest[m.end():m.end() + 1] in ("(", ":")))  # O(1)
+    return [m.group(0)] if ok else []  # O(1)
+
+
 def symbol_names(item: str) -> list[str]:  # O(m) total
-    """The symbol names a Produces item declares, signatures only (#78): a name counts when `(`, `<`, `:` or `->`
+    """The symbol names a Produces item declares, signatures only (#78): a name counts when `(`, `<`, `: Type` or `->`
     follows it, or a declaration keyword precedes it (`struct Foo`, `func make`); a `case a, b(Int), c = 1` list
-    gives every case. A bare name (`xcodebuild`, `NSHomeDirectory`, `Foo.bar`) is prose. Backticked spans win over
-    the unquoted text; unquoted, a keyword-led name must look like a symbol (capitalised, or followed by `(` or `:`)
-    so `class hierarchy` stays prose."""
+    gives every case. A bare name (`xcodebuild`, `NSHomeDirectory`, `Foo.bar`) is prose. Backticked spans win; when
+    none names a symbol the unquoted item is read, where a keyword-led name must look like a symbol (capitalised, or
+    followed by `(` or `:`) so `class hierarchy` stays prose."""
     text = item.strip()  # O(m)
     spans = re.findall(r"`([^`]*)`", text)  # O(m)
-    cands: list[str] = []  # O(1)
-    for s in (spans or [text]):  # O(spans) iterations
-        s = s.strip()  # O(m)
-        kw = DECL_PREFIX_RE.match(s)  # O(m)
-        rest = s[kw.end():] if kw else s  # O(m)
-        if kw and kw.group(0).split()[-1] == "case":  # a case list declares every name in it | O(m)
-            cands += [c.group(1) for part in split_top(rest, ",") if (c := CASE_ITEM_RE.fullmatch(part.strip()))]  # O(m)
-            continue  # O(1)
-        m = NAME_RE.match(rest)  # O(m)
-        if not m:  # O(1)
-            continue  # O(1)
-        sig = SIG_END_RE.match(rest, m.end())  # O(1)
-        if spans and not (sig or (kw and DECL_END_RE.match(rest, m.end()))):  # a bare backticked word is prose | O(1)
-            continue  # O(1)
-        if not spans and not (NAME_END_RE.match(rest, m.end()) and (sig or kw)  # unquoted: a signature or a declaration | O(1)
-                              and (not kw or rest[0].isupper() or rest[m.end():m.end() + 1] in ("(", ":"))):  # O(1)
-            continue  # O(1)
-        cands.append(m.group(0))  # O(1)
+    cands = [n for sp in spans for n in _span_names(sp, True)] or _span_names(text, False)  # O(m)
     out: list[str] = []  # O(1)
     for name in cands:  # O(c) iterations
         if "." in name and name.rsplit(".", 1)[1].lower() in FILE_SUFFIXES:  # a file name, not a symbol | O(len(name))
@@ -632,12 +635,20 @@ def find_declaration(root: Path, files: list[str], name: str) -> tuple[str, int]
         if not pat or is_test_path(rel) or not f.is_file():  # O(d)
             continue  # O(1)
         rx = re.compile(SWIFT_INIT_RE if name == "init" and f.suffix == ".swift" else pat.replace("{name}", re.escape(name)))  # a Swift init has no keyword before its name | O(m)
-        for n, ln in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):  # O(B) iterations
+        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()  # O(B)
+        i = 0  # O(1)
+        while i < len(lines):  # O(B) iterations over all lines, joined ones included
+            ln, start = lines[i], i + 1  # O(1)
+            i += 1  # O(1)
             if ln.lstrip().startswith(("//", "#", "*", "/*")):  # O(1)
                 continue  # O(1)
             code = STRING_RE.sub('""', ln).split("//", 1)[0]  # O(len(ln))
-            if rx.search(code):  # O(len(ln))
-                return rel, n  # O(1)
+            if f.suffix == ".swift" and re.search(r"\bcase\b", code):  # a case list wrapped across lines is one declaration | O(len(ln))
+                while code.rstrip().endswith(",") and i < len(lines):  # O(lines joined)
+                    code += " " + STRING_RE.sub('""', lines[i]).split("//", 1)[0].strip()  # O(len(line))
+                    i += 1  # O(1)
+            if rx.search(code):  # O(len(code))
+                return rel, start  # O(1)
     return None  # O(1)
 
 
