@@ -12,9 +12,9 @@ task's agent in the pool (`current: Tn`) gets `current` cleared, `busy: false`, 
 its `tasks`. `--dispatch` then prints `next:` and the `dispatch` lines (ready tasks and
 agents) for the updated ledger; a dispatch failure only warns, the commits stand.
 
-`--also FILE` (one task only, needs `--ruling TEXT`) commits FILE with that task though
+`--also FILE` (several tasks: the first gets the files; needs `--ruling TEXT`) commits FILE with that task though
 another task owns it or nobody does, and writes `- Ruling: Tn also commits FILE - TEXT` to
-the ledger; a FILE with no change is noted on stderr and ignored. The commit message is
+the ledger, after which that task owns FILE for the rest of the run; a FILE with no change is noted on stderr and ignored. The commit message is
 `autocommit.message()`: `KEY Tn: title` when the plan has a `**Ticket:** KEY` header.
 
 Default is checkpoint mode: instead of committing, a shadow commit (never on HEAD, the
@@ -315,6 +315,29 @@ def committed_tasks(ledger):  # O(c)
     return out  # O(1)
 
 
+ALSO_LINE = re.compile(r"^\s*[-*+]?\s*(?:\*\*)?Ruling:(?:\*\*)?\s*([A-Z]{1,3}\d+[A-Za-z]?) also commits (\S+) - ")  # O(1)
+
+
+def also_owned(ledger):  # O(c)
+    """{file or dir/ entry: task} from `Ruling: Tn also commits F - why` ledger lines; a missing ledger gives {}."""
+    p = Path(ledger)  # O(1)
+    if not p.exists():  # O(1)
+        return {}  # O(1)
+    out = {}  # O(1)
+    for ln in p.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n").split("\n"):  # O(c) iterations
+        m = ALSO_LINE.match(ln)  # O(1) regex
+        if m:  # O(1)
+            out[m.group(2)] = m.group(1)  # O(1)
+    return out  # O(1)
+
+
+def add_also_owns(info, ledger):  # O(c + o)
+    """Append every recorded --also entry to its task's owns (once); ids not in the plan are ignored."""
+    for entry, tid in also_owned(ledger).items():  # O(c) iterations
+        if tid in info and entry not in info[tid]["owns"]:  # O(o)
+            info[tid]["owns"] = info[tid]["owns"] + [entry]  # O(o)
+
+
 def seams(plan):  # O(n + e), plan parsed once per process (nt.taskgraph_full)
     """[(producer, consumer)] from the task graph; [] on failure."""
     try:  # O(1)
@@ -551,8 +574,6 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     a.task = a.task + ids  # O(k)
     if not a.task:  # O(1)
         ap.error("the following arguments are required: task")  # O(1)
-    if a.also and len(a.task) != 1:  # O(1)
-        nt.die("--also takes exactly one task")  # O(1)
     if a.also and not a.ruling:  # O(1)
         nt.die("--also needs --ruling TEXT")  # O(1)
 
@@ -562,6 +583,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
         w0 = wave0.synth_info(a.plan)  # O(1) file read
         if w0:  # O(1)
             info["T0"] = {"id": "T0", "title": w0["title"], "owns": w0["owns"], "body": ""}  # O(1)
+    add_also_owns(info, a.ledger)  # O(c + o) --also files stay owned by their task
     unknown = [t for t in a.task if t not in info]  # O(t)
     if len(a.task) == 1 and unknown:  # O(1)
         nt.die(f"unknown task {unknown[0]}")  # O(1)
@@ -580,8 +602,11 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     a.blocked = set()  # files reported out-of-scope by any task | O(1)
     worst = 0  # O(1)
     committed = []  # O(1)
-    for tid in a.task:  # O(t) iterations
+    also_all = a.also  # only the first task receives --also | O(1)
+    for i, tid in enumerate(a.task):  # O(t) iterations
+        a.also = also_all if i == 0 else []  # O(1)
         code, sha = commit_one(a, tid, info, own_files)  # see commit_one
+        add_also_owns(info, a.ledger)  # O(c + o) rulings just recorded
         worst = max(worst, code)  # O(1)
         if sha:  # O(1)
             committed.append(tid)  # O(1)

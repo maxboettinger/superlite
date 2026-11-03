@@ -61,16 +61,16 @@ def test_also_unchanged_file_noted_and_ignored(tmp_path):
     assert "Ruling" not in ledger(repo)
 
 
-def test_also_needs_one_task_and_ruling(tmp_path):
+def test_also_needs_ruling(tmp_path):
     repo = make_repo(tmp_path)
     write(repo, "src/a.py", "A = 1\n")
     write(repo, "src/b.py", "B = 1\n")
     write(repo, "x.txt", "x\n")
     r = commit(repo, "T1", "T2", "--also", "x.txt", "--ruling", RULING)
-    assert r.returncode == 2 and "error: --also takes exactly one task" in r.stderr
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert git(repo, "rev-list", "--count", "HEAD") == "3"
     r = commit(repo, "T1", "--also", "x.txt")
     assert r.returncode == 2 and "--ruling" in r.stderr
-    assert git(repo, "rev-list", "--count", "HEAD") == "1"
 
 
 def test_ruling_line_written(tmp_path):

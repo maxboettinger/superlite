@@ -63,12 +63,15 @@ def test_also_file_stays_accepted(tmp_path):
     assert entries(repo)[-1]["files"] == ["src/b.py"]
 
 
-def test_also_file_changed_again_blocks(tmp_path):
+def test_also_file_changed_again_commits_with_owner(tmp_path):
     repo = recorded(tmp_path)
     write(repo, "x.md", "changed again\n")
     r = commit(repo, "T2")
-    assert r.returncode == 1
-    assert "out-of-scope x.md" in r.stdout
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "x.md" not in entries(repo)[-1]["files"]
+    r = commit(repo, "T1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "x.md" in entries(repo)[-1]["files"]
 
 
 def test_also_deleted_file_accepted(tmp_path):
