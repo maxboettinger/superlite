@@ -262,6 +262,24 @@ def test_tool_only_header(proj):
     assert "REVIEW REQUIRED" in head and "tool checks only" not in head
 
 
+def test_failing_tests_rule_out_tool_only(proj):
+    """#12 review: a red suite has no item to dismiss, so it never gets the tool-only header."""
+    write_summary(proj / ".superlite" / "test-summary.json", passed=2, failed=1,
+                  failures=["tests/a.py::test_x: bad"], files={"tests/a.py": [2, 1]})
+    packet(proj)
+    assert "tool checks only" not in text(proj)
+    write_log(proj, [by("commit_task")])
+    packet(proj)
+    assert "tool checks only" not in text(proj)
+
+
+def test_checker_label_capped_and_default_is_agent():
+    """#12 review: at most 3 names per label; an Item built without the flag is not a tool check."""
+    [it] = pt.incident_items([by(a, ctx=f"c{a}") for a in ("T1", "T2", "T3", "T4", "T5")])
+    assert it.checker == "T1 (agent), T2 (agent), T3 (agent), +2 more"
+    assert pt.Item("incidents", (0,), "t", "b").tool is False
+
+
 def test_fast_path_unchanged_without_items(proj):
     write_summary(proj / ".superlite" / "test-summary.json")
     packet(proj)
