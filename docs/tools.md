@@ -10,7 +10,7 @@ Mechanical steps are scripts, not agents. Every tool runs as `<skill-dir>/script
 | `wave0` | Builds the Wave 0 skeleton brief for `implementer-haiku` from the plan alone |
 | `routing` | Maps each task's plan features to a tier (haiku or sonnet) using `routing.json` |
 | `shape` | Build shape: contract examples, removable edges, prune, chain ids |
-| `predict` | Predicts each task's time, context and cost; `--refit` fits the coefficients |
+| `predict` | Predicts each task's time, context and cost; `--refit` fits the coefficients; with 20 history rows of the project's language (`history.detect_language`), time is scaled by their median actual/predicted ratio, clamped to 0.5–3, and the forecast names it under `language` |
 | `build_prime` | Builds the shared prime that every agent reads first: slim for sonnet (rules and interfaces, no plan, no `--spec` needed), `--prime full` restores the old one with the plan and `--sections`, `--tier haiku` builds the mini prime |
 | `task` | `task Tn --plan PLAN` prints one task's block from the current plan (no rebuild); an unknown id exits 2 and lists the tasks |
 | `dispatch` | Ready tasks and who runs each, in one call (`next_tasks` + `assign`). A line can be a batch `Tn,Tm` of one tier, packed by predicted time and context; a critical-path task runs alone; `--batch 1` prints one task per line |

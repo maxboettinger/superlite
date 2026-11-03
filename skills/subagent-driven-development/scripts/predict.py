@@ -8,7 +8,8 @@ Reads each task's measurable features (Components, LOC owned, Tests: fast|slow, 
 computes Est. time, Est. context and a per-task cost, and prints run totals as JSON.
 Prices and speeds live in config/models.json; coefficients in config/predictor.json.
 --refit fits the time coefficients to predicted-against-actual data (ridge toward the
-current coefficients) and writes them back. Stdlib only.
+current coefficients) and writes them back. With LANG_MIN_ROWS history rows of the project's
+language, its time is scaled by their median actual/predicted ratio (clamped). Stdlib only.
 """
 
 # Complexity notation:
@@ -23,6 +24,7 @@ import glob  # O(1)
 import json  # O(1)
 import math
 import os  # O(1)
+import statistics  # O(1)
 import sys  # O(1)
 from pathlib import Path  # O(1)
 
@@ -63,6 +65,8 @@ def load_models(path=None) -> dict:  # O(S + M)
 
 HISTORY_MIN_ROWS = 30  # rows with loc and duration needed before history replaces the shipped coefficients | O(1)
 SLOW_MIN_ROWS = 8  # slow-test rows needed before a refit moves slow_tests_min off its prior | O(1)
+LANG_MIN_ROWS = 20  # history rows of one language needed before its time scale applies | O(1)
+LANG_CLAMP = (0.5, 3.0)  # bounds of a language's time scale | O(1)
 _HIST_CACHE: dict = {}  # O(1)
 
 
@@ -73,13 +77,39 @@ def history_observations(rows: list) -> list:  # O(R)
         loc, secs = r.get("loc"), r.get("duration_s")  # O(1)
         if isinstance(loc, (int, float)) and isinstance(secs, (int, float)) and secs > 0:  # O(1)
             obs.append({"components": float(r.get("components") or 1.0), "loc": float(loc), "slow": r.get("tests") == "slow",  # O(1)
-                        "model": r.get("model"), "actual": secs / 60.0, "overhead": None})
+                        "model": r.get("model"), "actual": secs / 60.0, "overhead": None, "language": r.get("language")})
     return obs  # O(R)
+
+
+def language_scales(obs: list, models: dict, coef: dict) -> dict:  # O(R*M)
+    """{language: (rows, scale)}: the median actual / predicted per language with at least LANG_MIN_ROWS rows, clamped.
+    The prediction is recomputed from each row's features under coef (unscaled), never the row's stored pred_min."""
+    ratios: dict[str, list] = {}  # O(1)
+    for o in obs:  # O(R)
+        if o.get("language") in (None, "unknown"):  # O(1)
+            continue  # O(1)
+        try:  # O(1)
+            model = resolve_model(o["model"], models, coef)  # O(M)
+        except PredictError:  # O(1)
+            continue  # O(1)
+        pred = time_from({"components": o["components"], "loc": o["loc"], "tests": "slow" if o["slow"] else "fast"}, model, models, coef)  # O(1)
+        if pred > 0:  # O(1)
+            ratios.setdefault(o["language"], []).append(o["actual"] / pred)  # O(1)
+    lo, hi = LANG_CLAMP  # O(1)
+    return {k: (len(v), round(min(hi, max(lo, statistics.median(v))), 3)) for k, v in sorted(ratios.items()) if len(v) >= LANG_MIN_ROWS}  # O(R log R)
+
+
+def project_language() -> str:  # O(d + entries)
+    """The language of the project the tools run in: the folder holding `.superlite/` above the cwd, else the cwd."""
+    import history  # O(1)
+    import run_tests  # O(1)
+    return history.detect_language(run_tests.project_root(Path.cwd()) or Path.cwd())  # O(d + entries)
 
 
 def load_coef(path=None) -> dict:  # O(S) shipped; O(R) with enough history
     """Shipped coefficients; with no explicit path and at least HISTORY_MIN_ROWS usable history rows
-    (`$SUPERLITE_HOME/history.jsonl`) the refit from history instead (deterministic: same rows, same fit)."""
+    (`$SUPERLITE_HOME/history.jsonl`) the refit from history instead (deterministic: same rows, same fit).
+    With no explicit path, the project's language scale from history (language_scales) goes to time.language_scale."""
     coef = _load_json(Path(path) if path else CONFIG_DIR / "predictor.json", "predictor file")  # O(S)
     if path:  # O(1)
         return coef  # O(1)
@@ -92,11 +122,19 @@ def load_coef(path=None) -> dict:  # O(S) shipped; O(R) with enough history
         if key not in _HIST_CACHE:  # O(R)
             obs = history_observations(history.read_rows(hp))  # O(R)
             fitted = None  # O(1)
+            models = load_models()  # O(S)
             if len(obs) >= int(os.environ.get("SUPERLITE_HISTORY_MIN", HISTORY_MIN_ROWS)):  # O(1)
-                fitted, _ = refit(obs, load_models(), coef)  # O(R*M)
+                fitted, _ = refit(obs, models, coef)  # O(R*M)
                 fitted["fit"]["source"] = "history"  # O(1)
-            _HIST_CACHE[key] = fitted  # O(1)
-        return _HIST_CACHE[key] or coef  # O(1)
+            _HIST_CACHE[key] = (fitted, language_scales(obs, models, fitted or coef))  # O(R*M)
+        fitted, scales = _HIST_CACHE[key]  # O(1)
+        out = json.loads(json.dumps(fitted or coef))  # a copy: the cached fit stays unscaled | O(size of coef)
+        lang = project_language()  # O(d + entries)
+        if lang in scales:  # O(1)
+            rows, scale = scales[lang]  # O(1)
+            out["time"]["language_scale"] = scale  # O(1)
+            out["language"] = {"name": lang, "rows": rows, "scale": scale}  # O(1)
+        return out  # O(1)
     except Exception:  # noqa: BLE001 | O(1)
         return coef  # O(1)
 
@@ -125,7 +163,7 @@ def time_from(feats: dict, model: str, models: dict, coef: dict) -> float:  # O(
     t = coef["time"]  # O(1)
     return (t["base_min"] + t["per_component_min"] * feats["components"]  # O(1)
             + (t["slow_tests_min"] if feats["tests"] == "slow" else 0.0)  # O(1)
-            + t["per_loc_min"] * feats["loc"] * speed_scale(model, models, coef))  # O(1)
+            + t["per_loc_min"] * feats["loc"] * speed_scale(model, models, coef)) * t.get("language_scale", 1.0)  # O(1)
 
 
 def context_from(task, feats: dict, coef: dict) -> int:  # O(1)
@@ -207,7 +245,7 @@ def predict_plan(plan, models: dict, coef: dict) -> dict:  # O(n)
         minutes += p["est_time_min"]  # O(1)
         for k in totals:  # O(1) iterations (5 cost keys)
             totals[k] += p["cost"][k]  # O(1)
-    return {  # O(1)
+    out = {  # O(1)
         "tasks": tasks,  # O(1)
         "totals": {  # O(1)
             "tasks": len(tasks),  # O(1)
@@ -215,6 +253,9 @@ def predict_plan(plan, models: dict, coef: dict) -> dict:  # O(n)
             "cost_usd": {k: round(v, 6) for k, v in totals.items()},  # O(1)
         },  # O(1)
     }  # O(1)
+    if coef.get("language"):  # the history time scale in force, so a scaled forecast says so | O(1)
+        out["language"] = coef["language"]  # O(1)
+    return out  # O(1)
 
 
 # --------------------------------------------------------------------------
@@ -332,6 +373,7 @@ def refit(obs: list[dict], models: dict, coef: dict, ridge: float = 0.25) -> tup
     sol = _solve(a, b)  # O(k^3) = O(1)
     sol = [max(0.0, v) for v in sol] + ([] if fit_slow else [prior[3]])  # O(1)
     new = json.loads(json.dumps(coef))  # O(size of coef) JSON round trip
+    new.pop("language", None)  # a project's history scale never goes into a coefficients file | O(1)
     new["time"] = {"base_min": round(sol[0], 4), "per_component_min": round(sol[1], 4),  # O(1)
                    "per_loc_min": round(sol[2] / 100, 6), "slow_tests_min": round(sol[3], 4)}  # O(1)
     new["size_band"] = refit_band(obs, coef)  # O(N log N)
