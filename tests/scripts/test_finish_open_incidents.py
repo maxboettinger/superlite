@@ -60,6 +60,15 @@ def test_stale_tdd_red_dropped(tmp_path):
     assert finish.open_incidents(log, RED) == [STALE]
 
 
+def test_full_run_closes_unfiled_run_tests_failure(tmp_path):
+    """#81: finish counts what the packet counts: a later green full run closes a `-` run_tests failure."""
+    e = entry(file="-", line=0, kind="test-failure", context="frontend: failed", agent="run_tests")
+    log = write_log(tmp_path / "incidents.jsonl", [e])
+    green_full = {"mode": "full", "passed": 9, "failed": 0, "failures": [], "files": {}}
+    assert finish.open_incidents(log, [green_full]) == []
+    assert finish.open_incidents(log, [dict(green_full, failed=1, failures=["-::frontend: failed"])]) == [e]
+
+
 def test_stale_tdd_red_with_test_path_context(tmp_path):
     e = dict(STALE, context="tests/test_a.py::test_x failed")
     assert finish.open_incidents(write_log(tmp_path / "incidents.jsonl", [e]), GREEN) == []

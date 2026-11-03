@@ -1863,15 +1863,36 @@ def run_summaries(path: Path) -> list[dict]:  # O(S log S + S*file size) total
     return out  # O(1)
 
 
+def _listed(entry: dict, summary: dict) -> bool:  # O(F) total
+    """The summary lists this failure: a `file::test` failure line whose test is the entry's (`test: message`)."""
+    head = f"{entry.get('file', '')}::{str(entry.get('context', '')).split(': ', 1)[0]}"  # O(m)
+    return any(str(f) == head or str(f).startswith(head + ":") for f in (summary.get("failures") or []))  # O(F)
+
+
+def _full_ran(summary: dict) -> bool:  # O(F) total
+    """A full run that ran tests: a crash adds a bare error line (no `::`) and decides nothing."""
+    fails = summary.get("failures") or []  # O(1)
+    return (summary.get("mode") == "full" and isinstance(fails, list) and all("::" in str(f) for f in fails)  # O(F)
+            and any(isinstance(summary.get(k), int) and summary[k] > 0 for k in ("passed", "failed", "skipped")))  # O(1)
+
+
 def stale_in_run(entry: dict, summaries: list[dict]) -> bool:  # O(S*F) total
-    """The newest summary that covers the entry's file decides; none covers it: not stale."""
+    """The newest summary that covers the entry decides; none covers it: not stale. A summary covers an entry when
+    it holds the entry's file or lists the failure; a full run also covers every `run_tests` failure, so a later
+    full run closes each one it does not list, `-` entries from runners without JUnit included (#81)."""
     if entry.get("kind") != "test-failure":  # O(1)
         return False  # O(1)
     file = str(entry.get("file", ""))  # O(1)
     for s in summaries:  # O(S)
-        files = s.get("files") if isinstance(s, dict) else None  # O(1)
+        if not isinstance(s, dict):  # O(1)
+            continue  # O(1)
+        files = s.get("files")  # O(1)
         if isinstance(files, dict) and file in files:  # O(1)
             return stale_test_failure(entry, s)  # O(F)
+        if _listed(entry, s):  # still failing in that run | O(F)
+            return False  # O(1)
+        if entry.get("agent") == "run_tests" and _full_ran(s):  # O(F)
+            return True  # O(1)
     return False  # O(1)
 
 

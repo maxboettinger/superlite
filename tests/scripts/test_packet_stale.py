@@ -149,6 +149,56 @@ def test_stale_test_failure_cases():
     assert pt.stale_test_failure(e, {"passed": 3}) is False
 
 
+def rt(ctx: str, file: str = "-", line: int = 0) -> dict:
+    """A test-failure incident as run_tests logs it (`-` when the runner wrote no JUnit)."""
+    return {"kind": "test-failure", "file": file, "line": line, "context": ctx, "resolution": "open", "agent": "run_tests"}
+
+
+def full(**kw) -> dict:
+    d = {"mode": "full", "passed": 10, "failed": 0, "skipped": 0, "failures": [], "files": {}}
+    d.update(kw)
+    return d
+
+
+def test_full_run_closes_run_tests_failure_it_does_not_list():
+    """#81: a later full run supersedes every run_tests failure it does not list, `-` (no JUnit) entries included."""
+    e = rt("frontend: failed")
+    assert pt.stale_in_run(e, [full()])
+    assert pt.stale_in_run(e, [full(failed=1, failures=["-::backend: failed"])])
+    assert not pt.stale_in_run(e, [full(failed=1, failures=["-::frontend: failed"])])
+    junit = rt("testBar(): XCTAssertEqual failed", file="Tests/AppTests/FooTests.swift", line=12)
+    assert pt.stale_in_run(junit, [full(files={"AppTests.FooTests": [10, 0]})])  # the full run keys the file differently
+
+
+def test_newest_covering_summary_still_decides():
+    """#81: a newer run that lists the failure keeps it open; a newer fast run that says nothing does not decide."""
+    e = rt("frontend: failed")
+    red_fast = {"mode": "fast", "passed": 0, "failed": 1, "failures": ["-::frontend: failed"], "files": {}}
+    green_fast = {"mode": "fast", "passed": 3, "failed": 0, "failures": [], "files": {"tests/b.py": [3, 0]}}
+    assert not pt.stale_in_run(e, [red_fast, full()])
+    assert pt.stale_in_run(e, [green_fast, full()])
+    assert not pt.stale_in_run(e, [green_fast])
+
+
+def test_full_run_rule_only_for_run_tests_entries():
+    """#81: an agent's own test-failure note is closed by its file's run only, as before; a crashed full run decides nothing."""
+    agent = dict(rt("test_x: boom", file="src/a.py", line=3), agent="T3")
+    assert not pt.stale_in_run(agent, [full()])
+    crashed = full(passed=0, failed=1, failures=["no test command found"])
+    assert not pt.stale_in_run(rt("frontend: failed"), [crashed])
+
+
+def test_packet_drops_unfiled_failure_after_green_full_run(proj):
+    """#81 end to end: a mid-build `-` failure from a run without JUnit is dropped once a full run is green."""
+    write_log(proj, [rt("frontend: failed"), inc("exception", "boom happened", file="src/a.py", line=7)])
+    write_summary(proj / ".superlite" / "test-summary.json", files={})
+    r = packet(proj)
+    assert r.returncode == 0, r.stderr
+    t = text(proj)
+    assert "frontend: failed" not in t and "boom happened" in t
+    assert "dropped 1 stale test-failure incident(s)" in t
+
+
 def test_read_test_summary_fast_label(tmp_path):
     p = tmp_path / "s.json"
     write_summary(p, mode="fast", passed=16)

@@ -6,7 +6,7 @@
 Collects, from the progress ledger, every `Ruling:` line (in order), the
 commits and the last test counts, plus the open incidents from the log. Open means what the
 review packet counts: a location whose newest entry is resolved, and a test-failure the newest
-test summary shows green, are not open.
+covering test summary shows green (a later full run covers every run_tests failure), are not open.
 Deterministic: the same files give the same text. Stdlib only.
 """
 # Complexity notation:
