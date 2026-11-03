@@ -2,7 +2,8 @@
 # SubagentStop hook: during an active superlite run, append one stop record to
 # <project>/.superlite/metrics.jsonl:
 #   {"ev":"stop","t":<epoch ms>,"agent_id":..,"type":..,"transcript":<path, forward slashes>,"last":<max 160 chars>}
-# Active when .superlite/stable.json, prime.md or pool.json exists under the project dir.
+# Active when .superlite/stable.json, prime.md or pool.json exists under the project dir; a superlite:final-reviewer stop is
+# recorded even without a run (the folder is created).
 # Bash builtins only (each external process costs ~250 ms on Windows). Never blocks: always exits 0.
 
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
@@ -26,10 +27,12 @@ esc() {
 . "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
 superlite_state || exit 0
 sd="$SL_SD"
-[ -f "$sd/stable.json" ] || [ -f "$sd/prime.md" ] || [ -f "$sd/pool.json" ] || exit 0
+jstr agent_type; type="$REPLY"
+if [ -f "$sd/stable.json" ] || [ -f "$sd/prime.md" ] || [ -f "$sd/pool.json" ]; then :
+elif [ "$type" = "superlite:final-reviewer" ]; then [ -d "$sd" ] || { mkdir -p "$sd" 2>/dev/null || exit 0; [ -n "$SL_PROJ" ] && [ "$sd" = "$SL_PROJ/.superlite" ] && _sl_exclude "$SL_PROJ"; }   # recorded outside a run too (final-review-check)
+else exit 0; fi
 
 jstr agent_id; id="$REPLY"
-jstr agent_type; type="$REPLY"
 jstr agent_transcript_path; tr="${REPLY//\\//}"
 jstr last_assistant_message; last="${REPLY:0:160}"
 esc id; esc type; esc tr; esc last

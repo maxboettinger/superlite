@@ -12,6 +12,7 @@
 - `compact-nudge`: on `UserPromptSubmit`, when the session is 30 minutes past its launch or last compact, adds one context line asking the agent to tell the user to run `/compact`; shown once per window (it stamps `.superlite/last-compact`). Off with `SUPERLITE_NO_AUTOCOMPACT=1`.
 - `capture-agent-launch`: during a run, appends a `launch` record (agent id, type, model, description) to `.superlite/metrics.jsonl` after each `Agent` call.
 - `capture-agent-stop`: during a run, appends a `stop` record (agent id, type, transcript path, last message) to `.superlite/metrics.jsonl` when a subagent stops.
+- `final-review-check`: on `Stop`, blocks once per branch (recorded in `.superlite/final-review-warned`) when the branch is not the default branch (`origin/HEAD`, else `main`, else `master`; detached HEAD is ignored), changes 5 or more files or 150 or more lines against the merge-base, working tree and untracked files included (`docs/` and `.superlite/` excluded; untracked files over 1 MB add no lines), and `.superlite/metrics.jsonl` has no `superlite:final-reviewer` stop newer than the merge-base commit. The reason asks for a final review on a packet or a stated reason. Off with `SUPERLITE_FINAL_REVIEW=off`; silent when `stop_hook_active`. Not in `hooks-cursor.json`. `capture-agent-stop` records final-reviewer stops even without a run.
 
 ## Detecting an active run
 

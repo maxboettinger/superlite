@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Stop hook: once per branch, block the stop when a sizeable branch has no final-reviewer verdict.
+# Silent (exit 0, no output) when: stop_hook_active; SUPERLITE_FINAL_REVIEW=off; not in a git work tree; detached HEAD or
+# default branch; branch already warned (.superlite/final-review-warned); diff small (<5 files and <150 lines against the
+# merge-base, docs/ and .superlite/ excluded); or metrics.jsonl has a final-reviewer stop newer than the merge-base commit.
+# Fails open: any internal error exits 0 without output.
+
+IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
+
+[ "${SUPERLITE_FINAL_REVIEW:-}" = off ] && exit 0
+[[ $input =~ \"stop_hook_active\"[[:space:]]*:[[:space:]]*true ]] && exit 0
+
+. "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
+_sl_launch
+proj="$SL_LAUNCH"
+superlite_state || exit 0   # the same .superlite folder capture-agent-stop writes metrics.jsonl to
+cd "$proj" 2>/dev/null || exit 0
+[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || exit 0
+
+branch="$(git symbolic-ref --short -q HEAD 2>/dev/null)"
+[ -n "$branch" ] || exit 0   # detached HEAD
+
+def="$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null)"; def="${def#origin/}"
+if [ -z "$def" ]; then
+  if git rev-parse --verify -q refs/heads/main >/dev/null 2>&1; then def=main
+  elif git rev-parse --verify -q refs/heads/master >/dev/null 2>&1; then def=master
+  else exit 0; fi
+fi
+[ "$branch" = "$def" ] && exit 0
+
+sd="$SL_SD"
+[ -n "$sd" ] || exit 0
+warned="$sd/final-review-warned"
+if [ -f "$warned" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ "${line%$'\r'}" = "$branch" ] && exit 0
+  done < "$warned" 2>/dev/null
+fi
+
+base="$(git merge-base HEAD "$def" 2>/dev/null)" || exit 0
+[ -n "$base" ] || exit 0
+
+files=0; lines=0
+while IFS=$'\t' read -r a d p; do
+  [ -n "$p" ] || continue
+  files=$((files + 1))
+  [[ $a =~ ^[0-9]+$ ]] && lines=$((lines + a))
+  [[ $d =~ ^[0-9]+$ ]] && lines=$((lines + d))
+done < <(git diff --numstat "$base" -- . ':(exclude)docs' ':(exclude).superlite' 2>/dev/null)
+# Untracked files (checkpoint and inline sessions leave new files untracked) count as changed; skip counting lines over 1 MB.
+if [ "$files" -lt 5 ] && [ "$lines" -lt 150 ]; then
+  while IFS= read -r p; do
+    [ -f "$p" ] || continue
+    files=$((files + 1))
+    read -r n b _ < <(wc -lc < "$p" 2>/dev/null)
+    [[ $n =~ ^[0-9]+$ && $b =~ ^[0-9]+$ ]] && [ "$b" -le 1048576 ] && lines=$((lines + n))
+    [ "$files" -ge 5 ] || [ "$lines" -ge 150 ] && break
+  done < <(git ls-files --others --exclude-standard -- . ':(exclude)docs' ':(exclude).superlite' 2>/dev/null)
+fi
+[ "$files" -lt 5 ] && [ "$lines" -lt 150 ] && exit 0
+
+# A final-reviewer stop record newer than the merge-base commit time counts as a verdict.
+bt="$(git log -1 --format=%ct "$base" 2>/dev/null)"
+if [[ $bt =~ ^[0-9]+$ ]] && [ -f "$sd/metrics.jsonl" ]; then
+  bms=$((bt * 1000))
+  tre='"t"[[:space:]]*:[[:space:]]*([0-9]+)'
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ $line == *'"type":"superlite:final-reviewer"'* || $line == *'"type": "superlite:final-reviewer"'* ]] || continue
+    [[ $line =~ $tre ]] || continue
+    [ "${BASH_REMATCH[1]}" -gt "$bms" ] && exit 0
+  done < "$sd/metrics.jsonl" 2>/dev/null
+fi
+
+if [ ! -d "$sd" ]; then
+  mkdir -p "$sd" 2>/dev/null || exit 0
+  [ "$sd" = "$proj/.superlite" ] && _sl_exclude "$proj"
+fi
+printf '%s\n' "$branch" >> "$warned" 2>/dev/null || exit 0
+b="${branch//\\/\\\\}"; b="${b//\"/\\\"}"
+printf '{"decision":"block","reason":"Branch %s changes %s files, %s lines with no final review. Run superlite:final-reviewer on a packet, or state why not, then stop again. Shown once per branch."}\n' "$b" "$files" "$lines"
+exit 0

@@ -77,3 +77,21 @@ superlite_state() {
   esac
   return 0
 }
+
+# _sl_exclude PROJ: keep PROJ/.superlite out of `git status` by listing it in the repo's info/exclude (idempotent; silent
+# on any failure, e.g. not a git repo). Spawns one git process, so call it only when the folder is first created.
+_sl_exclude() {
+  local x line
+  x="$(cd "$1" 2>/dev/null && git rev-parse --git-path info/exclude 2>/dev/null)" || return 0
+  [ -n "$x" ] || return 0
+  case "$x" in /*|[A-Za-z]:*) ;; *) x="$1/$x" ;; esac
+  if [ -f "$x" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
+      [ "$line" = ".superlite" ] || [ "$line" = ".superlite/" ] && return 0
+    done < "$x" 2>/dev/null
+  fi
+  mkdir -p "${x%/*}" 2>/dev/null || return 0
+  printf '.superlite/\n' >> "$x" 2>/dev/null
+  return 0
+}
