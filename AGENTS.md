@@ -1,3 +1,5 @@
+Read ~/github/max-core/AGENTS.md first (skip if missing).
+
 # Superlite - Contributor Guidelines
 
 Instructions for any agent (or human) changing this repository.
