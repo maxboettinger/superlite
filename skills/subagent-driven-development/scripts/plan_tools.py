@@ -1528,7 +1528,7 @@ def cmd_lint_stable(args) -> int:  # O(lint + n*k*s)
     (sl_dir / "chain-rulings.json").parent.mkdir(parents=True, exist_ok=True)  # O(1)
     (sl_dir / "chain-rulings.json").write_text(json.dumps(accepted, indent=1), encoding="utf-8")  # O(w)
     out.parent.mkdir(parents=True, exist_ok=True)  # O(1)
-    out.write_text(json.dumps({"stable": stable, "fix": fix, "plan_issues": plan_issues, "interfaces": interfaces, "blocks": blocks, "tiers": tiers}, indent=1), encoding="utf-8")  # O(S)
+    out.write_text(json.dumps({"stable": stable, "fix": fix, "plan_issues": plan_issues, "interfaces": interfaces, "blocks": blocks, "tiers": tiers, "plan": str(Path(args.plan).resolve())}, indent=1), encoding="utf-8")  # O(S)
     entry = {"time": datetime.now().isoformat(timespec="seconds"), "stable": len(stable), "fix": len(fix),  # O(n)
              "stable_ids": stable, "newly_stable": [t for t in stable if t not in set(old.get("stable") or [])],
              "dispatched": sorted(sent & set(stable), key=nkey), "pending": pending, "frozen": len(frozen)}

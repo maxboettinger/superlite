@@ -302,7 +302,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                     help="wait for PATH's run (the `summary:` line); bare: the latest background run")  # O(1)
     ap.add_argument("--timeout", type=float, default=None, help=f"--wait limit in seconds (default {DEFAULT_WAIT:.0f})")  # O(1)
     ap.add_argument("--task", default=None, help="task id: compiled stacks run in .superlite/trees/<task> (own files only)")  # O(1)
-    ap.add_argument("--plan", default=nt.DEFAULT_PLAN, help="plan for --task Owns (default %(default)s)")  # O(1)
+    ap.add_argument("--plan", default=None, help=f"plan for --task Owns (default: the plan in .superlite/stable.json, else {nt.DEFAULT_PLAN})")  # O(1)
     ap.add_argument("--run-id", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
@@ -379,6 +379,13 @@ def expand_fast_paths(paths):  # O(p) source paths -> related tests; test paths 
     return out  # O(p)
 
 
+def stable_plan():  # O(S) the plan path `plan_tools lint --stable` recorded, else None
+    try:  # O(1)
+        return json.loads(Path(".superlite/stable.json").read_text(encoding="utf-8")).get("plan") or None  # O(S)
+    except (OSError, ValueError, AttributeError):  # O(1)
+        return None  # O(1)
+
+
 def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     paths = [p for chunk in (a.fast or []) for p in nt.csv(chunk)]  # O(p)
     label = "fast" if paths else "full"  # O(1)
@@ -405,7 +412,15 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     if not spec["python"]:  # O(1)
         tree = None  # O(1)
         if a.task and spec.get("isolate", False):  # compiled stack: test own files only, in an isolated tree | O(1)
-            info = nt.parse_plan(a.plan)  # O(L)
+            plan = a.plan or stable_plan() or nt.DEFAULT_PLAN  # --plan, else stable.json's plan, else the default | O(S)
+            if not Path(plan).is_file():  # O(1)
+                reason = f"--task {a.task} needs its plan: pass --plan PLAN (no plan in .superlite/stable.json and no {nt.DEFAULT_PLAN})"  # O(1)
+                print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+                write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
+                publish_summary(a)  # O(summary size)
+                print("0 0 0 0.0")  # O(1)
+                return 2  # O(1)
+            info = nt.parse_plan(plan)  # O(L)
             if a.task not in info:  # O(1)
                 nt.die(f"unknown task {a.task}")  # O(1)
             tree = trees.prepare(".", a.task, info[a.task]["owns"])  # O(f * o) + git checkout
