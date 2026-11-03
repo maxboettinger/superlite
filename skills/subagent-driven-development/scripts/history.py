@@ -11,7 +11,7 @@ per-project copy of both under `.superlite/`. Aggregates only: no code, prompts 
 
 ROW SCHEMA (v1), one JSON object per line:
   v 1, date (YYYY-MM-DD), run (id), source ("run" | "import"), language (python, typescript, javascript,
-  go, rust, csharp, java, ruby, unknown: from the repo's marker files), task (Tn),
+  go, rust, csharp, java, ruby, swift, unknown: from the repo's marker files), task (Tn),
   kind (mechanical|design), loc, components, tests (fast|slow), focus (sorted Review Focus categories
   of the task's package), band (see band_of), critical_path (bool; predicted for source=run, actual for
   imports), slack_min (predicted slack in minutes, or actual slack_s / 60 for imports),
@@ -35,8 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 
 MARKERS = [("tsconfig.json", "typescript"), ("package.json", "javascript"), ("go.mod", "go"), ("Cargo.toml", "rust"),  # O(1)
            ("pyproject.toml", "python"), ("setup.py", "python"), ("requirements.txt", "python"), ("pom.xml", "java"),
-           ("build.gradle", "java"), ("Gemfile", "ruby")]
-SUFFIX_MARKERS = [(".csproj", "csharp"), (".sln", "csharp")]  # O(1)
+           ("build.gradle", "java"), ("Gemfile", "ruby"), ("Package.swift", "swift")]
+SUFFIX_MARKERS = [(".csproj", "csharp"), (".sln", "csharp"), (".xcodeproj", "swift"), (".xcworkspace", "swift")]  # O(1)
 
 
 def home() -> Path:  # O(1)
