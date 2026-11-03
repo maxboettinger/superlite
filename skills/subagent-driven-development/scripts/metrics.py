@@ -30,7 +30,15 @@ FAMILIES = ("fable", "mythos", "haiku", "sonnet", "opus")  # O(1)
 TID = re.compile(r"\bT(\d+[a-z]?)\b")  # O(1)
 STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b", re.I)  # O(1)
 RED = re.compile(r"\b(?:tests?|suite)\b[^\n]{0,40}\b(?:red|failing|failed)\b|\b\d+\s+failed\b", re.I)  # O(1)
+LEAD = re.compile(r"\A\s*[^\n]{0,80}?\b(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b")  # unlabelled first line: `T4 gallery: DONE` | O(1)
+HANDBACK = "SubagentHandback"  # Claude Code delivers a subagent's report as this tool call's input.message, not as text | O(1)
 CHARS_PER_TOKEN = 3.5  # output_tokens in a transcript is an early snapshot of a streamed message; text length bounds it below
+
+
+def status_of(text) -> str | None:  # O(len)
+    """`Status: X` anywhere, else an upper-case status token on the first line (about a quarter of real reports)."""
+    m = STATUS.search(text or "") or LEAD.search(text or "")  # O(len)
+    return m.group(1).upper() if m else None  # O(1)
 
 
 def msg_chars(msg) -> int:  # O(content)
@@ -120,7 +128,8 @@ def read_jsonl(path) -> list:  # O(bytes)
 
 
 def transcript_segments(path, tasks_hint: list) -> list:  # O(bytes of one transcript)
-    """[{tid, tokens, tool_calls, first, last, model, text}] split at user messages that name a Tn.
+    """[{tid, tokens, tool_calls, first, last, model, text, reports}] split at user messages that name a Tn.
+    reports: the segment's SubagentHandback messages in order; text is the last of them, else the last assistant text.
     Output tokens are the message's own count (the maximum seen per message id)."""
     segs: list[dict] = []  # O(1)
     cur = None  # O(1)
@@ -132,12 +141,12 @@ def transcript_segments(path, tasks_hint: list) -> list:  # O(bytes of one trans
                                                 for b in (msg.get("content") if isinstance(msg.get("content"), list) else [])):
             m = TID.search(_text_of(msg.get("content"))[:400])  # O(400)
             if m and (cur is None or cur["tid"] != "T" + m.group(1)):  # O(1)
-                cur = {"tid": "T" + m.group(1), "tok": _empty(), "calls": set(), "first": t, "last": t, "model": "", "text": ""}  # O(1)
+                cur = {"tid": "T" + m.group(1), "tok": _empty(), "calls": set(), "first": t, "last": t, "model": "", "text": "", "reports": []}  # O(1)
                 segs.append(cur)  # O(1)
         if e.get("type") != "assistant":  # O(1)
             continue  # O(1)
         if cur is None:  # work before any task message (the prime): belongs to the first task | O(1)
-            cur = {"tid": tasks_hint[0] if tasks_hint else None, "tok": _empty(), "calls": set(), "first": t, "last": t, "model": "", "text": ""}  # O(1)
+            cur = {"tid": tasks_hint[0] if tasks_hint else None, "tok": _empty(), "calls": set(), "first": t, "last": t, "model": "", "text": "", "reports": []}  # O(1)
             segs.append(cur)  # O(1)
         mid = msg.get("id") or f"anon{len(seen)}"  # O(1)
         u = msg.get("usage") or {}  # O(1)
@@ -160,7 +169,11 @@ def transcript_segments(path, tasks_hint: list) -> list:  # O(bytes of one trans
                 cur["tok"][k] += v  # O(1)
         for b in msg.get("content") or []:  # O(content)
             if isinstance(b, dict) and b.get("type") == "tool_use":  # O(1)
-                cur["calls"].add(b.get("id") or f"{mid}:{len(cur['calls'])}")  # O(1)
+                cid = b.get("id") or f"{mid}:{len(cur['calls'])}"  # O(1)
+                report = (b.get("input") or {}).get("message") if b.get("name") == HANDBACK else None  # O(1)
+                if isinstance(report, str) and cid not in cur["calls"]:  # a repeated snapshot delivers once | O(1)
+                    cur["reports"].append(report)  # O(1)
+                cur["calls"].add(cid)  # O(1)
         tx = _text_of(msg.get("content"))  # O(content)
         if tx:  # O(1)
             cur["text"] = tx  # O(1)
@@ -172,6 +185,9 @@ def transcript_segments(path, tasks_hint: list) -> list:  # O(bytes of one trans
         est = int(v["chars"] / CHARS_PER_TOKEN)  # O(1)
         if est > v["rec"]["output"]:  # O(1)
             v["seg"]["tok"]["output"] += est - v["rec"]["output"]  # O(1)
+    for sg in segs:  # the delivered report beats any text written after it | O(segments)
+        if sg["reports"]:  # O(1)
+            sg["text"] = sg["reports"][-1]  # O(1)
     return segs  # O(1)
 
 
@@ -326,7 +342,7 @@ def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n
             if tid:  # O(1)
                 st = (a["start_ms"] or 0) / 1000.0  # O(1)
                 en = (a["stop_ms"] or a["start_ms"] or 0) / 1000.0  # O(1)
-                segs = [{"tid": tid, "tok": _empty(), "calls": set(), "first": st, "last": en, "model": a["model"], "text": a["last"]}]  # O(1)
+                segs = [{"tid": tid, "tok": _empty(), "calls": set(), "first": st, "last": en, "model": a["model"], "text": a["last"], "reports": []}]  # O(1)
         for i, s in enumerate(segs):  # O(segments)
             if not s["tid"]:  # O(1)
                 continue  # O(1)
@@ -339,7 +355,7 @@ def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n
             text = s["text"] or (a["last"] if i == len(segs) - 1 else "")  # O(1)
             (rec(s["tid"])["fixes" if fixer else "builds"]).append(
                 {"agent": a["agent"], "type": a["type"], "fam": fam, "tok": s["tok"], "calls": len(s["calls"]),
-                 "start": st, "end": en, "text": text, "complete": a["complete"]})  # O(1)
+                 "start": st, "end": en, "text": text, "reports": s.get("reports") or [], "complete": a["complete"]})  # O(1)
     starts = [b["start"] for x in recs.values() for b in x["builds"] + x["fixes"]]  # O(n)
     t0 = min(starts) if starts else 0.0  # run time zero = the earliest agent start | O(n)
     incidents = read_jsonl(sl_dir / "incidents.jsonl")  # O(I)
@@ -356,8 +372,10 @@ def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n
                 tok[k] += b["tok"][k]  # O(1)
             cost += cost_of(b["tok"], price_for(prices, b["fam"]))  # O(1)
         last = builds[-1] if builds else None  # O(1)
-        sm = STATUS.search(last["text"]) if last else None  # O(1)
-        status = sm.group(1).upper() if sm else None  # O(1)
+        status = status_of(last["text"]) if last else None  # O(1)
+        earlier = [st for b in builds for x in b["reports"] for st in [status_of(x)] if st]  # O(reports)
+        earlier = earlier[:-1] if last and last["reports"] and status_of(last["reports"][-1]) else earlier  # O(1)
+        retried = any(st not in ("DONE", "DONE_WITH_CONCERNS") for st in earlier)  # a BLOCKED or NEEDS_CONTEXT report before the last | O(reports)
         rw_s = sum(f["end"] - f["start"] for f in fixes)  # O(fixes)
         rw_c = sum(cost_of(f["tok"], price_for(prices, f["fam"])) for f in fixes)  # O(fixes)
         misses = [i for i in incidents if re.search(rf"kind-miss\s+{tid}\b", str(i.get("context", "")))]  # O(I)
@@ -380,7 +398,7 @@ def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n
         if last is None or status is None:  # O(1)
             row["first_time_pass"] = None  # O(1)
         else:  # O(1)
-            row["first_time_pass"] = status in ("DONE", "DONE_WITH_CONCERNS") and not (RED.search(last["text"]) and status != "DONE") and not reworked  # O(1)
+            row["first_time_pass"] = status in ("DONE", "DONE_WITH_CONCERNS") and not (RED.search(last["text"]) and status != "DONE") and not reworked and not retried  # O(1)
         row["done_s"] = round(max([row["end_s"]] + [f["end"] - t0 for f in fixes]), 1) if builds else None  # O(fixes)
         out.append(row)  # O(1)
     timing(out, plan)  # O(n*(n + e))
