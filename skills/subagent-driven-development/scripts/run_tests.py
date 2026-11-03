@@ -35,6 +35,7 @@ import argparse  # O(1)
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
+import shlex  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
 import tempfile  # O(1)
@@ -328,15 +329,21 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     return run(a)  # see run
 
 
+def root_superlite(s, root):  # O(len s) a tree has no .superlite/ (git-ignored): point its word-initial uses at the project root
+    return re.sub(r"(?<![\w./~-])\.superlite/", lambda m: shlex.quote(str(root)) + "/.superlite/", s)  # O(len s)
+
+
 def run_other(a, spec, paths, label, cwd=None):  # one runner command (any language) | O(X + o) + the run
     """Run the resolved non-Python command: JUnit when the runner wrote one, else exit code plus output parsing."""
     with tempfile.TemporaryDirectory() as tmp:  # O(1)
         xml_path = Path(tmp) / "junit.xml"  # O(1)
-        sub = lambda s: s.replace("{junit}", str(xml_path))  # noqa: E731 | O(len)
+        root = Path.cwd().resolve()  # main chdir'd to the project root | O(1)
+        sub = lambda s: root_superlite(s, root) if cwd else s  # noqa: E731 | O(len)
+        sub = (lambda f: lambda s: f(s).replace("{junit}", str(xml_path)))(sub)  # noqa: E731 | O(len)
         env = {**os.environ, **{k: sub(str(v)) for k, v in (spec.get("env") or {}).items()}}  # O(env)
         literal = Path(spec["junit"]) if spec["junit"] and "{junit}" not in spec["junit"] else None  # a path the runner always writes | O(1)
-        if literal and cwd and not literal.is_absolute():  # the runner writes it inside its tree | O(1)
-            literal = Path(cwd) / literal  # O(1)
+        if literal and cwd and not literal.is_absolute():  # the runner writes it inside its tree, .superlite/ at the root | O(1)
+            literal = (root if literal.parts[:1] == (".superlite",) else Path(cwd)) / literal  # O(1)
         if literal and literal.exists():  # a stale report must not count | O(1)
             literal.unlink()  # O(1)
         marker = Path(cwd) / ".superlite-setup.done" if cwd else Path(".superlite") / "setup.done"  # setup runs once per run directory (per tree) | O(1)
