@@ -66,6 +66,7 @@ import autocommit  # noqa: E402 | O(1)
 import pyroots  # noqa: E402 | O(1)
 import _pyrun  # noqa: E402 | O(1)
 from pool import currents  # noqa: E402 | O(1)
+import state  # noqa: E402 | O(1)
 
 DEFAULT_LEDGER = ".superlite/progress.md"  # O(1)
 DEFAULT_LOG = ".superlite/incidents.jsonl"  # O(1)
@@ -499,7 +500,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         shared = changed_vs_parent(cand)  # O(m) + process spawns
         mine += shared  # O(m)
 
-    running = others_running(getattr(a, "pool", ".superlite/pool.json"), [tid]) if out_of_scope else []  # O(pool bytes)
+    running = others_running(getattr(a, "pool", None) or state.pool_path(), [tid]) if out_of_scope else []  # O(pool bytes)
     if out_of_scope and running:  # a running task's stray file is not this task's block | O(m)
         for f in out_of_scope:  # O(m) iterations
             print(f"left uncommitted (another task is running: {', '.join(running)}): {f}", file=sys.stderr)  # O(1)
@@ -562,7 +563,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
                     help="no-op alias (kept for compatibility): other tasks' files are always left alone")  # O(1)
     ap.add_argument("--dispatch", action="store_true",  # O(1)
                     help="after committing, print `dispatch` output (next tasks and agents)")  # O(1)
-    ap.add_argument("--pool", default=".superlite/pool.json", help="pool for --dispatch")  # O(1)
+    ap.add_argument("--pool", default=state.pool_path(), help="pool for --dispatch")  # the session's run, else ./.superlite | O(d)
     ap.add_argument("--running", help="running tasks for --dispatch (default: from the pool)")  # O(1)
     ap.add_argument("--cap", type=int, default=10, help="cap for --dispatch")  # O(1)
     ap.add_argument("--also", action="extend", nargs="+", default=[], metavar="FILE",  # O(1)

@@ -24,6 +24,7 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import assign as asg  # noqa: E402 | O(1)
 import metrics as mx  # noqa: E402 | O(1)
+import state  # noqa: E402 | O(1)
 
 
 def currents(ag):  # O(len current)
@@ -166,7 +167,7 @@ def line(ag):  # O(1)
 
 def main(argv=None):  # O(a*m + a*T)
     common = argparse.ArgumentParser(add_help=False)  # O(1)
-    common.add_argument("--pool", default=".superlite/pool.json")  # O(1)
+    common.add_argument("--pool", default=state.pool_path())  # the session's run, else ./.superlite | O(d)
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
     s = sub.add_parser("add", parents=[common])  # O(1)

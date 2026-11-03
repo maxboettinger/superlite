@@ -30,6 +30,7 @@ from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import next_tasks as nt  # noqa: E402 | O(1)
+import state  # noqa: E402 | O(1)
 
 MAX_CONTEXT_K = 80.0  # O(1)
 MAX_TASKS = 3  # O(1)
@@ -94,7 +95,7 @@ def decide(scores):  # O(a log a)
 def main(argv=None):  # O(L + a*o*F*len) + process spawn
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     ap.add_argument("--task", required=True)  # O(1)
-    ap.add_argument("--pool", default=".superlite/pool.json")  # O(1)
+    ap.add_argument("--pool", default=state.pool_path())  # the session's run, else ./.superlite | O(d)
     ap.add_argument("--plan")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     pool_path = Path(a.pool)  # O(1)

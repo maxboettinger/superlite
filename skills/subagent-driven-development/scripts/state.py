@@ -21,7 +21,7 @@ id), moves a pending gate (orchestrator.json, human-replies.jsonl) from the sess
 folder another live session owns (`force` takes it over). An owner is live while its binding points at the folder.
 Paths stay as given (absolute, symlinks not resolved, a relative path joined to $PWD), as the hooks see them. A
 binding also records $CLAUDE_PID, so the SessionStart hook moves it to the new id after /clear (same process). Bindings
-older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, resolve, bind, unbind, owner, live_owner. Stdlib only.
+older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, resolve, pool_path, bind, unbind, owner, live_owner. Stdlib only.
 """
 # Complexity notation:
 #   d = depth of a path (parents walked), b = bindings in $SUPERLITE_HOME/sessions
@@ -202,6 +202,11 @@ def resolve(plan_or_dir=None) -> Path:  # O(d)
     if other and not _hands_over(".superlite", other):  # ./.superlite is another session's run | O(d)
         return private_dir(sid)  # O(1)
     return Path(".superlite")  # O(1)
+
+
+def pool_path() -> str:  # O(d)
+    """Default pool file: pool.json in the folder `resolve` names, so a cwd reset to the launch folder keeps the run's pool."""
+    return str(resolve() / "pool.json")  # O(d)
 
 
 def _prune(now) -> None:  # O(b)
