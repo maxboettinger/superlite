@@ -226,6 +226,48 @@ def test_packet_drops_unfiled_failure_after_green_full_run(proj):
     assert "dropped 1 stale test-failure incident(s)" in t
 
 
+def by(agent: str, ctx: str = "boom", file: str = "src/a.py", line: int = 7, kind: str = "exception") -> dict:
+    return {"kind": kind, "file": file, "line": line, "context": ctx, "resolution": "open", "agent": agent}
+
+
+def test_items_name_their_checker():
+    """#12: every packet item names the checker that produced it, tool or agent."""
+    [tool] = pt.incident_items([by("commit_task")])
+    [agent] = pt.incident_items([by("T3")])
+    [mixed] = pt.incident_items([by("run_tests", kind="test-failure"), by("reviewer", ctx="other")])
+    assert (tool.checker, tool.tool) == ("commit_task (tool)", True)
+    assert (agent.checker, agent.tool) == ("T3 (agent)", False)
+    assert (mixed.checker, mixed.tool) == ("reviewer (agent), run_tests (tool)", False)
+    [claimed] = pt.claimed_fix_items([dict(by("T3"), resolution="fixed")], set())
+    assert claimed.tool and claimed.checker.startswith("pt_review claimed-fix check (tool)")
+
+
+def test_packet_shows_checker_lines(proj):
+    write_log(proj, [by("commit_task"), by("T3", ctx="race", line=9)])
+    assert packet(proj).returncode == 0
+    t = text(proj)
+    assert "checker: commit_task (tool)" in t and "checker: T3 (agent)" in t
+
+
+def test_tool_only_header(proj):
+    """#12: when every open item comes from a tool, the header says so and asks to confirm or dismiss each item."""
+    write_log(proj, [by("commit_task"), by("run_tests", ctx="frontend: failed", file="-", line=0, kind="test-failure")])
+    packet(proj)
+    head = text(proj).split("## 1.", 1)[0]
+    assert "REVIEW REQUIRED (tool checks only)" in head
+    assert "confirm or dismiss each" in head
+    write_log(proj, [by("commit_task"), by("T3", ctx="race", line=9)])
+    packet(proj)
+    head = text(proj).split("## 1.", 1)[0]
+    assert "REVIEW REQUIRED" in head and "tool checks only" not in head
+
+
+def test_fast_path_unchanged_without_items(proj):
+    write_summary(proj / ".superlite" / "test-summary.json")
+    packet(proj)
+    assert text(proj).startswith("# Review packet: FAST PATH")
+
+
 def test_read_test_summary_fast_label(tmp_path):
     p = tmp_path / "s.json"
     write_summary(p, mode="fast", passed=16)

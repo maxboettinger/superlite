@@ -1397,6 +1397,17 @@ class Item:  # O(1)
     body: str  # O(1)
     file: str = ""  # O(1)
     line: int = 0  # O(1)
+    checker: str = ""  # who produced the item, shown as its `checker:` line (#12) | O(1)
+    tool: bool = True  # produced by a tool check, not an agent finding | O(1)
+
+
+TOOL_AGENTS = {"run_tests", "pt_review", "commit_task", "probe_run"}  # scripts that log incidents | O(1)
+
+
+def _checker(agents: list[str]) -> tuple[str, bool]:  # O(a log a) total
+    """(`checker:` label, tool-made) for the agents that logged an item."""
+    names = sorted(set(agents)) or ["unknown"]  # O(a log a)
+    return ", ".join(f"{a} ({'tool' if a in TOOL_AGENTS else 'agent'})" for a in names), all(a in TOOL_AGENTS for a in names)  # O(a)
 
 
 def superseded(entries: list[dict]) -> set[tuple[str, int]]:  # O(K) total
@@ -1450,7 +1461,8 @@ def claimed_fix_items(entries: list[dict], changed: set[str], root: Path | None 
         agent = e.get("agent") or "unknown"  # O(1)
         items.append(Item("claimed", (3, "\uffff", file, line),  # O(1)
                           f"{file}:{line}  claimed fixed by {agent}, file unchanged since base",  # O(1)
-                          f"- [{agent}] {str(e.get('context', ''))[:200]}", file, line))  # O(1)
+                          f"- [{agent}] {str(e.get('context', ''))[:200]}", file, line,  # O(1)
+                          f"pt_review claimed-fix check (tool), claim by {agent}"))  # O(1)
     return items  # O(groups)
 
 
@@ -1479,9 +1491,10 @@ def incident_items(entries: list[dict]) -> list[Item]:  # O(K) total
             lines.append(f"- [{tags}] {str(e.get('context', ''))[:200]}")  # O(1)
         if len(es) > 3:  # O(1)
             lines.append(f"- (+{len(es) - 3} more entries at this location)")  # O(1)
+        checker, tool = _checker([str(e.get("agent") or "unknown") for e in es])  # O(entries)
         items.append(Item("incidents", (1, tier, -len(es), file, line),  # O(1)
                           f"{file}:{line}  ({', '.join(why)}; {len(es)} entr{'y' if len(es) == 1 else 'ies'})",  # O(1)
-                          "\n".join(lines), file, line))  # O(1)
+                          "\n".join(lines), file, line, checker, tool))  # O(1)
     return items  # O(1)
 
 
@@ -1503,7 +1516,7 @@ def read_probe_failures(probes: Path) -> list[Item]:  # O(R) total
         detail = str(r.get("detail") or r.get("message") or r.get("probe") or "")[:200]  # O(1)
         items.append(Item("probes", (3, str(r.get("category", "")), file, line),  # O(1)
                           f"probe {r.get('category', '?')} {r.get('status')}: {file}:{line}",  # O(1)
-                          f"- {detail}" if detail else "", file, line))  # O(1)
+                          f"- {detail}" if detail else "", file, line, "probe_run (tool)"))  # O(1)
     return items  # O(1)
 
 
@@ -1554,7 +1567,8 @@ def uncovered_items(plan: Plan, root: Path, entries: list[dict]) -> list[Item]: 
                         line = 1  # O(1)
             items.append(Item("uncovered", (4, pkg, cat),  # O(1)
                               f"package {pkg}: no `verified` entry for category `{cat}`",  # O(1)
-                              "- Unverified: judge from the excerpt or list it as a finding.", file, line))  # O(1)
+                              "- Unverified: judge from the excerpt or list it as a finding.", file, line,  # O(1)
+                              "probe coverage of the Review Focus (tool)"))  # O(1)
     return items  # O(1)
 
 
@@ -1928,7 +1942,7 @@ def read_test_summary(path: Path) -> tuple[str, int]:  # O(file size) total
 
 
 def render_item(root: Path, it: Item, shown: set[tuple[str, int]], idx: str) -> str:  # O(B) per item (excerpt re-reads file)
-    out = [f"### {idx} {it.title}"]  # O(1)
+    out = [f"### {idx} {it.title}"] + ([f"checker: {it.checker}"] if it.checker else [])  # O(1)
     if it.body:  # O(1)
         out.append(it.body)  # O(1)
     if it.file:  # O(1)
@@ -1979,12 +1993,13 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     mismatches, n_checked = check_interfaces(plan, root, None)  # O(P) + 1 subprocess
     for m in mismatches:  # O(Mm) iterations
         items.append(Item("contract", (2, m.file, m.line, m.msg), f"{m.file}:{m.line}  part1 {m.task}",  # O(1)
-                          f"- {m.msg}", m.file, m.line))  # O(1)
+                          f"- {m.msg}", m.file, m.line, "pt_review contract check (tool)"))  # O(1)
     items.sort(key=lambda i: i.rank)  # O(I log I)
     counts = {s: sum(1 for i in items if i.section == s) for s in ("incidents", "probes", "uncovered", "contract", "claimed")}  # O(5*I)
     tests_text, nfail = read_test_summary(tests)  # O(1)
     n_open = sum(counts.values()) + (1 if nfail else 0)  # O(1)
     fast = n_open == 0  # O(1)
+    tool_only = not fast and all(i.tool for i in items)  # every open item is a tool check, none an agent finding (#12) | O(I)
 
     seams = cross_package_calls(root)  # O(S*B)
     seam_text = "\n".join(seams) if seams else "- none"  # O(1)
@@ -2007,7 +2022,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     excerpts = cap_text(raw_ex, ex_budget)  # O(X)
 
     head = [  # O(1)
-        f"# Review packet: {'FAST PATH' if fast else 'REVIEW REQUIRED'}",  # O(1)
+        f"# Review packet: {'FAST PATH' if fast else 'REVIEW REQUIRED (tool checks only)' if tool_only else 'REVIEW REQUIRED'}",  # O(1)
         f"plan: {plan.path.name}",  # O(1)
         "Answer in one turn, no tools: a verdict, then findings as `file:line - problem - fix`. "  # O(1)
         "Anything marked unverified is judged from its excerpt or listed as a finding.",  # O(1)
@@ -2016,6 +2031,8 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
          f"Open items: {n_open} (incidents {counts['incidents']}, probe failures {counts['probes']}, "  # O(1)
          f"unverified categories {counts['uncovered']}, contract mismatches {counts['contract']}, claimed fixes {counts['claimed']}, "  # O(1)
          f"failing tests {nfail}). Excerpts are +-12 lines."),  # O(1)
+        *(["Every open item comes from a tool check (its `checker:` line), none from an agent finding: "  # O(1)
+           "confirm or dismiss each from its excerpt, one line why per dismissal; nothing is approved unread."] if tool_only else []),  # O(1)
         "",  # O(1)
     ]  # O(1)
     tail = ["## 4. Test summary", tests_text, "",  # O(1)
