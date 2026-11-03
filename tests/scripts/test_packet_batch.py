@@ -101,9 +101,65 @@ def fill_total(proj: Path) -> None:
 
 def test_left_out_named(proj):
     fill_total(proj)
-    s = sec8(packet(proj, "--max-tokens", "40000")).splitlines()
+    s = sec8(packet(proj, "--max-tokens", "2000")).splitlines()
     first = next(line for line in s[1:] if line.strip())
     assert first.startswith("Left out: ") and "src/f7.py" in first and "src/f0.py" not in first
+
+
+def change_wide(proj: Path, name: str, n: int, width: int = 60) -> None:
+    f = proj / name
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("".join(f"new {i} ".ljust(width, "x") + "\n" for i in range(n)), encoding="utf-8")
+
+
+def headed(s: str) -> list[str]:
+    return [h[4:] for h in s.splitlines() if h.startswith("### ")]
+
+
+def test_default_budget_scales_with_changed_code(proj):
+    """#80: by default every changed code file gets its capped hunks; the packet grows past 20k tokens to fit them."""
+    names = [f"src/f{i}.py" for i in range(8)]
+    commit_base(proj, {n: 1 for n in names})
+    for n in names:
+        change_wide(proj, n, 300)
+    text = packet(proj)
+    s = sec8(text)
+    assert headed(s) == names
+    assert "Left out:" not in text
+    assert s.count("(truncated: 120 of") == 8
+    assert int(20000 * 1.9) < len(text) <= int(60000 * 1.9)
+
+
+def test_default_budget_ceiling_60k(proj):
+    """#80: the scaled default stops at 60k tokens; files past the ceiling are named in Left out."""
+    names = [f"src/f{i:02}.py" for i in range(40)]
+    commit_base(proj, {n: 1 for n in names})
+    for n in names:
+        change_wide(proj, n, 300, width=80)
+    text = packet(proj)
+    assert len(text) <= int(60000 * 1.9)
+    assert "Left out: " in text and "src/f39.py" in text.split("Left out: ", 1)[1]
+    assert "(truncated: 40 of" in sec8(text)  # past the ceiling every shown file gets the floor first
+
+
+def test_floor_before_fill(proj):
+    """#80: one large hook no longer crowds out the core files; each changed code file gets hunks first."""
+    code = [f"src/f{i}.py" for i in range(6)]
+    commit_base(proj, {"hooks/guard": 1, **{n: 1 for n in code}})
+    change_wide(proj, "hooks/guard", 500, width=20)
+    for n in code:
+        change_wide(proj, n, 300, width=20)
+    s = sec8(packet(proj, "--max-tokens", "20000"))
+    assert headed(s) == ["hooks/guard", *code]
+    assert "Left out:" not in s
+
+
+def test_explicit_max_tokens_still_caps(proj):
+    names = [f"src/f{i}.py" for i in range(8)]
+    commit_base(proj, {n: 1 for n in names})
+    for n in names:
+        change_wide(proj, n, 300)
+    assert len(packet(proj, "--max-tokens", "3000")) <= int(3000 * 1.9)
 
 
 def test_left_out_survives_size_cap(proj):

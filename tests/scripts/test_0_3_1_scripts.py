@@ -285,22 +285,25 @@ def test_packet_excerpt_caps_per_file(tmp_path):
     assert "+y299" not in sec
 
 
-def test_packet_excerpt_caps_total(tmp_path):
+def test_packet_excerpt_every_file_at_large_budget(tmp_path):
     proj, base = excerpt_project(tmp_path, 8, 300)
     sec = section(make_packet(proj, base))
-    shown = [ln for ln in sec.splitlines() if ln.startswith(("+y", "@@", "+++", "---", "diff ", "index "))]
-    assert len(shown) <= 600
-    assert "total cap" in sec and "more file(s) omitted" in sec
+    assert all(f"### src/minisheet/m{i}.py" in sec for i in range(8))
+    assert sec.count("per-file cap") == 8 and "Left out" not in sec
 
 
 def test_source_excerpts_unit_caps(tmp_path):
     proj, base = excerpt_project(tmp_path, 3, 200)
-    out = pt_review.source_excerpts(proj, base, [f"src/minisheet/m{i}.py" for i in range(3)],
-                                    per_file=50, total=80)
+    files = [f"src/minisheet/m{i}.py" for i in range(3)]
+    full = pt_review.excerpt_need(pt_review.changed_diffs(proj, base, files)[1], per_file=50)
+    out = pt_review.source_excerpts(proj, base, files, per_file=50, budget=full - 200, floor=20)
     body = [ln for ln in out.splitlines() if ln.startswith(("+", "-", "@@", "diff", "index", " "))
             and not ln.startswith("- (")]
-    assert len(body) <= 80
-    assert "per-file cap" in out and "total cap" in out
+    assert len(body) <= 3 * 50
+    assert all(f"### src/minisheet/m{i}.py" in out for i in range(3))
+    notes = [ln for ln in out.splitlines() if ln.startswith("(truncated")]
+    assert any("per-file cap" in n for n in notes), notes
+    assert any("size cap" in n for n in notes), notes
 
 
 # ------------------------------------------------------------------ lint: CHAIN and OPUS-TASK
