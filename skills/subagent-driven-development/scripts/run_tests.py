@@ -329,8 +329,11 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     return run(a)  # see run
 
 
-def root_superlite(s, root):  # O(len s) a tree has no .superlite/ (git-ignored): point its word-initial uses at the project root
-    return re.sub(r"(?<![\w./~-])\.superlite/", lambda m: shlex.quote(str(root)) + "/.superlite/", s)  # O(len s)
+def root_superlite(s, root, raw=False):  # O(len s) a tree has no .superlite/ (git-ignored): point its word-initial uses at the project root
+    def at(m):  # O(1) raw root for env values and inside quotes, shell-quoted otherwise
+        quoted = m.start() > 0 and s[m.start() - 1] in "\"'"  # O(1)
+        return (str(root) if raw or quoted else shlex.quote(str(root))) + "/.superlite/"  # O(1)
+    return re.sub(r"(?<![\w./~-])\.superlite/", at, s)  # O(len s)
 
 
 def run_other(a, spec, paths, label, cwd=None):  # one runner command (any language) | O(X + o) + the run
@@ -340,12 +343,18 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
         root = Path.cwd().resolve()  # main chdir'd to the project root | O(1)
         sub = lambda s: root_superlite(s, root) if cwd else s  # noqa: E731 | O(len)
         sub = (lambda f: lambda s: f(s).replace("{junit}", str(xml_path)))(sub)  # noqa: E731 | O(len)
-        env = {**os.environ, **{k: sub(str(v)) for k, v in (spec.get("env") or {}).items()}}  # O(env)
+        subenv = lambda s: (root_superlite(s, root, raw=True) if cwd else s).replace("{junit}", str(xml_path))  # noqa: E731 | env is never shell-parsed | O(len)
+        env = {**os.environ, **{k: subenv(str(v)) for k, v in (spec.get("env") or {}).items()}}  # O(env)
         literal = Path(spec["junit"]) if spec["junit"] and "{junit}" not in spec["junit"] else None  # a path the runner always writes | O(1)
+        alt = None  # the tree copy of a .superlite/ report, used when the root has none | O(1)
         if literal and cwd and not literal.is_absolute():  # the runner writes it inside its tree, .superlite/ at the root | O(1)
-            literal = (root if literal.parts[:1] == (".superlite",) else Path(cwd)) / literal  # O(1)
-        if literal and literal.exists():  # a stale report must not count | O(1)
-            literal.unlink()  # O(1)
+            if literal.parts[:1] == (".superlite",):  # O(1)
+                literal, alt = root / literal, Path(cwd) / literal  # a runner config may write it relative to the tree | O(1)
+            else:  # O(1)
+                literal = Path(cwd) / literal  # O(1)
+        for stale in (literal, alt):  # a stale report must not count | O(1)
+            if stale and stale.exists():  # O(1)
+                stale.unlink()  # O(1)
         marker = Path(cwd) / ".superlite-setup.done" if cwd else Path(".superlite") / "setup.done"  # setup runs once per run directory (per tree) | O(1)
         if spec["setup"] and not marker.exists():  # O(1)
             pyrun.run_tree(sub(spec["setup"]), shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=cwd)  # O(o)
@@ -355,6 +364,8 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
         r = pyrun.run_tree(sub(spec["command"]), shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=cwd)  # O(o) + the run
         seconds = time.monotonic() - t0  # O(1)
         text = (r.stdout or "") + (r.stderr or "")  # O(o)
+        if alt and not literal.exists():  # O(1)
+            literal = alt  # O(1)
         reports = junit_reports(xml_path, literal)  # the main report plus sidecars | O(n log n)
         report = None  # O(1)
         if reports:  # O(1)
@@ -419,9 +430,11 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     if not spec["python"]:  # O(1)
         tree = None  # O(1)
         if a.task and spec.get("isolate", False):  # compiled stack: test own files only, in an isolated tree | O(1)
-            plan = a.plan or stable_plan() or nt.DEFAULT_PLAN  # --plan, else stable.json's plan, else the default | O(S)
-            if not Path(plan).is_file():  # O(1)
-                reason = f"--task {a.task} needs its plan: pass --plan PLAN (no plan in .superlite/stable.json and no {nt.DEFAULT_PLAN})"  # O(1)
+            sp = stable_plan()  # O(S)
+            plan = a.plan or next((p for p in (sp, nt.DEFAULT_PLAN) if p and Path(p).is_file()), None)  # --plan, else the first existing of stable.json's plan and the default | O(1)
+            if not plan or not Path(plan).is_file():  # O(1)
+                tried = a.plan or ", ".join(x for x in (sp and f"{sp} (.superlite/stable.json)", nt.DEFAULT_PLAN) if x)  # O(1)
+                reason = f"--task {a.task} needs its plan: pass --plan PLAN (tried {tried}, not found)"  # O(1)
                 print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
                 write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
                 publish_summary(a)  # O(summary size)

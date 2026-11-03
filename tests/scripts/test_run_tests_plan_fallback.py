@@ -59,3 +59,12 @@ def test_lint_stable_records_absolute_plan(tmp_path):
     assert cp.returncode == 0, cp.both
     data = json.loads((tmp_path / ".superlite" / "stable.json").read_text(encoding="utf-8"))
     assert data["plan"] == str(plan.resolve())
+
+
+def test_missing_stable_plan_falls_back_to_default_plan(tmp_path):
+    setup(tmp_path)
+    (tmp_path / ".superlite" / "stable.json").write_text(json.dumps({"plan": str(tmp_path / "gone.md")}), encoding="utf-8")
+    make_plan(tmp_path / ".superlite", [{"id": "T1", "owns": "src/a.txt"}], name="plan.md")
+    cp = run(RUN_TESTS, "--fast", "src/a.txt", "--task", "T1", cwd=tmp_path)
+    assert cp.returncode == 0, cp.both
+    assert summary(tmp_path)["passed"] == 2
