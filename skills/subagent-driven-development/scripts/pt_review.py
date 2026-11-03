@@ -1647,14 +1647,31 @@ def cross_package_calls(root: Path) -> list[str]:  # O(S*B) total, reads+parses 
     return [f"- {f}:{ln}  {a} -> {b}: {full}()" for f, ln, a, b, full in sorted(rows)]  # O(R log R) sort of rows
 
 
-def diff_head(root: Path) -> str | None:  # O(file size) total
-    """Sha of the newest checkpoint entry, or None without checkpoints."""  # O(1)
+def _state_sha(root: Path, pick) -> str | None:  # O(file size) total
+    """`pick(checkpoints.json)` when it is a hex id (never an option or None), else None."""  # O(1)
     try:  # O(1)
-        entries = json.loads((root / autocommit.STATE).read_text(encoding="utf-8")).get("entries") or []  # O(file size)
-        sha = entries[-1]["sha"]  # O(1)
-        return sha if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{1,64}", sha) else None  # a hex id only: never an option or None | O(1)
+        sha = pick(json.loads((root / autocommit.STATE).read_text(encoding="utf-8")))  # O(file size)
+        return sha if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{1,64}", sha) else None  # O(1)
     except (OSError, ValueError, AttributeError, IndexError, KeyError, TypeError):  # O(1)
         return None  # O(1)
+
+
+def diff_head(root: Path) -> str | None:  # O(file size) total
+    """Sha of the newest checkpoint entry, or None without checkpoints."""  # O(1)
+    return _state_sha(root, lambda st: (st.get("entries") or [])[-1]["sha"])  # O(file size)
+
+
+def moved_files(root: Path) -> set[str]:  # O(F) + 1 git subprocess
+    """Files HEAD changed since the run started (checkpoints.json `head`), as a mid-run fast-forward does (#104)."""
+    start = _state_sha(root, lambda st: st.get("head"))  # O(file size)
+    if not start:  # O(1)
+        return set()  # O(1)
+    try:  # O(1)
+        r = subprocess.run(["git", "-C", str(root), "diff", "--name-only", start, "HEAD"],  # O(F) + git spawn
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
+    except (OSError, subprocess.TimeoutExpired):  # O(1)
+        return set()  # O(1)
+    return {ln.strip() for ln in r.stdout.splitlines() if ln.strip()} if r.returncode == 0 else set()  # O(F)
 
 
 def diff_range(root: Path, base: str) -> list[str]:  # O(file size) total
@@ -1708,7 +1725,10 @@ def _excerpt_order(changed: list[str], hot: list[str]) -> list[str]:  # O(F^2) t
 
 
 def changed_diffs(root: Path, base: str | None, files: list[str]) -> tuple[list[str], list[tuple[str, list[str]]]] | None:  # O(X) + one git spawn per changed file
-    """(changed files, [(file, diff lines)] in excerpt order) against base and the newest checkpoint; None outside git."""
+    """(changed files, [(file, diff lines)] in excerpt order) against base and the newest checkpoint; None outside git.
+
+    A checkpointed file that HEAD also changed since the run started holds the merged lines too (a checkpoint stores
+    the working-tree file), so its hunk diffs HEAD against the checkpoint: only the run's lines (#104)."""
     if not (root / ".git").exists():  # O(1)
         return None  # O(1)
     if base is None:  # O(1)
@@ -1717,6 +1737,8 @@ def changed_diffs(root: Path, base: str | None, files: list[str]) -> tuple[list[
         roots = first.stdout.split() if first.returncode == 0 else []  # O(1)
         base = roots[0] if roots else "HEAD"  # O(1)
     rng = diff_range(root, base)  # O(file size)
+    cp = diff_head(root)  # O(file size)
+    moved = moved_files(root) if cp else set()  # O(F) + git spawn
     changed: list[str] = []  # O(1)
     try:  # O(1)
         nm = subprocess.run(["git", "-C", str(root), "diff", "--name-only", *rng],  # O(X) + git spawn
@@ -1728,7 +1750,7 @@ def changed_diffs(root: Path, base: str | None, files: list[str]) -> tuple[list[
     diffs: list[tuple[str, list[str]]] = []  # O(1)
     for f in _excerpt_order(changed, files):  # O(F) iterations
         try:  # O(1)
-            r = subprocess.run(["git", "-C", str(root), "diff", "-U3", *rng, "--", f],  # O(X) + git spawn
+            r = subprocess.run(["git", "-C", str(root), "diff", "-U3", *(["HEAD", cp] if f in moved else rng), "--", f],  # O(X) + git spawn
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
         except (OSError, subprocess.TimeoutExpired):  # O(1)
             continue  # O(1)
