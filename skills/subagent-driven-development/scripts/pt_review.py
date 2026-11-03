@@ -1647,7 +1647,6 @@ def git_diff_stat(root: Path, base: str | None) -> str:  # O(X) + up to 2 git su
 EXCERPT_FILE_LINES = 120  # O(1) cap on diff lines per hot-spot file
 EXCERPT_HOOK_LINES = 400  # O(1) cap on diff lines per changed hook file
 EXCERPT_FLOOR_LINES = 40  # O(1) diff lines every changed code file gets before any file gets more (#80)
-EXCERPT_FILE_OVERHEAD = 110  # O(1) chars per shown file: its heading, fences and a truncation note
 DEFAULT_TOKENS = 20000  # O(1) packet size without --max-tokens before the excerpts scale (plan section 5)
 AUTO_MAX_TOKENS = 60000  # O(1) ceiling of the scaled default (#80)
 
@@ -1702,47 +1701,67 @@ def _file_cap(f: str, per_file: int) -> int:  # O(m) total
     return EXCERPT_HOOK_LINES if _is_hook(f) else per_file  # O(m)
 
 
+def _overhead(f: str, n_lines: int, per_file: int) -> int:  # O(m) total
+    """Chars a shown file costs besides its diff lines: heading, fences, joins and the longest truncation note."""
+    note = f"(truncated: {_file_cap(f, per_file)} of {n_lines} diff lines shown, per-file cap)"  # O(m)
+    return len(f"### {f}\n```diff\n") + len("\n```") + len(note) + 2  # O(m)
+
+
 def excerpt_need(diffs: list[tuple[str, list[str]]], per_file: int = EXCERPT_FILE_LINES) -> int:  # O(X) total
     """Chars the excerpt section takes when every changed file shows its hunks up to its per-file cap."""
-    return sum(EXCERPT_FILE_OVERHEAD + sum(len(ln) + 1 for ln in lines[:_file_cap(f, per_file)])  # O(X)
+    return sum(_overhead(f, len(lines), per_file) + sum(len(ln) + 1 for ln in lines[:_file_cap(f, per_file)])  # O(X)
                for f, lines in diffs)  # O(F)
 
 
-def render_excerpts(changed: list[str], diffs: list[tuple[str, list[str]]], per_file: int = EXCERPT_FILE_LINES,  # O(X) total
-                    budget: int | None = None, floor: int = EXCERPT_FLOOR_LINES) -> str:
-    """The excerpt section within `budget` chars (None: no limit). Every changed code file (not tests, not markdown)
-    gets its first `floor` diff lines before any file gets more (#80); then each file fills up to its per-file cap,
-    in excerpt order. A first line `Left out: ...` names changed files whose hunks are not shown."""
+def _allocate(diffs: list[tuple[str, list[str]]], per_file: int, budget: int | None, floor: int,  # O(X) total
+              first: set[str]) -> dict[str, int]:
+    """Diff lines shown per file: pass 1 gives each file in `first` its floor, pass 2 fills to the per-file cap."""
     take = {f: 0 for f, _ in diffs}  # O(F)
     used = 0  # O(1)
 
     def grow(f: str, lines: list[str], upto: int) -> None:  # O(upto)
         nonlocal used  # O(1)
         while take[f] < upto:  # O(upto) iterations
-            c = len(lines[take[f]]) + 1 + (EXCERPT_FILE_OVERHEAD if take[f] == 0 else 0)  # O(1)
+            c = len(lines[take[f]]) + 1 + (_overhead(f, len(lines), per_file) if take[f] == 0 else 0)  # O(m)
             if budget is not None and used + c > budget:  # O(1)
                 return  # O(1)
             used += c  # O(1)
             take[f] += 1  # O(1)
 
-    for f, lines in diffs:  # pass 1: the floor for every changed code file | O(F) iterations
-        if not is_test_path(f) and not f.endswith(".md"):  # O(m)
+    for f, lines in diffs:  # pass 1: the floor | O(F) iterations
+        if f in first:  # O(1)
             grow(f, lines, min(floor, _file_cap(f, per_file), len(lines)))  # O(floor)
     for f, lines in diffs:  # pass 2: fill up to the per-file cap, in excerpt order | O(F) iterations
         grow(f, lines, min(_file_cap(f, per_file), len(lines)))  # O(per_file)
-    out: list[str] = []  # O(1)
-    for f, lines in diffs:  # O(F) iterations
-        n = take[f]  # O(1)
-        if not n:  # O(1)
-            continue  # O(1)
-        out.append(f"### {f}\n```diff\n" + "\n".join(lines[:n]) + "\n```")  # O(n)
-        if n < len(lines):  # O(1)
-            why = "per-file" if n == _file_cap(f, per_file) else "size"  # O(1)
-            out.append(f"(truncated: {n} of {len(lines)} diff lines shown, {why} cap)")  # O(1)
-    skipped = [f for f in changed if not take.get(f)]  # O(F)
-    if skipped:  # O(1)
-        out.insert(0, "Left out: " + ", ".join(skipped))  # O(F)
-    return "\n".join(out) or "- none (no changed hunks in the hot-spot files)"  # O(output)
+    return take  # O(1)
+
+
+def render_excerpts(changed: list[str], diffs: list[tuple[str, list[str]]], per_file: int = EXCERPT_FILE_LINES,  # O(X * shrink rounds) total
+                    budget: int | None = None, floor: int = EXCERPT_FLOOR_LINES, hot: list[str] = ()) -> str:
+    """The excerpt section within `budget` chars (None: no limit). The hot-spot files and every changed code file
+    (not tests, not markdown) get their first `floor` diff lines before any file gets more (#80); then each file
+    fills up to its per-file cap, in excerpt order. A first line `Left out: ...` names changed files whose hunks are
+    not shown; it is charged too, so the section never exceeds the budget unless that line alone does."""
+    first = {f for f, _ in diffs if f in set(hot) or (not is_test_path(f) and not f.endswith(".md"))}  # O(F)
+    b = budget  # O(1)
+    while True:  # shrink rounds: each one takes the overshoot (mostly the Left out line) off the fill budget | O(rounds)
+        take = _allocate(diffs, per_file, None if b is None else max(0, b), floor, first)  # O(X)
+        out: list[str] = []  # O(1)
+        for f, lines in diffs:  # O(F) iterations
+            n = take[f]  # O(1)
+            if not n:  # O(1)
+                continue  # O(1)
+            out.append(f"### {f}\n```diff\n" + "\n".join(lines[:n]) + "\n```")  # O(n)
+            if n < len(lines):  # O(1)
+                why = "per-file" if n == _file_cap(f, per_file) else "size"  # O(1)
+                out.append(f"(truncated: {n} of {len(lines)} diff lines shown, {why} cap)")  # O(1)
+        skipped = [f for f in changed if not take.get(f)]  # O(F)
+        if skipped:  # O(1)
+            out.insert(0, "Left out: " + ", ".join(skipped))  # O(F)
+        text = "\n".join(out) or "- none (no changed hunks in the hot-spot files)"  # O(output)
+        if budget is None or len(text) <= budget or b <= 0:  # O(1)
+            return text  # O(1)
+        b -= len(text) - budget  # O(1)
 
 
 def source_excerpts(root: Path, base: str | None, files: list[str], per_file: int = EXCERPT_FILE_LINES,  # O(X) + one git spawn per changed file
@@ -1751,7 +1770,7 @@ def source_excerpts(root: Path, base: str | None, files: list[str], per_file: in
     got = changed_diffs(root, base, files)  # O(X) + git spawns
     if got is None:  # O(1)
         return "- (not a git repository)"  # O(1)
-    return render_excerpts(*got, per_file=per_file, budget=budget, floor=floor)  # O(X)
+    return render_excerpts(*got, per_file=per_file, budget=budget, floor=floor, hot=files)  # O(X)
 
 
 def load_summary(path: Path) -> dict | None:  # O(file size) total
@@ -1901,7 +1920,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     probes = Path(a.probes) if a.probes else sl / "probes"  # O(1)
     out = Path(a.out) if a.out else sl / "review-packet.md"  # O(1)
     tests = Path(a.tests) if a.tests else sl / "test-summary.json"  # O(1)
-    cap = int((a.max_tokens or DEFAULT_TOKENS) * CHARS_PER_TOKEN)  # without --max-tokens it grows with the excerpts below | O(1)
+    cap = int((DEFAULT_TOKENS if a.max_tokens is None else a.max_tokens) * CHARS_PER_TOKEN)  # without --max-tokens it grows with the excerpts below | O(1)
 
     wait_for_full(tests, a.wait_timeout)  # O(timeout / 0.5)
     tests = newest_summary_path(tests)  # O(1)
@@ -1948,7 +1967,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         rest = cap - ex_budget  # O(1)
         ex_budget = min(max(ex_budget, excerpt_need(got[1])), int(AUTO_MAX_TOKENS * CHARS_PER_TOKEN) - rest)  # O(X)
         cap = rest + ex_budget  # O(1)
-    raw_ex = render_excerpts(*got, budget=ex_budget) if got is not None else "- (not a git repository)"  # O(X)
+    raw_ex = render_excerpts(*got, budget=ex_budget, hot=hot) if got is not None else "- (not a git repository)"  # O(X)
     left_line = raw_ex.split("\n", 1)[0] if raw_ex.startswith("Left out: ") else ""  # O(1)
     excerpts = cap_text(raw_ex, ex_budget)  # O(X)
 
@@ -2015,6 +2034,13 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
 # --------------------------------------------------------------------------- CLI
 
 
+def _positive_int(v: str) -> int:  # O(len(v)) total
+    n = int(v)  # O(len(v))
+    if n <= 0:  # O(1)
+        raise argparse.ArgumentTypeError("must be a positive number of tokens")  # O(1)
+    return n  # O(1)
+
+
 def build_parser() -> argparse.ArgumentParser:  # O(1) total
     ap = argparse.ArgumentParser(prog="pt_review.py", description="Review-side plan tools.")  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
@@ -2028,7 +2054,7 @@ def build_parser() -> argparse.ArgumentParser:  # O(1) total
             sp.add_argument("--log")  # O(1)
             sp.add_argument("--probes")  # O(1)
             sp.add_argument("--out")  # O(1)
-            sp.add_argument("--max-tokens", type=int, default=None,  # O(1)
+            sp.add_argument("--max-tokens", type=_positive_int, default=None,  # O(1)
                             help="packet size cap; default 20000, grown to fit every changed file's hunks up to 60000")  # O(1)
             sp.add_argument("--tests", help="test summary JSON (default .superlite/test-summary.json)")  # O(1)
             sp.add_argument("--wait-timeout", type=float, default=600.0,  # O(1)

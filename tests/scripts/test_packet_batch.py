@@ -162,6 +162,57 @@ def test_explicit_max_tokens_still_caps(proj):
     assert len(packet(proj, "--max-tokens", "3000")) <= int(3000 * 1.9)
 
 
+def test_hot_test_file_gets_the_floor(proj):
+    """#80 review: a hot-spot test file (an incident points at it) gets its floor before the code files."""
+    code = [f"src/f{i}.py" for i in range(10)]
+    commit_base(proj, {"tests/test_hot.py": 1, **{n: 1 for n in code}})
+    change_wide(proj, "tests/test_hot.py", 300)
+    for n in code:
+        change_wide(proj, n, 300)
+    (proj / ".superlite" / "incidents.jsonl").write_text(json.dumps(
+        {"kind": "exception", "file": "tests/test_hot.py", "line": 1, "context": "boom", "resolution": "", "agent": "T1"})
+        + "\n", encoding="utf-8")
+    s = sec8(packet(proj, "--max-tokens", "6000"))
+    assert headed(s)[0] == "tests/test_hot.py"
+
+
+def test_excerpts_fit_their_budget(proj):
+    """#80 review: long paths, truncation notes and the Left out line are charged; every fence is closed."""
+    names = [f"skills/subagent-driven-development/scripts/module_number_{i:02}.py" for i in range(40)]
+    commit_base(proj, {n: 1 for n in names})
+    for n in names:
+        change_wide(proj, n, 300)
+    for budget in (3000, 5000, 20000):
+        out = pt.source_excerpts(proj, None, [], budget=budget)
+        assert len(out) <= budget, budget
+        assert out.startswith("Left out: ")
+        assert out.count("```diff") == sum(1 for ln in out.splitlines() if ln == "```"), budget
+
+
+def test_max_tokens_must_be_positive(proj):
+    for bad in ("0", "-5"):
+        r = subprocess.run([sys.executable, str(SCRIPT), "packet", "--plan", str(proj / "plan.md"),
+                            "--root", str(proj), "--out", str(proj / "packet.md"), "--max-tokens", bad],
+                           capture_output=True, text=True, timeout=60)
+        assert r.returncode == 2, bad
+
+
+def test_items_keep_their_share_when_excerpts_grow(proj):
+    """#80 review: a large diff grows the packet for its excerpts, not at the expense of the items."""
+    log = "\n".join(json.dumps({"kind": "perf", "file": "src/a.py", "line": n + 1, "context": f"issue {n} " + "x" * 120,
+                                "resolution": "", "agent": "T1"}) for n in range(200)) + "\n"
+    names = [f"src/f{i}.py" for i in range(8)]
+    commit_base(proj, {"src/a.py": 1, **{n: 1 for n in names}})
+    (proj / ".superlite" / "incidents.jsonl").write_text(log, encoding="utf-8")
+    for n in names:
+        change_wide(proj, n, 300)
+    fixed = packet(proj, "--max-tokens", "20000")  # the old default: excerpts get a third
+    grown = packet(proj)
+    count = lambda t: sum(1 for ln in t.splitlines() if ln.startswith("### [")) # noqa: E731
+    assert count(grown) == count(fixed) > 0
+    assert len(grown) > len(fixed)
+
+
 def test_left_out_survives_size_cap(proj):
     fill_total(proj)
     text = packet(proj, "--max-tokens", "500")
