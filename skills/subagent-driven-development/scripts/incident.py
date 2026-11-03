@@ -71,7 +71,9 @@ def make_entry(file, line, context, agent=None, kind=None, resolution=None,  # O
                      ("confidence", confidence)):
         if val is not None:  # O(1)
             entry[key] = val  # O(1)
-    entry["time"] = time.strftime("%H:%M:%S")  # O(1)
+    now = time.time()  # O(1)
+    entry["time"] = time.strftime("%H:%M:%S", time.localtime(now))  # O(1)
+    entry["epoch"] = now  # comparable with a test run's start, across midnight too (#101) | O(1)
     return entry  # O(1)
 
 

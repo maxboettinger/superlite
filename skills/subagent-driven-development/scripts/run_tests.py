@@ -12,7 +12,7 @@ a `tests` line to the progress ledger. On every run it also writes
 `.superlite/test-summary.json` (--summary), the file `pt_review packet` reads:
 `{"passed": N, "failed": N, "skipped": N, "seconds": S, "mode": "fast|full",
 "failures": ["file::test: message", ...], "skipped_tests": ["file::test", ...],
-"files": {"file": [passed, failed], ...}}` (the background pointer also records `"mode"`)
+"files": {"file": [passed, failed], ...}, "started": EPOCH}` (the background pointer also records `"mode"`)
 (a run where pytest produced nothing records failed=1 and the reason, also as `"error"`). Exit 0 when nothing failed, 1 when a
 test failed or none ran, 2 when pytest could not run.
 
@@ -271,8 +271,8 @@ def existing_verified(log):  # O(B)
     return seen  # O(1)
 
 
-def write_summary(path, mode, counts, failures, seconds, error=None, files=None):  # O(k + sk) + file write
-    """Write the test summary `pt_review packet` reads (atomically)."""  # O(1)
+def write_summary(path, mode, counts, failures, seconds, error=None, files=None, started=None):  # O(k + sk) + file write
+    """Write the test summary `pt_review packet` reads (atomically); `started` is the run's start (epoch)."""  # O(1)
     data = {"passed": counts["passed"], "failed": counts["failed"] + (1 if error else 0),  # O(1)
             "skipped": counts["skipped"], "seconds": round(seconds, 1), "mode": mode,  # O(1)
             "failures": [f"{f}::{ctx}"[:200] for f, _line, ctx in failures]  # O(k)
@@ -281,6 +281,8 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None)
             "files": {k: list(v) for k, v in (files or {}).items()}}  # O(F)
     if error:  # a crashed run says so, so the packet never reads it as a test run (#81) | O(1)
         data["error"] = error[:200]  # O(1)
+    if started is not None:  # the packet closes only incidents logged before this run started (#101) | O(1)
+        data["started"] = started  # O(1)
     p = Path(path)  # O(1)
     p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     tmp = p.with_name(p.name + ".tmp")  # O(1)
@@ -315,6 +317,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
     a = ap.parse_args(argv)  # O(1)
+    a.started = time.time()  # before the runner reads any code: the summary's `started` (#101) | O(1)
     cwd = Path.cwd().resolve()  # O(1)
     root = project_root(cwd) if a.wait_path is None else None  # --wait paths are absolute | O(d)
     if root is not None and root != cwd:  # O(1)
@@ -483,7 +486,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
 
 
 def finish_run(a, label, counts, failures, files, seconds, returncode):  # O(k + F + B) one incident append
-    write_summary(a.summary, label, counts, failures, seconds, files=files)  # O(k + sk + F)
+    write_summary(a.summary, label, counts, failures, seconds, files=files, started=getattr(a, "started", None))  # O(k + sk + F)
     publish_summary(a)  # O(summary size)
     items = [(f, line, ctx, "test-failure", "open") for f, line, ctx in failures]  # O(k)
     if label == "full":  # O(1)

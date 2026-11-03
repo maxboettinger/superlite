@@ -1639,6 +1639,15 @@ def diff_head(root: Path) -> str | None:  # O(file size) total
         return None  # O(1)
 
 
+def diff_range(root: Path, base: str) -> list[str]:  # O(file size) total
+    """git diff arguments for the run's changes: `base...checkpoint` with checkpoints, else base against the tree.
+
+    Checkpoints are parented on the HEAD the run started from, so after a mid-run fast-forward a two-dot
+    diff from the new HEAD lists the merged files as reverse changes; three dots diff from the merge base (#100)."""
+    head = diff_head(root)  # O(file size)
+    return [f"{base}...{head}"] if head else [base]  # O(1)
+
+
 def git_diff_stat(root: Path, base: str | None) -> str:  # O(X) + up to 2 git subprocess spawns total
     def git(*args: str) -> subprocess.CompletedProcess | None:  # O(X) + 1 git subprocess spawn
         try:  # O(X)
@@ -1652,8 +1661,7 @@ def git_diff_stat(root: Path, base: str | None) -> str:  # O(X) + up to 2 git su
     if base is None:  # O(1)
         first = git("rev-list", "--max-parents=0", "HEAD")  # O(1)
         base = first.stdout.split()[0] if first and first.returncode == 0 and first.stdout.split() else "HEAD"  # O(1)
-    head = diff_head(root)  # O(file size)
-    r = git("diff", "--stat", base, *([head] if head else []))  # O(1)
+    r = git("diff", "--stat", *diff_range(root, base))  # O(1)
     if not r or r.returncode != 0:  # O(1)
         return "(diff stat unavailable)"  # O(1)
     return r.stdout.strip() or "(no changes)"  # O(1)
@@ -1690,10 +1698,10 @@ def changed_diffs(root: Path, base: str | None, files: list[str]) -> tuple[list[
                                capture_output=True, text=True, encoding="utf-8", errors="replace")  # O(1)
         roots = first.stdout.split() if first.returncode == 0 else []  # O(1)
         base = roots[0] if roots else "HEAD"  # O(1)
-    head = diff_head(root)  # O(file size)
+    rng = diff_range(root, base)  # O(file size)
     changed: list[str] = []  # O(1)
     try:  # O(1)
-        nm = subprocess.run(["git", "-C", str(root), "diff", "--name-only", base, *([head] if head else [])],  # O(X) + git spawn
+        nm = subprocess.run(["git", "-C", str(root), "diff", "--name-only", *rng],  # O(X) + git spawn
                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
         changed = nm.stdout.split("\n") if nm.returncode == 0 else []  # O(X)
     except (OSError, subprocess.TimeoutExpired):  # O(1)
@@ -1702,7 +1710,7 @@ def changed_diffs(root: Path, base: str | None, files: list[str]) -> tuple[list[
     diffs: list[tuple[str, list[str]]] = []  # O(1)
     for f in _excerpt_order(changed, files):  # O(F) iterations
         try:  # O(1)
-            r = subprocess.run(["git", "-C", str(root), "diff", "-U3", base, *([head] if head else []), "--", f],  # O(X) + git spawn
+            r = subprocess.run(["git", "-C", str(root), "diff", "-U3", *rng, "--", f],  # O(X) + git spawn
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
         except (OSError, subprocess.TimeoutExpired):  # O(1)
             continue  # O(1)
@@ -1905,15 +1913,26 @@ def _full_ran(summary: dict) -> bool:  # O(F) total
             and any(isinstance(summary.get(k), int) and summary[k] > 0 for k in ("passed", "failed", "skipped")))  # O(1)
 
 
+def _num(v) -> float | None:  # O(1) total
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # O(1)
+
+
+def _started_before(summary: dict, entry: dict) -> bool:  # O(1) total
+    """The run started before the entry was logged, so it never ran the failing code; unknown times: False (#101)."""
+    started, logged = _num(summary.get("started")), _num(entry.get("epoch"))  # O(1)
+    return started is not None and logged is not None and started <= logged  # O(1)
+
+
 def stale_in_run(entry: dict, summaries: list[dict]) -> bool:  # O(S*F) total
     """The newest summary that covers the entry decides; none covers it: not stale. A summary covers an entry when
     it holds the entry's file or lists the failure; a full run also covers every `run_tests` failure, so a later
-    full run closes each one it does not list, `-` entries from runners without JUnit included (#81)."""
+    full run closes each one it does not list, `-` entries from runners without JUnit included (#81). A run that
+    started before the entry was logged covers nothing (#101)."""
     if entry.get("kind") != "test-failure":  # O(1)
         return False  # O(1)
     file = str(entry.get("file", ""))  # O(1)
     for s in summaries:  # O(S)
-        if not isinstance(s, dict):  # O(1)
+        if not isinstance(s, dict) or _started_before(s, entry):  # O(1)
             continue  # O(1)
         files = s.get("files")  # O(1)
         if isinstance(files, dict) and file in files:  # O(1)
