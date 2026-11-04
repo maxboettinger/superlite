@@ -232,6 +232,9 @@ def render(lines, evict):  # O(R + a)
 
 def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=None):  # O(c + L + n + e + R*a*(F + o))
     """Library entry for commit_task --dispatch; flags left as None take their defaults."""
+    if batch is None:  # the run claimed an experiment (`sl experiment`, #53): its batch | O(f)
+        import experiment  # O(1)
+        batch = (experiment.for_plan(plan, Path(pool_path).parent) or {}).get("batch")  # O(f)
     pool = load_pool(pool_path)  # O(pool bytes)
     if Path(pool_path).exists():  # real context_k, idle_min, busy from the stop records; saved only when a value changed | O(a*m + a*T)
         before = json.dumps(pool, sort_keys=True)  # O(pool bytes)
@@ -276,11 +279,7 @@ def main(argv=None):  # O(c + L + n + e + R*a*(F + o))
     blocked = orchestrator.require(plan, "dispatch")  # human mode waits for approval | O(file)
     if blocked:  # O(1)
         return blocked  # O(1)
-    batch = a.batch  # O(1)
-    if batch is None:  # the run claimed an experiment (`sl experiment`, #53): its batch | O(f)
-        import experiment  # O(1)
-        batch = (experiment.for_plan(plan, Path(a.pool).parent) or {}).get("batch")  # O(f)
-    render(*run(plan, a.pool, a.ledger, a.committed, a.running, a.cap, batch))  # see run
+    render(*run(plan, a.pool, a.ledger, a.committed, a.running, a.cap, a.batch))  # see run
     try:  # the budget line when it changed (needs .superlite/metrics.jsonl) | O(compute)
         import budget  # O(1)
         budget.maybe_print(plan, str(Path(a.pool).parent))  # O(compute)

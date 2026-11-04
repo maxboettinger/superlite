@@ -566,6 +566,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     ap.add_argument("--pool", default=state.pool_path(), help="pool for --dispatch")  # the session's run, else ./.superlite | O(d)
     ap.add_argument("--running", help="running tasks for --dispatch (default: from the pool)")  # O(1)
     ap.add_argument("--cap", type=int, default=10, help="cap for --dispatch")  # O(1)
+    ap.add_argument("--batch", type=int, help="batch for --dispatch: 1 = one task per agent")  # O(1)
     ap.add_argument("--also", action="extend", nargs="+", default=[], metavar="FILE",  # O(1)
                     help="commit FILE with the one named task even if another task owns it or nobody does")  # O(1)
     ap.add_argument("--ruling", help="why --also is needed; written to the ledger")  # O(1)
@@ -622,7 +623,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
         print("next:")  # O(1)
         try:  # the commits stand whatever happens here | O(1)
             import dispatch  # O(1) lazy: dispatch imports this module
-            dispatch.render(*dispatch.run(a.plan, a.pool, a.ledger, None, a.running, a.cap))  # see dispatch.run
+            dispatch.render(*dispatch.run(a.plan, a.pool, a.ledger, None, a.running, a.cap, a.batch))  # see dispatch.run
         except (SystemExit, Exception) as e:  # O(1)
             print(f"warning: dispatch failed ({e}); run `dispatch` after fixing it", file=sys.stderr)  # O(1)
     return worst  # O(1)

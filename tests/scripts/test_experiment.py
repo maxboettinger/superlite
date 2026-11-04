@@ -10,6 +10,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from test_batching import equal_plan
 from test_metrics_history import HISTORY, setup_run
 from test_plan_tools import SCRIPTS, run
@@ -196,3 +198,33 @@ def test_history_rows_carry_the_experiment_of_the_run(tmp_path, monkeypatch):
     assert cp.returncode == 0, cp.both
     rows = [json.loads(x) for x in (home / "history.jsonl").read_text(encoding="utf-8").splitlines()]
     assert {r["run"]: r["experiment"] for r in rows} == {"r0": None, "r1": "53-old-settings"}
+
+
+@pytest.mark.parametrize(("claim", "batch", "solo"), [(False, None, False), (False, "1", True),
+                                                           (True, None, True), (True, "2", False)])
+def test_commit_dispatch_keeps_batch_settings(tmp_path, monkeypatch, capsys, claim, batch, solo):
+    """Exercise commit_task's CLI and real dispatcher; only the commit itself is stubbed."""
+    import commit_task
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("SUPERLITE_HOME", str(home))
+    d, p = project(tmp_path, "big", 8)
+    monkeypatch.chdir(d)
+    monkeypatch.setattr(commit_task, "setup_exclude", lambda: None)
+    monkeypatch.setattr(commit_task, "commit_one", lambda *args: (0, "fake-sha"))
+    pool_path = pool(d, [])
+    args = ["T1", "--plan", str(p), "--pool", str(pool_path), "--ledger", str(d / "l.md"),
+            "--log", str(d / "incidents.jsonl"), "--dispatch"]
+
+    def dispatched(extra=()):
+        assert commit_task.main([*args, *extra]) == 0
+        output = capsys.readouterr()
+        assert "warning: dispatch failed" not in output.err
+        return [line.split()[0] for line in output.out.splitlines() if line.startswith("T")]
+
+    if claim:
+        arm(home)
+        prime(d, p)
+    tasks = dispatched(["--batch", batch] if batch else [])
+    assert tasks
+    assert all("," not in task for task in tasks) == solo
