@@ -3,7 +3,9 @@
 # the main session, whose calls carry no agent_id. Subagent calls always pass. Three rules, in order:
 #  1. Protected files, in every state: .superlite/orchestrator.json (changed only by `sl orchestrator`)
 #     and .superlite/human-replies.jsonl (written only by hooks/record-human-reply) are never written
-#     by the model.
+#     by the model. An interpreter writer in a command that names one is judged by its targets in every state: a
+#     protected or unknown target blocks, and so does a move, copy or link API next to the name when the command also
+#     holds a writer call (#122).
 #  2. HUMAN-UNAPPROVED (.superlite/orchestrator.json has mode human and approved false): nothing
 #     builds until the human approves the plan. Allowed writes: docs/plans/*.review.md, docs/*/plans/*.review.md and
 #     .superlite/** (minus the protected files), also inside a linked worktree in the project (judged from its root, whose
@@ -21,7 +23,9 @@
 # interpreter, a shell -c or eval wrapper, or a $(interpreter ...) substitution: text that only quotes code is not a call.
 # Relative targets are judged from the shell's directory: the JSON cwd when the text holds no cd at all; at each cd when
 # every cd is a plain command into the project and the command is one && chain or one leading cd (interpreter writer
-# targets then from every directory it visits); else the JSON cwd plus each target when every cd is a readable absolute
+# targets then from every directory it visits); for lines of && chains with plain cds into the project, at each command's
+# place (case D, d_walk: a sure cd, or `mkdir -p X && cd X`, moves the later lines too; the JSON cwd is the shell's own
+# directory, as Claude Code's hooks reference states); else the JSON cwd plus each target when every cd is a readable absolute
 # one into the project, or a leading `cd <absolute>` that is the only cd outside quotes, or the project root when that is
 # void, plus the cwd and each cd target. Outside the project relative targets are
 # not project code (absolute paths into it still are). A body that changes directory is judged from the project root;
@@ -554,6 +558,181 @@ and_chain() {
   return 0
 }
 
+# Case D (#122): the command is lines of && chains (no | || & ! ( ) or backticks, no control words, no source, ., eval,
+# alias, enable or trap, also after builtin/command, no line ending in && or \, no CDPATH), every cd the plain command
+# word of its own command (cd DIR, redirects aside) into the project. d_walk walks them: the commands after a cd in its
+# chain run in its target; after the chain the target is sure only when every command before the cd is read-only (an
+# allowlist, plus cd and mkdir -p, none redirected into a file), the cd starts its chain or follows only `mkdir -p`
+# calls (no -m) that can succeed, and the folder exists and can be entered or one of them makes it; else the directory
+# before the chain stays possible too. d_sets[i] holds the directories (@: the input cwd) the i-th
+# simple command (one line of `stripped`) may run in; D_ALL every directory any command may run in.
+d_sets=(); D_ALL=""; dmode=0; d_k=0; d0_out=0; d0_a=""
+# d_res SET WORD [any]: WORD resolved from each directory of SET (a relative one from @ starts at the input cwd), into
+# RS; fails when one lands outside the project, unless `any` is given.
+d_res() {
+  local c b t out="" nl=$'\n'
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    case "$2" in
+      /*|[A-Za-z]:[/\\]*) t="$2" ;;
+      *) if [ "$c" != @ ]; then b="$c"; elif [ "$eff_out" = 1 ]; then b="$effn"; else b="${cwd_in:-$projn}"; fi
+         t="$b/${2#./}" ;;
+    esac
+    norm "$t"; t="$NORM"
+    case "/$t/" in */../*|*/./*) dotres "$t"; t="$RES" ;; esac
+    lower "$t"
+    case "$LOWER" in "$projl"|"$projl"/*) ;; *) [ "$3" = any ] || return 1 ;; esac
+    out="$out$t$nl"
+  done <<< "$1"
+  RS="$out"
+}
+# d_can_mk DIR: succeeds when `mkdir -p DIR` can succeed: DIR is a folder, or nothing is in its way and its nearest
+# existing ancestor is a writable folder.
+d_can_mk() {
+  local a="$1"
+  if [ -e "$a" ] || [ -L "$a" ]; then [ -d "$a" ]; return; fi
+  while [ -n "$a" ] && ! { [ -e "$a" ] || [ -L "$a" ]; }; do a="${a%/*}"; done
+  [ -n "$a" ] || a=/
+  [ -d "$a" ] && [ -w "$a" ] && [ -x "$a" ]
+}
+# d_rdfile TARGET: succeeds when an output redirect to TARGET (the word after > or >&) creates or truncates a file: not
+# a descriptor (2>&1, >&-) and not /dev/*.
+d_rdfile() {
+  local t="${1#&}"
+  case "$t" in ''|-|/dev/*) return 1 ;; *[!0-9]*) return 0 ;; esac
+  return 1
+}
+# d_mkdir WORDS...: the words after mkdir; succeeds when they hold -p (or --parents) and only -v besides (no -m: a
+# folder without u+x cannot be entered), with the operands in D_OPS.
+d_mkdir() {
+  local w c opt=1 p=0
+  D_OPS=()
+  for w in "$@"; do
+    if [ "$opt" = 1 ]; then
+      case "$w" in
+        --) opt=0; continue ;;
+        --parents) p=1; continue ;;
+        --verbose) continue ;;
+        --*) return 1 ;;   # --mode too: a folder without u+x cannot be entered
+        -?*) c="${w#-}"
+             while [ -n "$c" ]; do
+               case "${c:0:1}" in p) p=1 ;; v) ;; *) return 1 ;; esac
+               c="${c:1}"
+             done
+             continue ;;
+      esac
+    fi
+    D_OPS[${#D_OPS[@]}]="$w"
+  done
+  [ "$p" = 1 ] && [ "${#D_OPS[@]}" -gt 0 ]
+}
+d_walk() {
+  local f="${flat%$'\n'}" t line piece w i n ck=0 ok sure made S A C nl=$'\n' am=$'\x11' all="" prior=1 rd op mk
+  local re_op='^[0-9]*(>>?|<<?<?|<>|>&|<&|&>(>)?)$'
+  local -a pieces=() seps=() kw=() words=()
+  d_sets=(); D_ALL=""
+  t="${f//>&/}"; t="${t//&>/}"; t="${t//<&/}"; t="${t//&&/}"
+  case "$t" in *'&'*|*'|'*|*'!'*) return 1 ;; esac
+  case "$stripped" in *[\(\)\`]*) return 1 ;; esac
+  case "$lc" in *cdpath*) return 1 ;; esac   # CDPATH sends a relative cd elsewhere
+  if [ -n "${CDPATH:-}" ]; then
+    for w in "${cd_words[@]}"; do case "$w" in /*|[A-Za-z]:[/\\]*|./*) ;; *) return 1 ;; esac; done
+  fi
+  t="$lc"; n=0   # a cd hidden in quoted text or a heredoc body may move the shell anywhere
+  while [[ $t =~ $re_cdw ]]; do n=$((n + 1)); t="${BASH_REMATCH[5]}"; done
+  [ "$n" = "$cd_n" ] || return 1
+  while IFS= read -r line; do
+    t="${line%"${line##*[![:space:]]}"}"
+    case "$t" in *\\|*'&&') return 1 ;; esac   # the next line joins this chain
+    t="${line//;/$nl;}"; t=";${t//&&/$nl$am}"   # \x11, not &: bash 5.2 reads & in a replacement as the match
+    while IFS= read -r piece; do seps[${#seps[@]}]="${piece:0:1}"; pieces[${#pieces[@]}]="${piece:1}"; done <<< "$t"
+  done <<< "$f"
+  t="${stripped//[!$nl]/}"
+  [ "${#t}" = "${#pieces[@]}" ] || return 1   # one entry per simple command, as judge_segs reads them
+  S="@$nl"; A="$S"; C="$S"; sure=1; made="$nl"
+  for ((i = 0; i < ${#pieces[@]}; i++)); do
+    if [ "${seps[i]}" = ";" ]; then S="$A"; C="$S"; sure=1; made="$nl"; fi   # a new chain
+    d_sets[i]="$C"; all="$all$C"
+    set -f; words=(${pieces[i]}); set +f
+    kw=(); n=0; rd=0; op=""
+    for w in "${words[@]}"; do   # redirects aside; rd: one creates or truncates a file
+      if [ "$n" = 1 ]; then n=0; case "$op" in *'>'*) d_rdfile "$w" && rd=1 ;; esac; continue; fi
+      if [[ $w =~ $re_op ]]; then n=1; op="$w"; continue; fi
+      case "$w" in [0-9\<\>\&]*) ;; *[\<\>]*) return 1 ;; esac   # a word glued to a redirect (rmdir>f) is a command
+      case "$w" in
+        *'>'*) d_rdfile "${w##*>}" && rd=1; continue ;;
+        *'<'*) continue ;;
+      esac
+      kw[${#kw[@]}]="$w"
+    done
+    while [ "${#kw[@]}" -gt 0 ]; do   # builtin and command run the word after them (command's own options aside)
+      case "${kw[0]}" in
+        builtin) kw=("${kw[@]:1}") ;;
+        command) kw=("${kw[@]:1}"); while [ "${#kw[@]}" -gt 0 ] && [[ ${kw[0]} == -* ]]; do kw=("${kw[@]:1}"); done ;;
+        *) break ;;
+      esac
+    done
+    if [ "${#kw[@]}" = 0 ]; then [ "$rd" = 1 ] && prior=0; continue; fi
+    case "${kw[0]}" in   # control flow, and commands that may redefine cd or move the shell unseen
+      if|then|else|elif|fi|case|esac|for|select|while|until|do|done|function|'{'|'}') return 1 ;;
+      source|.|eval|alias|enable|trap) return 1 ;;
+    esac
+    if [ "${kw[0]}" = cd ]; then
+      [ "${#kw[@]}" = 2 ] || return 1   # cd A B fails
+      w="${cd_words[ck]}"; ck=$((ck + 1))
+      [ -n "$w" ] || return 1
+      d_res "$C" "$w" || return 1
+      # sure: the chain reaches it, nothing before it can have removed, locked or blocked the folder, and it can be
+      # entered (or a mkdir -p of this chain makes it)
+      ok="$sure"; [ "$prior" = 1 ] && [ "$rd" = 0 ] || ok=0
+      if [ "$ok" = 1 ]; then
+        while IFS= read -r t; do
+          [ -n "$t" ] || continue
+          [ -d "$t" ] && [ -x "$t" ] && continue
+          case "$made" in *"$nl$t$nl"*|*"$nl$t/"*) continue ;; esac
+          ok=0; break
+        done <<< "$RS"
+      fi
+      if [ "$ok" = 1 ]; then A="$RS"; else A="$A$RS"; sure=0; fi
+      C="$RS"
+    elif [ "${kw[0]}" = mkdir ]; then
+      mk=1; d_mkdir "${kw[@]:1}" && [ "$rd" = 0 ] || mk=0
+      [ "$mk" = 1 ] || prior=0   # mkdir -m, or a redirect, may leave a folder that cannot be entered
+      for w in "${D_OPS[@]}"; do   # each operand readable, made from every directory the chain may be in
+        [ "$mk" = 1 ] && [ "$sure" = 1 ] || break
+        case "$w" in ''|*Q*|*$'\x05'*|*$'\x06'*|*'$'*|*'`'*|'~'*|*[\*\?\[\{]*) mk=0; break ;; esac
+        d_res "$C" "$w" any
+        while IFS= read -r t; do
+          [ -n "$t" ] || continue
+          d_can_mk "$t" || { mk=0; break; }
+          made="$made$t$nl"
+        done <<< "$RS"
+      done
+      [ "$mk" = 1 ] || sure=0
+    else
+      sure=0   # a command that may fail stops its chain; only a read-only one leaves later folders as they are
+      case "${kw[0]}" in echo|printf|ls|pwd|true|:|cat|head|tail|wc|grep|test|'['|date) ;; *) prior=0 ;; esac
+    fi
+    [ "$rd" = 1 ] && prior=0   # the file it creates may stand where a later cd or mkdir -p needs a folder
+  done
+  [ "$ck" = "$cd_n" ] || return 1
+  while IFS= read -r t; do
+    [ -n "$t" ] && [ "$t" != @ ] && case "$nl$D_ALL" in *"$nl$t$nl"*) ;; *) D_ALL="$D_ALL$t$nl" ;; esac
+  done <<< "$all"
+  return 0
+}
+# d_apply SET: the shell's directory for one simple command of case D: @ (the input cwd) first, the others as alt_list.
+d_apply() {
+  local t first="" rest="" nl=$'\n'
+  case "$nl$1" in *"$nl@$nl"*) first=@ ;; esac
+  while IFS= read -r t; do
+    [ -n "$t" ] && [ "$t" != @ ] || continue
+    if [ -z "$first" ]; then first="$t"; else rest="$rest$t$nl"; fi
+  done <<< "$1"
+  if [ "$first" = @ ]; then eff_out="$d0_out"; basea="$d0_a"; else eff_out=0; basea="$first"; fi
+  basen=""; base_void=0; alt_list="$rest"
+}
+
 # git_hit ARGS...: ARGS follow the git command word; sets `hit` when they write project files. The subcommand is the
 # first word that is not a global option, and the last -C / --work-tree names the directory git runs in (a relative one
 # is taken from the outside directory or the shell's known one, else stays in the project). In the project (or when
@@ -800,6 +979,12 @@ judge_segs() {
   segs="${stripped//>&/>$amp}"; segs="${segs//&>/$amp>}"; segs="${segs//<&/<$amp}"
   segs="${segs//&/$nl}"; segs="${segs//$amp/"$and"}"; segs="${segs//[()]/$nl}"; segs="${segs//\`/$nl}"
   while IFS= read -r seg; do
+    if [ "$dmode" = 1 ] && [ "$jdepth" = 0 ]; then   # case D: this command's own directories
+      if [ "$d_k" -lt "${#d_sets[@]}" ]; then d_apply "${d_sets[d_k]}"
+      else eff_out=0; basea=""; basen=""; base_void=1; alt_list="$D_ALL"   # past the walk: unknown, fail closed
+      fi
+      d_k=$((d_k + 1))
+    fi
     seg0="$seg"; QRAW=()
     if [[ $seg == *Q* ]]; then qdecode "$seg"; seg="$QSEG"; fi
     if [ "$jdepth" = 0 ] && [ "${#QRAW[@]}" -gt 0 ]; then   # $( ) and backticks inside double quotes run
@@ -1096,6 +1281,8 @@ elif [ -z "$hit" ]; then
   #     quoted text, with no ( ) or backticks, and the command is one && chain (a failed cd stops it) or one leading cd
   #     to an existing folder: the base moves at each cd (judge_segs walks chain_dirs); interpreter writer targets are
   #     judged from every directory the shell can be in.
+  #  D. otherwise, lines of && chains whose every cd is plain and into the project: each command from the directories it
+  #     may run in (d_walk, d_apply).
   #  C. anything else: the JSON cwd, overridden by a leading `cd <absolute>` to an existing folder when it is the only cd
   #     outside quotes, moved by plain relative `cd sub` steps for paths with . or .. segments; any other directory
   #     change (a second cd, cd .. / - / ~ / $VAR / -P, pushd, popd, chdir, a cd in a pipe or sent to the background)
@@ -1186,7 +1373,13 @@ elif [ -z "$hit" ]; then
       fi ;;
     esac
   fi
-  if [ "$chain" = 0 ]; then
+  # Case D: lines of && chains, each cd judged at its place (d_walk); interpreter writer targets from every directory.
+  if [ "$chain" = 0 ] && [ "$cd_n" -gt 0 ] && [ "$cd_bad" = 0 ] && [ "$cd_pos" = 1 ] && [ "$stripped_unsure" = 0 ] \
+     && d_walk; then
+    dmode=1; d_k=0; scan_alt="$D_ALL"; segs_alt=""
+    [ "$eff_out" = 0 ] && basea="$cwd_in"
+  fi
+  if [ "$chain" = 0 ] && [ "$dmode" = 0 ]; then
     [ "$cd_n" = 0 ] && [ "$envc" = 0 ] && [ -n "$cwd_in" ] && ! [[ $lc == *cd* || $lc == *pushd* || $lc == *popd* || $lc == *chdir* ]] \
       && basea="$cwd_in"   # case A
     lead_done=0
@@ -1284,55 +1477,61 @@ elif [ -z "$hit" ]; then
   re_interp='(^|[^[:alnum:]_])(python[0-9.]*|node|ruby|php)([[:space:]"'"'"']|$)'
   re_writer="open\(([^()]|\(([^()]|\([^()]*\))*\))*,[[:space:]]*(mode=)?['\"]([wax]|r[bt]?\+)|\.open\([[:space:]]*(mode=)?['\"]([wax]|r[bt]?\+)|\.(write_text|write_bytes)\(|writeFileSync|writeFile\(|appendFile(Sync)?\(|fs\.write|File\.(bin)?write\(|file_put_contents\("
   alt_list="$scan_alt"
+  # A command that names a protected file runs the scan in every state (#122): without a run only a protected or
+  # unknown writer target blocks; an unknown one then counts as the protected file.
   if [ -z "$hit" ] && { [ "$enforce" = 1 ] || [ "$mentions" = 1 ]; } && [[ $lc =~ $re_interp && $cmd =~ $re_writer ]] && scan_gate; then
-    if [ "$mentions" = 1 ]; then
+    # Each writer call's own target: a literal, Path('...'), or a name assigned one of those in the command.
+    # Every open( must read as a plain read or a parsed write; every other writer call must be parsed.
+    sq="'"; dq='"'; q="[$sq$dq]"; arg="([^,()]*|Path\([^()]*\)|os\.path\.join\([^()]*\))"
+    re_open='(^|[^A-Za-z0-9_])open\('
+    re_ow="^$arg,[[:space:]]*(mode=)?$q([wax]|r[bt]?\+)"
+    re_or="^$arg(,[[:space:]]*((mode=)?${q}r[bt]?$q|(encoding|errors|newline|buffering)=[^,()]*))*\)"
+    re_mr="^[[:space:]]*(\)|(mode=)?${q}r)"
+    re_mw="^[[:space:]]*(mode=)?$q([wax]|r[bt]?\+)"
+    re_w2="(Path\([^()]*\)|\(([^()]|Path\([^()]*\))*\)|[A-Za-z_][A-Za-z_0-9]*)\.(write_text|write_bytes)\("
+    re_w3="(Path\([^()]*\)|[A-Za-z_][A-Za-z_0-9]*)\.open\([[:space:]]*(mode=)?$q([wax]|r[bt]?\+)"
+    re_w4="(writeFileSync|writeFile|appendFileSync|appendFile|File\.write|File\.binwrite|file_put_contents)\(([^,()]*),"
+    re_other='\.(write_text|write_bytes)\(|writeFileSync\(|writeFile\(|appendFileSync\(|appendFile\(|fs\.write(Sync)?\(|File\.(bin)?write\(|file_put_contents\('
+    unknown=0; want=0; got=0
+    rest="$cmd"
+    while [ -z "$hit" ] && [ "$unknown" = 0 ] && [[ $rest =~ $re_open ]]; do
+      prev="${BASH_REMATCH[1]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"
+      if [ "$prev" = . ]; then                         # obj.open(...): Path.open, os.open, ...
+        if [[ $rest =~ $re_mw ]]; then want=$((want + 1)); elif [[ $rest =~ $re_mr ]]; then :; else unknown=1; fi   # 'r+' writes
+      elif [[ $rest =~ $re_ow ]]; then
+        resolve_target "${BASH_REMATCH[1]}"
+        if [ -z "$TGT" ]; then [ "$RT_OUT" = 1 ] || unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
+      elif ! [[ $rest =~ $re_or ]]; then unknown=1
+      fi
+    done
+    rest="$cmd"
+    while [[ $rest =~ $re_other ]]; do want=$((want + 1)); rest="${rest#*"${BASH_REMATCH[0]}"}"; done
+    for re_w in "$re_w2" "$re_w3" "$re_w4"; do
+      rest="$cmd"
+      while [ -z "$hit" ] && [ "$unknown" = 0 ] && [[ $rest =~ $re_w ]]; do
+        m="${BASH_REMATCH[0]}"
+        if [ "$re_w" = "$re_w4" ]; then e="${BASH_REMATCH[2]}"; else e="${BASH_REMATCH[1]}"; fi
+        rest="${rest#*"$m"}"; got=$((got + 1))
+        resolve_target "$e"
+        if [ -z "$TGT" ]; then [ "$RT_OUT" = 1 ] || unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
+      done
+    done
+    # A writer whose target is unknown (a variable, an f-string, a method chain, fs.write on a descriptor) blocks.
+    # Out of reach: file APIs without a writer call (os.replace, shutil.copy, ...).
+    if [ -z "$hit" ] && { [ "$unknown" = 1 ] || [ "$got" -lt "$want" ]; }; then
+      hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; [ "$mentions" = 1 ] && prot=1
+    fi
+    # Next to a protected file's name, a move, copy or link API may put a scratch file in its place.
+    re_mv='os\.(replace|renames?|link|symlink)\(|shutil\.|\.(rename|symlink_to|hardlink_to|link_to)\(|\.replace\(([^,()]|\([^()]*\))*\)'
+    re_mv="$re_mv"'|fs\.(rename|copyFile|cp|symlink|link)(Sync)?\(|FileUtils|File\.(rename|symlink|link)\(|(^|[^A-Za-z0-9_.])(rename|copy|symlink|link)\('
+    if [ -z "$hit" ] && [ "$mentions" = 1 ] && [[ $cmd =~ $re_mv ]]; then
       hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; prot=1
-    else
-      # Each writer call's own target: a literal, Path('...'), or a name assigned one of those in the command.
-      # Every open( must read as a plain read or a parsed write; every other writer call must be parsed.
-      sq="'"; dq='"'; q="[$sq$dq]"; arg="([^,()]*|Path\([^()]*\)|os\.path\.join\([^()]*\))"
-      re_open='(^|[^A-Za-z0-9_])open\('
-      re_ow="^$arg,[[:space:]]*(mode=)?$q([wax]|r[bt]?\+)"
-      re_or="^$arg(,[[:space:]]*((mode=)?${q}r[bt]?$q|(encoding|errors|newline|buffering)=[^,()]*))*\)"
-      re_mr="^[[:space:]]*(\)|(mode=)?${q}r)"
-      re_mw="^[[:space:]]*(mode=)?$q([wax]|r[bt]?\+)"
-      re_w2="(Path\([^()]*\)|\(([^()]|Path\([^()]*\))*\)|[A-Za-z_][A-Za-z_0-9]*)\.(write_text|write_bytes)\("
-      re_w3="(Path\([^()]*\)|[A-Za-z_][A-Za-z_0-9]*)\.open\([[:space:]]*(mode=)?$q([wax]|r[bt]?\+)"
-      re_w4="(writeFileSync|writeFile|appendFileSync|appendFile|File\.write|File\.binwrite|file_put_contents)\(([^,()]*),"
-      re_other='\.(write_text|write_bytes)\(|writeFileSync\(|writeFile\(|appendFileSync\(|appendFile\(|fs\.write(Sync)?\(|File\.(bin)?write\(|file_put_contents\('
-      unknown=0; want=0; got=0
-      rest="$cmd"
-      while [ -z "$hit" ] && [ "$unknown" = 0 ] && [[ $rest =~ $re_open ]]; do
-        prev="${BASH_REMATCH[1]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"
-        if [ "$prev" = . ]; then                         # obj.open(...): Path.open, os.open, ...
-          if [[ $rest =~ $re_mr ]]; then :; elif [[ $rest =~ $re_mw ]]; then want=$((want + 1)); else unknown=1; fi
-        elif [[ $rest =~ $re_ow ]]; then
-          resolve_target "${BASH_REMATCH[1]}"
-          if [ -z "$TGT" ]; then [ "$RT_OUT" = 1 ] || unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
-        elif ! [[ $rest =~ $re_or ]]; then unknown=1
-        fi
-      done
-      rest="$cmd"
-      while [[ $rest =~ $re_other ]]; do want=$((want + 1)); rest="${rest#*"${BASH_REMATCH[0]}"}"; done
-      for re_w in "$re_w2" "$re_w3" "$re_w4"; do
-        rest="$cmd"
-        while [ -z "$hit" ] && [ "$unknown" = 0 ] && [[ $rest =~ $re_w ]]; do
-          m="${BASH_REMATCH[0]}"
-          if [ "$re_w" = "$re_w4" ]; then e="${BASH_REMATCH[2]}"; else e="${BASH_REMATCH[1]}"; fi
-          rest="${rest#*"$m"}"; got=$((got + 1))
-          resolve_target "$e"
-          if [ -z "$TGT" ]; then [ "$RT_OUT" = 1 ] || unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
-        done
-      done
-      # A writer whose target is unknown (a variable, an f-string, a method chain, fs.write on a descriptor) blocks.
-      # Out of reach: file APIs without a writer call (os.replace, shutil.copy, ...).
-      if [ -z "$hit" ] && { [ "$unknown" = 1 ] || [ "$got" -lt "$want" ]; }; then hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; fi
     fi
   fi
   alt_list="$segs_alt"
   if [ -z "$hit" ]; then
     [ "$stripped_done" = 1 ] || strip_cmd
-    qi=0
+    qi=0; d0_out="$eff_out"; d0_a="$basea"
     judge_segs
   fi
 fi

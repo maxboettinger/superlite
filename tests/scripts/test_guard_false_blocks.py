@@ -115,7 +115,8 @@ def test_known_cd_targets_keep_the_start_base(proj, tmp_path_factory):
     notes = (f"mkdir -p {fixes} && cd {fixes} && cat > F-T5-1.md <<'EOF'\n# F-T5-1\nEOF\n"
              "cat > F-T5-2.md <<'EOF'\n# F-T5-2\nEOF\n")
     assert at(proj, notes, outside).returncode == 0   # the transcript form: the cwd outside the project
-    assert at(proj, notes, proj).returncode == 2      # from the root, F-T5-2.md may land there if mkdir fails
+    assert at(proj, notes, proj).returncode == 0      # #122: `mkdir -p X && cd X` counts as reaching X
+    assert at(proj, notes.replace("mkdir -p", "mkdir"), proj).returncode == 2   # plain mkdir may fail: F-T5-2.md at the root
     assert at(proj, f"echo x; cd {proj}/src; echo y > a.py", outside).returncode == 2
     assert at(proj, f"eval \"cd {proj}/src\"; echo x > a.py", outside).returncode == 2
 

@@ -20,8 +20,10 @@ def at(proj, cmd, cwd):
 def test_relative_cd_walk_starts_at_the_cwd_and_a_missing_step_voids_it(tree):
     assert at(tree, "mkdir -p t/u; cd t/u; rm ../../src/a.py", tree) == 2
     assert at(tree, "ls; cd plans; rm ../../src/a.py", tree / "docs") == 2
-    # the cd may fail, so the cwd is a base too: ../plans/p.md from docs/ is plans/p.md, project code
-    assert at(tree, "ls; cd plans; echo x > ../plans/p.md", tree / "docs") == 2
+    # #122: a cd that starts its chain into an existing folder succeeds; one after `ls &&` may not run, so the cwd is a
+    # base too: ../plans/p.md from docs/ is plans/p.md, project code
+    assert at(tree, "ls; cd plans; echo x > ../plans/p.md", tree / "docs") == 0
+    assert at(tree, "ls && cd plans; echo x > ../plans/p.md", tree / "docs") == 2
     assert at(tree, "ls; cd plans; echo x > ./p.md", tree / "docs") == 0
 
 
