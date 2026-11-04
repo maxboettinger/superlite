@@ -83,8 +83,8 @@ flowchart TB
 ```
 
 1. Gate: all tasks committed, all reviews reported and committed, all seams `verified`.
-2. Build the packet: `"$SL" plan_tools packet --plan $PLAN --base <start-sha>` uses `.superlite/test-summary.json`, the probe results and the incidents, and writes `.superlite/review-packet.md`. Its header says `FAST PATH` or `REVIEW REQUIRED`. In the same message start `run_tests --full --background`; don't wait.
-3. Start `superlite:final-reviewer` then, fresh, brief = the absolute `sl` path and "read .superlite/review-packet.md", nothing more. The tree stays frozen. It answers once, from the packet only: `Verdict: APPROVED` or `CHANGES_REQUESTED` plus `file:line - problem - fix - tier N` lines.
+2. Build the packet: `"$SL" plan_tools packet --plan $PLAN --base <start-sha>` (inline build: `--inline --spec <spec.md>`; later rounds add `--previous <rounds.md>`) uses `.superlite/test-summary.json`, the probe results and the incidents, and writes `.superlite/review-packet.md`. In the same message start `run_tests --full --background`; don't wait.
+3. Start `superlite:final-reviewer` then, fresh, brief = the absolute `sl` path and "read .superlite/review-packet.md", nothing more. The tree stays frozen. It answers once: `Verdict: APPROVED` or `CHANGES_REQUESTED` plus `file:line - problem - fix - tier N` lines.
 4. Red suite lines are findings. Send all to fixers (`fixing.md`: tier by understanding, split by file), then `commit_task Tn` per owning task and one more `run_tests --background`. Leftovers become a `Ruling:`.
 5. Before the final commit, `"$SL" run_tests --wait` once; green means freeze.
 

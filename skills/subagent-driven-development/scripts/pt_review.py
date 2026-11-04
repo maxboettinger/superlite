@@ -3,7 +3,8 @@
 
     pt_review.py adapter  --plan PLAN.md [--root .] [--out .superlite/probes/adapter.py]
     pt_review.py packet   --plan PLAN.md [--root .] [--log F] [--probes DIR] [--out F]
-                          [--max-tokens 20000] [--tests F] [--base REF]
+                          [--max-tokens 20000] [--tests F] [--base REF] [--previous F]
+    pt_review.py packet   --inline --spec SPEC.md [the packet options above, without --plan]
     pt_review.py contract --plan PLAN.md [--root .] [--seam Ta,Tb] [--log F]
                           [--timeout 300]
 
@@ -145,11 +146,13 @@ class Plan:  # O(1)
     def section_text(self, start: int, end: int) -> str:  # O(end-start) total
         return "\n".join(self.lines[start:end])  # O(end-start)
 
+    def review_focus_span(self) -> tuple[int, int] | None:  # O(H) total
+        """(heading line, end) of the first Review Focus section; the packet's spec section leaves it out (#130)."""
+        return next(((idx, end) for idx, _lvl, title, end in self.headings if "review focus" in title.lower()), None)  # O(H)
+
     def review_focus(self) -> str:  # O(H + section lines) total
-        for idx, _lvl, title, end in self.headings:  # O(H) iterations
-            if "review focus" in title.lower():  # O(len(title))
-                return self.section_text(idx + 1, end).strip()  # O(section lines)
-        return ""  # O(1)
+        span = self.review_focus_span()  # O(H)
+        return self.section_text(span[0] + 1, span[1]).strip() if span else ""  # O(section lines)
 
 
 def split_top(s: str, seps: str) -> list[str]:  # O(m) total
@@ -1753,7 +1756,43 @@ def _format_stat(rows: dict[str, tuple[int, int] | None]) -> str:  # O(F log F +
     return "\n".join(out + [" " + ", ".join(summary)])  # O(F)
 
 
-def git_diff_stat(root: Path, base: str | None, ranges: RunRanges | None = None) -> str:  # O(X) + 1 git spawn per distinct range, plus run_ranges without ranges total
+def untracked_files(root: Path, skip: set[str] = frozenset()) -> list[str]:  # O(F log F) + 1 git spawn total
+    """Untracked, not ignored files an inline build added (#130); `.superlite/` and the `skip` paths never count."""
+    try:  # O(1)
+        r = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--others", "--exclude-standard"],  # O(F) + git spawn
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
+    except (OSError, subprocess.TimeoutExpired):  # O(1)
+        return []  # O(1)
+    if r.returncode != 0:  # O(1)
+        return []  # O(1)
+    keep = [p for p in r.stdout.split("\0")  # a nested repository is listed as `dir/`: not a file | O(F)
+            if p and not p.endswith("/") and not p.startswith(".superlite/") and p not in skip]  # O(F)
+    return sorted(keep, key=lambda p: (any(part.startswith(".") for part in p.split("/")), p))  # hidden folders last | O(F log F)
+
+
+MAX_UNTRACKED = 200  # O(1) untracked files an inline packet shows; the stat names the rest (#130)
+
+
+def _new_file(root: Path, f: str, *opts: str) -> str | None:  # O(file size) + 1 git spawn total
+    """`git diff --no-index` output for an untracked file against /dev/null (exit 1 means a difference)."""
+    try:  # O(1)
+        r = subprocess.run(["git", "-C", str(root), "diff", "--no-index", *opts, "--", "/dev/null", f],  # O(file size) + git spawn
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
+    except (OSError, subprocess.TimeoutExpired):  # O(1)
+        return None  # O(1)
+    return r.stdout if r.returncode in (0, 1) else None  # O(1)
+
+
+def _new_file_row(out: str) -> tuple[int, int] | None:  # O(len(out)) total
+    """A `git diff --no-index --numstat` line as (added, deleted), None for a binary file; no line: an empty file."""
+    parts = out.split("\t", 2)  # O(len(out))
+    if len(parts) < 3:  # O(1)
+        return (0, 0)  # O(1)
+    return (int(parts[0]), int(parts[1])) if parts[0].isdigit() and parts[1].isdigit() else None  # O(1)
+
+
+def git_diff_stat(root: Path, base: str | None, ranges: RunRanges | None = None,  # O(X) + 1 git spawn per distinct range, plus run_ranges without ranges total
+                  extra: list[str] | tuple[str, ...] = ()) -> str:  # O(1)
     """The run's diff stat. Each file counts the lines of its own range (RunRanges.of), the same lines as its hunk in
     changed_diffs: a file HEAD also changed since the run started counts HEAD against the checkpoint (#109)."""
     def numstat(*args: str) -> dict[str, tuple[int, int] | None] | None:  # O(X) + 1 git subprocess spawn
@@ -1781,6 +1820,10 @@ def git_diff_stat(root: Path, base: str | None, ranges: RunRanges | None = None)
         for f in fs:  # O(F) iterations
             rows.pop(f)  # a file with no lines in its own range has no hunk either | O(1)
         rows.update(m)  # O(F)
+    for f in extra:  # untracked files of an inline build (#130) | O(E) iterations
+        out = _new_file(root, f, "--numstat")  # O(file size) + git spawn
+        if out is not None:  # a git failure (the file vanished, unreadable) shows no row | O(1)
+            rows[f] = _new_file_row(out)  # O(1)
     return _format_stat(rows) or "(no changes)"  # O(F log F)
 
 
@@ -1806,8 +1849,8 @@ def _excerpt_order(changed: list[str], hot: list[str]) -> list[str]:  # O(F^2) t
     return list(hot) + hooks + code + tests + mds  # O(F)
 
 
-def changed_diffs(root: Path, base: str | None, files: list[str], ranges: RunRanges | None = None  # O(X) + one git spawn per changed file
-                  ) -> tuple[list[str], list[tuple[str, list[str]]]] | None:
+def changed_diffs(root: Path, base: str | None, files: list[str], ranges: RunRanges | None = None,  # O(X) + one git spawn per changed file
+                  extra: list[str] | tuple[str, ...] = ()) -> tuple[list[str], list[tuple[str, list[str]]]] | None:
     """(changed files, [(file, diff lines)] in excerpt order) against base and the newest checkpoint; None outside git.
 
     Each file diffs its own range (RunRanges.of): a checkpointed file that HEAD also changed since the run started holds
@@ -1823,8 +1866,15 @@ def changed_diffs(root: Path, base: str | None, files: list[str], ranges: RunRan
     except (OSError, subprocess.TimeoutExpired):  # O(1)
         pass  # O(1)
     changed = [c.strip() for c in changed if c.strip()]  # O(F)
+    fresh = [f for f in extra if f not in changed]  # untracked files of an inline build, as added hunks (#130) | O(E*F)
+    changed += fresh  # O(E)
     diffs: list[tuple[str, list[str]]] = []  # O(1)
     for f in _excerpt_order(changed, files):  # O(F) iterations
+        if f in fresh:  # O(E)
+            lines = (_new_file(root, f, "-U3") or "").splitlines()  # O(file size) + git spawn
+            if lines:  # O(1)
+                diffs.append((f, lines))  # O(1)
+            continue  # O(1)
         try:  # O(1)
             r = subprocess.run(["git", "-C", str(root), "diff", "-U3", *rr.of(f), "--", f],  # O(X) + git spawn
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
@@ -2097,8 +2147,43 @@ def cap_text(s: str, limit: int, note: str = "(truncated)") -> str:  # O(len(s))
     return s[: max(0, limit - len(note) - 1)].rstrip() + "\n" + note  # O(len(s))
 
 
+SPEC_CHARS = 6000  # O(1) cap on an inline packet's spec section (#130)
+PREVIOUS_CHARS = 4000  # O(1) cap on the earlier review rounds section (#130)
+
+
+def spec_text(plan: Plan) -> str:  # O(L) total
+    """The spec without its Review Focus section (section 7 shows that), headings two levels down under section 0."""
+    lines = list(plan.lines)  # O(L)
+    for idx, lvl, _title, _end in plan.headings:  # unfenced headings only | O(H) iterations
+        lines[idx] = "#" * min(6, lvl + 2) + lines[idx].lstrip()[lvl:]  # O(m)
+    drop = plan.review_focus_span()  # the section review_focus() shows | O(H)
+    if drop:  # O(1)
+        lines = lines[:drop[0]] + lines[drop[1]:]  # O(L)
+    return "\n".join(lines).strip()  # O(L)
+
+
+def packet_inputs(a: argparse.Namespace) -> tuple[bool, Plan, str]:  # O(W + L*m + H^2) total
+    """(inline, plan or spec, earlier rounds text); a ToolError names a missing or contradictory flag."""
+    inline = bool(getattr(a, "inline", False))  # O(1)
+    spec, previous = getattr(a, "spec", None), getattr(a, "previous", None)  # O(1)
+    if inline and not spec:  # O(1)
+        raise ToolError("--inline needs --spec FILE (the spec, its rulings and a Review Focus section)")  # O(1)
+    if inline and a.plan:  # O(1)
+        raise ToolError("--inline takes --spec in place of --plan")  # O(1)
+    if spec and not inline:  # O(1)
+        raise ToolError("--spec needs --inline")  # O(1)
+    if not inline and not a.plan:  # O(1)
+        raise ToolError("packet needs --plan, or --inline with --spec")  # O(1)
+    if inline and not Path(spec).is_file():  # O(1)
+        raise ToolError(f"spec not found: {spec}")  # O(1)
+    if previous and not Path(previous).is_file():  # O(1)
+        raise ToolError(f"previous rounds not found: {previous}")  # O(1)
+    prev = Path(previous).read_text(encoding="utf-8", errors="replace").strip() if previous else ""  # O(file size)
+    return inline, parse_plan(spec if inline else a.plan), prev  # O(W + L*m + H^2)
+
+
 def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/python subprocesses total
-    plan = parse_plan(a.plan)  # O(1)
+    inline, plan, previous = packet_inputs(a)  # O(W + L*m + H^2)
     root = Path(a.root).resolve()  # O(1)
     sl = root / ".superlite"  # O(1)
     log = Path(a.log) if a.log else sl / "incidents.jsonl"  # O(1)
@@ -2106,6 +2191,9 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     out = Path(a.out) if a.out else sl / "review-packet.md"  # O(1)
     tests = Path(a.tests) if a.tests else sl / "test-summary.json"  # O(1)
     cap = int((DEFAULT_TOKENS if a.max_tokens is None else a.max_tokens) * CHARS_PER_TOKEN)  # without --max-tokens it grows with the excerpts below | O(1)
+    inputs = {rel_to(root, p) for p in (getattr(a, "spec", None), getattr(a, "previous", None), out) if p}  # never new files | O(1)
+    fresh = untracked_files(root, inputs) if inline else []  # O(F log F) + git spawn
+    extra, n_more = fresh[:MAX_UNTRACKED], max(0, len(fresh) - MAX_UNTRACKED)  # two git spawns per file shown | O(1)
 
     wait_for_full(tests, a.wait_timeout)  # O(timeout / 0.5)
     tests = newest_summary_path(tests)  # O(1)
@@ -2115,7 +2203,9 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     runs = run_summaries(Path(a.tests) if a.tests else sl / "test-summary.json") or ([summary] if summary else [])  # O(S log S)
     entries = [e for e in entries if not stale_in_run(e, runs)]  # O(K*S*F)
     n_stale = n_all - len(entries)  # O(1)
-    items = incident_items(entries) + read_probe_failures(probes) + uncovered_items(plan, root, entries)  # O(K + R + pkgs*cats*...)
+    items = incident_items(entries) + read_probe_failures(probes)  # O(K + R)
+    if not inline:  # probe coverage needs plan tasks; an inline build ran no probes (#130) | O(1)
+        items += uncovered_items(plan, root, entries)  # O(pkgs*cats*...)
     base_ok = False  # O(1)
     if a.base:  # O(1)
         try:  # O(1)
@@ -2126,7 +2216,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     changed = changed_since(root, a.base) if base_ok else None  # O(F)
     if changed is not None:  # O(1)
         items += claimed_fix_items(entries, changed, root)  # O(K + F)
-    mismatches, n_checked = check_interfaces(plan, root, None)  # O(P) + 1 subprocess
+    mismatches, n_checked = ([], 0) if inline else check_interfaces(plan, root, None)  # O(P) + 1 subprocess
     for m in mismatches:  # O(Mm) iterations
         items.append(Item("contract", (2, m.file, m.line, m.msg), f"{m.file}:{m.line}  part1 {m.task}",  # O(1)
                           f"- {m.msg}", m.file, m.line, "pt_review contract check (tool)", True))  # O(1)
@@ -2134,22 +2224,24 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     counts = {s: sum(1 for i in items if i.section == s) for s in ("incidents", "probes", "uncovered", "contract", "claimed")}  # O(5*I)
     tests_text, nfail = read_test_summary(tests)  # O(1)
     n_open = sum(counts.values()) + (1 if nfail else 0)  # O(1)
-    fast = n_open == 0  # O(1)
-    tool_only = not fast and not nfail and all(i.tool for i in items)  # every open item is a tool check, none an agent finding or a red test (#12) | O(I)
+    fast = n_open == 0 and not inline  # an inline build had no reviewer, so nothing is verified yet (#130) | O(1)
+    tool_only = not fast and not inline and not nfail and all(i.tool for i in items)  # every open item is a tool check, none an agent finding or a red test (#12) | O(I)
 
     seams = cross_package_calls(root)  # O(S*B)
     seam_text = "\n".join(seams) if seams else "- none"  # O(1)
     seam_text = cap_text(seam_text, 5000, f"- (+ more calls omitted; {len(seams)} total)")  # O(1)
     focus = cap_text(plan.review_focus() or "(plan has no Review Focus section)", 3000)  # O(1)
     ranges = run_ranges(root, a.base)  # one range resolution for the stat and the hunks (#113) | O(F + file size) + git spawns
-    diff = cap_text(git_diff_stat(root, a.base, ranges), 2000)  # O(X) + git spawns
+    diff = cap_text(git_diff_stat(root, a.base, ranges, extra), 2000)  # O(X) + git spawns
+    if n_more:  # the note survives the stat cap | O(1)
+        diff += f"\n(+{n_more} more untracked files not shown)"  # O(1)
     hot: list[str] = []  # hot-spot files: those the ranked items point at, in rank order | O(1)
     for it in items:  # O(I) iterations
         rel = rel_to(root, root / it.file) if it.file else None  # O(d)
         if rel and rel not in hot:  # O(H)
             hot.append(rel)  # O(1)
     ex_budget = max(2000, cap // 3)  # O(1)
-    got = changed_diffs(root, a.base, hot, ranges)  # O(X) + git spawns
+    got = changed_diffs(root, a.base, hot, ranges, extra)  # O(X) + git spawns
     if got is not None and a.max_tokens is None:  # the default scales with the changed code, up to AUTO_MAX_TOKENS (#80) | O(1)
         rest = cap - ex_budget  # O(1)
         ex_budget = min(max(ex_budget, excerpt_need(got[1])), int(AUTO_MAX_TOKENS * CHARS_PER_TOKEN) - rest)  # O(X)
@@ -2158,9 +2250,18 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     left_line = raw_ex.split("\n", 1)[0] if raw_ex.startswith("Left out: ") else ""  # O(1)
     excerpts = cap_text(raw_ex, ex_budget)  # O(X)
 
+    front: list[str] = []  # an inline build's spec, then earlier review rounds (#130) | O(1)
+    if inline:  # O(1)
+        front += ["## 0. Spec", cap_text(spec_text(plan) or "(empty spec)", SPEC_CHARS), ""]  # O(L)
+    if previous:  # O(1)
+        front += ["## 0b. Earlier review rounds (findings and their fixes)", cap_text(previous, PREVIOUS_CHARS), ""]  # O(P)
+    if a.max_tokens is None:  # the default cap grows by these sections, as it does for the excerpts | O(1)
+        cap += len("\n".join(front))  # O(1)
+    title = ("FAST PATH" if fast else "REVIEW REQUIRED (inline build)" if inline  # O(1)
+             else "REVIEW REQUIRED (tool checks only)" if tool_only else "REVIEW REQUIRED")  # O(1)
     head = [  # O(1)
-        f"# Review packet: {'FAST PATH' if fast else 'REVIEW REQUIRED (tool checks only)' if tool_only else 'REVIEW REQUIRED'}",  # O(1)
-        f"plan: {plan.path.name}",  # O(1)
+        f"# Review packet: {title}",  # O(1)
+        f"{'spec' if inline else 'plan'}: {plan.path.name}",  # O(1)
         "Answer in one turn, no tools: a verdict, then findings as `file:line - problem - fix`. "  # O(1)
         "Anything marked unverified is judged from its excerpt or listed as a finding.",  # O(1)
         ("Nothing is open: no open incidents, probe failures, unverified categories, contract mismatches or "  # O(1)
@@ -2170,7 +2271,11 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
          f"failing tests {nfail}). Excerpts are +-12 lines."),  # O(1)
         *(["Every open item comes from a tool check (its `checker:` line), none from an agent finding: "  # O(1)
            "confirm or dismiss each from its excerpt, one line why per dismissal; nothing is approved unread."] if tool_only else []),  # O(1)
+        *(["Inline build: no package reviewer, probe or contract check ran, so nothing below is verified. Review the "  # O(1)
+           "diff and the new files against the spec (section 0) and the Review Focus; list every defect as a finding."]  # O(1)
+          if inline else []),  # O(1)
         "",  # O(1)
+        *front,  # O(1)
     ]  # O(1)
     tail = ["## 4. Test summary", tests_text, "",  # O(1)
             "## 5. Cross-package seams (calls from one package into another)", seam_text, "",  # O(1)
@@ -2182,8 +2287,9 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
                      + (f"\ndropped {n_stale} stale test-failure incident(s)" if n_stale else ""),  # O(1)
         "probes": "## 2. Probe results: failures still open and unverified categories",  # O(1)
         "claimed": "## 3b. Claimed fixes not on disk (a reviewer logged these fixed, the file is unchanged since base)",  # O(1)
-        "contract": f"## 3. Contract check: real signatures vs the plan's Produces ({n_checked} checked, "  # O(1)
-                    f"{len(mismatches)} mismatch(es))",  # O(1)
+        "contract": ("## 3. Contract check: not run (inline build)" if inline else  # O(1)
+                     f"## 3. Contract check: real signatures vs the plan's Produces ({n_checked} checked, "  # O(1)
+                     f"{len(mismatches)} mismatch(es))"),  # O(1)
     }  # O(1)
     fixed_len = len("\n".join(head + tail)) + 400 + sum(len(t) + 40 for t in sec_titles.values())  # O(sum of text sizes)
     budget = cap - fixed_len  # O(1)
@@ -2216,7 +2322,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     out.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     out.write_text(text, encoding="utf-8", newline="\n")  # O(1)
     print(f"wrote {out} ({len(text)} chars, ~{int(len(text) / CHARS_PER_TOKEN)} tokens) - "  # O(1)
-          f"{'FAST PATH' if fast else f'{n_open} open item(s)'}")  # O(1)
+          f"{'FAST PATH' if fast else f'{n_open} open item(s)'}{', inline build' if inline else ''}")  # O(1)
     return 0  # O(1)
 
 
@@ -2235,7 +2341,7 @@ def build_parser() -> argparse.ArgumentParser:  # O(1) total
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
     for name in ("adapter", "packet", "contract"):  # O(3) iterations
         sp = sub.add_parser(name)  # O(1)
-        sp.add_argument("--plan", required=True)  # O(1)
+        sp.add_argument("--plan", required=name != "packet")  # packet checks it itself: --inline takes --spec instead | O(1)
         sp.add_argument("--root", default=".")  # O(1)
         if name == "adapter":  # O(1)
             sp.add_argument("--out")  # O(1)
@@ -2249,6 +2355,10 @@ def build_parser() -> argparse.ArgumentParser:  # O(1) total
             sp.add_argument("--wait-timeout", type=float, default=600.0,  # O(1)
                             help="seconds to wait for an older in-flight full run (default 600)")  # O(1)
             sp.add_argument("--base", help="git ref for the diff stat and source excerpts (default: the root commit)")  # O(1)
+            sp.add_argument("--inline", action="store_true",  # O(1)
+                            help="inline build: never the fast path, the spec as section 0, untracked files in the diff")  # O(1)
+            sp.add_argument("--spec", help="with --inline: spec, rulings and Review Focus (markdown), in place of --plan")  # O(1)
+            sp.add_argument("--previous", help="earlier review rounds' findings and fixes (markdown), as section 0b")  # O(1)
         else:  # O(1)
             sp.add_argument("--seam", help="Ta,Tb: run parts 1-3 for that seam")  # O(1)
             sp.add_argument("--log", help="append a verified/incident entry to this JSONL log "  # O(1)
@@ -2262,7 +2372,8 @@ def main(argv: list[str]) -> int:  # O(1) + dispatched command
         a = build_parser().parse_args(argv)  # O(1)
     except SystemExit as e:  # O(1)
         return int(e.code) if isinstance(e.code, int) else 2  # O(1)
-    IMPORT_ROOTS[:] = pyroots.import_roots(Path(getattr(a, "root", None) or ".").resolve(), str(Path(a.plan).resolve()) if getattr(a, "plan", None) else None)  # O(d)
+    plan_arg = getattr(a, "plan", None) or getattr(a, "spec", None)  # O(1)
+    IMPORT_ROOTS[:] = pyroots.import_roots(Path(getattr(a, "root", None) or ".").resolve(), str(Path(plan_arg).resolve()) if plan_arg else None)  # O(d)
     try:  # O(1)
         return {"adapter": cmd_adapter, "packet": cmd_packet, "contract": cmd_contract}[a.cmd](a)  # O(1)
     except ToolError as e:  # O(1)
