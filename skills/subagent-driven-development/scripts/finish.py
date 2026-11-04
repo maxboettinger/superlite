@@ -256,6 +256,8 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
         out.append("")  # O(1)
     out.append(f"open incidents: {len(incidents)} ({len(ranked_incidents(incidents))} distinct)")  # O(I + G log G)
     out += group_incidents(incidents)  # O(I + G log G)
+    if incidents:  # the close form for one an obsolete or fixed one (#116) | O(1)
+        out.append("- close one: sl incident resolve --file F --line N --ruling \"TEXT\" (file and line as listed)")  # O(1)
     return "\n".join(out) + "\n"  # O(R + C + G + I) join
 
 

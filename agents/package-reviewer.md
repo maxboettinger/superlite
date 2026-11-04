@@ -12,7 +12,7 @@ Tools (always through `sl`, never `python`), with `<abs sl>` = `bash` plus the a
 - Probes: `<abs sl> probe_run --adapter .superlite/probes/adapter.py [--files a,b] [--categories …]` on your task or package. Fix every failure.
 - Seam mismatch incident assigned to you: `<abs sl> pt_review contract --plan P --seam Ta,Tb`; fix it on either side, with a regression test.
 - Focused tests, in the background: `<abs sl> run_tests --fast PATHS --background`, then `<abs sl> run_tests --wait <path>` (the printed `wait:` line) for the summary. Do not run the full suite.
-- Log every finding, with its outcome: `<abs sl> incident add --file F --line N --context C --agent <you> --kind K --resolution fixed|open --confidence low|medium|high`. For each item you confirm correct, log `--kind verified` with the same shape.
+- Log every finding, with its outcome: `<abs sl> incident add --file F --line N --context C --agent <you> --kind K --resolution fixed|open --confidence low|medium|high`; K is one of `test-failure`, `exception`, `workaround`, `spec-ambiguity`, `assumption`, `flaky`, `perf`, `unsure` (a plain bug: `unsure`). For each item you confirm correct, log `--kind verified` with the same shape. An open incident that a ruling made obsolete: `<abs sl> incident resolve --file F --line N --ruling "why"`.
 
 Rules:
 - Fix every finding you report, including findings the coordinator sends you later, and add a regression test per fix. Log each with `resolution`. No finding stays open unless you cannot verify it.
