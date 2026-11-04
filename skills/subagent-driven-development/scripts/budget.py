@@ -68,7 +68,7 @@ def compute(plan_path, sl_dir=".superlite", now=None) -> dict:  # O(M + B + n*(n
     starts = [a["first_abs"] if a.get("first_abs") else a["start_ms"] / 1000.0 for a in agents if a.get("first_abs") or a["start_ms"]]  # O(A)
     now = now if now is not None else time.time()  # O(1)
     elapsed = max(0.0, now - min(starts)) if starts else 0.0  # O(1)
-    co = metrics.coordinator_record(sl)  # O(B) the main session's own spend
+    co = metrics.coordinator_record(sl, agents=agents)  # O(B) the main session's own spend, the run alone (#112)
     agents_usd = metrics.agents_cost(sl)  # O(M + B) every agent segment, mapped to a task or not
     co_usd = co["cost_usd"] if co else 0.0  # O(1)
     spent = agents_usd + co_usd  # coordinator + agents | O(1)

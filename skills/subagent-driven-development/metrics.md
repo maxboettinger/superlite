@@ -41,12 +41,14 @@ auto-downgrading optional reviewers to the haiku tier; stopping the run at 100%.
 
 ## Coordinator, accuracy and reconcile
 - The coordinator is its own line: `metrics.py --json --all` returns `{coordinator, tasks}` (turns, tokens, cost by model, median and
-  peak context, duration). Its transcript is a `session_transcript` / `transcript_path` key on any metrics line, else derived from an
+  peak context, duration) for the run alone: from the first dispatch (the last `Agent`/`Task` call at or before the first agent's
+  launch or first message) to the transcript's end; `session` holds turns, cost and duration of the whole transcript, design and
+  planning included (`scope: session` before any agent ran). Its transcript is a `session_transcript` / `transcript_path` key on any metrics line, else derived from an
   agent transcript path (`<dir>/<session>/subagents/agent-X.jsonl` -> `<dir>/<session>.jsonl`). `sl budget` totals coordinator + agents
   (`coordinator $2.10 | agents $3.05 | total $5.15 of $8 cap`) and hints when the coordinator is 40%+ of the cost with 30+ turns at 60k+
   median context.
 - Transcripts store an early snapshot of `output_tokens` per streamed message (one message id spans several entries), so output is
   topped up from text, thinking and tool-input length at 3.5 chars per token; thinking tokens are not stored and stay uncounted.
-- `metrics.py --reconcile STREAM_LOG` compares coordinator + agents with the stream-json log's last `total_cost_usd`
+- `metrics.py --reconcile STREAM_LOG` compares the coordinator's session + agents with the stream-json log's last `total_cost_usd`
   (diff, percent, which side is higher). On the z2 benchmark-style run (agents killed at the $3 budget): 2.78 vs 3.09 USD, -9.9%
   (metrics lower; before the output top-up it was -23%).

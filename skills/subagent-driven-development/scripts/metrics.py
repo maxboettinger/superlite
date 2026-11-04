@@ -316,25 +316,54 @@ def session_transcript(sl_dir: Path) -> str | None:  # O(M)
     return None  # O(1)
 
 
-def coordinator_record(sl_dir, prices=None) -> dict | None:  # O(bytes of the main transcript)
+DISPATCH_TOOLS = ("Agent", "Task")  # the tool calls that launch a subagent (capture-agent-launch's matcher) | O(1)
+
+
+def run_start(agents) -> float | None:  # O(A)
+    """Epoch seconds of the earliest evidence of a run agent: its launch hook or its transcript's first message (the
+    hook can be logged late, never early); None before any agent ran. The capture hooks log only during a run."""
+    ts = [x for a in agents for x in (a.get("first_abs"), (a["start_ms"] / 1000.0) if a.get("start_ms") else None) if x]  # O(A)
+    return min(ts) if ts else None  # O(A)
+
+
+def _coordinator_line(msgs: list, prices: dict) -> dict:  # O(turns log turns)
+    """Turns, tokens, cost by model, context median and peak (input + cache read + cache write per message) and the
+    first-to-last message time of the given coordinator messages."""
+    tok, by_model, ctx = _empty(), {}, []  # O(1)
+    for rec in msgs:  # O(turns)
+        fam = fam_key(rec["model"])  # O(1)
+        t5 = {k: rec[k] for k in tok}  # O(5)
+        for k in tok:  # O(5)
+            tok[k] += t5[k]  # O(1)
+        by_model[fam] = by_model.get(fam, 0.0) + cost_of(t5, price_for(prices, fam))  # O(1)
+        ctx.append(rec["input"] + rec["cache_read"] + rec["cache_write_5m"] + rec["cache_write_1h"])  # O(1)
+    ctx.sort()  # O(turns log turns)
+    times = [t for rec in msgs for t in (rec["first"], rec["last"]) if t is not None]  # O(turns)
+    return {"turns": len(msgs), "tokens": {"in": tok["input"], "out": tok["output"], "cache_read": tok["cache_read"],  # O(1)
+                                           "cache_write": tok["cache_write_5m"] + tok["cache_write_1h"]},
+            "cost_usd": round(sum(by_model.values()), 6), "cost_by_model": {k: round(v, 6) for k, v in sorted(by_model.items())},
+            "context_peak": ctx[-1] if ctx else 0, "context_median": ctx[len(ctx) // 2] if ctx else 0,
+            "duration_s": round(max(times) - min(times), 1) if times else None}
+
+
+def coordinator_record(sl_dir, prices=None, agents=None) -> dict | None:  # O(main transcript + M + B), O(main + A) given agents
     """The coordinator as one line: usage per assistant message (deduplicated by message id), turns, context peak and
-    median (input + cache read + cache write per message), cost by model, and its first-to-last message time."""
+    median, cost by model and duration of the run alone, from the first dispatch (the last Agent/Task call at or before
+    `run_start`) to the transcript's end (`finish` writes the report); `session` holds turns, cost and duration of the
+    whole transcript, design and planning included. scope: "run", or "session" before any agent ran (then both agree).
+    agents: agent_records(sl_dir), when the caller has them."""
     sl_dir = Path(sl_dir)  # O(1)
     path = session_transcript(sl_dir)  # O(M)
     if not path:  # O(1)
         return None  # O(1)
     prices = prices or load_prices()  # O(file)
     seen: dict[str, dict] = {}  # O(1)
-    first = last = None  # O(1)
     for e in read_jsonl(path):  # O(entries)
         if e.get("isSidechain") or e.get("type") != "assistant":  # subagent entries are counted per agent | O(1)
             continue  # O(1)
         msg = e.get("message") or {}  # O(1)
         u = msg.get("usage") or {}  # O(1)
         t = _ts(e)  # O(1)
-        if t is not None:  # O(1)
-            first = t if first is None else first  # O(1)
-            last = t  # O(1)
         mid = msg.get("id") or f"anon{len(seen)}"  # O(1)
         cc = u.get("cache_creation") or {}  # O(1)
         w1, w5 = cc.get("ephemeral_1h_input_tokens"), cc.get("ephemeral_5m_input_tokens")  # O(1)
@@ -342,7 +371,10 @@ def coordinator_record(sl_dir, prices=None) -> dict | None:  # O(bytes of the ma
             w5, w1 = u.get("cache_creation_input_tokens") or 0, 0  # O(1)
         rec = {"input": u.get("input_tokens") or 0, "output": u.get("output_tokens") or 0,  # O(1)
                "cache_read": u.get("cache_read_input_tokens") or 0, "cache_write_5m": w5 or 0, "cache_write_1h": w1 or 0,
-               "model": msg.get("model") or ""}
+               "model": msg.get("model") or "", "first": t, "last": t, "dispatch": None}
+        if any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in DISPATCH_TOOLS  # O(content)
+               for b in msg.get("content") or []):
+            rec["dispatch"] = t  # O(1)
         old = seen.get(mid)  # O(1)
         if old is None:  # O(1)
             rec["chars"] = msg_chars(msg)  # O(content)
@@ -352,21 +384,22 @@ def coordinator_record(sl_dir, prices=None) -> dict | None:  # O(bytes of the ma
             for k in ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h"):  # O(5)
                 old[k] = max(old[k], rec[k])  # O(1)
             old["model"] = rec["model"] or old["model"]  # O(1)
-    tok, by_model, ctx = _empty(), {}, []  # O(1)
-    for rec in seen.values():  # O(turns)
+            if t is not None:  # O(1)
+                old["first"] = t if old["first"] is None else min(old["first"], t)  # O(1)
+                old["last"] = t if old["last"] is None else max(old["last"], t)  # O(1)
+            old["dispatch"] = old["dispatch"] if old["dispatch"] is not None else rec["dispatch"]  # O(1)
+    msgs = list(seen.values())  # O(turns)
+    for rec in msgs:  # O(turns)
         rec["output"] = max(rec["output"], int(rec["chars"] / CHARS_PER_TOKEN))  # O(1)
-        fam = fam_key(rec["model"])  # O(1)
-        t5 = {k: rec[k] for k in tok}  # O(5)
-        for k in tok:  # O(5)
-            tok[k] += t5[k]  # O(1)
-        by_model[fam] = by_model.get(fam, 0.0) + cost_of(t5, price_for(prices, fam))  # O(1)
-        ctx.append(rec["input"] + rec["cache_read"] + rec["cache_write_5m"] + rec["cache_write_1h"])  # O(1)
-    ctx.sort()  # O(turns log turns)
-    return {"turns": len(seen), "tokens": {"in": tok["input"], "out": tok["output"], "cache_read": tok["cache_read"],  # O(1)
-                                           "cache_write": tok["cache_write_5m"] + tok["cache_write_1h"]},
-            "cost_usd": round(sum(by_model.values()), 6), "cost_by_model": {k: round(v, 6) for k, v in sorted(by_model.items())},
-            "context_peak": ctx[-1] if ctx else 0, "context_median": ctx[len(ctx) // 2] if ctx else 0,
-            "duration_s": round(last - first, 1) if first is not None and last is not None else None, "transcript": path}
+    start = run_start(agents if agents is not None else agent_records(sl_dir))  # O(A), O(M + B) without agents
+    if start is not None:  # O(1)
+        start = max((r["dispatch"] for r in msgs if r["dispatch"] is not None and r["dispatch"] <= start), default=start)  # O(turns)
+    run = [r for r in msgs if start is not None and r["last"] is not None and r["last"] >= start]  # O(turns)
+    whole = _coordinator_line(msgs, prices)  # O(turns log turns)
+    out = _coordinator_line(run, prices) if start is not None else dict(whole)  # O(turns log turns)
+    out.update({"scope": "run" if start is not None else "session", "run_start": start,  # O(1)
+                "session": {k: whole[k] for k in ("turns", "cost_usd", "duration_s")}, "transcript": path})
+    return out  # O(1)
 
 
 def agents_cost(sl_dir, prices=None) -> float:  # O(M + B)
@@ -377,16 +410,18 @@ def agents_cost(sl_dir, prices=None) -> float:  # O(M + B)
 
 
 def reconcile(sl_dir, stream_log, prices=None) -> dict:  # O(M + B + log)
-    """Coordinator + agents from the transcripts against the stream-json log's cumulative total_cost_usd."""
+    """The whole session (coordinator session + agents) from the transcripts against the stream-json log's cumulative
+    total_cost_usd, which covers the whole session too; coordinator_usd is the run alone."""
     truth = None  # O(1)
     for e in read_jsonl(stream_log):  # O(log)
         if isinstance(e.get("total_cost_usd"), (int, float)):  # O(1)
             truth = float(e["total_cost_usd"])  # the last (cumulative) value wins | O(1)
-    co = coordinator_record(sl_dir, prices)  # O(B)
+    co = coordinator_record(sl_dir, prices)  # O(M + B)
     ag = round(agents_cost(sl_dir, prices), 6)  # O(M + B)
-    mine = round((co["cost_usd"] if co else 0.0) + ag, 6)  # O(1)
+    mine = round((co["session"]["cost_usd"] if co else 0.0) + ag, 6)  # O(1)
     diff = None if truth is None else round(mine - truth, 6)  # O(1)
-    return {"metrics_usd": mine, "coordinator_usd": co["cost_usd"] if co else None, "agents_usd": ag,  # O(1)
+    return {"metrics_usd": mine, "coordinator_usd": co["cost_usd"] if co else None,  # O(1)
+            "coordinator_session_usd": co["session"]["cost_usd"] if co else None, "agents_usd": ag,
             "stream_usd": truth, "diff_usd": diff, "diff_pct": None if not truth else round(100.0 * diff / truth, 2),
             "higher": None if diff is None else ("metrics" if diff > 0 else "stream" if diff < 0 else "equal")}
 
@@ -538,7 +573,8 @@ def main(argv=None):  # O(M + B)
         print(json.dumps({"coordinator": co, "tasks": rows} if a.all else rows, indent=1))  # O(n)
     else:  # O(1)
         if co:  # O(1)
-            print(f"coordinator {co['turns']} turns ${co['cost_usd']:.3f} context median {co['context_median']} peak {co['context_peak']}")  # O(1)
+            print(f"coordinator {co['turns']} turns ${co['cost_usd']:.3f} context median {co['context_median']} peak {co['context_peak']}"  # O(1)
+                  + (f" (session ${co['session']['cost_usd']:.3f}, {co['session']['turns']} turns)" if co["scope"] == "run" else ""))
         for r in rows:  # O(n)
             print(f"{r['task']} {r['model'] or '?'} {r['duration_s']}s ${r['cost_usd']:.3f} tools={r['tool_calls']} "
                   f"status={r['status']} first_time_pass={r['first_time_pass']}")  # O(1)

@@ -27,8 +27,8 @@ Mechanical steps are scripts, not agents. Every tool runs as `<skill-dir>/script
 | `trees` | `trees.py clean` removes the isolated test trees under `.superlite/trees` (`sl trees clean`, at finish); `path Tn` prints one |
 | `incident` | Records and queries the shared incident log (file, line, context; `time` as `HH:MM:SS` and `epoch` seconds) |
 | `feedback` | Superlite's own friction inbox, `~/.superlite/feedback.jsonl` per machine: `add TEXT [--kind K] [--plan P]` (text scrubbed of home paths, e-mails, tokens), `triage [--host H]... [--all]` (merges the hosts in `feedback-hosts` over ssh, groups duplicates, ranks by count, matches open issues via `gh`), `mark ID...`; `finish` asks for it |
-| `budget` | One line of elapsed time and cost against the plan's target and cap |
-| `metrics` | Per-task time, tokens and cost from `.superlite/metrics.jsonl` and agent transcripts |
+| `budget` | One line of elapsed time and cost against the plan's target and cap; its coordinator cost is the run alone |
+| `metrics` | Per-task time, tokens and cost from `.superlite/metrics.jsonl` and agent transcripts; the coordinator line counts the run alone, from the first dispatch (the last `Agent`/`Task` call at or before the first agent's launch or first message) to the transcript's end, with the whole session (design and planning included) under `session`; `--reconcile` compares the session total with the stream log. The report's cost split shows the coordinator's run cost, turns, context median and peak, and the session total |
 | `history` | Run history: `write` rows to `~/.superlite/history.jsonl`, `read`, `derive` stats, `import` bench scores |
 | `graphify_gate` | Gates Graphify for search in non-trivial codebases |
 | `finish` | Collects the finish summary (rulings, commits or checkpoints, test counts, open incidents) |

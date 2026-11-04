@@ -109,7 +109,8 @@ def _read_json(p):  # O(file)
 def collect(plan_path, sl_dir) -> dict:  # O(M + B + n*(n + e))
     sl = Path(sl_dir)  # O(1)
     rows = metrics.task_records(sl, plan_path)  # O(M + B)
-    co = metrics.coordinator_record(sl)  # O(B)
+    agents = metrics.agent_records(sl)  # O(M + B)
+    co = metrics.coordinator_record(sl, agents=agents)  # O(B) the run alone; co["session"] the whole session
     proj, note = load_projection(plan_path, sl)  # O(n*(n + e))
     ptasks = (proj or {}).get("tasks") or {}  # O(1)
     mins = lambda r: (r["duration_s"] or 0) / 60.0  # noqa: E731 | O(1)
@@ -140,9 +141,11 @@ def collect(plan_path, sl_dir) -> dict:  # O(M + B + n*(n + e))
             "wall_min": {"projected": (proj or {}).get("wall_min"), "actual": wall},
             "cost_usd_agents": {"projected": (proj or {}).get("cost_usd"), "actual": round(agents_usd + rework_usd, 6)},
             "task_min": {"projected": (proj or {}).get("sum_task_min"), "actual": round(sum(mins(r) for r in rows), 3)},
-            "agents": {"projected": (proj or {}).get("agents"), "actual": len(metrics.agent_records(sl))},
+            "agents": {"projected": (proj or {}).get("agents"), "actual": len(agents)},
         },
         "cost_split": {"agents_usd": round(agents_usd, 6), "rework_usd": round(rework_usd, 6), "coordinator_usd": coord_usd,
+                       "coordinator_session_usd": co["session"]["cost_usd"] if co else None,
+                       "coordinator": {k: co[k] for k in ("turns", "context_median", "context_peak")} if co else None,
                        "total_usd": round(agents_usd + rework_usd + (coord_usd or 0.0), 6)},
         "concurrency": {"peak": peak_concurrency(rows), "projected_peak": (proj or {}).get("peak_width")},
         "critical_path": {"actual": [r["task"] for r in rows if r.get("on_critical_path")],
@@ -187,8 +190,11 @@ def render(c) -> str:  # O(n)
         v = h[key]  # O(1)
         out.append(f"{label:24}{_num(v['projected'], fmt):>10}{_num(v['actual'], fmt):>10}  "
                    + _delta(delta(v["projected"], v["actual"]), unit, "+.2f" if key == "cost_usd_agents" else "+.1f" if fmt != "d" else "+d"))  # O(1)
+    co, sess = cs.get("coordinator"), cs.get("coordinator_session_usd")  # absent in reports written before the run split (#112) | O(1)
+    co_txt = (f" ({co['turns']} turns, context median {co['context_median'] / 1000:.1f}k, peak {co['context_peak'] / 1000:.1f}k"
+              + (f"; session ${sess:.2f})" if sess is not None else ")")) if co else ""  # O(1)
     out.append(f"cost split: agents ${cs['agents_usd']:.2f}, rework ${cs['rework_usd']:.2f}, coordinator "
-               f"{'n/a' if cs['coordinator_usd'] is None else '$%.2f' % cs['coordinator_usd']}, total ${cs['total_usd']:.2f}")  # O(1)
+               f"{'n/a' if cs['coordinator_usd'] is None else '$%.2f' % cs['coordinator_usd']}{co_txt}, total ${cs['total_usd']:.2f}")  # O(1)
     cp = c["critical_path"]  # O(1)
     out.append(f"concurrency: peak {c['concurrency']['peak']} at once (projected {_num(c['concurrency']['projected_peak'], 'd')}); "
                f"critical path actual {' '.join(cp['actual']) or 'n/a'}; projected {' > '.join(cp['projected'] or []) or 'n/a'}"
