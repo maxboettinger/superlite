@@ -5,7 +5,7 @@
     experiment.py show | clear
 
 `$SUPERLITE_HOME/experiment.json` (default `~/.superlite/`) holds the experiment. A sonnet `build_prime` without
-`--prime` calls `claim`: the first plan with at least min_tasks tasks takes one run (runs_left - 1, under a lock) and
+`--prime` calls `claim`: the first plan with at least min_tasks tasks whose run has not dispatched yet takes one run (runs_left - 1, under a lock) and
 its claim `{id, plan, prime, batch}` goes to `experiment.json` beside its prime (`.superlite/`); rebuilding that plan's
 prime keeps the claim. `dispatch` without `--batch` and `history write` read the claim of their plan (`for_plan`), so
 the run's dispatches use its batch and its history rows carry its id. Explicit `--prime`/`--batch` always win.
@@ -54,14 +54,17 @@ def for_plan(plan, sl_dir) -> dict | None:  # O(f)
 
 
 def claim(plan, sl_dir) -> dict | None:  # O(L + f)
-    """This plan's claim: kept when it has one, else one run of the global experiment when the plan has at least
-    min_tasks tasks and runs are left. None otherwise (also for an unreadable plan)."""
+    """This plan's claim: kept when it has one, else one run of the global experiment when the run has not
+    dispatched yet (no agents in sl_dir/pool.json), the plan has at least min_tasks tasks and runs are left. None
+    otherwise (also for an unreadable plan)."""
     mine = for_plan(plan, sl_dir)  # O(f)
     if mine:  # O(1)
         return mine  # O(1)
     g = global_path()  # O(1)
     if not g.is_file():  # O(1)
         return None  # O(1)
+    if ((load(Path(sl_dir) / "pool.json") or {}).get("agents")):  # the run already dispatched: a mid-run rebuild | O(pool)
+        return None  # stays on the settings it started with | O(1)
     import plan_tools as pt  # O(1)
     try:  # O(1)
         n = len(pt.Plan.load(str(plan)).tasks)  # O(L)

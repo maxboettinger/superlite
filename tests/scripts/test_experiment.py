@@ -113,6 +113,33 @@ def test_an_explicit_prime_or_the_haiku_tier_never_claims(tmp_path, monkeypatch)
     assert left(home) == 1 and not (d / "experiment.json").exists()
 
 
+def test_a_run_that_already_dispatched_does_not_claim(tmp_path, monkeypatch):
+    """A mid-run prime rebuild (resume) must not switch a default run to the experiment: its pool has agents."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("SUPERLITE_HOME", str(home))
+    arm(home)
+    d, p = project(tmp_path, "running", 26)
+    pool(d, [{"id": "a1", "tasks": ["T1"], "tier": "sonnet"}])
+    cp, text = prime(d, p)
+    assert FULL_ONLY not in text and "53-old-settings" not in cp.err
+    assert left(home) == 1 and not (d / "experiment.json").exists()
+    d2, p2 = project(tmp_path, "fresh", 8)
+    pool(d2, [])  # an empty pool is a run that has not dispatched yet
+    _, fresh = prime(d2, p2)
+    assert FULL_ONLY in fresh and left(home) == 0
+
+
+def test_the_claiming_run_keeps_its_claim_after_dispatching(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("SUPERLITE_HOME", str(home))
+    arm(home)
+    d, p = project(tmp_path, "big", 8)
+    prime(d, p)
+    pool(d, [{"id": "a1", "tasks": ["T1"], "tier": "sonnet"}])
+    _, again = prime(d, p)
+    assert FULL_ONLY in again and left(home) == 0
+
+
 def test_two_builds_at_once_claim_it_only_once(tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("SUPERLITE_HOME", str(home))
