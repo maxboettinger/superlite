@@ -6,7 +6,7 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from test_autocommit import checkpoint, git, make_repo, run, write  # noqa: E402
+from test_autocommit import ENV, checkpoint, git, make_repo, run, write  # noqa: E402
 
 TASK_FILES = ["src/a.py", "src/b.py", "tests/test_a.py"]
 
@@ -121,3 +121,35 @@ def test_packet_after_fast_forward_lists_no_merged_file(ff_repo):
     packet = (repo / ".superlite" / "review-packet.md").read_text(encoding="utf-8")
     assert "social/feed.py" not in packet
     assert "src/b.py" in packet
+
+
+def test_stat_and_hunks_read_one_per_file_range(ff_shared, pt_review, monkeypatch):
+    """#113: a per-file range change reaches the stat and the hunks together; here src/a.py gets an empty range."""
+    repo, _ = ff_shared
+    rr = pt_review.run_ranges(repo, "HEAD")
+    assert rr.of("src/b.py") == ["HEAD", pt_review.diff_head(repo)]  # moved: HEAD against the checkpoint
+    assert rr.of("src/a.py") == pt_review.diff_range(repo, "HEAD")
+    of = pt_review.RunRanges.of
+    monkeypatch.setattr(pt_review.RunRanges, "of", lambda self, f: ["HEAD", "HEAD"] if f == "src/a.py" else of(self, f))
+    stat = pt_review.git_diff_stat(repo, "HEAD")
+    assert "src/a.py" not in stat and "src/b.py" in stat
+    _, diffs = pt_review.changed_diffs(repo, "HEAD", [])
+    assert [f for f, _ in diffs] == ["src/b.py"]
+
+
+def test_packet_lists_moved_files_once(ff_shared, pt_review, monkeypatch):
+    """#113: one packet resolves the files HEAD changed since the run started once, for the stat and the hunks."""
+    repo, start = ff_shared
+    real, calls = pt_review.subprocess.run, []
+
+    def spy(cmd, *a, **kw):
+        calls.append(list(cmd))
+        return real(cmd, *a, **kw)
+
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(pt_review.subprocess, "run", spy)
+    assert pt_review.main(["packet", "--plan", "plan.md", "--root", str(repo), "--base", "HEAD",
+                           "--wait-timeout", "0"]) == 0
+    assert sum(c[-4:] == ["diff", "--name-only", start, "HEAD"] for c in calls) == 1

@@ -1679,8 +1679,39 @@ def diff_range(root: Path, base: str) -> list[str]:  # O(file size) total
 
     Checkpoints are parented on the HEAD the run started from, so after a mid-run fast-forward a two-dot
     diff from the new HEAD lists the merged files as reverse changes; three dots diff from the merge base (#100)."""
-    head = diff_head(root)  # O(file size)
-    return [f"{base}...{head}"] if head else [base]  # O(1)
+    return _run_range(base, diff_head(root))  # O(file size)
+
+
+def _run_range(base: str, cp: str | None) -> list[str]:  # O(1) total
+    return [f"{base}...{cp}"] if cp else [base]  # O(1)
+
+
+@dataclass(frozen=True)  # O(1)
+class RunRanges:  # O(1)
+    """The run's diff range and each file's own range, resolved once per packet for the stat and the hunks (#113)."""  # O(1)
+    rng: list[str]  # the run's changes, as diff_range gives them | O(1)
+    cp: str | None  # newest checkpoint sha | O(1)
+    moved: frozenset[str]  # files HEAD changed since the run started | O(1)
+
+    def of(self, f: str) -> list[str]:  # O(1) total
+        """git diff arguments for f: a file HEAD also changed diffs HEAD against the checkpoint, only the run's lines (#104)."""
+        return ["HEAD", self.cp] if self.cp and f in self.moved else self.rng  # O(1)
+
+
+def run_ranges(root: Path, base: str | None) -> RunRanges | None:  # O(F + file size) + up to 2 git spawns total
+    """RunRanges for base (None: the root commit), or None outside git."""  # O(1)
+    if not (root / ".git").exists():  # O(1)
+        return None  # O(1)
+    if base is None:  # O(1)
+        try:  # O(1)
+            first = subprocess.run(["git", "-C", str(root), "rev-list", "--max-parents=0", "HEAD"],  # O(1) + git spawn
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
+            roots = first.stdout.split() if first.returncode == 0 else []  # O(1)
+        except (OSError, subprocess.TimeoutExpired):  # O(1)
+            roots = []  # O(1)
+        base = roots[0] if roots else "HEAD"  # O(1)
+    cp = diff_head(root)  # O(file size)
+    return RunRanges(_run_range(base, cp), cp, frozenset(moved_files(root)) if cp else frozenset())  # O(F) + git spawn
 
 
 STAT_BAR = 50  # O(1) widest +/- bar of one diff stat row
@@ -1722,34 +1753,34 @@ def _format_stat(rows: dict[str, tuple[int, int] | None]) -> str:  # O(F log F +
     return "\n".join(out + [" " + ", ".join(summary)])  # O(F)
 
 
-def git_diff_stat(root: Path, base: str | None) -> str:  # O(X) + up to 4 git subprocess spawns total
-    """The run's diff stat. A file HEAD also changed since the run started counts HEAD against the checkpoint,
-    the same lines as its hunk in changed_diffs, not the merged lines (#109)."""
-    def git(*args: str) -> subprocess.CompletedProcess | None:  # O(X) + 1 git subprocess spawn
+def git_diff_stat(root: Path, base: str | None, ranges: RunRanges | None = None) -> str:  # O(X) + 1 git spawn per distinct range, plus run_ranges without ranges total
+    """The run's diff stat. Each file counts the lines of its own range (RunRanges.of), the same lines as its hunk in
+    changed_diffs: a file HEAD also changed since the run started counts HEAD against the checkpoint (#109)."""
+    def numstat(*args: str) -> dict[str, tuple[int, int] | None] | None:  # O(X) + 1 git subprocess spawn
         try:  # O(X)
-            return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,  # O(X) + git process spawn
-                                  encoding="utf-8", errors="replace", timeout=30)  # O(X)
+            r = subprocess.run(["git", "-C", str(root), "diff", "--numstat", *args], capture_output=True, text=True,  # O(X) + git spawn
+                               encoding="utf-8", errors="replace", timeout=30)  # O(X)
         except (OSError, subprocess.TimeoutExpired):  # O(X)
             return None  # O(X)
+        return _numstat(r.stdout) if r.returncode == 0 else None  # O(X)
 
-    if not (root / ".git").exists():  # O(1)
+    rr = ranges or run_ranges(root, base)  # O(F + file size) + git spawns
+    if rr is None:  # O(1)
         return "(not a git repository)"  # O(1)
-    if base is None:  # O(1)
-        first = git("rev-list", "--max-parents=0", "HEAD")  # O(1)
-        base = first.stdout.split()[0] if first and first.returncode == 0 and first.stdout.split() else "HEAD"  # O(1)
-    r = git("diff", "--numstat", *diff_range(root, base))  # O(X)
-    if not r or r.returncode != 0:  # O(1)
+    rows = numstat(*rr.rng)  # O(X)
+    if rows is None:  # O(1)
         return "(diff stat unavailable)"  # O(1)
-    rows = _numstat(r.stdout)  # O(X)
-    cp = diff_head(root)  # O(file size)
-    moved = sorted(set(rows) & moved_files(root)) if rows and cp else []  # O(F log F) + git spawn
-    if moved:  # O(1)
-        m = git("diff", "--numstat", "HEAD", cp, "--", *moved)  # O(X)
-        if not m or m.returncode != 0:  # O(1)
+    own: dict[tuple[str, ...], list[str]] = {}  # files whose own range is not the run's, by that range | O(1)
+    for f in sorted(rows):  # O(F log F) sort + O(F) iterations
+        if (rng := rr.of(f)) != rr.rng:  # O(1)
+            own.setdefault(tuple(rng), []).append(f)  # O(1)
+    for rng, fs in own.items():  # O(R) iterations
+        m = numstat(*rng, "--", *fs)  # O(X)
+        if m is None:  # O(1)
             return "(diff stat unavailable)"  # O(1)
-        for f in moved:  # O(F) iterations
-            rows.pop(f)  # a moved file with no run lines left has no hunk either | O(1)
-        rows.update(_numstat(m.stdout))  # O(X)
+        for f in fs:  # O(F) iterations
+            rows.pop(f)  # a file with no lines in its own range has no hunk either | O(1)
+        rows.update(m)  # O(F)
     return _format_stat(rows) or "(no changes)"  # O(F log F)
 
 
@@ -1775,24 +1806,18 @@ def _excerpt_order(changed: list[str], hot: list[str]) -> list[str]:  # O(F^2) t
     return list(hot) + hooks + code + tests + mds  # O(F)
 
 
-def changed_diffs(root: Path, base: str | None, files: list[str]) -> tuple[list[str], list[tuple[str, list[str]]]] | None:  # O(X) + one git spawn per changed file
+def changed_diffs(root: Path, base: str | None, files: list[str], ranges: RunRanges | None = None  # O(X) + one git spawn per changed file
+                  ) -> tuple[list[str], list[tuple[str, list[str]]]] | None:
     """(changed files, [(file, diff lines)] in excerpt order) against base and the newest checkpoint; None outside git.
 
-    A checkpointed file that HEAD also changed since the run started holds the merged lines too (a checkpoint stores
-    the working-tree file), so its hunk diffs HEAD against the checkpoint: only the run's lines (#104)."""
-    if not (root / ".git").exists():  # O(1)
+    Each file diffs its own range (RunRanges.of): a checkpointed file that HEAD also changed since the run started holds
+    the merged lines too (a checkpoint stores the working-tree file), so its hunk diffs HEAD against the checkpoint (#104)."""
+    rr = ranges or run_ranges(root, base)  # O(F + file size) + git spawns
+    if rr is None:  # O(1)
         return None  # O(1)
-    if base is None:  # O(1)
-        first = subprocess.run(["git", "-C", str(root), "rev-list", "--max-parents=0", "HEAD"],  # O(1) + git spawn
-                               capture_output=True, text=True, encoding="utf-8", errors="replace")  # O(1)
-        roots = first.stdout.split() if first.returncode == 0 else []  # O(1)
-        base = roots[0] if roots else "HEAD"  # O(1)
-    rng = diff_range(root, base)  # O(file size)
-    cp = diff_head(root)  # O(file size)
-    moved = moved_files(root) if cp else set()  # O(F) + git spawn
     changed: list[str] = []  # O(1)
     try:  # O(1)
-        nm = subprocess.run(["git", "-C", str(root), "diff", "--name-only", *rng],  # O(X) + git spawn
+        nm = subprocess.run(["git", "-C", str(root), "diff", "--name-only", *rr.rng],  # O(X) + git spawn
                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
         changed = nm.stdout.split("\n") if nm.returncode == 0 else []  # O(X)
     except (OSError, subprocess.TimeoutExpired):  # O(1)
@@ -1801,7 +1826,7 @@ def changed_diffs(root: Path, base: str | None, files: list[str]) -> tuple[list[
     diffs: list[tuple[str, list[str]]] = []  # O(1)
     for f in _excerpt_order(changed, files):  # O(F) iterations
         try:  # O(1)
-            r = subprocess.run(["git", "-C", str(root), "diff", "-U3", *(["HEAD", cp] if f in moved else rng), "--", f],  # O(X) + git spawn
+            r = subprocess.run(["git", "-C", str(root), "diff", "-U3", *rr.of(f), "--", f],  # O(X) + git spawn
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
         except (OSError, subprocess.TimeoutExpired):  # O(1)
             continue  # O(1)
@@ -2116,14 +2141,15 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     seam_text = "\n".join(seams) if seams else "- none"  # O(1)
     seam_text = cap_text(seam_text, 5000, f"- (+ more calls omitted; {len(seams)} total)")  # O(1)
     focus = cap_text(plan.review_focus() or "(plan has no Review Focus section)", 3000)  # O(1)
-    diff = cap_text(git_diff_stat(root, a.base), 2000)  # O(X) + git spawns
+    ranges = run_ranges(root, a.base)  # one range resolution for the stat and the hunks (#113) | O(F + file size) + git spawns
+    diff = cap_text(git_diff_stat(root, a.base, ranges), 2000)  # O(X) + git spawns
     hot: list[str] = []  # hot-spot files: those the ranked items point at, in rank order | O(1)
     for it in items:  # O(I) iterations
         rel = rel_to(root, root / it.file) if it.file else None  # O(d)
         if rel and rel not in hot:  # O(H)
             hot.append(rel)  # O(1)
     ex_budget = max(2000, cap // 3)  # O(1)
-    got = changed_diffs(root, a.base, hot)  # O(X) + git spawns
+    got = changed_diffs(root, a.base, hot, ranges)  # O(X) + git spawns
     if got is not None and a.max_tokens is None:  # the default scales with the changed code, up to AUTO_MAX_TOKENS (#80) | O(1)
         rest = cap - ex_budget  # O(1)
         ex_budget = min(max(ex_budget, excerpt_need(got[1])), int(AUTO_MAX_TOKENS * CHARS_PER_TOKEN) - rest)  # O(X)
