@@ -181,7 +181,9 @@ def test_symlinked_cwd_is_the_project(proj, other):  # noqa: F811
 
 
 def test_git_stash_apply_and_outside_dash_c_allowed(proj, other):  # noqa: F811
-    assert bash(proj, "git stash apply").returncode == 0
+    # `git stash apply` is no `git apply`; since #121 it blocks in the project as a rewrite of tracked files
+    assert bash(proj, "git stash apply").returncode == 2
+    assert bash(proj, f"git -C {other} stash apply").returncode == 0
     assert bash(proj, f"git -C {other} apply f.patch").returncode == 0
     assert bash(proj, f"git -c core.x=1 -C {other} apply f.patch").returncode == 0
     assert bash(proj, f"git -C {proj} apply f.patch").returncode == 2
