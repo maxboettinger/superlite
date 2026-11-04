@@ -6,11 +6,12 @@
 #     by the model.
 #  2. HUMAN-UNAPPROVED (.superlite/orchestrator.json has mode human and approved false): nothing
 #     builds until the human approves the plan. Allowed writes: docs/plans/*.review.md, docs/*/plans/*.review.md and
-#     .superlite/** (minus the protected files); Agent calls of superlite:* and general-purpose and
+#     .superlite/** (minus the protected files), also inside a linked worktree in the project (judged from its root, whose
+#     .git file points into .../worktrees/); Agent calls of superlite:* and general-purpose and
 #     sl dispatch/assign/wave0/commit_task/finish/build_prime/run_tests are denied.
 #  3. Active run (.superlite/stable.json, prime.md or pool.json exists): project code is not written
-#     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md and
-#     .superlite/**. `sl orchestrator end` closes the run.
+#     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, any docs.md and
+#     .superlite/**, in the project or a linked worktree in it. `sl orchestrator end` closes the run.
 # The .superlite folder is the session's own (hooks/superlite-state.sh): its binding, else the launch
 # directory's unless another session owns that one. Interpreter writes are judged by each writer call's own
 # target (a literal, Path('...'), a name assigned one, or sys.argv[N] read off the interpreter's command line, directly
@@ -18,9 +19,16 @@
 # or an existing one) are judged by <dir>/<basename of the first source>; mv also judges every source.
 # The interpreter scan runs only when the command, with quoted strings and heredoc bodies removed, still runs an
 # interpreter, a shell -c or eval wrapper, or a $(interpreter ...) substitution: text that only quotes code is not a call.
-# Relative targets are judged from the shell's directory: the JSON cwd, or a leading `cd <absolute>` that is the only
-# cd outside quotes; outside the project they are not project code (absolute paths into it still are). A writer whose
-# target is unknown but whose root is an absolute path outside the project passes.
+# Relative targets are judged from the shell's directory: the JSON cwd when the text holds no cd at all; at each cd when
+# every cd is a plain command into the project and the command is one && chain or one leading cd (interpreter writer
+# targets then from every directory it visits); else the JSON cwd plus each target when every cd is a readable absolute
+# one into the project, or a leading `cd <absolute>` that is the only cd outside quotes, or the project root when that is
+# void, plus the cwd and each cd target. Outside the project relative targets are
+# not project code (absolute paths into it still are). A body that changes directory is judged from the project root;
+# env -C and sudo -D count as a directory change; while the directory is unknown a relative path with .. blocks.
+# A writer whose target is unknown but whose root is an absolute path outside the project passes.
+# Accepted limits (#64): run time grows quadratically with the number of quoted words (about 1000 of them reach the hook
+# timeout, which fails open), and nested quotes inside a $(...) within double quotes are not judged.
 # Bash/PowerShell write detection is best-effort; when unsure, allow. Sessions without a .superlite
 # directory are never touched. Bash builtins only (no external process is spawned: each spawn costs
 # ~250 ms on Windows), cheap exits first. Exit 2 blocks (message on stderr); anything else,
@@ -91,7 +99,7 @@ fi
 norm "$proj"; projn="$NORM"; lower "$projn"; projl="$LOWER"
 
 prot=0
-eff_out=0; effn=""; basen=""
+eff_out=0; effn=""; basen=""; basea=""; base_void=0
 # dotres PATH: absolute PATH with . and .. segments resolved lexically, into RES.
 dotres() {
   local -a st=(); local s n IFS=/
@@ -102,8 +110,22 @@ dotres() {
   set +f
   RES="/${st[*]}"
 }
-# project_code PATH: succeeds when writing PATH is denied (sets prot=1 for protected files).
+# project_code PATH: succeeds when writing PATH is denied (sets prot=1 for protected files). alt_list holds more
+# directories the shell may sit in, one per line: PATH is denied when it is denied from the base or from any of them.
+alt_list=""
 project_code() {
+  project_code1 "$1" && return 0
+  [ -n "$alt_list" ] || return 1
+  local sa="$basea" sb="$basen" so="$eff_out" d r=1
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    basea="$d"; basen=""; eff_out=0
+    project_code1 "$1" && { r=0; break; }
+  done <<< "$alt_list"
+  basea="$sa"; basen="$sb"; eff_out="$so"
+  return $r
+}
+project_code1() {
   local p rel pl v1='$CLAUDE_PROJECT_DIR' v2='${CLAUDE_PROJECT_DIR}'
   norm "${1//$'\x05'/Q}"; p="$NORM"; p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
   p="${p//$'\x03'/ }"
@@ -112,10 +134,16 @@ project_code() {
   case "$p" in ''|*'$'*|'~'*|/dev/*|-*) return 1 ;; esac
   if [ "$eff_out" = 1 ]; then   # the shell sits outside the project: a relative path is judged from there
     case "$p" in /*) ;; *) p="$effn/${p#./}" ;; esac
+  elif [ -n "$basea" ]; then   # inside, known: judged from the shell's directory
+    case "$p" in /*|[A-Za-z]:[/\\]*) ;; *) p="$basea/${p#./}" ;; esac
   elif [ -n "$basen" ]; then   # inside: a path with dots is judged from the directory the cd steps reached
     case "$p" in /*|[A-Za-z]:[/\\]*) ;; *) case "/$p/" in */../*|*/./*) p="$basen/${p#./}" ;; esac ;; esac
   else
-    case "$p" in /*|[A-Za-z]:[/\\]*) ;; *) case "/$p/" in */../*|*/./*) p="$projn/${p#./}" ;; esac ;; esac
+    case "$p" in /*|[A-Za-z]:[/\\]*) ;; *)
+      # the shell's directory is unknown: a relative path with .. may climb from anywhere into the project
+      case "/$p/" in */../*) [ "$base_void" = 1 ] && [ "$enforce" = 1 ] && return 0 ;; esac
+      case "/$p/" in */../*|*/./*) p="$projn/${p#./}" ;; esac ;;
+    esac
   fi
   case "$p" in   # any absolute path with . or .. segments is judged resolved
     /*) case "$p/" in */../*|*/./*) dotres "$p"; p="$RES" ;; esac ;;
@@ -130,15 +158,38 @@ project_code() {
   case "$pl" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
   { [ "$human" = 1 ] || [ "$active" = 1 ]; } || return 1
   case "/$rel/" in */../*|*/./*) return 0 ;; esac   # docs/../src/a.py is not under docs/
-  if [ "$human" = 1 ]; then
-    case "$rel" in docs/plans/*.review.md|docs/*/plans/*.review.md|.superlite/*) return 1 ;; esac
-    return 0
+  allowed_rel "$rel" && return 1
+  if wt_rel "$rel"; then   # a linked worktree inside the project: judged from its root
+    lower "$WREL"
+    case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
+    allowed_rel "$WREL" && return 1
   fi
-  [ "$active" = 1 ] || return 1
-  case "$rel" in
-    docs/plans/*|docs/*/plans/*|docs/*.md|SPEC*.md|*/SPEC*.md|.superlite/*) return 1 ;;
-  esac
   return 0
+}
+
+# allowed_rel REL: succeeds when the coordinator may write the project-relative REL in the guard's state.
+allowed_rel() {
+  if [ "$human" = 1 ]; then
+    case "$1" in docs/plans/*.review.md|docs/*/plans/*.review.md|.superlite/*) return 0 ;; esac
+    return 1
+  fi
+  case "$1" in docs/plans/*|docs/*/plans/*|docs/*.md|SPEC*.md|*/SPEC*.md|docs.md|*/docs.md|.superlite/*) return 0 ;; esac
+  return 1
+}
+
+# wt_rel REL: REL below the deepest linked worktree root it lies in (a folder whose .git file points into a
+# .../worktrees/<name> folder; a submodule's points into .../modules/...) into WREL; fails when it lies in none.
+wt_rel() {
+  local r="$1" pre="" line ok=1
+  WREL=""
+  while [[ $r == */* ]]; do
+    pre="${pre:+$pre/}${r%%/*}"; r="${r#*/}"
+    [ -f "$projn/$pre/.git" ] || continue
+    line=""; IFS= read -r line < "$projn/$pre/.git" || true
+    line="${line//\\//}"; line="${line%/}"
+    case "$line" in gitdir:*/worktrees/*/*) ;; gitdir:*/worktrees/*) WREL="$r"; ok=0 ;; esac
+  done
+  return $ok
 }
 
 # writer_target EXPR: the literal path an interpreter writer's target expression names, into TGT (empty if unknown):
@@ -340,12 +391,13 @@ emit_line() {
   local line="$1" nl=$'\n' bar=$'\x08'
   line="${line//>|/>$bar}"
   line="${line//&&/$nl}"; line="${line//||/$nl}"; line="${line//;/$nl}"; line="${line//|/$nl}"
+  flat="$flat$1$nl"
   stripped="$stripped${line//>$bar/>}$nl"
   qs+=("${lq[@]}"); lq=()
 }
 strip_cmd() {
   local sq="'" dq='"' line t skip=0 tag="" open="" hq=0 cut=0 re_here re_here2 re_quote atoms text="$cmd" pass=0 hbody="" nl=$'\n'
-  stripped_done=1
+  stripped_done=1; stripped=""; flat=""   # judge_body strips its body alone, not appended to the outer command
   # a heredoc starts at a << outside quotes that is not part of <<<; a double quote opened before it counts only inside a
   # "$(cat <<'EOF' substitution.
   atoms="(\\\\.|[^$dq$sq\\\\]|$dq([^$dq\\\\]|\\\\.)*$dq|$sq[^$sq]*$sq)*"
@@ -464,12 +516,21 @@ dir_target() {
   if [[ $t == */ || $t == . || $t == */. || -d $t || ( $t != /* && $t != [A-Za-z]:* && -d "$proj/$t" ) ]]; then DT="${t%/}/${b:-x}"; fi
 }
 
+# and_chain: succeeds when the command, quoted text and heredoc bodies aside, is one line of commands joined only by &&
+# (no ; | || &, no !, no second line): a cd in it that fails stops every command after it.
+and_chain() {
+  local f="${flat%$'\n'}" re='(^|[^>&])&([^&>]|$)'
+  case "$f" in *$'\n'*|*';'*|*'|'*|*'!'*) return 1 ;; esac
+  [[ $f =~ $re ]] && return 1
+  return 0
+}
+
 # git_apply_hit ARGS...: ARGS follow the git command word. Succeeds when they run `git apply` against the project:
 # the subcommand is the first word that is not a global option, and the last -C names the directory it runs in (a
 # relative one is taken from the outside directory, or stays in the project).
 git_apply_hit() {
   local a gd="" sub="" gd_unknown=0
-  [ "$eff_out" = 1 ] && gd="$effn"
+  [ "$eff_out" = 1 ] && [ -z "$alt_list" ] && gd="$effn"   # a candidate directory in the project: judged as inside
   while [ $# -gt 0 ]; do
     a="$1"; shift
     case "$a" in
@@ -534,7 +595,19 @@ judge_segs() {
     done
     [ -n "$hit" ] && break
     set -f; set -- $seg; set +f
-    while [ $# -gt 0 ]; do case "$1" in *=*|sudo|command|env|time|then|do|else|elif|if|while|until|'!'|'{') shift ;; *) break ;; esac; done
+    w0=""   # a wrapper's own options (env -i, env -C DIR, sudo -u USER) are not the command it runs
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        *=*|sudo|command|env|time|then|do|else|elif|if|while|until|'!'|'{') w0="$1"; shift ;;
+        -*) case "$w0" in
+              env|sudo) case "$1" in -[CuSDgUhpr]|--chdir|--unset|--split-string|--user|--group|--host|--prompt) shift ;; esac
+                        [ $# -gt 0 ] && shift ;;
+              command|time) shift ;;
+              *) break ;;
+            esac ;;
+        *) break ;;
+      esac
+    done
     [ $# -gt 0 ] || continue
     c="${1##*/}"; c="${c%.exe}"; shift
     args=(); for a in "$@"; do case "$a" in -*|*'>'*|*'<'*) ;; *) args+=("$a") ;; esac; done   # redirects are not operands
@@ -545,7 +618,8 @@ judge_segs() {
               case "$raw" in \"*|\'*) judge_body "${raw:1:${#raw}-2}"; [ -n "$hit" ] && break ;; esac
             done
             [ -z "$hit" ] && eval_body "$seg0" ;;
-      patch) aip_base="$effn"; [ "$enforce" = 1 ] && { [ "$eff_out" = 0 ] || args_in_proj "$@"; } && hit="patch" ;;
+      patch) aip_base="$effn"; [ "$enforce" = 1 ] && { [ "$eff_out" = 0 ] || [ -n "$alt_list" ] || args_in_proj "$@"; } \
+               && hit="patch" ;;
       git) git_apply_hit "$@" && hit="git apply" ;;
       sed|perl) inpl=0; skip=0; hasscr=0   # -i anywhere in a flag cluster; every operand after the script is a file
           for a in "$@"; do
@@ -575,19 +649,26 @@ judge_segs() {
           for a in "${args[@]:0:n-1}"; do project_code "$a" && { hit="$c $a"; break; }; done
           [ -z "$hit" ] && project_code "$DT" && hit="mv $last" ;;
       cp) if [ "$n" -gt 1 ]; then dir_target "$last" "${args[0]}"; project_code "$DT" && hit="cp $last"; fi ;;
+      cd) if [ "$jdepth" = 0 ] && [ "$chain" = 1 ]; then   # case B: the shell moves here
+            basea="${chain_dirs[chain_k]}"; basen=""; eff_out=0; chain_k=$((chain_k + 1))
+          fi ;;
     esac
     [ -n "$hit" ] && break
   done <<< "$segs"
 }
 
-# judge_body TEXT: judges TEXT as a command line of its own (a shell -c body, a substitution), one level deep.
+# judge_body TEXT: judges TEXT as a command line of its own (a shell -c body, a substitution), one level deep; a TEXT
+# that changes directory is judged from the project root.
 judge_body() {
   [ "$jdepth" = 0 ] || return 0
-  local sv_cmd="$cmd" sv_str="$stripped" sv_uns="$stripped_unsure" sv_ok="$qs_ok" sv_qi="$qi"
+  local sv_cmd="$cmd" sv_str="$stripped" sv_flat="$flat" sv_uns="$stripped_unsure" sv_ok="$qs_ok" sv_qi="$qi"
+  local sv_a="$basea" sv_n="$basen" sv_o="$eff_out" sv_v="$base_void" re='(^|[^[:alnum:]_./-])(cd|pushd|popd)([[:space:]]|$)|chdir'
   local -a sv_qs=("${qs[@]}") sv_raw=("${QRAW[@]}")
+  lower "$1"; [[ $LOWER =~ $re ]] && { basea=""; basen=""; eff_out=0; base_void=1; }   # it moves: judged from the project root
   jdepth=1; cmd="$1"; strip_cmd; qi=0
   judge_segs
-  jdepth=0; cmd="$sv_cmd"; stripped="$sv_str"; stripped_unsure="$sv_uns"; qs_ok="$sv_ok"; qi="$sv_qi"
+  jdepth=0; cmd="$sv_cmd"; stripped="$sv_str"; flat="$sv_flat"; stripped_unsure="$sv_uns"; qs_ok="$sv_ok"; qi="$sv_qi"
+  basea="$sv_a"; basen="$sv_n"; eff_out="$sv_o"; base_void="$sv_v"
   qs=("${sv_qs[@]}"); QRAW=("${sv_raw[@]}")
 }
 
@@ -654,65 +735,172 @@ elif [ -z "$hit" ]; then
   cmd="${cmd//\\\\/$'\x01'}"   # JSON \\ first, so \\" and \\n keep their shell meaning
   cmd="${cmd//\\\"/\"}"; cmd="${cmd//\\t/ }"; cmd="${cmd//\\r/}"; cmd="${cmd//\\n/$'\n'}"
   cmd="${cmd//$'\x01'/\\}"
+  cmd="${cmd//pathlib.Path(/Path(}"   # a module-qualified pathlib.Path( names its target like Path(
   lower "$cmd"; lc="$LOWER"
-  # Effective directory: the JSON cwd, overridden by a leading `cd <absolute>` when it is the only cd outside quotes.
-  # Any other directory change (a second cd, cd .. / - / ~ / $VAR, pushd, popd, chdir, a subshell cd) voids an outside base.
-  jstr cwd
-  if [ -n "$REPLY" ] && abs_outside "$REPLY"; then eff_out=1; effn="$NORM"; fi
+  # Effective directory, where relative targets are judged from:
+  #  A. no cd, pushd, popd or chdir anywhere in the text: the JSON cwd (outside the project: the outside base).
+  #  B. every cd is the command word of its own command, reads to a target in the project, and has no twin hidden in
+  #     quoted text, with no ( ) or backticks, and the command is one && chain (a failed cd stops it) or one leading cd
+  #     to an existing folder: the base moves at each cd (judge_segs walks chain_dirs); interpreter writer targets are
+  #     judged from every directory the shell can be in.
+  #  C. anything else: the JSON cwd, overridden by a leading `cd <absolute>` to an existing folder when it is the only cd
+  #     outside quotes, moved by plain relative `cd sub` steps for paths with . or .. segments; any other directory
+  #     change (a second cd, cd .. / - / ~ / $VAR / -P, pushd, popd, chdir, a cd in a pipe or sent to the background)
+  #     voids the base to the project root. Inside the project, the cwd and every absolute cd target are judged too.
+  jstr cwd; cwd_in=""; walked_in=0; chain=0; chain_dirs=(); chain_k=0; scan_alt=""; segs_alt=""; nl=$'\n'
+  if [ -n "$REPLY" ]; then
+    if abs_outside "$REPLY"; then eff_out=1; effn="$NORM"
+    else norm "$REPLY"; case "$NORM" in /*) case "/$NORM/" in */../*|*/./*) ;; *) [ -d "$NORM" ] && cwd_in="$NORM" ;; esac ;; esac
+    fi
+  fi
   sq="'"; dq='"'
   re_cd="^[[:space:]]*cd[[:space:]]+($dq([^$dq]+)$dq|$sq([^$sq]+)$sq|([^[:space:];&|<>()$dq$sq]+))"
-  cd_lead=""; cd_n=0; cd_abs=0; cd_bad=0; cd_rels=()
+  cd_n=0; cd_abs=0; cd_bad=0; cd_rels=(); cd_pos=1; cd_words=()
   if [[ $lc == *cd* || $lc == *pushd* || $lc == *popd* || $lc == *chdir* ]]; then
     [ "$stripped_done" = 1 ] || strip_cmd
     [[ $lc == *chdir* ]] && cd_bad=1
     re_cdw='(^|[^[:alnum:]_./-])(cd|pushd|popd)([[:space:]]+([^[:space:]]*))?(.*)$'
+    qn=0; v1='$CLAUDE_PROJECT_DIR'; v2='${CLAUDE_PROJECT_DIR}'   # qn: Q marks before the current one (qs index)
     while IFS= read -r seg; do
+      first=1
       while [[ $seg =~ $re_cdw ]]; do
-        seg="${BASH_REMATCH[5]}"; t="${BASH_REMATCH[4]}"; cd_n=$((cd_n + 1))
+        t="${seg%"${BASH_REMATCH[0]}"}${BASH_REMATCH[1]}"
+        { [ "$first" = 1 ] && [ -z "${t//[[:space:]]/}" ]; } || cd_pos=0   # not the command word of its command
+        first=0; t="${t//[!Q]/}"; qn=$((qn + ${#t}))
+        seg="${BASH_REMATCH[5]}"; t="${BASH_REMATCH[4]}"; cd_n=$((cd_n + 1)); w=""
+        t="${t//"$v2"/$projn}"; t="${t//"$v1"/$projn}"
         if [ "${BASH_REMATCH[2]}" != cd ] || [ -z "$t" ] || [ "$t" = - ]; then cd_bad=1
         else
-          case "$t" in *'$'*|*'~'*|*'`'*) cd_bad=1 ;; esac
+          case "$t" in *'$'*|*'~'*|*'`'*|-*) cd_bad=1 ;; esac
           case "/$t/" in */../*) cd_bad=1 ;; esac
-          case "$t" in /*|[A-Za-z]:[/\\]*|Q) cd_abs=$((cd_abs + 1)) ;; *) cd_rels[${#cd_rels[@]}]="$t" ;; esac
+          case "$t" in
+            Q) cd_abs=$((cd_abs + 1))   # a quoted target: read off its quoted text
+               if [ "$qs_ok" = 1 ] && [ "$qn" -lt "${#qs[@]}" ] && [ "${#qs[qn]}" -ge 2 ]; then
+                 w="${qs[qn]}"; w="${w:1:${#w}-2}"; w="${w//"$v2"/$projn}"; w="${w//"$v1"/$projn}"
+                 case "$w" in ''|*'$'*|*'`'*|*\\*|*$'\n'*|*$'\x06'*) w="" ;; esac
+                 case "/$w/" in */../*) w="" ;; esac
+               fi ;;
+            *Q*) cd_bad=1 ;;   # part quoted, part not
+            /*|[A-Za-z]:[/\\]*) cd_abs=$((cd_abs + 1)); w="${t//$'\x05'/Q}" ;;
+            *) cd_rels[${#cd_rels[@]}]="$t"; w="${t//$'\x05'/Q}" ;;
+          esac
         fi
+        cd_words[${#cd_words[@]}]="$w"
+        case "${BASH_REMATCH[4]}" in *Q*) t="${BASH_REMATCH[4]//[!Q]/}"; qn=$((qn + ${#t})) ;; esac
       done
+      t="${seg//[!Q]/}"; qn=$((qn + ${#t}))
     done <<< "$stripped"
   fi
-  # a cd in a pipeline runs in a subshell and moves nothing the later commands see
+  # a cd in a pipeline or sent to the background (`cd dir &`) runs in a subshell and moves nothing the later commands see
   re_cdpipe='(^|[^|])[|][[:space:]]*(cd|pushd)([[:space:]]|$)|(^|[;&|(])[[:space:]]*(cd|pushd)[[:space:]]+[^;&|]*[|]([^|]|$)'
+  re_cdpipe="$re_cdpipe"'|(^|[;&|(])[[:space:]]*(cd|pushd)[[:space:]]+[^;&|]*[^>;&|][[:space:]]*&([^&>]|$)'
   [[ $lc =~ $re_cdpipe ]] && cd_bad=1
-  if [ "$cd_n" -gt 0 ] && [[ $cmd =~ $re_cd ]]; then
-    cdt="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
-    case "$cdt" in
-      *'$'*|*'`'*|'') ;;
-      /*|[A-Za-z]:[/\\]*)
-        if [ "$cd_n" = 1 ] && [ "$cd_bad" = 0 ] && [ -d "$cdt" ]; then   # a cd to a missing folder moves nowhere
-          if abs_outside "$cdt"; then eff_out=1; effn="$NORM"; else eff_out=0; fi
-          cd_abs=0
-        fi ;;
+  # env -C DIR and sudo -D DIR run their command in DIR: a directory change too
+  re_envc='(^|[^[:alnum:]_])env[[:space:]]([^;&|]*[[:space:]])?-[[:alnum:]]*c|(^|[^[:alnum:]_])sudo[[:space:]]([^;&|]*[[:space:]])?-[[:alnum:]]*d'
+  envc=0; [[ $lc =~ $re_envc ]] && { cd_bad=1; envc=1; }
+  lead=0; [[ $cmd =~ $re_cd ]] && lead=1
+  # Case B: walk the cd targets from the start directory; each must land in the project.
+  if [ "$cd_n" -gt 0 ] && [ "$cd_bad" = 0 ] && [ "$cd_pos" = 1 ] && [ "$stripped_unsure" = 0 ]; then
+    case "$stripped" in *[\(\)\`]*) ;; *)
+      t="$lc"; n=0   # no cd hidden in quoted text or heredoc bodies: the raw text holds no more cd words
+      while [[ $t =~ $re_cdw ]]; do n=$((n + 1)); t="${BASH_REMATCH[5]}"; done
+      if [ "$n" = "$cd_n" ]; then
+        if [ "$eff_out" = 1 ]; then cur="$effn"; else cur="${cwd_in:-$projn}"; fi
+        ok=1; dirs=()
+        for w in "${cd_words[@]}"; do
+          [ -n "$w" ] || { ok=0; break; }
+          case "$w" in /*|[A-Za-z]:[/\\]*) t="$w" ;; *) t="$cur/${w#./}" ;; esac
+          norm "$t"; t="$NORM"
+          case "/$t/" in */./*) dotres "$t"; t="$RES" ;; esac
+          lower "$t"; case "$LOWER" in "$projl"|"$projl"/*) ;; *) ok=0; break ;; esac
+          dirs[${#dirs[@]}]="$t"; cur="$t"
+        done
+        if [ "$ok" = 1 ]; then
+          if and_chain; then chain=1
+          elif [ "$lead" = 1 ] && [ "$cd_n" = 1 ] && [ -d "${dirs[0]}" ]; then chain=1   # a leading cd that succeeds
+          fi
+        fi
+        if [ "$chain" = 1 ]; then
+          chain_dirs=("${dirs[@]}")
+          for t in "${dirs[@]}"; do scan_alt="$scan_alt$t$nl"; done
+          if [ "$lead" = 1 ]; then eff_out=0; basea="${dirs[0]}"   # nothing runs before it
+          elif [ "$eff_out" = 0 ]; then basea="$cwd_in"
+          fi
+        fi
+      fi ;;
     esac
   fi
-  # What is left is a cwd base plus relative plain `cd sub` steps; an absolute or unreadable cd left over voids it.
-  { [ "$cd_bad" = 1 ] || [ "$cd_abs" -gt 0 ] || [ "$stripped_unsure" = 1 ]; } && eff_out=0
-  # Each relative cd moves the outside base; one that lands in the project (or on it) ends the outside base.
-  if [ "$eff_out" = 1 ] && [ "${#cd_rels[@]}" -gt 0 ]; then
-    for t in "${cd_rels[@]}"; do
-      t="${t#./}"
-      if [ -z "$t" ] || [ "$t" = . ]; then continue; fi
-      if abs_outside "$effn/$t"; then   # a cd to a missing folder moves nowhere
-        [ -d "$effn/$t" ] && effn="$NORM"
-      else eff_out=0; break   # into the project, or onto it, or not readable: no outside base any more
+  if [ "$chain" = 0 ]; then
+    [ "$cd_n" = 0 ] && [ "$envc" = 0 ] && [ -n "$cwd_in" ] && ! [[ $lc == *cd* || $lc == *pushd* || $lc == *popd* || $lc == *chdir* ]] \
+      && basea="$cwd_in"   # case A
+    lead_done=0
+    if [ "$cd_n" -gt 0 ] && [ "$lead" = 1 ]; then   # case C: a leading cd
+      [[ $cmd =~ $re_cd ]]; cdt="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+      case "$cdt" in
+        *'$'*|*'`'*|'') ;;
+        /*|[A-Za-z]:[/\\]*)
+          if [ "$cd_n" = 1 ] && [ "$cd_bad" = 0 ] && [ -d "$cdt" ]; then   # a cd to a missing folder moves nowhere
+            if abs_outside "$cdt"; then eff_out=1; effn="$NORM"; else eff_out=0; fi
+            cd_abs=0; lead_done=1
+          fi ;;
+      esac
+    fi
+    # a cd hidden in quoted text (eval, a body, a sourced string) may move the shell anywhere
+    hidden=0
+    if [ "$cd_n" -gt 0 ] || [[ $lc == *cd* ]]; then
+      t="$lc"; n=0
+      while [[ $t =~ $re_cdw ]]; do n=$((n + 1)); t="${BASH_REMATCH[5]}"; done
+      [ "$n" -gt "$cd_n" ] && hidden=1
+    fi
+    # every cd a readable absolute target in the project: the start base stays, each target is judged as well
+    known=0
+    if [ "$lead_done" = 0 ] && [ "$cd_n" -gt 0 ] && [ "$cd_bad" = 0 ] && [ "$hidden" = 0 ] \
+       && [ "$stripped_unsure" = 0 ] && [ "${#cd_rels[@]}" = 0 ]; then
+      known=1; t=""
+      for w in "${cd_words[@]}"; do
+        case "$w" in /*|[A-Za-z]:[/\\]*) ;; *) known=0; break ;; esac
+        norm "$w"; lower "$NORM"
+        case "/$NORM/" in */../*|*/./*) known=0; break ;; esac
+        case "$LOWER" in "$projl"|"$projl"/*) t="$t$NORM$nl" ;; *) known=0; break ;; esac
+      done
+      if [ "$known" = 1 ]; then
+        segs_alt="$t"; scan_alt="$t"
+        [ "$eff_out" = 0 ] && basea="$cwd_in"
       fi
-    done
-  fi
-  # Inside the project: the directory the relative cd steps reached, for judging paths with . and .. segments.
-  if [ "$eff_out" = 0 ] && [ "$cd_bad" = 0 ] && [ "$cd_abs" = 0 ] && [ "${#cd_rels[@]}" -gt 0 ]; then
-    basen="$projn"
-    for t in "${cd_rels[@]}"; do
-      t="${t#./}"
-      if [ -z "$t" ] || [ "$t" = . ]; then continue; fi
-      if [ -d "$basen/$t" ]; then basen="$basen/$t"; else basen=""; break; fi
-    done
+    fi
+    # What is left is a cwd base plus relative plain `cd sub` steps; an absolute or unreadable cd left over voids it.
+    [ "$known" = 0 ] && { [ "$cd_bad" = 1 ] || [ "$cd_abs" -gt 0 ] || [ "$stripped_unsure" = 1 ] || [ "$hidden" = 1 ]; } \
+      && { eff_out=0; base_void=1; }
+    # Each relative cd moves the outside base; one that lands in the project (or on it) ends the outside base.
+    if [ "$eff_out" = 1 ] && [ "${#cd_rels[@]}" -gt 0 ]; then
+      for t in "${cd_rels[@]}"; do
+        t="${t#./}"
+        if [ -z "$t" ] || [ "$t" = . ]; then continue; fi
+        if abs_outside "$effn/$t"; then   # a cd to a missing folder moves nowhere
+          [ -d "$effn/$t" ] && effn="$NORM"
+        else eff_out=0; walked_in=1; break   # into the project, or onto it, or not readable: no outside base any more
+        fi
+      done
+    fi
+    # Inside the project: the directory the relative cd steps reached, for judging paths with . and .. segments.
+    if [ "$eff_out" = 0 ] && [ "$cd_bad" = 0 ] && [ "$cd_abs" = 0 ] && [ "${#cd_rels[@]}" -gt 0 ]; then
+      basen="$projn"
+      for t in "${cd_rels[@]}"; do
+        t="${t#./}"
+        if [ -z "$t" ] || [ "$t" = . ]; then continue; fi
+        if [ -d "$basen/$t" ]; then basen="$basen/$t"; else basen=""; break; fi
+      done
+    fi
+    # Inside the project with no known base: the cwd and each absolute cd target are judged as well.
+    if [ "$known" = 0 ] && [ "$eff_out" = 0 ] && [ -z "$basea" ] && [ "$lead_done" = 0 ]; then
+      [ -n "$cwd_in" ] && segs_alt="$cwd_in$nl"
+      for w in "${cd_words[@]}"; do
+        case "$w" in /*|[A-Za-z]:[/\\]*) norm "$w"; lower "$NORM"
+          case "/$NORM/" in */../*|*/./*) ;; *) case "$LOWER" in "$projl"|"$projl"/*) segs_alt="$segs_alt$NORM$nl" ;; esac ;; esac ;;
+        esac
+      done
+      scan_alt="$segs_alt"
+    fi
   fi
   # Outside by spelling only: a symlinked cwd (/tmp vs /private/tmp) is the project's tree, or holds it. Rare, so the
   # subshell `cd -P` (a builtin, no exec) is paid only here.
@@ -734,7 +922,8 @@ elif [ -z "$hit" ]; then
   # path-like quoted literals in the command are classified like any write; any denied one blocks, and a
   # writer with no path literal at all (a variable target) blocks while the guard is enforcing.
   re_interp='(^|[^[:alnum:]_])(python[0-9.]*|node|ruby|php)([[:space:]"'"'"']|$)'
-  re_writer="open\(([^()]|\(([^()]|\([^()]*\))*\))*,[[:space:]]*(mode=)?['\"]([wax]|r[bt]?\+)|\.(write_text|write_bytes)\(|writeFileSync|writeFile\(|appendFile(Sync)?\(|fs\.write|File\.(bin)?write\(|file_put_contents\("
+  re_writer="open\(([^()]|\(([^()]|\([^()]*\))*\))*,[[:space:]]*(mode=)?['\"]([wax]|r[bt]?\+)|\.open\([[:space:]]*(mode=)?['\"]([wax]|r[bt]?\+)|\.(write_text|write_bytes)\(|writeFileSync|writeFile\(|appendFile(Sync)?\(|fs\.write|File\.(bin)?write\(|file_put_contents\("
+  alt_list="$scan_alt"
   if [ -z "$hit" ] && { [ "$enforce" = 1 ] || [ "$mentions" = 1 ]; } && [[ $lc =~ $re_interp && $cmd =~ $re_writer ]] && scan_gate; then
     if [ "$mentions" = 1 ]; then
       hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; prot=1
@@ -780,6 +969,7 @@ elif [ -z "$hit" ]; then
       if [ -z "$hit" ] && { [ "$unknown" = 1 ] || [ "$got" -lt "$want" ]; }; then hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; fi
     fi
   fi
+  alt_list="$segs_alt"
   if [ -z "$hit" ]; then
     [ "$stripped_done" = 1 ] || strip_cmd
     qi=0
@@ -804,7 +994,7 @@ else
     'Blocked: the superlite coordinator must not write project code. Dispatch it instead:' \
     '- Fix: give a fixer a finding id F-<Tn>-<n> and the note path .superlite/fixes/<id>.md, tiered per skills/subagent-driven-development/fixing.md: known cause, one module -> fixer-sonnet; cross-module -> fixer-sonnet-high; unknown cause -> fixer-opus.' \
     '- Wave 0 skeleton/stub/config files belong to an implementer-haiku task.' \
-    '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md and .superlite/**.' \
+    '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, any docs.md and .superlite/**.' \
     '- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete .superlite by hand.' >&2
 fi
 exit 2

@@ -38,4 +38,4 @@ Mechanical steps are scripts, not agents. Every tool runs as `<skill-dir>/script
 
 `_pyrun.py` is a shared helper, not a tool. Probes live in `probes/` with the probe pack in `probes/pack/`.
 
-The coordinator guard (`hooks/block-coordinator-edits`) judges `cp`, `mv` and `tee` with a directory target (trailing `/`, `.` or an existing directory) by `<dir>/<basename of the first source>`, and resolves `sys.argv[N]` writer targets to the interpreter's N-th positional argument, through one `VAR=literal` assignment in the same command; anything unresolvable still blocks.
+The coordinator guard (`hooks/block-coordinator-edits`) judges `cp`, `mv` and `tee` with a directory target (trailing `/`, `.` or an existing directory) by `<dir>/<basename of the first source>`, and resolves `sys.argv[N]` writer targets to the interpreter's N-th positional argument, through one `VAR=literal` assignment in the same command; anything unresolvable still blocks. `pathlib.Path('...')` and a mode-first `Path('...').open('w')` count as writer targets like `Path('...')`.
