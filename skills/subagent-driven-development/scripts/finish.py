@@ -261,8 +261,10 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
 
 def main(argv=None):  # O(R*w + I*w)
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
-    ap.add_argument("--ledger", default=DEFAULT_LEDGER)  # O(1)
-    ap.add_argument("--log", default=DEFAULT_LOG)  # O(1)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+    import state  # O(1)
+    ap.add_argument("--ledger", default=state.ledger_path())  # the session's run, else ./.superlite | O(d)
+    ap.add_argument("--log", default=state.incident_log())  # the session's run, else ./.superlite | O(d)
     ap.add_argument("--plan", help="record this run into history (needs .superlite/metrics.jsonl)")  # O(1)
     ap.add_argument("--lint-log", help="default: lint-log.jsonl next to the ledger")  # O(1)
     a = ap.parse_args(argv)  # O(1)

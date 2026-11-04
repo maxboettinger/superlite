@@ -209,6 +209,16 @@ def pool_path() -> str:  # O(d)
     return str(resolve() / "pool.json")  # O(d)
 
 
+def ledger_path() -> str:  # O(d)
+    """Default ledger: progress.md in the folder `resolve` names, as `pool_path` (#87)."""
+    return str(resolve() / "progress.md")  # O(d)
+
+
+def incident_log() -> str:  # O(d)
+    """Default incident log: incidents.jsonl in the folder `resolve` names, as `pool_path` (#87)."""
+    return str(resolve() / "incidents.jsonl")  # O(d)
+
+
 def _prune(now) -> None:  # O(b)
     try:  # O(1)
         entries = list((home() / "sessions").iterdir())  # O(b)
