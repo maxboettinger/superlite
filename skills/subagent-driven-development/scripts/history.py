@@ -16,7 +16,8 @@ ROW SCHEMA (v1), one JSON object per line:
   of the task's package), band (see band_of), critical_path (bool; predicted for source=run, actual for
   imports), slack_min (predicted slack in minutes, or actual slack_s / 60 for imports),
   tier (haiku|sonnet), agent_type, model, prime_bytes, duration_s, tokens {in,out,cache_read,cache_write},
-  cost_usd, tool_calls, first_time_pass (true|false|null), rework_s, rework_cost, pred_min.
+  cost_usd, tool_calls, first_time_pass (true|false|null), rework_s, rework_cost, pred_min,
+  experiment (the `sl experiment` id the run claimed, else null; source=run only).
 STATS (stats.json): {v, updated, rows, bands: {band: S}, tiers: {tier: S}, bands_by_tier: {tier|band: S}} with
   S = {n, ftp_n, ftp_rate, mean_s, p90_s, mean_cost}. Same rows, same stats (sorted keys, no clock in S).
 Stdlib only.
@@ -176,6 +177,8 @@ def run_rows(plan_path, sl_dir=".superlite", run_id=None) -> list:  # O(M + B + 
     lang = detect_language(Path(sl).resolve().parent)  # O(entries)
     prime = {t: (sl / name).stat().st_size if (sl / name).is_file() else None for t, name in (("sonnet", "prime.md"), ("haiku", "prime-haiku.md"))}  # O(1)
     rid = run_id or datetime.now().strftime("%Y%m%d-%H%M%S")  # O(1)
+    import experiment  # O(1)
+    exp = (experiment.for_plan(plan_path, sl) or {}).get("id")  # the experiment this run claimed (#53) | O(f)
     rows = []  # O(1)
     for r in recs:  # O(n)
         task = plan.by_id.get(r["task"])  # O(1)
@@ -191,7 +194,8 @@ def run_rows(plan_path, sl_dir=".superlite", run_id=None) -> list:  # O(M + B + 
                      "prime_bytes": prime.get(tier), "duration_s": r["duration_s"],
                      "tokens": {"in": tk["in"], "out": tk["out"], "cache_read": tk["cache_read"], "cache_write": tk["cache_write"]},
                      "cost_usd": r["cost_usd"], "tool_calls": r["tool_calls"], "first_time_pass": r["first_time_pass"],
-                     "rework_s": r["rework_s"], "rework_cost": r["rework_cost"], "pred_min": f.get("pred_min")})  # O(1)
+                     "rework_s": r["rework_s"], "rework_cost": r["rework_cost"], "pred_min": f.get("pred_min"),
+                     "experiment": exp})  # O(1)
     return rows  # O(n)
 
 

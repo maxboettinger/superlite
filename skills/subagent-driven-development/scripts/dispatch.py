@@ -276,7 +276,11 @@ def main(argv=None):  # O(c + L + n + e + R*a*(F + o))
     blocked = orchestrator.require(plan, "dispatch")  # human mode waits for approval | O(file)
     if blocked:  # O(1)
         return blocked  # O(1)
-    render(*run(plan, a.pool, a.ledger, a.committed, a.running, a.cap, a.batch))  # see run
+    batch = a.batch  # O(1)
+    if batch is None:  # the run claimed an experiment (`sl experiment`, #53): its batch | O(f)
+        import experiment  # O(1)
+        batch = (experiment.for_plan(plan, Path(a.pool).parent) or {}).get("batch")  # O(f)
+    render(*run(plan, a.pool, a.ledger, a.committed, a.running, a.cap, batch))  # see run
     try:  # the budget line when it changed (needs .superlite/metrics.jsonl) | O(compute)
         import budget  # O(1)
         budget.maybe_print(plan, str(Path(a.pool).parent))  # O(compute)
