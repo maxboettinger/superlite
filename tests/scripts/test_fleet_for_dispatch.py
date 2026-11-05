@@ -63,13 +63,39 @@ def test_blocked_spawn_continues(dwld, capsys):
     assert [n for n, _ in _sent(dwld)] == [fleet.fs.agent_name(dwld.sd, "W2")]
 
 
+WAVE0 = "wave0 tier=haiku agent=superlite:implementer-haiku"
+
+
+@pytest.fixture
+def brief_calls(monkeypatch):
+    """T5's `fleet_io.send_brief`, faked (it may not exist yet): records its calls, prints the line T5 prints, returns the label."""
+    calls = []
+    def send_brief(sd, wid, brief, label=""):
+        calls.append((sd, wid, brief, label)); print(f"{wid} {label} sent"); return label
+    monkeypatch.setattr(fleet_io, "send_brief", send_brief, raising=False)
+    return calls
+
+
 @pytest.mark.skipif(REAL, reason="scripted dispatch lines need the in-process fake")
-def test_wave0_line_left_to_coordinator(dwld, capsys):
+def test_wave0_line_spawns_haiku_and_sends_brief(dwld, capsys, brief_calls):
     fleet.main(["on"])
-    dwld.lines = [("T0", "wave0 tier=haiku agent=superlite:implementer-haiku"), ("T1", FRESH)]
+    sd = dwld.sd.resolve(); (sd / "briefs").mkdir(); (sd / "briefs" / "wave0.md").write_text("wave 0 brief\n")
+    dwld.lines = [("T0", WAVE0), ("T1", FRESH)]
     assert _go(dwld) == 0
-    assert capsys.readouterr().out.splitlines() == ["T0: run the Wave 0 Agent line yourself", "W1 T1 sent"]
-    assert [c[0] for c in dwld.fh.calls].count("start_agent") == 1
+    assert capsys.readouterr().out.splitlines() == ["W1 T0 sent", "W2 T1 sent"]
+    assert brief_calls == [(sd, "W1", str(sd / "briefs" / "wave0.md"), "T0")]
+    starts = [c for c in dwld.fh.calls if c[0] == "start_agent"]
+    assert len(starts) == 2 and "haiku" in starts[0][2] and "superlite:implementer-haiku" in starts[0][2]
+    assert any(c[0] == "prompt" and "prime-haiku.md" in c[2] for c in dwld.fh.calls)
+
+
+@pytest.mark.skipif(REAL, reason="scripted dispatch lines need the in-process fake")
+def test_wave0_line_without_brief_is_blocked_and_the_rest_goes_on(dwld, capsys, brief_calls):
+    fleet.main(["on"])
+    dwld.lines = [("T0", WAVE0), ("T1", FRESH)]
+    assert _go(dwld) == 3
+    assert capsys.readouterr().out.splitlines() == ["BLOCKED: T0 not sent (no .superlite/briefs/wave0.md; run wave0 --plan PLAN)", "W1 T1 sent"]
+    assert brief_calls == [] and [c[0] for c in dwld.fh.calls].count("start_agent") == 1  # no worker for a brief that is not there
 
 
 @pytest.mark.skipif(REAL, reason="scripted dispatch lines need the in-process fake")
