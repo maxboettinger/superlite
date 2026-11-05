@@ -7,7 +7,8 @@ words[0] is the command (a path or `.exe` suffix is dropped). Rules:
   of cp, mv, install and ln is the destination (ln with one operand makes a link named after it in the working dir);
 - mv also names its sources (they are removed); cp, install, ln and rsync do not; rsync names a local last operand;
 - rm, rmdir, unlink, shred, tee, touch, truncate: every operand; dd: each of= value; install -d: every operand;
-- sed and perl write only with -i (--in-place); the operands after the script are the files;
+- sed and perl write only with -i (--in-place); the operands after the script are the files; sed also writes the file of
+  a `w`/`W` command or an `s///w` flag, and "?" for an `e` command or `s///e` flag (a shell command), with or without -i;
 - `-`, an empty word and a /dev/ path are not targets; --help, --version and a missing operand write nothing.
 Options follow getopt: clusters (-rfv), a value attached or in the next word (-t d, -td, --size 0, --size=0), `--` ends
 options; GNU permutes options after operands, perl stops its switches at the first operand.
@@ -15,6 +16,7 @@ options; GNU permutes options after operands, perl stops its switches at the fir
 # Complexity notation:
 #   n = words in the command, m = length of the longest word
 import os  # O(1)
+import re  # O(1)
 
 COMMANDS = frozenset({"cp", "mv", "rm", "rmdir", "unlink", "shred", "tee", "install", "ln", "touch", "dd",  # O(1)
                       "truncate", "rsync", "patch", "sed", "perl"})  # O(1)
@@ -113,8 +115,8 @@ def _val(opts, *names):  # O(len(opts) * len(names)) | the last value of any of 
     return found  # O(1)
 
 
-def _real(p):  # O(m) | a word that names a file
-    return bool(p) and p != "-" and not p.startswith("/dev/")  # O(m)
+def _real(p):  # O(m) | a word that names a file (/dev/../x leaves /dev)
+    return bool(p) and p != "-" and (not p.startswith("/dev/") or ".." in p.replace("\\", "/").split("/"))  # O(m)
 
 
 def _dir(d):  # O(m)
@@ -168,7 +170,10 @@ def _rsync(words):  # O(n*m) | a local last operand
     opts, ops = _parse(words, "rsync")  # O(n*m)
     if _has(opts, *_HELP, "V") or len(ops) < 2:  # a listing writes nothing | O(1)
         return []  # O(1)
-    return [ops[-1]] if _real(ops[-1]) and not _remote(ops[-1]) else []  # O(m)
+    out = [ops[-1]] if _real(ops[-1]) and not _remote(ops[-1]) else []  # O(m)
+    if _has(opts, "--remove-source-files", "--remove-sent-files"):  # the sources are deleted after the transfer | O(1)
+        out = [p for p in ops[:-1] if _real(p) and not _remote(p)] + out  # O(n*m)
+    return out  # O(1)
 
 
 def _patch(words):  # O(n*m) | -o FILE, else the file operand, else "?" (the files are named inside the patch)
@@ -185,12 +190,38 @@ def _patch(words):  # O(n*m) | -o FILE, else the file operand, else "?" (the fil
     return ["?"]  # O(1)
 
 
+_SED_W = re.compile(r"(?:^|[;{}\n])[ \t]*(?:\d+|\$|/(?:[^/\\\n]|\\.)*/)?(?:[ \t]*,[ \t]*(?:\d+|\$|/(?:[^/\\\n]|\\.)*/))?"
+                    r"[ \t]*!?[ \t]*[wW][ \t]*([^\n]+)")  # O(1) | the w and W commands write the file named to the end of the line
+_SED_SW = re.compile(r"(?:^|[;{}\n])[^;\n]*?\bs([^\w\s\\])(?:[^\\\n]|\\.)*?\1(?:[^\\\n]|\\.)*?\1[a-zA-Z0-9]*w[ \t]*([^\n]+)")  # O(1)
+_SED_E = re.compile(r"(?:^|[;{}\n])[ \t]*(?:\d+|\$|/(?:[^/\\\n]|\\.)*/)?[ \t]*!?[ \t]*e[ \t]+\S|\bs([^\w\s\\])(?:[^\\\n]|\\.)*?\1(?:[^\\\n]|\\.)*?\1[a-zA-Z0-9]*e")  # O(1)
+
+
+def _sed_scripts(opts, ops):  # O(n*m) | the script texts: every -e / --expression value, else the first operand
+    sc = [v for k, v in opts if k in ("e", "--expression") and v is not None]  # O(len(opts))
+    if sc:  # O(1)
+        return sc, ops  # O(1)
+    return ([ops[0]], ops[1:]) if ops else ([], ops)  # O(1)
+
+
+def _sed_writes(opts, ops):  # O(n*m) | files a sed script writes without -i (w, W, s///w) or "?" for e (a shell command)
+    out = []  # O(1)
+    for sc in _sed_scripts(opts, ops)[0]:  # O(n)
+        for rx in (_SED_W, _SED_SW):  # O(1)
+            out.extend(m.group(m.lastindex).strip() for m in rx.finditer(sc))  # O(m)
+        if _SED_E.search(sc):  # O(m)
+            out.append("?")  # O(1)
+    return out  # O(1)
+
+
 def _inplace(words, name):  # O(n*m) | sed, perl: the operands after the script, only with -i
     opts, ops = _parse(words, name, permute=(name == "sed"))  # O(n*m)
-    if not _has(opts, "i", "--in-place"):  # O(len(opts))
+    if _has(opts, *_HELP):  # O(1)
         return []  # O(1)
+    wr = [p for p in _sed_writes(opts, ops) if p == "?" or _real(p)] if name == "sed" else []  # O(n*m)
+    if not _has(opts, "i", "--in-place"):  # O(len(opts))
+        return wr  # O(1)
     script = _has(opts, "e", "f", "--expression", "--file") if name == "sed" else _has(opts, "e", "E")  # O(len(opts))
-    return [p for p in (ops if script else ops[1:]) if _real(p)]  # O(n*m)
+    return wr + [p for p in (ops if script else ops[1:]) if _real(p)]  # O(n*m)
 
 
 def targets(words):  # O(n*m) | the paths `words` (one simple command, decoded) writes, as written; "?" when unknown

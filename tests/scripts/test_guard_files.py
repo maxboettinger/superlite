@@ -172,3 +172,25 @@ def test_target_directory_trailing_slash_not_doubled():
 def test_module_exports():
     assert callable(guard_files.targets)
     assert isinstance(guard_files.COMMANDS, frozenset)
+
+
+def test_review_sed_w_command_writes_file():
+    assert targets(["sed", "-n", "w src/x", "f"]) == ["src/x"]
+    assert targets(["sed", "s/a/b/w src/x", "f"]) == ["src/x"]
+    assert targets(["sed", "-n", "/a/w src/x", "f"]) == ["src/x"]
+    assert targets(["sed", "-e", "1,3w src/x", "-e", "p", "f"]) == ["src/x"]
+    assert targets(["sed", "-n", "p;w /dev/stdout", "f"]) == []
+    assert targets(["sed", "s/a/w b/", "f"]) == []
+    assert targets(["sed", "1e rm x", "f"]) == ["?"]
+    assert targets(["sed", "s/a/b/e", "f"]) == ["?"]
+    assert targets(["sed", "-i", "w src/x", "f"]) == ["src/x", "f"]
+
+
+def test_review_dev_dotdot_is_not_dev():
+    assert targets(["tee", "/dev/../tmp/x"]) == ["/dev/../tmp/x"]
+    assert targets(["tee", "/dev/null"]) == []
+
+
+def test_review_rsync_remove_source_files_names_sources():
+    assert targets(["rsync", "--remove-source-files", "a", "d/"]) == ["a", "d/"]
+    assert targets(["rsync", "-a", "a", "d/"]) == ["d/"]
