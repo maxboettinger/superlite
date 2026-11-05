@@ -2,7 +2,8 @@
 # Stop hook: once per branch, block the stop when a sizeable branch has no final-reviewer verdict.
 # Silent (exit 0, no output) when: stop_hook_active; SUPERLITE_FINAL_REVIEW=off; not in a git work tree; detached HEAD or
 # default branch; branch already warned (.superlite/final-review-warned); diff small (<5 files and <150 lines against the
-# merge-base, docs/ and .superlite/ excluded); or metrics.jsonl has a final-reviewer stop newer than the merge-base commit.
+# merge-base, docs/ and .superlite/ excluded); or metrics.jsonl has a final-reviewer stop newer than the merge-base commit
+# (a subagent's `superlite:final-reviewer`, or a fleet final reviewer's `fleet:superlite:final-reviewer`).
 # Fails open: any internal error exits 0 without output.
 
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
@@ -65,7 +66,8 @@ if [[ $bt =~ ^[0-9]+$ ]] && [ -f "$sd/metrics.jsonl" ]; then
   bms=$((bt * 1000))
   tre='"t"[[:space:]]*:[[:space:]]*([0-9]+)'
   while IFS= read -r line || [ -n "$line" ]; do
-    [[ $line == *'"type":"superlite:final-reviewer"'* || $line == *'"type": "superlite:final-reviewer"'* ]] || continue
+    [[ $line == *'"type":"superlite:final-reviewer"'* || $line == *'"type": "superlite:final-reviewer"'* \
+      || $line == *'"type":"fleet:superlite:final-reviewer"'* || $line == *'"type": "fleet:superlite:final-reviewer"'* ]] || continue
     [[ $line =~ $tre ]] || continue
     [ "${BASH_REMATCH[1]}" -gt "$bms" ] && exit 0
   done < "$sd/metrics.jsonl" 2>/dev/null
