@@ -123,3 +123,30 @@ def test_answer_sends_the_file_and_resumes_the_lead(bk, capsys, tmp_path):
     assert run(capsys, "answer", "B1", "--file", str(f))[0] == 2
     waiting(); f.write_text(json.dumps({"answers": {"K?": "x\x1b[2J"}}))
     assert run(capsys, "answer", "B1", "--file", str(f))[0] == 2
+
+def test_start_passes_summary_paths_not_contents(bk, capsys, monkeypatch):
+    seen = []
+    monkeypatch.setitem(sys.modules, "backlog_brief", types.SimpleNamespace(lead_brief=lambda batch, ctx: seen.append(ctx["summaries"]) or "brief"))
+    f = bk.sd / "backlog" / "B1.md"; f.parent.mkdir(parents=True); f.write_text("# ruling text\nbody")
+    put(bk, b("B1", ["a.py"], "shipped"), b("B2", ["c.py"]))
+    assert run(capsys, "start")[0] == 0 and seen == [[str(f)]]
+
+def test_wait_parks_on_a_deeply_nested_question_json(bk, capsys):
+    wt = running(bk); bk.stops["W1"] = {"t": 2000, "last": "Status: NEEDS_DECISION"}
+    (wt / ".superlite" / "question.json").write_text("[" * 200000 + "]" * 200000)
+    rc, out = run(capsys, "wait", "--timeout", "0")
+    assert rc == 0 and out.startswith("B1 parked: invalid question.json") and get(bk, "B1")["state"] == "parked"
+
+def test_wait_reports_a_batch_its_lead_parked_once_and_stops_the_lead(bk, capsys):
+    running(bk); bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "parked", "reason": "release --park: tui red"}))
+    assert run(capsys, "wait", "--timeout", "0") == (0, "B1 parked: release --park: tui red\n")
+    assert ("stop", ["W1"]) in bk.calls and ("release", "B1") in bk.calls
+    bk.states.clear()
+    assert run(capsys, "wait", "--timeout", "0") == (0, "no running batch\n")
+
+def test_start_never_spawns_a_second_lead_while_the_first_pane_lives(bk, capsys):
+    running(bk); bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "parked", "reason": "x"}))
+    rc, out = run(capsys, "start", "B1")
+    assert rc == 2 and "still running" in out and not any(c[0] == "spawn" for c in bk.calls)
+    bk.states.clear()
+    assert run(capsys, "start", "B1")[0] == 0 and any(c[0] == "spawn" for c in bk.calls)
