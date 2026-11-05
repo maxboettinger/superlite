@@ -13,9 +13,17 @@ Every e2e test runs the agent on `--model haiku`, caps turns at 8 or fewer, and 
 
 ## Stamps
 
-A layer is stale when the SHA-256 over the current contents of all files it maps to differs from the hash stamped at its last green run. The stamps live in `.superlite/test-layers.json`, which is git-ignored through `.superlite/`.
+A layer is stale when its hash is not among the green hashes stored for it. The hash is a SHA-256 over the sorted `path` and per-file digest pairs of all files the layer maps to. Two rules keep it stable:
 
-    python3 scripts/test_layers.py check                  # print the stale layers; exit 2 when any
+- A manifest (`.claude-plugin/*.json`, any `.<name>-plugin/*.json`, and `package.json` and `gemini-extension.json` at the root) is digested with every `"version": "<value>"` replaced by `"version": ""`, so a version bump alone moves no layer. Any other manifest change does.
+- A file that enters the tui layer only through the keyword scan (`CLAUDE_CODE_FORK_SUBAGENT`, `agent_summary`) contributes its path and the lines that contain a keyword, not its whole content. `docs/plans/` and `tests/scripts/` are never scanned.
+
+The green hashes (the newest 200 per layer) and the file list of the last green run live in one store per repository: `<git common dir>/superlite/test-layers.json`. Every checkout and linked worktree of the repository reads and writes the same file, so a layer stamped green in any of them counts in all of them that hold the same layer content. Outside a git repository the store is `.superlite/test-layers.json`. `--state PATH` overrides the store path on every command.
+
+`run` writes a lock (`running.json`, beside the store) with its pid and the layer hash before it starts the command and removes it after. `check` and the Stop hook skip a layer whose lock pid is alive and whose lock hash equals the current hash, so a layer is not demanded again while its run is in progress.
+
+    python3 scripts/test_layers.py check                  # one line per stale layer, naming up to 5 changed files; exit 2 when any
+    python3 scripts/test_layers.py status                 # one line per layer: green, stale (with the changed files), running or none
     python3 scripts/test_layers.py run <layer>...         # run them in order; stamp each green one
     python3 scripts/test_layers.py stamp <layer> --ruling "<why>"   # record a deliberate skip
 
