@@ -348,7 +348,7 @@ class Plan:  # O(1)
         return float(m.group(1)) if m else None  # O(1)
 
     def header_wave0_off(self) -> bool:  # O(C)
-        return bool(re.search(r"^\*\*Wave0:\*\*\s*none\b", re.split(r"^#{2,}\s", self.text, 1, re.M)[0], re.M | re.I))  # O(C)
+        return bool(re.search(r"^\*\*Wave0:\*\*\s*none\b", re.split(r"^#{2,}\s", self.text, maxsplit=1, flags=re.M)[0], re.M | re.I))  # O(C)
 
     def header_max_chars(self) -> int | None:  # O(C)
         m = re.search(r"^\*\*Max chars:\*\*\s*([\d_,]+)", self.text, re.M)  # O(C)
