@@ -29,7 +29,7 @@ fi
 script="$root/skills/subagent-driven-development/scripts/compact_due.py"
 
 sid=""
-re='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_.-]+)"'
+re='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'
 [[ $input =~ $re ]] && sid="${BASH_REMATCH[1]}"
 
 line="$("$py" "$script" "$sl_dir" "$sid" 2>/dev/null)" || exit 0

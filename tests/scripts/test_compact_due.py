@@ -138,3 +138,23 @@ def test_is_due_sid_first_sight(tmp_path):
     assert (sl / "last-compact.s1").exists()
     _age(sl / "last-compact.s1", 1801)
     assert compact_due.is_due(str(sl), (sl / "last-compact.s1").stat().st_mtime + 1801, sid="s1") is True
+
+
+def test_spaced_json_sid_is_read(tmp_path):
+    sl = _sl(tmp_path)
+    inp = '{ "session_id"  :  "s9" }'
+    subprocess.run([BASH, str(HOOK)], input=inp, capture_output=True, text=True,
+                   env=_env(tmp_path), cwd=str(tmp_path))
+    assert (sl / "last-compact.s9").exists()
+
+
+def test_absent_or_unsafe_sid_writes_no_odd_stamp(tmp_path):
+    sl = _sl(tmp_path, compact_mtime=0)
+    _run(tmp_path)
+    subprocess.run([BASH, str(HOOK)], input='{"session_id": "../evil"}', capture_output=True, text=True,
+                   env=_env(tmp_path), cwd=str(tmp_path))
+    compact_due.mark(str(sl), "../../x/y")
+    assert not (sl / "last-compact.").exists()
+    assert not (tmp_path / "evil").exists() and not (tmp_path.parent / "x").exists()
+    assert not (sl / "last-compact.evil").exists()
+    assert all("/" not in p.name for p in sl.iterdir())
