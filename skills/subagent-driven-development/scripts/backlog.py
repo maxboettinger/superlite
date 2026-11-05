@@ -22,11 +22,17 @@ def _root() -> Path:
     return bs.main_root(Path.cwd())  # O(1)
 
 
+ISSUES_JQ = (".[] | select(has(\"pull_request\") | not) | {number, title, author: {login: .user.login}, "
+             "authorAssociation: .author_association}")
+
+
 def _gh(args: list):
     try:  # O(1)
         r = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=120)  # O(network)
         if r.returncode:  # O(1)
             raise RuntimeError(f"gh {' '.join(args[:2])} failed: {(r.stderr or '').strip()[:200]}")  # O(1)
+        if "--paginate" in args:  # O(1): --jq output is one JSON object per line
+            return [json.loads(x) for x in r.stdout.splitlines() if x.strip()]  # O(size)
         return json.loads(r.stdout)  # O(size)
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:  # O(1)
         raise RuntimeError(f"gh {' '.join(args[:2])} failed: {e}") from None  # O(1)
@@ -97,7 +103,7 @@ def cmd_plan(a) -> int:
         print("BLOCKED: backlog has open batches (" + ", ".join(f"{b['id']} {b['state']}" for b in open_) + ")")
         return 2
     info = _gh(["repo", "view", "--json", "nameWithOwner,visibility"])
-    issues = _gh(["issue", "list", "--state", "open", "--limit", "200", "--json", "number,title,author,authorAssociation"])
+    issues = _gh(["api", "--paginate", "repos/{owner}/{repo}/issues?state=open&per_page=100", "--jq", ISSUES_JQ])[:200]
     admitted, skipped = set(d["admitted"]), set(d["skipped"])
     public = info.get("visibility") == "PUBLIC"
     trusted, outside = [], []
