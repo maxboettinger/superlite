@@ -21,10 +21,15 @@ from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import plan_tools as pt  # noqa: E402 | O(1)
+import worktree  # noqa: E402 | O(1)
 
 SUPERLITE = Path(__file__).resolve().parents[3]  # plugin root | O(1)
 MANIFESTS = ("package.json", "pyproject.toml", "go.mod", "Cargo.toml", "Makefile", "pom.xml", "build.gradle", "Gemfile")  # O(1)
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__)/|\.(test|spec)\.|(^|/)test_")  # O(1)
+# Lockfile -> the command that installs from it, in the order the first match wins (#141); nothing is copied or installed globally.
+LOCKFILES = [("uv.lock", "uv sync"), ("package-lock.json", "npm ci"), ("pnpm-lock.yaml", "pnpm install --frozen-lockfile"),  # O(1)
+             ("bun.lock", "bun install --frozen-lockfile"), ("bun.lockb", "bun install --frozen-lockfile"),
+             ("yarn.lock", "yarn install --frozen-lockfile")]
 SKELETON = re.compile(r"wave\s*0|skeleton|scaffold|bootstrap", re.I)  # O(1)
 LANGS = [("TypeScript", r"typescript|\btsc\b|\.tsx?\b"), ("JavaScript", r"javascript|\bnode(?:\.js)?\b|\.m?jsx?\b"),  # O(1)
          ("Python", r"python|pyproject|pytest|\.py\b"), ("Go", r"\bgolang\b|\bgo\.mod\b|\.go\b"),
@@ -35,6 +40,19 @@ SYNTH_OWNS = ["package.json", "package-lock.json", "tsconfig*.json", "pyproject.
               "Cargo.lock", "Makefile", "*.csproj", "*.sln", "pom.xml", "build.gradle", "Gemfile", ".gitignore",
               "jest.config.*", "vitest.config.*", "pytest.ini", "tox.ini", "conftest.py", ".eslintrc*",
               "**/__init__.py", "**/errors.*", "**/types.*", "**/models.*"]
+
+
+def bootstrap_lock(root: Path):  # O(1) stats
+    """(lockfile, command) for a linked worktree `root` that holds a known lockfile, else None."""
+    if not worktree.is_linked(root):  # O(1) file read
+        return None  # O(1)
+    return next(((lock, cmd) for lock, cmd in LOCKFILES if (Path(root) / lock).is_file()), None)  # O(1) stats
+
+
+def bootstrap_command(root: Path) -> str | None:  # O(1) stats
+    """The install command for the lockfile in a linked worktree (`uv sync`), None in a main checkout or without a lockfile."""
+    found = bootstrap_lock(root)  # O(1) stats
+    return found[1] if found else None  # O(1)
 
 
 def sl_dir(plan_path: str) -> Path:  # O(1)
@@ -163,11 +181,13 @@ def build_brief(plan, plan_path: str, task, tid: str) -> str:  # O(L + q*s)
     else:  # O(1)
         owns_txt = (f"The plan has no Wave 0 task, so you own: {OWNS_SYNTH}. Project manifest, package/module "
                     "initialisers, test-runner config, and one file of shared error/data types per source directory the stub spec names.\n")  # O(1)
+    found = bootstrap_lock(pt.stable_root(plan_path))  # the plan's root, when it is a linked worktree | O(d)
+    boot = f"Bootstrap: run `{found[1]}` in the worktree before anything else (lockfile {found[0]}).\n\n" if found else ""  # O(1)
     return f"""# {tid}: Wave 0 skeleton
 
 You are {tid}, a one-off skeleton task. This message is your whole task, not the shared plan: do not reply READY. Plan: `{plan_path}`. Edit only the files you own.
 
-## Global constraints and stack (as the plan states them)
+{boot}## Global constraints and stack (as the plan states them)
 
 {chr(10).join(lines) if lines else "(the plan states none)"}
 

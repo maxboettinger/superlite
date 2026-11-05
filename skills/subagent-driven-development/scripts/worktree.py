@@ -6,9 +6,10 @@
 From a linked worktree the tool returns that worktree. Otherwise it returns (or creates)
 `<main root>/.claude/worktrees/superlite-<slug>` on branch `superlite/<slug>`. The main checkout's
 branch and files are never changed. No repository, a bare one, or no commit yet: the start folder.
-Exit 2 when a plain folder sits at the target path. Stdlib only.
+Exit 2 when a plain folder sits at the target path. A new worktree gets a stderr line naming the ignored
+top-level entries of the main checkout it lacks (`.env`, `.venv/`; names only, nothing is copied). Stdlib only.
 """
-# Complexity notation: n = length of the topic, w = registered worktrees, e = lines of info/exclude
+# Complexity notation: n = length of the topic, w = registered worktrees, e = lines of info/exclude, i = ignored entries
 import argparse  # O(1)
 import re  # O(1)
 import subprocess  # O(1)
@@ -16,6 +17,8 @@ import sys  # O(1)
 from pathlib import Path  # O(1)
 
 PARENT = ".claude/worktrees"  # O(1)
+INTERNAL = {".git", ".superlite", ".claude", "__pycache__"}  # never listed as missing (#141) | O(1)
+SHOWN = 10  # names in the "missing here" line | O(1)
 
 
 class Taken(Exception):  # O(1)
@@ -69,6 +72,27 @@ def add_exclude(root, rel, probe):  # O(e) + spawns
     f.write_text(old + ("" if not old or old.endswith("\n") else "\n") + line + "\n", encoding="utf-8")  # O(file)
 
 
+def missing_ignored(main, wt):  # O(i) + one process spawn
+    """-> sorted names (`.env`, `.venv/`) of the ignored top-level entries of the main checkout that `wt` lacks."""
+    rc, out, _ = git(main, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")  # O(i) + spawn
+    if rc:  # O(1)
+        return []  # O(1)
+    names = set()  # O(1)
+    for entry in out.split("\0"):  # O(i)
+        bare = entry.rstrip("/")  # O(1)
+        if bare and "/" not in bare and bare not in INTERNAL and not (Path(wt) / bare).exists():  # O(1) stat
+            names.add(entry)  # O(1)
+    return sorted(names)  # O(i log i)
+
+
+def missing_line(names):  # O(1)
+    """-> the stderr line for `missing_ignored` names, '' when there are none."""
+    if not names:  # O(1)
+        return ""  # O(1)
+    more = f" (+{len(names) - SHOWN} more)" if len(names) > SHOWN else ""  # O(1)
+    return "worktree: ignored in the main checkout, missing here: " + ", ".join(names[:SHOWN]) + more  # O(1)
+
+
 def ensure(topic, start):  # O(w) + spawns
     """-> (run folder, state): created / exists / linked / no-repo."""
     start = Path(start).resolve()  # O(1)
@@ -117,7 +141,9 @@ def main(argv=None):  # O(w) + spawns
     if state == "no-repo":  # O(1)
         print(f"worktree: {no_repo_reason(path) or 'bare repository'}; using {path.as_posix()} as is", file=sys.stderr)  # O(1)
     elif state == "created":  # O(1)
-        print("worktree: fresh worktree has no installed dependencies or ignored local files; install them there", file=sys.stderr)  # O(1)
+        line = missing_line(missing_ignored(path.parents[len(PARENT.split("/"))], path))  # the main root above <PARENT>/<name> | O(i) + spawn
+        if line:  # O(1)
+            print(line, file=sys.stderr)  # O(1)
     print(path.as_posix())  # O(1)
     return 0  # O(1)
 
