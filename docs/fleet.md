@@ -18,14 +18,14 @@ Start one with `"$SL" fleet spawn --role R [--tier T] --plan PLAN`, then give it
 | `fixer` | `superlite:fixer-{sonnet,sonnet-high,opus}` (`--tier 1\|2\|3`, or `sonnet\|sonnet-high\|opus`) | sonnet medium, sonnet high, opus high | none; one brief, a fresh worker per fix |
 | `package-reviewer` | `superlite:package-reviewer` | sonnet, medium | none; one brief |
 | `final-reviewer` | `superlite:final-reviewer` | opus, high; a fresh worker per round | none; `.superlite/review-packet.md` |
-| `research` | `superlite:researcher` (`agents/researcher.md`) | haiku, low; read-only (Read, Grep, Glob, Bash) | none; one brief |
+| `research` | `superlite:researcher` (`agents/researcher.md`) | haiku, low; read-only (Read, Grep, Glob; no shell) | none; one brief |
 
 The reviewers take no `--tier`; an unknown role or tier exits 2 with `error: ...`. A test layer is not an agent: `fleet run --layer headless|tui|evals` runs `scripts/test_layers.py` in a shell pane and records the role `layer`.
 
 - Every worker gets `--effort` from its agent file (frontmatter effort is ignored in a main-thread session), `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0` and `SUPERLITE_FLEET_ROLE=<role>`.
 - Briefs live in `.superlite/briefs/` (inside the worker's cwd; spawn adds `--add-dir` when the state dir is outside it). A brief is a file the worker reads, never pasted text.
 - A one-turn worker (everything except the implementer) ends with a status line and one JSON block; `fleet wait` stops it once its status is final.
-- Fleet relies on accounts in auto mode. A non-auto account stops research Bash and reads outside the cwd at a permission dialog, which `wait` reports as `BLOCKED-UI`.
+- Fleet relies on accounts in auto mode. A non-auto account stops reads outside the cwd at a permission dialog, which `wait` reports as `BLOCKED-UI`.
 
 ## Capacity
 

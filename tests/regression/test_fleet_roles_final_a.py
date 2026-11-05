@@ -29,8 +29,8 @@ def test_fleet_gate_passes_on_verdict_stop(repo):
     assert run(repo).stdout == ""
 
 def test_findings_root_is_the_git_root_with_state_dir_outside(tmp_path):
-    root = tmp_path / "repo"; (root / ".git").mkdir(parents=True)
-    sd = tmp_path / "state" / ".superlite"; (sd / "fleet" / "reports").mkdir(parents=True)
+    root = (tmp_path / "repo").resolve(); (root / ".git").mkdir(parents=True)
+    sd = root / "sub" / ".superlite"; (sd / "fleet" / "reports").mkdir(parents=True)
     plan = make_plan(root, [{"id": "T1", "owns": "src/a.py"}, {"id": "T2", "owns": "src/b.py"}])
     rp = sd / "fleet" / "reports" / "FR1.json"
     rp.write_text(json.dumps({"id": "W4", "label": "FR1", "findings": [{"file": str(root / "src" / "a.py"), "line": 1, "problem": "p", "fix": "x", "tier": 1}]}))
@@ -40,6 +40,7 @@ def test_findings_root_is_the_git_root_with_state_dir_outside(tmp_path):
 def test_layer_closes_the_pane_when_run_in_pane_fails(tmp_path, monkeypatch, capsys):
     root = tmp_path / "repo"; sd = root / ".superlite"; sd.mkdir(parents=True)
     (sd / "fleet.json").write_text(json.dumps({"on": True, "workers": {}, "next": 5}))
+    (root / "scripts").mkdir(); (root / "scripts" / "test_layers.py").write_text("#\n")
     monkeypatch.setattr(fl.fleet, "choose_account", lambda *a: ("claude3", "/u/.c3", "claude3"), raising=False)
     def open_pane(sd_, wid, cwd, env, record):
         d = json.loads((sd / "fleet.json").read_text()); d["workers"][wid] = {**record, "pane_id": "w6:p2"}
