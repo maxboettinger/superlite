@@ -21,6 +21,7 @@ Shorthand: `SUPERLITE` = plugin root, two levels above this skill's "Base direct
 Fleet mode (user asks): `"$SL" fleet on` before the first dispatch, then `fleet.md`.
 - Prime: `"$SL" build_prime --plan $PLAN` prints `hash size`, writes `.superlite/prime.md`: slim for sonnet (rules and interfaces, no plan; no `--spec`). `--prime full --spec SPEC --sections "1,3"` restores the old one. Never paste it.
 - Incidents: `.superlite/incidents.jsonl` (`"$SL" incident add`); log BLOCKED and NEEDS_CONTEXT as `--agent coordinator`.
+- MCP tools: agents inherit the session's MCP tools (deferred, names only); a project MCP server that needs approval must be approved before dispatch, because background agents surface its prompt in the main session.
 - Graphify: `"$SL" graphify_gate` prints JSON. `use` false: skip. Installed: `graphify update .`. `needs_install` and `allowed`: `uv tool install graphifyy`, `graphify extract . --code-only`. Only you run it.
 
 ## Planning check

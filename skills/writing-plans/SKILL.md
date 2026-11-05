@@ -144,6 +144,7 @@ Rules:
 - List, per package: app type, categories, specific risks.
 - Copy into each task the cases that touch its files, as named tests with exact inputs and outcomes. The implementer writes them during TDD, so the failures never reach review (lever 1).
 - Never list the spec's own examples: tests already cover them.
+- An MCP-only check (Xcode `RenderPreview`) can be a task step when the project configures that MCP server, since agents inherit the session's MCP tools; otherwise it is the coordinator's step after the package review.
 - A **`**Probe entry:**` line per package** feeds the generated probe adapter, for example `call=minisheet.Workbook.set · run=python -m minisheet · serve=minisheet.server.create_server`. Use `call=` for libraries, `run=` for CLIs, `serve=` for servers. No agent writes adapters. `call=` and `serve=` import Python; other languages use `run=` with an already built command, because each probe call has a 10 s timeout: a Swift package with an executable target gets `run=.build/debug/<Exec>` (built by `swift build`). Never `run=swift run`, `swift test` or `xcodebuild` (they compile on every call). A Swift library or Xcode app target without an executable gets no `Probe entry`; its Review Focus cases become named XCTest or Swift Testing tests in the owning task.
 
 ## Plan size: aim for 15k characters

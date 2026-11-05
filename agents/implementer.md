@@ -3,7 +3,7 @@ name: implementer
 description: Implements one task from a plan. Use for each task; primed with the shared rules first (READY), then sent its task by message. Stays idle after DONE for reuse.
 model: sonnet
 effort: medium
-tools: Read, Edit, Write, Bash, Grep, Glob
+disallowedTools: Agent, Task, Workflow, AskUserQuestion, SendMessage, EnterWorktree, ExitWorktree, EnterPlanMode, ExitPlanMode, CronCreate, CronDelete, ScheduleWakeup, RemoteTrigger, PushNotification, TaskCreate, TaskUpdate, TaskStop
 experimental:
   cacheTtl: 1h
 ---
