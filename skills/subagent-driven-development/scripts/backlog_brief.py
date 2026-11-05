@@ -48,10 +48,14 @@ def lead_brief(batch, ctx):  # O(i + f + a)
     out.append(f"Never end your turn while your workers run: wait with `{sl} fleet wait --timeout 540000 --plan .superlite`.")  # O(1)
     out.append("Escalate a new major decision: let running workers finish, write .superlite/question.json in the "
                "AskUserQuestion shape, end your turn with Status: NEEDS_DECISION.")  # O(1)
-    ap = ctx.get("approved") or {}  # O(1)
-    out.append(f"Ship: allowed (approved by {ap.get('by')} at {ap.get('time')}). Ship only with `{sl} backlog ship {bid} lock`, "
-               "then bump, then merge (backlog.md); first write .superlite/notes.md (at most 4 lines: rulings that change "
-               "later batches, follow-up issues).")  # O(1)
+    ap = ctx.get("approved")  # O(1)
+    if ap:  # O(1)
+        out.append(f"Ship: allowed (approved by {ap.get('by')} at {ap.get('time')}). Ship only with `{sl} backlog ship {bid} lock`, "
+                   "then bump, then merge (backlog.md); first write .superlite/notes.md (at most 4 lines: rulings that change "
+                   "later batches, follow-up issues).")  # O(1)
+    else:  # O(1)
+        out.append("Ship: NOT approved. Do not rebase, bump or ship; build and review, write .superlite/notes.md, "
+                   "end with Status: BLOCKED (ship not approved).")  # O(1)
     out.append("End: Status: DONE once merge printed shipped; otherwise Status: BLOCKED with the reason. Then the JSON block.")  # O(1)
     return "\n".join(out) + "\n"  # O(n)
 
