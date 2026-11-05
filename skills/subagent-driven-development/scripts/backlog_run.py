@@ -12,6 +12,7 @@ import argparse  # O(1)
 import json  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
+import os  # O(1)
 import time  # O(1)
 from pathlib import Path  # O(1)
 
@@ -92,6 +93,8 @@ def cmd_start(a) -> int:
     import fleet_state
     import worktree
     import backlog_brief
+    if os.environ.get("SUPERLITE_FLEET_WORKER"):  # only Max's session runs this; never a lead or worker
+        return _refuse("sl backlog_run start runs only in the main session")  # O(1)
     root = _root()  # O(1)
     sd, p = root / ".superlite", bs.path(root)  # O(1)
     data = bs.load(p)  # O(size)
@@ -140,7 +143,7 @@ def cmd_start(a) -> int:
         def mark(d, bid=bid, rec=rec, wt=wt, branch=branch):  # O(b)
             x = bs.batch(d, bid)
             x.update({"state": "running", "lead": rec["id"], "agent": rec["name"], "worktree": str(wt), "branch": branch,
-                      "since": _now_ms(), "reason": ""})
+                      "since": _now_ms(), "reason": "", "ship_runs": 0})
         bs.update(p, mark)  # O(size)
         print(f"{bid} running lead={rec['id']} worktree={wt}")  # O(1)
     return 0  # O(1)
@@ -271,6 +274,8 @@ def _answers(f) -> tuple:
 
 def cmd_answer(a) -> int:
     import fleet_io
+    if os.environ.get("SUPERLITE_FLEET_WORKER"):  # only Max's session runs this; never a lead or worker
+        return _refuse("sl backlog_run answer runs only in the main session")  # O(1)
     root = _root()  # O(1)
     sd, p = root / ".superlite", bs.path(root)  # O(1)
     try:  # O(1)
