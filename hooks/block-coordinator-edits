@@ -105,12 +105,71 @@ dotres() {
   set +f
   RES="/${st[*]}"
 }
+# cache_hit PATH: succeeds when PATH (absolute, or ~/...) lies in the folder of the Python cache find_py reads; a fake
+# interpreter written there would pass every command later. The folder is judged in every state.
+cache_hit() {
+  local p="$1" c lc
+  case "$p" in '~/'*) p="$HOME/${p#\~/}" ;; esac
+  case "$p" in /*) ;; *) return 1 ;; esac
+  case "$p/" in */../*|*/./*) dotres "$p"; p="$RES" ;; esac
+  lower "$p"; lc="$LOWER"
+  for c in "${SUPERLITE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/superlite}" "$HOME/.cache/superlite"; do
+    norm "$c"; lower "$NORM"
+    case "$lc" in "$LOWER"|"$LOWER"/*) return 0 ;; esac
+  done
+  return 1
+}
+
+# rel_ok REL: succeeds when the coordinator may write the canonical project-relative REL (also below a linked worktree
+# in the project); sets prot=1 when REL is a protected file.
+rel_ok() {
+  lower "$1"
+  case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 1 ;; esac
+  allowed_rel "$1" && return 0
+  if wt_rel "$1"; then
+    lower "$WREL"
+    case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 1 ;; esac
+    allowed_rel "$WREL" && return 0
+  fi
+  return 1
+}
+
+# link_deny REL: for a REL the text rules allow, succeeds when the write still lands elsewhere: a path component that is
+# a symlink whose real target lies outside the allowed set (or cannot be resolved), or an existing file with more than
+# one hard link (its other names are unknown). Only symlink tests (builtins) on the common path; one resolve for a
+# symlink, one stat for an existing file.
+link_deny() {
+  local r="$1" pre="" found=0 real rp rpl n target="$projn/$1"
+  while :; do
+    pre="${pre:+$pre/}${r%%/*}"
+    [ -L "$projn/$pre" ] && { found=1; break; }
+    [[ $r == */* ]] || break
+    r="${r#*/}"
+  done
+  if [ "$found" = 1 ]; then
+    real="$(readlink -f "$target" 2>/dev/null || realpath "$target" 2>/dev/null)"
+    rp="$(cd -P "$projn" 2>/dev/null && pwd -P)"
+    [ -n "$real" ] && [ -n "$rp" ] || return 0
+    real="${real//\\//}"
+    lower "$rp"; rpl="$LOWER"; lower "$real"
+    case "$LOWER" in "$rpl"/*) real="${real:$((${#rp}+1))}" ;; *) return 0 ;; esac
+    rel_ok "$real" || return 0
+    target="$rp/$real"
+  fi
+  if [ -f "$target" ]; then
+    n="$(stat -c %h "$target" 2>/dev/null || stat -f %l "$target" 2>/dev/null)"
+    [ "${n:-1}" -gt 1 ] 2>/dev/null && return 0
+  fi
+  return 1
+}
+
 # project_code PATH: succeeds when writing PATH (the file_path or notebook_path of an Edit, Write or NotebookEdit call)
 # is denied; sets prot=1 for the protected files. A relative path is the project's own.
 project_code() {
   local p rel pl v1='$CLAUDE_PROJECT_DIR' v2='${CLAUDE_PROJECT_DIR}'
   norm "$1"; p="$NORM"; p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
   p="${p//"$v2"/$projn}"; p="${p//"$v1"/$projn}"
+  cache_hit "$p" && { prot=2; return 0; }
   case "$p" in ''|*'$'*|'~'*|/dev/*|-*) return 1 ;; esac
   case "$p" in /*|[A-Za-z]:[/\\]*) ;; *) case "/$p/" in */../*|*/./*) p="$projn/${p#./}" ;; esac ;; esac
   case "$p" in   # any absolute path with . or .. segments is judged resolved
@@ -126,11 +185,11 @@ project_code() {
   case "$pl" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
   { [ "$human" = 1 ] || [ "$active" = 1 ]; } || return 1
   case "/$rel/" in */../*|*/./*) return 0 ;; esac   # docs/../src/a.py is not under docs/
-  allowed_rel "$rel" && return 1
+  if allowed_rel "$rel"; then link_deny "$rel"; return; fi   # allowed by its text: still through a link?
   if wt_rel "$rel"; then   # a linked worktree inside the project: judged from its root
     lower "$WREL"
     case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
-    allowed_rel "$WREL" && return 1
+    if allowed_rel "$WREL"; then link_deny "$rel"; return; fi
   fi
   return 0
 }
@@ -170,7 +229,8 @@ guard_error() {
 
 # find_py [nocache]: the Python 3.10+ that runs the judge, into PY (an array; empty when none is found), the way
 # skills/subagent-driven-development/scripts/sl finds it: $SUPERLITE_PYTHON (no version check), else the interpreter
-# sl cached for this PATH, working directory and VIRTUAL_ENV (the same file), else the first of python3, python,
+# sl cached for this PATH, working directory and VIRTUAL_ENV (the same file) and only while it is the file `command -v
+# python3` or `command -v python` finds (a planted cache names another), else the first of python3, python,
 # `py -3` and `uv run --no-project python` that is 3.10+, whose real path is cached for the next call. `nocache` skips
 # the cached interpreter (it lies outside the project, so the model may have planted a fake there) and rewrites it.
 find_py() {
@@ -185,7 +245,11 @@ find_py() {
   fi
   if [ "${1:-}" != nocache ] && [ -f "$cache" ]; then
     { IFS= read -r cached; IFS= read -r ckey; } < "$cache" 2>/dev/null || true
-    if [ -n "$cached" ] && [ "$ckey" = "$key" ] && [ -x "$cached" ]; then PY=("$cached"); return 0; fi
+    if [ -n "$cached" ] && [ "$ckey" = "$key" ] && [ -x "$cached" ]; then
+      for cand in python3 python; do   # trusted only when it is the interpreter this PATH finds (same file, links followed)
+        exe="$(command -v "$cand" 2>/dev/null)" && [ -n "$exe" ] && [ "$cached" -ef "$exe" ] && { PY=("$cached"); return 0; }
+      done
+    fi
   fi
   for cand in python3 python "py -3" "uv run --no-project python"; do
     read -r -a c <<< "$cand"
@@ -242,7 +306,8 @@ elif [ -z "$hit" ]; then
   lower "$cmd"; lc="$LOWER"
   bare=${lc//\'/}; bare=${bare//\"/}; bare=${bare//\\/}   # orchestrator.js''on and orchestrator.j\son name it too
   mentions=0
-  [[ $bare == *human-replies.jsonl* || $bare == *orchestrator.json* || $bare == *superlite/python* ]] && mentions=1
+  [[ $bare == *human-replies.jsonl* || $bare == *orchestrator.json* || $bare == *.superlite* ]] && mentions=1
+  [[ $bare == *superlite* && $bare == *python* ]] && mentions=1   # the Python cache folder: ~/.cache/superlite/python
   if [ "$enforce" = 0 ] && [ "$mentions" = 0 ]; then
     # $'\x6f...' may spell a protected name, and a glob or brace near .superlite may reach one (.superlite/orch*)
     re_g='[][*?{]'; re_w='[^[:space:];&|<>()]*'
@@ -252,7 +317,7 @@ elif [ -z "$hit" ]; then
       mentions=1
     elif [[ $nob =~ $re_g ]]; then
       jstr cwd
-      { [[ $nob =~ $re_near ]] || [[ $nob == *.superlite* ]] || [[ $REPLY == *.superlite* ]]; } && mentions=1
+      { [[ $nob =~ $re_near ]] || [[ $REPLY == *.superlite* ]]; } && mentions=1
     fi
   fi
   # sl tools that start a build are denied until the plan is approved.
@@ -273,7 +338,9 @@ hit="${hit:0:120}"; hit="${hit//[\"\\$'\n\r\t']/}"
 printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s"}\n' "$tool" "$hit" \
   >> "$sd/incidents.jsonl" 2>/dev/null
 
-if [ "$prot" = 1 ]; then
+if [ "$prot" = 2 ]; then
+  printf '%s\n' 'Blocked: the Python interpreter cache of superlite (~/.cache/superlite) is never written by the coordinator.' >&2
+elif [ "$prot" = 1 ]; then
   printf '%s\n' \
     'Blocked: .superlite/orchestrator.json and .superlite/human-replies.jsonl are never written directly. Change the orchestrator state only with `sl orchestrator ...` (for example `sl orchestrator approve --review <path>`); human-replies.jsonl is written only by the hook that records the human'"'"'s replies.' >&2
 elif [ "$human" = 1 ]; then
@@ -287,7 +354,7 @@ else
     '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, any docs.md and .superlite/**.' \
     '- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete .superlite by hand.' >&2
 fi
-if [ "$prot" != 1 ]; then   # name what was judged: a path as "target", a command as "command"
+if [ "$prot" != 1 ]; then   # (prot 2, the cache, names its target too)   name what was judged: a path as "target", a command as "command"
   tgt="${tgt//[[:cntrl:]]/}"
   tgt="${tgt%\"}"; tgt="${tgt#\"}"; tgt="${tgt%\'}"; tgt="${tgt#\'}"
   lower "$tgt"
