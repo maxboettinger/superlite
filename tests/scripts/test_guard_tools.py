@@ -95,16 +95,17 @@ def test_git_writers():
         ["git", "stash", "pop"],
         ["git", "stash", "apply"],
         ["git", "stash", "branch", "b"],
-        ["git", "clean", "-fd"],
-        ["git", "clean", "-f"],
     ):
         assert targets(words) == ["."], words
     assert targets(["git", "-C", "sub", "reset", "--hard"]) == ["sub"]
-    assert targets(["git", "apply", "p.diff"]) == ["?"]
-    assert targets(["git", "am", "p.mbox"]) == ["?"]
+    assert targets(["git", "clean", "-fd"]) == ["./?"]  # any file below the directory it runs in, not the folder itself
+    assert targets(["git", "-C", "sub", "clean", "-f"]) == ["sub/?"]
+    assert targets(["git", "apply", "p.diff"]) == ["."]
+    assert targets(["git", "am", "p.mbox"]) == ["."]
+    assert targets(["git", "-C", "/tmp/o", "am", "p.mbox"]) == ["/tmp/o"]
     assert targets(["git", "restore", "--pathspec-from-file=l"]) == ["?"]
     assert targets(["git", "restore", ":(glob)*.py"]) == ["?"]
-    assert targets(["git", "-c", "alias.zz=!rm a", "zz"]) == ["?"]
+    assert targets(["git", "-c", "alias.zz=!rm a", "zz"]) == ["a"]
     for sub in ("log", "diff", "show", "status", "branch", "fetch"):
         assert targets(["git", sub]) == [], sub
     assert targets(["git", "stash"]) == []
@@ -333,3 +334,52 @@ def test_review_name_assigned_literals_other_languages():
     assert targets(["node", "-e", "fs.writeFileSync(p,'z')"]) == ["?"]
     assert targets(["ruby", "-e", "p='x'; File.write(p,'z')"]) == ["x"]
     assert targets(["php", "-r", "$p='x'; file_put_contents($p,'z');"]) == ["x"]
+
+
+def test_git_alias_is_judged_as_what_it_runs():
+    t = lambda *w, **kw: targets(["git", *w], **kw)  # noqa: E731
+    assert t("-c", "alias.st=status", "st") == []
+    assert t("-c", "alias.co=checkout", "co", "--", "src/a.py") == ["src/a.py"]
+    assert t("-c", "alias.x=checkout -f", "x") == ["."]
+    assert t("-c", "alias.x=!rm", "x", "src/a.py") == ["src/a.py"]
+    assert t("-c", "alias.x=!echo hi > docs/p.md", "x", top="/p") == ["/p/docs/p.md"]  # a ! alias runs at the top
+    assert t("-c", "alias.x=!echo hi > docs/p.md", "x", top="/p", cwd="/elsewhere") == ["docs/p.md"]
+    assert t("-c", "alias.x=!echo hi > docs/p.md", "-C", "/elsewhere", "x", top="/p", cwd="/elsewhere") == ["/p/docs/p.md"]  # -C names the repo
+    assert t("-c", "alias.a=b", "-c", "alias.b=status", "a") == ["?"]  # an alias of an alias is not followed
+    assert t("-c", "alias.x=x", "x") == ["?"]
+
+
+def test_git_config_the_guard_cannot_read_makes_an_unknown_subcommand_unknown():
+    assert targets(["git", "--config-env=alias.x=CMD", "x"]) == ["?"]
+    assert targets(["git", "--config-env", "alias.x=CMD", "x"]) == ["?"]
+    assert targets(["git", "-c", "include.path=/tmp/c", "x"]) == ["?"]
+    assert targets(["git", "-c", "includeIf.gitdir:/a.path=/c", "x"]) == ["?"]
+    assert targets(["git", "x"], text="GIT_DIR=/p/.git git x") == ["?"]
+    assert targets(["git", "x"], text="GIT_CONFIG_PARAMETERS=\"'alias.x=!rm a'\" git x") == ["?"]
+    assert targets(["git", "w"], text="git config alias.w '!rm a' && git w") == ["?"]
+    assert targets(["git", "--git-dir=/p/.git", "x"]) == ["?"]
+    assert targets(["git", "x"]) == []  # no config read from elsewhere: a plain unknown word writes nothing
+    assert targets(["git", "status"], text="git config user.name x && git status") == []
+    assert targets(["git", "config", "user.name", "x"], text="git config user.name x") == []
+
+
+def test_git_work_tree_from_the_environment_and_config():
+    co = ["git", "checkout", "--", "src/a.py"]
+    assert targets(co, env={"GIT_WORK_TREE": "/p"}) == ["/p/src/a.py"]
+    assert targets(co, env={"GIT_WORK_TREE": "/tmp/x"}) == ["/tmp/x/src/a.py"]
+    assert targets(["git", "--work-tree=/tmp/x", *co[1:]], env={"GIT_WORK_TREE": "/p"}) == ["/tmp/x/src/a.py"]
+    assert targets(["git", "-c", "core.worktree=/p", *co[1:]]) == ["/p/src/a.py"]
+    assert targets(co, env={"GIT_WORK_TREE": None}) == ["$GIT_WORK_TREE/src/a.py"]  # a variable: unknown
+    assert targets(co, text="export GIT_WORK_TREE=$X; git checkout -- src/a.py") == ["$GIT_WORK_TREE/src/a.py"]
+    assert targets(co, text="git config core.worktree /p && git checkout -- src/a.py") == ["$GIT_WORK_TREE/src/a.py"]
+    assert targets(["git", "-C", "$X", "checkout", "HEAD", "--", "SPEC.md"]) == ["$X/SPEC.md"]
+
+
+def test_git_checkout_operand_is_a_path_when_it_exists_below_cwd(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("x")
+    assert targets(["git", "checkout", "src/a.py"], cwd=str(tmp_path)) == ["src/a.py"]
+    assert targets(["git", "checkout", "a.py"], cwd=str(tmp_path / "src")) == ["a.py"]
+    assert targets(["git", "checkout", "main"], cwd=str(tmp_path)) == []
+    assert targets(["git", "-C", "src", "checkout", "a.py"], cwd=str(tmp_path)) == ["src/a.py"]
+    assert targets(["git", "-C", "$X", "checkout", "a.py"], cwd=str(tmp_path)) == []

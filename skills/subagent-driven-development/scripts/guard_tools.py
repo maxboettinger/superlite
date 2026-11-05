@@ -8,6 +8,7 @@ module reads (a path and ".exe" are stripped from the command word first).
 
 import os
 import re
+import shlex
 
 import guard_files
 import guard_lex
@@ -123,8 +124,49 @@ def _git_out(sub: str, args: list[str], base: str) -> list[str]:  # O(len(args))
     return _uniq(out)  # O(len(out))
 
 
-def _git(words: list[str]) -> list[str]:  # O(len(words))
+_GIT_CONFIG_WRITTEN = re.compile(r"(?:^|[^\w./-])git(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+config(?:\s|$)")  # O(1)
+_UNKNOWN_TREE = "$GIT_WORK_TREE"  # a work tree the guard cannot name
+
+
+def _is_abs(p: str) -> bool:  # O(1)
+    return p.startswith("/") or re.match(r"^[A-Za-z]:[/\\]", p) is not None  # O(1)
+
+
+def _exists(cwd: str | None, base: str, p: str) -> bool:  # O(len(base) + len(p)) | does p exist below base (from cwd)?
+    if "$" in base or "$" in p or base.startswith("~") or p.startswith("~"):  # an unknown folder: nothing to look at  # O(1)
+        return False  # O(1)
+    full = _join(base, p)  # O(len(base) + len(p))
+    return os.path.exists(full if _is_abs(full) or cwd is None else os.path.join(cwd, full))  # O(1)
+
+
+def _inside(cwd: str | None, top: str) -> bool:  # O(len(cwd) + len(top)) | does the shell sit in top (unknown: yes)?
+    if cwd is None:  # O(1)
+        return True  # O(1)
+    a, b = os.path.realpath(cwd), os.path.realpath(top)  # O(1)
+    return a == b or a.startswith(b.rstrip("/") + "/")  # O(1)
+
+
+def _alias(words: list[str], i: int, al: str, cfg: dict[str, str], cwd: str | None, env, top, text, cflag: bool) -> list[str]:  # O(len(words))
+    """A -c alias of a subcommand that is no git command, judged as what it runs (one level deep)."""
+    rest = words[i:]  # O(len(words))
+    if al.startswith("!"):  # git runs a shell alias at the work tree's top  # O(len(al))
+        paths = _shell(al[1:] + "".join(" " + shlex.quote(a) for a in rest))  # O(len(al))
+        if top and (cflag or _inside(cwd, top)):  # O(1)
+            paths = [_join(top, p) for p in paths]  # O(len(paths))
+        return paths  # O(len(paths))
+    try:  # O(1)
+        aw = shlex.split(al)  # O(len(al))
+    except ValueError:  # O(1)
+        return ["?"]  # O(1)
+    if not aw or aw[0].lower() in {k[6:] for k in cfg if k.startswith("alias.")}:  # an alias of another alias: not followed  # O(len(cfg))
+        return ["?"]  # O(len(cfg))
+    return _git(words[:i - 1] + aw + rest, cwd, env, top, text)  # O(len(words))
+
+
+def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = None,
+         text: str | None = None) -> list[str]:  # O(len(words))
     base, sub, i, cflag, wt, cfg = "", "", 1, False, None, {}  # O(1)
+    unk = False  # a config the guard cannot read (include, --config-env, GIT_CONFIG*, a git dir, git config in the command)  # O(1)
     n = len(words)  # O(1)
     while i < n:  # O(len(words))
         a = words[i]  # O(1)
@@ -132,17 +174,30 @@ def _git(words: list[str]) -> list[str]:  # O(len(words))
             v = words[i + 1] if i + 1 < n else ""  # O(1)
             if a == "-C":  # O(1)
                 base = _join(base, v) if base else v  # O(len(v))
+                cflag = True  # O(1)
             elif a == "--work-tree":  # O(1)
                 wt = v  # O(1)
+                cflag = True  # O(1)
             elif a == "-c":  # O(1)
                 k, _, val = v.partition("=")  # O(len(v))
                 cfg[k.lower()] = val  # O(1)
+                unk = unk or k.lower().startswith(("include.", "includeif."))  # O(1)
+            elif a == "--config-env":  # O(1)
+                unk = True  # O(1)
+            elif a == "--git-dir":  # O(1)
+                cflag = True  # O(1)
             i += 2  # O(1)
             continue  # O(1)
         if a.startswith("--work-tree="):  # O(1)
             wt = a.split("=", 1)[1]  # O(len(a))
+            cflag = True  # O(1)
+        elif a.startswith("--config-env="):  # O(1)
+            unk = True  # O(1)
+        elif a.startswith("--git-dir="):  # O(1)
+            cflag = True  # O(1)
         elif a.startswith("-C") and len(a) > 2:  # O(1)
             base = _join(base, a[2:]) if base else a[2:]  # O(len(a))
+            cflag = True  # O(1)
         elif a.startswith("-"):  # O(1)
             pass  # O(1)
         else:  # O(1)
@@ -152,15 +207,29 @@ def _git(words: list[str]) -> list[str]:  # O(len(words))
         i += 1  # O(1)
     if not sub:  # O(1)
         return []  # O(1)
-    cflag = False  # O(1)
-    if wt is None and "core.worktree" in cfg:  # O(1)
-        wt = cfg["core.worktree"]  # O(1)
+    blob = text if text is not None else " ".join(words)  # O(len(blob))
+    low = blob.lower()  # O(len(blob))
+    unk = unk or "GIT_CONFIG" in blob or "GIT_DIR" in blob or "--git-dir" in low or _GIT_CONFIG_WRITTEN.search(low) is not None  # O(len(blob))
+    env = env or {}  # O(1)
+    if wt is None:  # not given on the command line: GIT_WORK_TREE (precise from env, else named elsewhere), core.worktree  # O(1)
+        if "GIT_WORK_TREE" in env:  # O(1)
+            wt = env["GIT_WORK_TREE"] or _UNKNOWN_TREE  # O(1)
+        elif "GIT_WORK_TREE" in blob:  # O(1)
+            wt = _UNKNOWN_TREE  # O(1)
+        elif "core.worktree" in cfg:  # O(1)
+            wt = cfg["core.worktree"]  # O(1)
+        elif unk:  # O(1)
+            wt = _UNKNOWN_TREE  # O(1)
     if wt is not None:  # O(1)
-        base = wt if wt.startswith("/") or not base else _join(base, wt)  # O(len(wt))
+        if not wt or wt.startswith("~") or "$" in wt or "`" in wt:  # an unknown tree  # O(len(wt))
+            base = _UNKNOWN_TREE  # O(1)
+        else:  # O(1)
+            base = wt if _is_abs(wt) or not base else _join(base, wt)  # O(len(wt))
     if sub not in _GIT_CMDS:  # O(1)
-        if any(k.startswith("alias.") and k[6:] == sub.lower() for k in cfg):  # O(len(cfg))
-            return ["?"]  # an alias from -c: its body is not read here  # O(1)
-        return []  # O(1)
+        al = [v for k, v in cfg.items() if k.startswith("alias.") and k[6:] == sub.lower()]  # O(len(cfg))
+        if al:  # O(1)
+            return _alias(words, i, al[-1], cfg, cwd, env, top, text, cflag)  # O(len(words))
+        return ["?"] if unk else []  # an alias from a config this cannot read  # O(1)
     args = words[i:]  # O(len(words))
     paths: list[str] = []  # O(1)
     ops: list[str] = []  # O(1)
@@ -187,8 +256,8 @@ def _git(words: list[str]) -> list[str]:  # O(len(words))
     def whole() -> list[str]:  # O(1)
         return [root if base else "."]  # O(1)
 
-    if sub in ("apply", "am"):  # O(1)
-        return ["?"]  # O(1)
+    if sub in ("apply", "am"):  # the patch may touch any file below the directory git runs in  # O(1)
+        return whole()  # O(1)
     if sub in _GIT_OUT:  # a command that writes its output to a named file or folder  # O(len(args))
         return _git_out(sub, args, base)  # O(len(args))
     if sub == "stash":  # O(1)
@@ -226,14 +295,14 @@ def _git(words: list[str]) -> list[str]:  # O(len(words))
     elif sub == "mv":  # O(1)
         paths = ops + paths  # O(len(ops))
     elif sub == "clean":  # O(1)
-        paths = ops + paths or ["."]  # O(len(ops))
+        paths = ops + paths or ["./?"]  # O(len(ops)) no path: any file below the directory, its own folder is no target
     else:  # checkout: without --, <tree-ish> <path>..., or one operand that names an existing path  # O(1)
         if _git_flag(args, "f", "force", sub):  # O(len(args))
             return whole()  # O(1)
         if not dd:  # O(1)
             if len(ops) >= 2:  # O(1)
                 paths = ops[1:]  # O(len(ops))
-            if ops and (os.path.exists(_join(base, ops[0])) or any(  # --ours/--theirs/--conflict take only paths
+            if ops and (_exists(cwd, base, ops[0]) or any(  # --ours/--theirs/--conflict take only paths
                     _git_flag([x], "", "ours", sub) or _git_flag([x], "", "theirs", sub)
                     or _git_flag([x], "", "conflict", sub) for x in args)):  # O(len(args))
                 paths.append(ops[0])  # O(1)
@@ -1009,17 +1078,23 @@ def _ps(cmd: str, args: list[str]) -> list[str]:  # O(len(args))
 # ---------------------------------------------------------------- entry point
 
 
-def targets(words: list[str]) -> list[str]:  # O(len(words) * |options|)
-    return _targets(words)  # O(len(words) * |options|)
+def targets(words: list[str], cwd: str | None = None, env=None, top: str | None = None,
+            text: str | None = None) -> list[str]:  # O(len(words) * |options|)
+    """The paths one simple command writes. The optional context only sharpens git: cwd is the directory the shell sits
+    in (an operand of `git checkout` counts as a path when it exists there; None: the process's), env the shell
+    variables in force for the command (GIT_WORK_TREE; a None value is unknown), top the directory a `!` alias runs in
+    (the project root), text the whole command line (a git config or git dir named anywhere makes the config unknown)."""
+    return _targets(words, cwd, env, top, text)  # O(len(words) * |options|)
 
 
-def _targets(words: list[str]) -> list[str]:  # O(len(words) * |options|)
+def _targets(words: list[str], cwd: str | None = None, env=None, top: str | None = None,
+             text: str | None = None) -> list[str]:  # O(len(words) * |options|)
     if not words:  # O(1)
         return []  # O(1)
     cmd = _cmd(words[0])  # O(len(words[0]))
     args = words[1:]  # O(len(words))
     if cmd == "git":  # O(1)
-        return _git(words)  # O(len(words))
+        return _git(words, cwd, env, top, text)  # O(len(words))
     if cmd in _TARS:  # O(1)
         return _tar(args)  # O(len(args))
     if cmd == "unzip":  # O(1)
