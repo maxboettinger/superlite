@@ -20,6 +20,7 @@ resolved against each possible directory, then judged by the path policy.
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
+import stat  # O(1)
 import sys  # O(1)
 import time  # O(1)
 from dataclasses import dataclass  # O(1)
@@ -213,6 +214,14 @@ def _isdir(p, base):  # O(1) | is p an existing folder from base?
         return False  # O(1)
 
 
+def _hardlinked(real):  # O(1) | an existing regular file with more than one name
+    try:  # O(1)
+        st = os.stat(real)  # O(1)
+    except (OSError, ValueError):  # O(1)
+        return False  # O(1)
+    return stat.S_ISREG(st.st_mode) and st.st_nlink > 1  # O(1)
+
+
 def _judge_path(path, base, ctx, name=None):  # O(p + depth) | the policy's verdict for one path from directory base
     p = _winpath(path)  # O(p)
     if p == "" or p.startswith("/dev/"):  # O(1)
@@ -265,6 +274,8 @@ def _judge_path(path, base, ctx, name=None):  # O(p + depth) | the policy's verd
         return Verdict(".", absolute, ctx.kind) if ctx.enforce else None  # O(1)
     if rel.lower() in PROTECTED:  # O(p)
         return Verdict(rel, absolute, "protected")  # O(1)
+    if ctx.enforce and _hardlinked(real):  # a second name for a file that may be code: a write here writes there | O(1)
+        return Verdict(rel, absolute, ctx.kind)  # O(1)
     wt = _wt_rel(rel, ctx.projreal) if (ctx.enforce or rel.lower().endswith(NAMES)) else None  # O(depth)
     if wt is not None and wt.lower() in PROTECTED:  # also inside a linked worktree | O(p)
         return Verdict(rel, absolute, "protected")  # O(1)
@@ -541,9 +552,17 @@ def _walk_docs(docs, c, st, ctx, depth, shared=False):  # O(sum of docs) | judge
     return None  # O(1)
 
 
-def _is_sl(words):  # O(w) | an sl call: judged by what it does, not by its path
+def _is_sl(words):  # O(w) | an sl call: `$SL`, or a script that really lies in this scripts folder (a name alone proves nothing)
     def slish(w):  # O(p)
-        return w in ("$SL", "${SL}") or "subagent-driven-development/scripts/" in w  # O(p)
+        if w in ("$SL", "${SL}"):  # O(1)
+            return True  # O(1)
+        if not w.startswith("/"):  # a relative path depends on the shell's directory: not trusted | O(1)
+            return False  # O(1)
+        try:  # O(1)
+            real = os.path.realpath(w)  # O(p) syscalls
+        except ValueError:  # O(1)
+            return False  # O(1)
+        return real.startswith(os.path.realpath(_HERE).rstrip("/") + "/")  # O(p)
     if not words:  # O(1)
         return False  # O(1)
     if slish(words[0]):  # O(1)
@@ -798,7 +817,7 @@ def _link_hit(src, dests, inn, st, ctx):  # O(d * p) | protected verdict when a 
             for lit in (a, a.rstrip("/") + "/orchestrator.json"):  # the source, or a folder that holds the run file | O(1)
                 for base in inn:  # O(d)
                     v = _judge_path(lit, base, ctx)  # O(p + depth)
-                    if v is not None and v.kind == "protected":  # O(1)
+                    if v is not None and (v.kind == "protected" or (lit == a and os.path.isfile(v.abs))):  # an existing code file: a hard link to it is a second way to write it | O(1)
                         return v  # O(1)
     return None  # O(1)
 
