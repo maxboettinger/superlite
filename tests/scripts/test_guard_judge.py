@@ -25,7 +25,7 @@ def _fake_files(words):  # one operand per path, like the real cp/mv/rm/tee/touc
     return ops
 
 
-def _fake_tools(words):  # Python open(..., 'w') with a literal target; a non-literal target is "?"
+def _fake_tools(words, **_ctx):  # Python open(..., 'w') with a literal target; a non-literal target is "?"
     if words[0] != "python3" or "-c" not in words:
         return []
     code = words[words.index("-c") + 1]
@@ -187,9 +187,57 @@ def test_unknown_targets(P):
     passes("rm \"$X\"", P, "idle")
     assert blocked("rm \"$X\"; cat .superlite/orchestrator.json", P, "idle").rel == "?"
     passes(f"X={P}/docs/plans/a.md; rm \"$X\"", P)
-    passes("rm ~/x; rm $HOME/y", P)
+    passes("rm ~/x", P)
+    blocked('rm "$HOME/x y"', P)  # parity (test_guard_targets): $HOME is not resolved
     passes("rm $CLAUDE_PROJECT_DIR/.superlite/x ${CLAUDE_PROJECT_DIR}/docs/plans/y".replace("$CLAUDE_PROJECT_DIR", P).replace("${CLAUDE_PROJECT_DIR}", P), P)
     assert blocked("rm $CLAUDE_PROJECT_DIR/src/a ${X}", P).rel in ("?", "src/a")
+
+
+def test_parity_walker_fixes(P, tmp_path):
+    """T5 parity: the old guard's cd, loop, script and stdin rules, as the existing suites pin them."""
+    out = str(tmp_path / "out")
+    sl = f"{P}/.superlite"
+    passes(f"echo a; mkdir -p {sl}/a/b && cd {sl}/a && echo x > F.md; echo y > G.md", P)  # mkdir -p makes each parent
+    for cmd, cwd in (
+        (f"{{ false; }} && cd {sl}; echo x > a.py", None),
+        ("echo a > .superlite/n; mkdir -p .superlite/n && cd .superlite/n; echo y > a.py", None),
+        (f"export CDPATH={P}/src; mkdir -p docs/plans/x && cd docs/plans/x && echo x > a.py", None),
+        (f"! cd {sl}/nope && echo x > src/a.py", None),
+        (f"for i in 1 2; do echo x > a.py; cd {P}/src; done", out),
+        (f"f(){{ echo x > a.py; }}; cd {P}/src; f", sl),
+        (f"cd {out} && cd .. && rm src/a.py", out),
+        (f"cd {out} && cd - && rm src/a.py", out),
+        (f"cd {out} && python3 -c \"import os; os.chdir('{P}'); open('src/a.py','w')\"", None),
+        ("X=a.py; X=docs/plans/p.md; rm \"$X\"", None),
+        (f"cat > {out}/x.py <<'EOF'\nimport sys\nopen(sys.argv[1],'w')\nEOF\npython3 {out}/x.py src/a.py", None),
+        ("bash -c 'cd /tmp; echo x > docs/plans/a.md'", None),
+        ("bash -c 'source /dev/stdin' <<'EOF'\nrm src/a.py\nEOF", None),
+        ("bash -euo pipefail <<'EOF'\nrm src/a.py\nEOF", None),
+        (f"cd {P}/docs/plans && ls; c''d {P}/src; cd {P}/docs/plans; rm a.md", None),
+    ):
+        blocked(cmd, P, cwd=cwd)
+    passes(f"cat > {out}/x.py <<'EOF'\nimport sys\nopen(sys.argv[1],'w')\nEOF\npython3 {out}/x.py docs/plans/x.md", P)
+    passes("cat <<'EOF' | sh\necho hi\nEOF", P)
+    passes(f"cd {P}; source .venv/bin/activate; echo x > .superlite/out.json", P)
+    assert blocked("python3 -c \"p=input(); open(p,'w')\" # orchestrator.json", P).kind == "protected"
+    assert blocked("ls | cat; cd nope; printf x > human-replies.jsonl", P, "idle").kind == "protected"
+    nox = Path(sl) / "nox"
+    nox.mkdir()
+    nox.chmod(0o600)
+    try:
+        blocked(f"cd {nox}; echo a; cd {nox}; echo x > a.py", P)
+    finally:
+        nox.chmod(0o700)
+
+
+def test_partial_targets(P, tmp_path, monkeypatch):
+    """A target with an unknown part ("?" component): outside passes unless the folder holds the project."""
+    monkeypatch.setattr(guard_tools, "targets", lambda w, **_: [w[-1]] if w[0] == "python3" else [])
+    passes("python3 /tmp/s/?", P)
+    blocked(f"python3 {tmp_path}/?", P)  # tmp_path holds the project
+    blocked("python3 src/?", P)
+    passes("python3 .superlite/?", P)
+    blocked("python3 ?/orchestrator.json", P, "idle")
 
 
 def test_main_cli(P, tmp_path, monkeypatch, capsys):
@@ -207,7 +255,7 @@ def test_main_cli(P, tmp_path, monkeypatch, capsys):
     code, out, err = run(hook)
     assert code == 2 and out == ""
     assert "must not write project code" in err and "fixer-sonnet" in err
-    assert err.splitlines()[-1] == f"Blocked target: src/a ({P}/src/a)"
+    assert err.splitlines()[-2:] == [f"Absolute target: {P}/src/a", "Blocked target: src/a"]
     rows = [json.loads(line) for line in (sd / "incidents.jsonl").read_text().splitlines()]
     assert len(rows) == 1 and rows[0]["kind"] == "rule-block" and rows[0]["agent"] == "coordinator"
     assert rows[0]["tool"] == "Bash" and rows[0]["target"] == "src/a"
