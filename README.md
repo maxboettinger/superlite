@@ -59,6 +59,7 @@ And it is not tied to one language. A TypeScript site generator went from spec t
 | **Debug** | "This test fails on leap days: find the root cause and fix it" | `systematic-debugging` finds the cause first; fixes go to fix-only agents by tier, each leaving a note, and escalate after two failed rounds |
 | **A small change** | "Rename `build` to `render` everywhere" | Small work stays inline, with a reviewer always |
 | **Review and harden** | "Review this branch and fix what you find" | Package reviewers fix their own findings; the final reviewer reports findings with tiers and never edits |
+| **Many real sessions across accounts** | `sl fleet on`, then build as usual | Implementers run as Claude Code sessions in Herdr panes, one account per worker (docs/fleet.md) |
 | **You approve first** | "Build X. I will approve the plan" | A human orchestrator: you get a plain-language review plan with diagrams; nothing runs until you say yes |
 | **Hands off** | "Build X. I am away, decide yourself" | The AI orchestrator plans, lints, dispatches and rules on open choices without stopping |
 | **Ship it** | "We are done: finish the branch" | Verification first, then merge or PR options. It never pushes without you |

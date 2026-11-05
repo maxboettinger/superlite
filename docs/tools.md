@@ -34,6 +34,11 @@ Mechanical steps are scripts, not agents. Every tool runs as `<skill-dir>/script
 | `graphify_gate` | Gates Graphify for search in non-trivial codebases |
 | `finish` | Collects the finish summary (rulings, commits or checkpoints, test counts, open incidents); without `--ledger`/`--log` it reads the session's bound run folder, like the pool; with open incidents it prints the `incident resolve` form |
 | `orchestrator` | Human or AI gate: `set`, `approve --review`, `status`, `bind` (bind this session to a `.superlite`), `end` (archive the run markers and gate files into `.superlite/runs/<time>/`) |
+| `fleet` | Herdr fleet mode CLI: `on [--accounts a,b]`, `off`, `status`, `spawn --tier T`, `stop [Wn...] [--all]`; `send`, `keys` and `wait` are handled by `fleet_io` (see `docs/fleet.md`) |
+| `fleet_io` | Fleet task message, `send Wn Tn [Tm ...] [--text TEXT]`, `keys Wn KEY...`, `wait [--timeout MS] [Wn...]` (prints `Wn Tn STATUS report`, `BLOCKED-UI`, `TIMEOUT`), and report extraction |
+| `fleet_state` | The run's `.superlite/fleet.json`: on/off, worker ids and states (library, no CLI) |
+| `accounts` | Account choice for fleet workers from `claude-profile usage --json` and `list --json` (library) |
+| `herdr_client` | One subprocess wrapper over the `herdr` CLI, JSON in and out (library) |
 | `state` | `where`: which `.superlite` this session uses (`SUPERLITE_STATE_DIR`, the session's binding, else `./.superlite`; a plan resolves at its git toplevel) |
 
 `_pyrun.py` is a shared helper, not a tool. Probes live in `probes/` with the probe pack in `probes/pack/`.
