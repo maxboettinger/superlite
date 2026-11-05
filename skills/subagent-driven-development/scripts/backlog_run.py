@@ -159,6 +159,19 @@ def _park(p, sd, repo, b, reason, out):  # O(size)
     out.append(f"{bid} parked: {reason}")  # O(1)
 
 
+def _shipped(p, sd, root, b, wt) -> list:  # O(size)
+    bid = b["id"]
+    bs.update(p, lambda d: bs.batch(d, bid).__setitem__("state", "shipped"))  # O(size)
+    _stop(sd, b["lead"])  # O(w)
+    pr = f" PR #{b['pr']}" if b.get("pr") else ""
+    ver = f" {b['version']}" if b.get("version") else ""
+    out = [f"{bid} shipped{pr}{ver} summary={sd / 'backlog' / (bid + '.md')}"]
+    rc, msg = _run(["maxapp", "ship", "-C", str(wt)], root)  # O(cmd)
+    if rc:  # O(1)
+        out.append(f"{bid} cleanup: {(msg.splitlines() or ['failed'])[-1][:120]}")  # O(len)
+    return out
+
+
 def _round(root, sd, p, states) -> list:
     import fleet_io
     import fleet
@@ -174,6 +187,9 @@ def _round(root, sd, p, states) -> list:
                 except fleet.hc.HerdrError:  # O(1)
                     states["v"] = False  # O(1)
             if states["v"] is not False and b.get("agent") not in states["v"]:  # O(1)
+                if b.get("merged"):  # PR is merged: the lead's pane ending is the normal end
+                    out.extend(_shipped(p, sd, root, b, wt))  # O(size)
+                    continue  # O(1)
                 _park(p, sd, data.get("repo", ""), b, "lead pane gone", out)  # O(size)
             continue  # O(1)
         q = wt / ".superlite" / "question.json"  # O(1)
@@ -193,14 +209,7 @@ def _round(root, sd, p, states) -> list:
                 out.append(f"{bid} needs_decision question={q}")  # O(1)
             continue  # O(1)
         if b.get("merged"):  # O(1)
-            bs.update(p, lambda d, bid=bid: bs.batch(d, bid).__setitem__("state", "shipped"))  # O(size)
-            _stop(sd, b["lead"])  # O(w)
-            pr = f" PR #{b['pr']}" if b.get("pr") else ""  # O(1)
-            ver = f" {b['version']}" if b.get("version") else ""  # O(1)
-            out.append(f"{bid} shipped{pr}{ver} summary={sd / 'backlog' / (bid + '.md')}")  # O(1)
-            rc, msg = _run(["maxapp", "ship", "-C", str(wt)], root)  # O(cmd)
-            if rc:  # O(1)
-                out.append(f"{bid} cleanup: {(msg.splitlines() or ['failed'])[-1][:120]}")  # O(len)
+            out.extend(_shipped(p, sd, root, b, wt))  # O(size)
             continue  # O(1)
         last = " ".join(str(rec.get("last") or "lead stopped").split())[:120]  # O(len)
         _park(p, sd, data.get("repo", ""), b, last, out)  # O(size)
