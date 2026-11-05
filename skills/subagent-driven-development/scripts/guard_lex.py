@@ -29,6 +29,17 @@ _FD = re.compile(r"\d+|\{[A-Za-z_][A-Za-z0-9_]*\}")  # an fd number or {name} gl
 _ANSI = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v",
          "\\": "\\", "'": "'", '"': '"', "?": "?"}  # `$'...'` single-character escapes | O(1)
 _HEX = "0123456789abcdefABCDEF"  # O(1)
+_CONTROL = {"if", "then", "elif", "else", "do", "while", "until", "!", "time", "coproc"}  # words before a command word | O(1)
+_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")  # a leading `NAME=value` word | O(1)
+
+
+def _lead(words: list[str]) -> list[str]:  # O(prefix + 3)
+    """The first words left after the control words and `NAME=value` assignments that may precede a command word
+    (at most three: enough to see `function NAME`)."""
+    k = 0  # O(1)
+    while k < len(words) and (words[k] in _CONTROL or _ASSIGN.match(words[k])):  # O(prefix)
+        k += 1  # O(1)
+    return words[k:k + 3]  # O(1)
 
 
 def _empty(seg: Segment) -> bool:  # O(1)
@@ -45,6 +56,7 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
         self.n = len(text)  # O(1)
         self.i = 0  # O(1)
         self.depth = 0  # O(1)
+        self.glob = False  # the last word read has an unquoted `*`, `?` or `[` | O(1)
         self.close_at = 0  # index of the `)` that ended the last nested parse (n when none) | O(1)
 
     # ---- words -------------------------------------------------------------------------------------------------
@@ -72,14 +84,25 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
         bodies.append(self.s[i:end])  # O(n)
         return self.s[i - 2:end + 1], min(end + 1, self.n), end >= self.n  # O(n)
 
-    def _brace(self, i: int, bodies: list[str]) -> tuple[str, int, bool]:  # O(n)
-        """`i` is after `${`: (original text through the matching `}`, index after it, unterminated)."""
+    def _brace(self, i: int, bodies: list[str], in_dq: bool = False) -> tuple[str, int, bool]:  # O(n)
+        """`i` is after `${`: (original text through the matching `}`, index after it, unterminated). In double
+        quotes a `'` is a plain character. Nesting through quotes counts toward MAX_DEPTH."""
+        if self.depth >= MAX_DEPTH:  # too deep to lex: the rest stays visible to the caller as one body | O(1)
+            bodies.append(self.s[i:])  # O(n)
+            return self.s[i - 2:], self.n, True  # O(n)
+        self.depth += 1  # O(1)
+        try:  # O(n)
+            return self._brace_scan(i, bodies, in_dq)  # O(n)
+        finally:  # O(1)
+            self.depth -= 1  # O(1)
+
+    def _brace_scan(self, i: int, bodies: list[str], in_dq: bool) -> tuple[str, int, bool]:  # O(n)
         s, n, j, depth = self.s, self.n, i, 1  # O(1)
         while j < n:  # O(n)
             c = s[j]  # O(1)
             if c == "\\":  # O(1)
                 j += 2  # O(1)
-            elif c == "'":  # O(1)
+            elif c == "'" and not in_dq:  # O(1)
                 k = s.find("'", j + 1)  # O(n)
                 j = n if k < 0 else k + 1  # O(1)
             elif c == '"':  # O(1)
@@ -109,7 +132,7 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
             parts.append(text)  # O(1)
             return j, True, bad  # O(1)
         if nx == "{":  # O(1)
-            text, j, bad = self._brace(i + 2, bodies)  # O(n)
+            text, j, bad = self._brace(i + 2, bodies, in_dq)  # O(n)
             parts.append(text)  # O(1)
             return j, True, bad  # O(1)
         if nx and (nx in _NAME0 or nx in _SPECIAL or nx == "["):  # O(1)
@@ -222,6 +245,7 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
         s, n = self.s, self.n  # O(1)
         parts: list[str] = []  # O(1)
         dyn = quoted = False  # O(1)
+        unq: list[str] = []  # the unquoted literal characters, for brace expansion and globs | O(1)
         while self.i < n:  # O(n)
             i = self.i  # O(1)
             c = s[i]  # O(1)
@@ -265,7 +289,12 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
                 dyn = True  # O(1)
             else:  # O(1)
                 parts.append(c)  # O(1)
+                unq.append(c)  # O(1)
                 self.i = i + 1  # O(1)
+        u = "".join(unq)  # O(n)
+        self.glob = any(g in u for g in "*?[")  # O(n)
+        if "{" in u and ("," in u or ".." in u):  # brace expansion `{rm,x}` builds words the text does not show | O(1)
+            dyn = True  # O(1)
         return "".join(parts), dyn, quoted  # O(n)
 
     # ---- heredocs ----------------------------------------------------------------------------------------------
@@ -424,8 +453,15 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
                 lastw = (self.i, text, quoted)  # O(1)
                 if closed:  # O(1)
                     finish(";")  # O(1)
-                if not cur.words and not quoted and text in ("{", "}"):  # O(1)
-                    continue  # `{ ...; }` is flattened | O(1)
+                lead = _lead(cur.words) if self.glob or text == "{" else ["-"]  # O(prefix)
+                if self.glob and not lead:  # a glob in command position can name any program | O(1)
+                    dyn = True  # O(1)
+                if not quoted and text == "{" and (not lead or lead[0] == "function" and len(lead) == 2):  # O(1)
+                    if lead:  # `function f {`: the definition ends here, its body is the next segment | O(1)
+                        finish(";")  # O(1)
+                    continue  # `{ ...; }` is flattened, also after `then`, `time`, `!` | O(1)
+                if not cur.words and not quoted and text == "}":  # O(1)
+                    continue  # O(1)
                 cur.words.append(text)  # O(1)
                 cur.dyn.append(dyn)  # O(1)
         if pending:  # a heredoc whose body never started | O(1)

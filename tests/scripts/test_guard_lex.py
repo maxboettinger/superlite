@@ -189,3 +189,25 @@ def test_deep_nesting_does_not_raise():  # O(1)
 
 def test_types_are_shared():  # O(1)
     assert guard_lex.Segment is Segment and guard_lex.Redirect is Redirect  # O(1)
+
+
+def test_single_quote_in_dquoted_brace_is_literal():  # O(1)
+    segs = split("echo \"${a:-'}\"; rm x; echo '}'")
+    assert [s.words[0] for s in segs] == ["echo", "rm", "echo"]
+
+
+def test_function_keyword_and_control_brace_group():  # O(1)
+    assert [s.words for s in split("function f { rm x; }; f")] == [["function", "f"], ["rm", "x"], ["f"]]
+    assert [s.words for s in split("if t; then { rm y; }; fi")] == [["if", "t"], ["then", "rm", "y"], ["fi"]]
+    assert split("time { rm x; }")[0].words == ["time", "rm", "x"]
+
+
+def test_deep_quote_brace_nesting_does_not_raise():  # O(1)
+    segs = split('"${a:-' * 3000)
+    assert segs and any(s.dyn and s.dyn[-1] for s in segs)
+
+
+def test_brace_expansion_and_command_glob_are_dyn():  # O(1)
+    assert split("{rm,x} y")[0].dyn == [True, False]
+    assert split("x=1 /bin/r? y")[0].dyn == [False, True, False]
+    assert split("ls *.py")[0].dyn == [False, False]
