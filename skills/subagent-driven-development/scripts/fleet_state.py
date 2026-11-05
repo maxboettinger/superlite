@@ -2,7 +2,7 @@
 """The run's fleet state, `<run>/.superlite/fleet.json`: on/off, accounts, workspace and workers."""
 
 # Complexity notation:
-# w = workers in the fleet
+# w = workers in the fleet, p = panes of a tab, a = agents herdr lists
 import contextlib  # O(1)
 import fcntl  # O(1)
 import json  # O(1)
@@ -10,6 +10,11 @@ import os  # O(1)
 import re  # O(1)
 import tempfile  # O(1)
 from pathlib import Path  # O(1)
+
+import history  # O(1)
+
+MAX_PANES = 4  # O(1) a tab holds at most this many worker panes
+MIN_ROWS = 20  # O(1) a pane never splits down below this many rows
 
 
 def default():  # O(1)
@@ -130,3 +135,54 @@ def set_workspace(sd, workspace_id, root_pane):  # O(w)
 def workers(sd, state=None):  # O(w)
     ws = load(sd)["workers"]  # O(w)
     return {k: v for k, v in ws.items() if state is None or v.get("state") == state}  # O(w)
+
+
+def place(panes, max_panes=MAX_PANES, min_rows=MIN_ROWS):  # O(p)
+    """Where the next worker pane goes: (direction, pane to split), or ("tab", None) for a new tab.
+
+    One pane splits right; otherwise the tallest pane (the first on a tie) splits down while both halves keep `min_rows`."""
+    if not panes or len(panes) >= max_panes:  # O(1)
+        return "tab", None  # O(1)
+    if len(panes) == 1:  # O(1)
+        return "right", panes[0]["pane_id"]  # O(1)
+    tallest = max(panes, key=lambda x: x["rows"])  # max returns the first of equal rows | O(p)
+    if tallest["rows"] // 2 >= min_rows:  # O(1)
+        return "down", tallest["pane_id"]  # O(1)
+    return "tab", None  # O(1)
+
+
+def _registry():  # O(1)
+    return history.home() / "fleet" / "agents"  # O(1)
+
+
+def register_agent(name, account):  # O(1), atomic; overwritten on reuse, never deleted
+    """Record which account a worker agent runs on, where every superlite session on the machine can read it."""
+    d = _registry()  # O(1)
+    d.mkdir(parents=True, exist_ok=True)  # O(1)
+    fd, tmp = tempfile.mkstemp(dir=str(d), prefix=name + ".", suffix=".tmp")  # O(1)
+    try:  # O(1)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:  # O(1)
+            fh.write(account + "\n")  # O(1)
+        os.replace(tmp, d / name)  # O(1) atomic rename
+    except BaseException:  # O(1)
+        with contextlib.suppress(OSError):  # O(1)
+            os.unlink(tmp)  # O(1)
+        raise  # O(1)
+
+
+def live_by_account(agents, own):  # O(a)
+    """Live fleet workers per account over every session: account -> count.
+
+    Counts the agents herdr lists whose name starts with `sl-`, is not in `own` and has a registered account other than `current`."""
+    out = {}  # O(1)
+    for a in agents:  # O(a)
+        name = a.get("name") or ""  # O(1)
+        if not name.startswith("sl-") or name in own:  # O(1)
+            continue  # O(1)
+        try:  # O(1)
+            account = (_registry() / name).read_text(encoding="utf-8").strip()  # O(1)
+        except OSError:  # O(1)
+            continue  # O(1)
+        if account and account != "current":  # O(1)
+            out[account] = out.get(account, 0) + 1  # O(1)
+    return out  # O(1)

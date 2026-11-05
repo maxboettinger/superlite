@@ -2,7 +2,7 @@
 """Thin wrapper over the herdr CLI: JSON in and out, errors as HerdrError."""
 
 # Complexity notation:
-# n = argument count, e = env vars, k = until states, a = agents listed
+# n = argument count, e = env vars, k = until states, a = agents listed, p = panes of a tab
 import json  # O(1)
 import os  # O(1)
 import subprocess  # O(1)
@@ -80,6 +80,19 @@ def create_workspace(label, cwd, env_vars):  # O(e)
     return _pick(r, "workspace", "workspace_id"), _pick(r, "root_pane", "pane_id")  # O(1)
 
 
+def create_tab(workspace_id, cwd, env_vars):  # O(e)
+    r = call(["tab", "create", "--workspace", workspace_id, "--cwd", cwd] + _env_flags(env_vars) + ["--no-focus"])  # O(e)
+    return _pick(r, "tab", "tab_id"), _pick(r, "root_pane", "pane_id")  # O(1)
+
+
+def pane_layout(pane_id):  # O(p)
+    """Panes of the tab holding `pane_id`, as [{"pane_id", "rows", "cols"}] (herdr's `rect` height and width)."""
+    panes = _pick(call(["pane", "layout", "--pane", pane_id]), "layout", "panes")  # O(1)
+    if not isinstance(panes, list):  # O(1)
+        raise HerdrError("parse", "expected result.layout.panes to be a list")  # O(1)
+    return [{"pane_id": _pick(x, "pane_id"), "rows": _pick(x, "rect", "height"), "cols": _pick(x, "rect", "width")} for x in panes]  # O(p)
+
+
 def split_pane(pane_id, direction, cwd, env_vars):  # O(e)
     r = call(["pane", "split", pane_id, "--direction", direction, "--cwd", cwd] + _env_flags(env_vars) + ["--no-focus"])  # O(e)
     return _pick(r, "pane", "pane_id")  # O(1)
@@ -94,9 +107,13 @@ def agent_state(name):  # O(1)
     return _pick(call(["agent", "get", name]), "agent", "agent_status")  # O(1)
 
 
+def agents():  # O(a)
+    """Every named agent herdr lists (name, agent_status, pane_id, cwd); an agent nobody named has no `name` and is dropped."""
+    return [x for x in _pick(call(["agent", "list"]), "agents") if isinstance(x, dict) and x.get("name")]  # O(a)
+
+
 def agent_states():  # O(a)
-    agents = _pick(call(["agent", "list"]), "agents")  # O(1)
-    return {x["name"]: _pick(x, "agent_status") for x in agents if isinstance(x, dict) and x.get("name")}  # an agent nobody named has no `name` | O(a)
+    return {x["name"]: _pick(x, "agent_status") for x in agents()}  # O(a)
 
 
 def read_screen(name, lines=40, source="visible"):  # O(lines)

@@ -2,7 +2,7 @@
 """Account choice for fleet workers from `claude-profile usage --json` and `list --json`."""
 
 # Complexity notation:
-# a = accounts in the usage report, l = limits per account
+# a = accounts in the usage report, l = limits per account, e = entries of the allowed list
 import json  # O(1)
 import os  # O(1)
 import subprocess  # O(1)
@@ -76,15 +76,18 @@ def _skip(a, tier=None):  # O(l)
     return None  # O(1)
 
 
-def pick_account(usage, allowed, running=None, tier=None):  # O(a*l)
-    """Best usable account of `allowed`: fewest live workers (`running`: account -> count), then lowest weekly_all, then lowest n."""
+def pick_account(usage, allowed, running=None, tier=None, alias=None):  # O(a*l)
+    """Best usable account of `allowed`: fewest live workers (`running`: account -> count), then lowest weekly_all, then lowest n.
+
+    `alias` maps an entry that is not a claude-profile name (`current`, a config dir basename) to the account name it uses."""
     running = running or {}  # O(1)
+    alias = alias or {}  # O(1)
     by = {a.get("name"): a for a in (usage or {}).get("accounts") or []}  # O(a)
     if not by:  # no usage data: spread by worker count alone, the first entry wins a tie | O(a)
         return min(allowed, key=lambda n: running.get(n, 0)) if allowed else None  # O(a)
     best = None  # O(1)
     for name in allowed:  # O(a)
-        a = by.get(name)  # O(1)
+        a = by.get(alias.get(name, name))  # O(1)
         if a is None or _skip(a, tier):  # O(l)
             continue  # O(1)
         key = (running.get(name, 0), _pct(a, "weekly_all"), a.get("n") if isinstance(a.get("n"), int) else 10 ** 9)  # O(l)
@@ -93,11 +96,12 @@ def pick_account(usage, allowed, running=None, tier=None):  # O(a*l)
     return best[1] if best else None  # O(1)
 
 
-def reasons(usage, allowed, tier=None):  # O(a*l)
+def reasons(usage, allowed, tier=None, alias=None):  # O(a*l)
+    alias = alias or {}  # O(1)
     by = {a.get("name"): a for a in (usage or {}).get("accounts") or []}  # O(a)
     out = []  # O(1)
     for name in allowed:  # O(a)
-        a = by.get(name)  # O(1)
+        a = by.get(alias.get(name, name))  # O(1)
         if a is None:  # O(1)
             out.append("%s: not in usage" % name)  # O(1)
             continue  # O(1)
@@ -138,3 +142,22 @@ def account_dir(listing, name, env=None):  # O(a)
         if a.get("name") == name:  # O(1)
             return a.get("dir") or None  # `claude-profile list --json` schema 1 names the config dir `dir` | O(1)
     return None  # O(1)
+
+
+def _norm(path):  # O(len path)
+    return os.path.normpath(os.path.expanduser(path))  # O(len path)
+
+
+def aliases(listing, entries, env=None):  # O(a*e)
+    """Entry -> claude-profile account name, for the entries that name a config dir: `current` and path entries.
+
+    Keyed by `entry_name`; an entry whose dir no listed account owns (or a name entry) gets no alias."""
+    dirs = {_norm(x["dir"]): x.get("name") for x in (listing or {}).get("accounts") or [] if x.get("dir") and x.get("name")}  # O(a)
+    out = {}  # O(1)
+    for entry in entries:  # O(e)
+        if entry != "current" and not is_path(entry):  # O(1)
+            continue  # O(1)
+        d = account_dir(listing, entry, env)  # O(a)
+        if d and _norm(d) in dirs:  # O(len d)
+            out[entry_name(entry)] = dirs[_norm(d)]  # O(1)
+    return out  # O(e)

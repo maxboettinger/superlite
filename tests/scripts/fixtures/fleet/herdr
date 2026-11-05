@@ -31,6 +31,12 @@ if reply is not None:
 key = " ".join(a[:2])
 if key == "workspace create":
     out = {"id": "x", "result": {"type": "workspace_created", "workspace": {"workspace_id": "w6"}, "root_pane": {"pane_id": "w6:p1"}}}
+elif key == "tab create":
+    out = {"result": {"type": "tab_created", "tab": {"tab_id": "w6:t2", "workspace_id": "w6"}, "root_pane": {"pane_id": "w6:p5"}}}
+elif key == "pane layout":
+    out = {"result": {"type": "pane_layout", "layout": {"area": {"height": 64, "width": 147, "x": 0, "y": 0}, "panes": [
+        {"pane_id": "w6:p1", "focused": False, "rect": {"height": 64, "width": 73, "x": 0, "y": 0}},
+        {"pane_id": "w6:p2", "focused": False, "rect": {"height": 64, "width": 73, "x": 74, "y": 0}}], "splits": [], "tab_id": "w6:t1", "workspace_id": "w6", "zoomed": False}}}
 elif key == "pane split":
     out = {"result": {"pane": {"pane_id": "w6:p2"}}}
 elif key == "agent start" and not NAME.fullmatch(a[2]):
@@ -41,7 +47,7 @@ elif key == "agent start":
 elif key == "agent get":
     out = {"result": {"agent": {"agent_status": "idle", "name": a[2]}}}
 elif key == "agent list":
-    out = {"result": {"agents": [{"agent_status": "working", "pane_id": "w5:p1"}, {"name": "sl-proj-w1", "agent_status": "done", "pane_id": "w6:p1"}, {"name": "sl-proj-w2", "agent_status": "working", "pane_id": "w6:p2"}]}}
+    out = {"result": {"agents": [{"agent_status": "working", "pane_id": "w5:p1"}, {"name": "sl-proj-w1", "agent_status": "done", "pane_id": "w6:p1", "cwd": "/u/proj"}, {"name": "sl-proj-w2", "agent_status": "working", "pane_id": "w6:p2", "cwd": "/u/proj"}]}}
 elif key == "agent read":
     print("line one\nline two\nYes, I trust this folder\nREADY")
     sys.exit(0)
