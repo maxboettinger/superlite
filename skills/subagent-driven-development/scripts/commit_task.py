@@ -4,13 +4,14 @@
     commit_task.py Tn [Tm ...] [--plan P] [--ledger .superlite/progress.md]
                       [--log .superlite/incidents.jsonl] [--allow-other-tasks]
                       [--also FILE ... --ruling TEXT]
-                      [--dispatch [--pool .superlite/pool.json] [--running T3] [--cap 10]]
+                      [--dispatch [--pool .superlite/pool.json] [--running T3] [--cap 10] [--batch N]]
 
 Several ids commit in order in one process (one plan parse, one exclude check). Output:
 the SHA for one task; `Tn <sha>` or `Tn FAILED` per task for several. Each committed
 task's agent in the pool (`current: Tn`) gets `current` cleared, `busy: false`, and Tn in
 its `tasks`. `--dispatch` then prints `next:` and the `dispatch` lines (ready tasks and
-agents) for the updated ledger; a dispatch failure only warns, the commits stand.
+agents) for the updated ledger, with the run's batch setting (`--batch`, else the plan's experiment claim, as
+`dispatch` does); a dispatch failure only warns, the commits stand.
 
 `--also FILE` (several tasks: the first gets the files; needs `--ruling TEXT`) commits FILE with that task though
 another task owns it or nobody does, and writes `- Ruling: Tn also commits FILE - TEXT` to
@@ -596,6 +597,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     ap.add_argument("--pool", default=state.pool_path(), help="pool for --dispatch")  # the session's run, else ./.superlite | O(d)
     ap.add_argument("--running", help="running tasks for --dispatch (default: from the pool)")  # O(1)
     ap.add_argument("--cap", type=int, default=10, help="cap for --dispatch")  # O(1)
+    ap.add_argument("--batch", type=int, help="batch for --dispatch (1 = one task per agent); default: the plan's experiment claim")  # O(1)
     ap.add_argument("--also", action="extend", nargs="+", default=[], metavar="FILE",  # O(1)
                     help="commit FILE with the one named task even if another task owns it or nobody does")  # O(1)
     ap.add_argument("--claim", action="extend", nargs="+", default=[], metavar="FILE",  # O(1)
@@ -676,7 +678,11 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
         print("next:")  # O(1)
         try:  # the commits stand whatever happens here | O(1)
             import dispatch  # O(1) lazy: dispatch imports this module
-            dispatch.render(*dispatch.run(a.plan, a.pool, a.ledger, None, a.running, a.cap))  # see dispatch.run
+            batch = a.batch  # O(1)
+            if batch is None:  # the run claimed an experiment (`sl experiment`, #53): its batch, as dispatch.main reads it | O(f)
+                import experiment  # O(1)
+                batch = (experiment.for_plan(a.plan, Path(a.pool).parent) or {}).get("batch")  # O(f)
+            dispatch.render(*dispatch.run(a.plan, a.pool, a.ledger, None, a.running, a.cap, batch=batch))  # see dispatch.run
         except (SystemExit, Exception) as e:  # O(1)
             print(f"warning: dispatch failed ({e}); run `dispatch` after fixing it", file=sys.stderr)  # O(1)
     return worst  # O(1)
