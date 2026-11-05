@@ -152,7 +152,7 @@ def test_packet_lists_moved_files_once(ff_shared, pt_review, monkeypatch):
     monkeypatch.setattr(pt_review.subprocess, "run", spy)
     assert pt_review.main(["packet", "--plan", "plan.md", "--root", str(repo), "--base", "HEAD",
                            "--wait-timeout", "0"]) == 0
-    assert sum(c[-4:] == ["diff", "--name-only", start, "HEAD"] for c in calls) == 1
+    assert sum(c[-5:] == ["diff", "--name-only", "-z", start, "HEAD"] for c in calls) == 1
 
 
 def fast_forward(repo, tmp_path, files):
@@ -211,6 +211,25 @@ def test_ff_merged_file_checkpointed_before_merge(tmp_path, pt_review):
     assert not any(ln.startswith("-") and not ln.startswith("---") for ln in lines)
     packet = packet_for(repo, new)
     assert "+MERGED = 1" not in packet
+
+
+def test_ff_non_ascii_file_checkpointed_before_merge(tmp_path, pt_review):
+    """#158: a path git quotes in numstat (non-ASCII, space) still picks the run range for a merged file."""
+    repo = make_repo(tmp_path)
+    name = "docs/\u00e4 b.md"
+    write(repo, name, "def lex(t):\n    return list(t)\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "b")
+    write(repo, name, "def lex(t):\n    return list(t)\n\n\nRUN_LINE = 2\n")
+    assert checkpoint(repo, "T4").returncode == 0
+    git(repo, "checkout", "-q", "--", name)
+    fast_forward(repo, tmp_path, {name: "MERGED = 1\n\n\ndef lex(t):\n    return list(t)\n"})
+    new = git(repo, "rev-parse", "HEAD")
+    changed, diffs = pt_review.changed_diffs(repo, new, [])
+    assert changed == [name]
+    lines = dict(diffs)[name]
+    assert "+RUN_LINE = 2" in lines and "+MERGED = 1" not in lines
+    assert not any(ln.startswith("-") and not ln.startswith("---") for ln in lines)
 
 
 def test_ff_explicit_sha_base(ff_repo, pt_review):

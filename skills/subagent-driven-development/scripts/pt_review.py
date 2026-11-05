@@ -1670,11 +1670,11 @@ def moved_files(root: Path) -> set[str]:  # O(F) + 1 git subprocess
     if not start:  # O(1)
         return set()  # O(1)
     try:  # O(1)
-        r = subprocess.run(["git", "-C", str(root), "diff", "--name-only", start, "HEAD"],  # O(F) + git spawn
+        r = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "-z", start, "HEAD"],  # O(F) + git spawn
                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
     except (OSError, subprocess.TimeoutExpired):  # O(1)
         return set()  # O(1)
-    return {ln.strip() for ln in r.stdout.splitlines() if ln.strip()} if r.returncode == 0 else set()  # O(F)
+    return {ln for ln in r.stdout.split("\0") if ln} if r.returncode == 0 else set()  # -z: git quotes no path | O(F)
 
 
 def diff_range(root: Path, base: str) -> list[str]:  # O(file size) total
@@ -1720,15 +1720,16 @@ def run_ranges(root: Path, base: str | None) -> RunRanges | None:  # O(F + file 
 def _churn(root: Path, args: list[str], files: set[str]) -> dict[str, int]:  # O(F) + 1 git spawn
     """{path: added + deleted lines} of `git diff args` over files; a path git reports otherwise is missing."""  # O(1)
     try:  # O(1)
-        r = subprocess.run(["git", "-C", str(root), "diff", "--numstat", *args, "--", *sorted(files)],  # O(F) + git spawn
+        r = subprocess.run(["git", "-C", str(root), "diff", "--numstat", "--no-renames", "-z", *args, "--", *sorted(files)],  # O(F) + git spawn
                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
     except (OSError, subprocess.TimeoutExpired):  # O(1)
         return {}  # O(1)
     out: dict[str, int] = {}  # O(1)
-    for ln in r.stdout.splitlines() if r.returncode == 0 else []:  # O(F) iterations
-        a, _, rest = ln.partition("\t")  # O(len)
+    for ln in r.stdout.split("\0") if r.returncode == 0 else []:  # one record per path, no quoting | O(F) iterations
+        a, _, rest = ln.lstrip("\n").partition("\t")  # O(len)
         d, _, path = rest.partition("\t")  # O(len)
-        out[path] = (int(a) + int(d)) if a.isdigit() and d.isdigit() else 1 << 30  # binary: never the smaller side | O(1)
+        if path:  # O(1)
+            out[path] = (int(a) + int(d)) if a.isdigit() and d.isdigit() else 1 << 30  # binary: never the smaller side | O(1)
     return out  # O(1)
 
 
@@ -1885,12 +1886,12 @@ def changed_diffs(root: Path, base: str | None, files: list[str], ranges: RunRan
         return None  # O(1)
     changed: list[str] = []  # O(1)
     try:  # O(1)
-        nm = subprocess.run(["git", "-C", str(root), "diff", "--name-only", *rr.rng],  # O(X) + git spawn
+        nm = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "-z", *rr.rng],  # O(X) + git spawn
                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)  # O(1)
-        changed = nm.stdout.split("\n") if nm.returncode == 0 else []  # O(X)
+        changed = nm.stdout.split("\0") if nm.returncode == 0 else []  # -z: git quotes no path | O(X)
     except (OSError, subprocess.TimeoutExpired):  # O(1)
         pass  # O(1)
-    changed = [c.strip() for c in changed if c.strip()]  # O(F)
+    changed = [c for c in changed if c]  # O(F)
     fresh = [f for f in extra if f not in changed]  # untracked files of an inline build, as added hunks (#130) | O(E*F)
     changed += fresh  # O(E)
     diffs: list[tuple[str, list[str]]] = []  # O(1)
