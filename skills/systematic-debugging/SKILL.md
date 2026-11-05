@@ -7,6 +7,8 @@ description: Use when encountering any bug, test failure, or unexpected behavior
 
 Find the root cause before fixing. A fix without a known cause is a guess, and guesses create new bugs. Do not stack several changes at once.
 
+In `/superlite:debug` without a plan you make the fix yourself; fix-only agents run only inside a plan run (`subagent-driven-development/fixing.md`).
+
 ## Obvious failures: fix directly
 
 A typo, a missing import, a clear stack trace pointing at the faulty line, a failing assertion whose cause is plain on reading the code. Fix it, re-run the focused test, move on. No ceremony.
