@@ -3,6 +3,7 @@
 
     run_tests.py [--fast PATHS... | --full] [--log PATH] [--ledger PATH]
                  [--summary PATH] [--background]
+    run_tests.py --record --passed N --command CMD   (a full result run outside run_tests; report only, closes no incidents)
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
 Prints `passed failed skipped seconds` (errors count as failed). Each failing
@@ -313,6 +314,9 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--timeout", type=float, default=None, help=f"--wait limit in seconds (default {DEFAULT_WAIT:.0f})")  # O(1)
     ap.add_argument("--task", default=None, help="task id: compiled stacks run in .superlite/trees/<task> (own files only)")  # O(1)
     ap.add_argument("--plan", default=None, help=f"plan for --task Owns (default: the plan in .superlite/stable.json, else {nt.DEFAULT_PLAN})")  # O(1)
+    ap.add_argument("--record", action="store_true", help="record a result run outside run_tests (needs --passed and --command), no test run")  # O(1)
+    ap.add_argument("--passed", type=int, default=None, help="--record: tests that passed")  # O(1)
+    ap.add_argument("--command", default=None, help="--record: the command that ran them")  # O(1)
     ap.add_argument("--run-id", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
@@ -322,6 +326,8 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     root = project_root(cwd) if a.wait_path is None else None  # --wait paths are absolute | O(d)
     if root is not None and root != cwd:  # O(1)
         to_root(a, argv, cwd, root)  # O(len argv + p)
+    if a.record:  # O(1)
+        return record_run(a)  # O(1)
     if a.wait_path is not None:  # O(1)
         return wait_background(a)  # O(timeout / POLL_SECONDS)
     if a.background:  # O(1)
@@ -337,6 +343,21 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                 publish_summary(a)  # O(summary size)
             raise  # O(1)
     return run(a)  # see run
+
+
+def record_run(a):  # a full result the agent ran outside run_tests: reports only, closes no incidents | O(1)
+    for flag, val in (("--passed", a.passed), ("--command", a.command)):  # O(1)
+        if val is None or val == "":  # O(1)
+            print(f"run_tests: --record needs {flag}", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+    write_summary(a.summary, "full", {"passed": a.passed, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, started=a.started)  # O(1)
+    data = json.loads(Path(a.summary).read_text(encoding="utf-8"))  # O(1)
+    data["recorded"] = a.command[:200]  # O(1)
+    atomic_write(a.summary, json.dumps(data, ensure_ascii=False, indent=1) + "\n")  # O(1)
+    pointer_path(a.summary).unlink(missing_ok=True)  # an older background run must not shadow the recorded result | O(1)
+    ct.append_ledger(a.ledger, f"- tests full passed={a.passed} failed=0 skipped=0 seconds=0 recorded")  # O(1)
+    print(f"{a.passed} 0 0 0.0")  # O(1)
+    return 0  # O(1)
 
 
 def root_superlite(s, root, raw=False):  # O(len s) a tree has no .superlite/ (git-ignored): point its word-initial uses at the project root

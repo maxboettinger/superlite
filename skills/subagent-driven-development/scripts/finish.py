@@ -27,7 +27,7 @@ UNBLOCKED = re.compile(r"^\s*[-*+]?\s*unblocked:\s*dispatched\s+((?:[A-Z]{1,3}\d
 RULING = re.compile(r"^\s*(?:[-*+]\s+)?(?:\*\*)?Ruling:(?:\*\*)?\s*(.*?)\s*$")  # O(1)
 COMMIT = re.compile(r"^\s*[-*+]?\s*commit\s+([A-Z]{1,3}\d+[A-Za-z]?)\s+([0-9a-f]{7,40})\s*(.*?)\s*$")  # O(1)
 TESTS = re.compile(r"^\s*[-*+]?\s*tests\s+(\w+)\s+passed=(\d+)\s+failed=(\d+)"  # O(1)
-                   r"\s+skipped=(\d+)\s+seconds=([\d.]+)")  # O(1)
+                   r"\s+skipped=(\d+)\s+seconds=([\d.]+)(\s+recorded)?")  # O(1)
 
 
 def read_ledger(path):  # O(R*w)
@@ -229,7 +229,8 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     out += [f"- {r}" for r in rulings]  # O(G)
     out.append("")  # O(1)
     if tests:  # O(1)
-        mode, p, f, s, sec = tests  # O(1)
+        mode, p, f, s, sec, rec = tests  # O(1)
+        mode = f"{mode}, recorded" if rec else mode  # O(1)
         out.append(f"tests ({mode}): {p} passed, {f} failed, {s} skipped in {sec}s")  # O(1)
     else:  # O(1)
         out.append("tests: none recorded")  # O(1)
