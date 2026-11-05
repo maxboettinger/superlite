@@ -43,6 +43,26 @@
             "shell": "bash"
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/mark-inline-flow\"",
+            "shell": "bash"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/inline-worktree-guard\"",
+            "shell": "bash"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -99,6 +119,11 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/compact-nudge\"",
+            "shell": "bash"
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/mark-inline-flow\"",
             "shell": "bash"
           }
         ]

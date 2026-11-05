@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# UserPromptSubmit and PreToolUse (matcher Skill) hook: marks an inline superlite flow (#148). The marker is
+# <state folder>/inline-flow.json {"flow":"small|debug|tdd|debugging","at":<epoch s>,"inplace":null}, which
+# hooks/inline-worktree-guard reads. Marked by:
+#   - a prompt that STARTS with /superlite:small or /superlite:debug (a new flow: the marker is rewritten, inplace null);
+#   - the Skill superlite:test-driven-development (tdd) or superlite:systematic-debugging (debugging), the implement-phase
+#     skills (brainstorming alone writes nothing); an existing marker is kept, so an `sl worktree inplace` opt-out stays.
+# Only the main session marks: a subagent call (agent_id) and a fleet worker session never do. `sl orchestrator end`
+# and a new session start clear the marker. Bash builtins only on the no-op path. Exit 0 always (fail open).
+
+IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
+
+re_agent='"agent_id"[[:space:]]*:[[:space:]]*"'
+[[ $input =~ $re_agent ]] && exit 0   # subagent call
+[ -n "${SUPERLITE_FLEET_WORKER:-}" ] && exit 0   # fleet worker session
+
+flow=""; keep=0
+re_tool='"tool_name"[[:space:]]*:[[:space:]]*"([A-Za-z]+)"'
+re_skill='"skill"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
+# Leading blanks (a raw space or a JSON \n \r \t), then the command, then a blank or the closing quote.
+re_prompt='"prompt"[[:space:]]*:[[:space:]]*"(\\[nrt]|[[:space:]])*/superlite:(small|debug)(\\[nrt]|[[:space:]]|")'
+if [[ $input =~ $re_tool ]]; then
+  [ "${BASH_REMATCH[1]}" = Skill ] || exit 0
+  [[ $input =~ $re_skill ]] || exit 0
+  case "${BASH_REMATCH[1]}" in
+    superlite:test-driven-development) flow=tdd ;;
+    superlite:systematic-debugging) flow=debugging ;;
+    *) exit 0 ;;
+  esac
+  keep=1
+elif [[ $input =~ $re_prompt ]]; then
+  flow="${BASH_REMATCH[2]}"
+else
+  exit 0
+fi
+
+. "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
+superlite_state || exit 0
+sd="$SL_SD"
+[ -n "$sd" ] || exit 0
+if [ ! -d "$sd" ]; then
+  mkdir -p "$sd" 2>/dev/null || exit 0
+  [ -n "$SL_PROJ" ] && [ "$sd" = "$SL_PROJ/.superlite" ] && _sl_exclude "$SL_PROJ"
+fi
+[ "$keep" = 1 ] && [ -f "$sd/inline-flow.json" ] && exit 0
+printf '{"flow": "%s", "at": %s, "inplace": null}\n' "$flow" "$(date +%s)" > "$sd/inline-flow.json" 2>/dev/null
+exit 0
