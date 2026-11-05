@@ -50,6 +50,7 @@ _sl_worktree_run() {
   [ -n "$c" ] || c="${CLAUDE_PROJECT_DIR:-$PWD}"
   _sl_trim c
   d="$c"
+  case "$d" in /*) ;; *) return 0 ;; esac   # a relative cwd names no ancestor chain
   while :; do
     if [ -e "$d/.git" ]; then
       [ -f "$d/.git" ] || return 0   # a main checkout keeps `.git` as a folder
@@ -59,6 +60,7 @@ _sl_worktree_run() {
       return 0
     fi
     [ -n "$d" ] && [ "$d" != / ] || return 0
+    [ "${d%/*}" != "$d" ] || return 0   # no `/` left to strip
     d="${d%/*}"
   done
 }
