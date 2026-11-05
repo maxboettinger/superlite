@@ -1,10 +1,12 @@
 # Sourced by the hooks (not a hook itself): which .superlite folder this session uses. The same order as
 # skills/subagent-driven-development/scripts/state.py, so hooks and sl always agree:
 #   1. $SUPERLITE_STATE_DIR;
-#   2. the session's binding: ${SUPERLITE_HOME:-$HOME/.superlite}/sessions/<session_id from the hook input>, whose
+#   2. the run of the linked worktree the cwd is in (the nearest `.git` above it is a file) while its .superlite holds a
+#      run marker (stable.json, prime.md or pool.json): it wins over the session's binding (#178);
+#   3. the session's binding: ${SUPERLITE_HOME:-$HOME/.superlite}/sessions/<session_id from the hook input>, whose
 #      first line is the bound .superlite path (written by `sl orchestrator set|approve|bind` and `lint --stable`);
 #      used while that folder exists and its `session` file names no other session;
-#   3. legacy: <CLAUDE_PROJECT_DIR, else the input's cwd, else $PWD>/.superlite, unless its `session` file names
+#   4. legacy: <CLAUDE_PROJECT_DIR, else the input's cwd, else $PWD>/.superlite, unless its `session` file names
 #      another live session (one whose binding points at that folder): another session's run never gates this one.
 # superlite_state: reads $input (the raw hook JSON); sets SL_SD (the .superlite folder) and SL_PROJ (the project its
 # paths are judged against: the folder's parent, or the launch directory for a session's private folder under
@@ -38,6 +40,29 @@ _sl_launch() {
   _sl_trim SL_LAUNCH
 }
 
+# _sl_worktree_run: SL_SD := <linked worktree above the cwd>/.superlite when it holds a run marker, else SL_SD stays
+# empty. The cwd is the input's, else CLAUDE_PROJECT_DIR, else $PWD. Builtins only; one file test per ancestor and three on a worktree.
+_sl_worktree_run() {
+  local re c d m
+  c=""
+  re='"cwd"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
+  [[ $input =~ $re ]] && c="${BASH_REMATCH[1]//\\\\//}"
+  [ -n "$c" ] || c="${CLAUDE_PROJECT_DIR:-$PWD}"
+  _sl_trim c
+  d="$c"
+  while :; do
+    if [ -e "$d/.git" ]; then
+      [ -f "$d/.git" ] || return 0   # a main checkout keeps `.git` as a folder
+      for m in stable.json prime.md pool.json; do
+        [ -f "$d/.superlite/$m" ] && { SL_SD="$d/.superlite"; return 0; }
+      done
+      return 0
+    fi
+    [ -n "$d" ] && [ "$d" != / ] || return 0
+    d="${d%/*}"
+  done
+}
+
 superlite_state() {
   local re sid="" o a b sessions="${SUPERLITE_HOME:-$HOME/.superlite}/sessions"
   SL_SD=""; SL_PROJ=""
@@ -49,7 +74,8 @@ superlite_state() {
   else
     re='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'
     [[ $input =~ $re ]] && sid="${BASH_REMATCH[1]}"
-    if [ -n "$sid" ]; then
+    _sl_worktree_run
+    if [ -z "$SL_SD" ] && [ -n "$sid" ]; then
       _sl_line "$sessions/$sid"
       if [ -n "$SL_LINE" ] && [ -d "$SL_LINE" ]; then
         SL_SD="$SL_LINE"
