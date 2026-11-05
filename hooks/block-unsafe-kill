@@ -34,4 +34,56 @@ if [ "$gp_pipe" = 1 ] || [[ $cmd =~ $re_kill ]]; then
   echo "Blocked: this command kills processes by name or pattern, which can stop other sessions' processes. Kill only the PIDs you started (kill <PID>, taskkill /PID <PID>, Stop-Process -Id <PID>)." >&2
   exit 2
 fi
+
+# kill [-SIG] PID...: collect the literal PIDs of every kill in the command, resolve them with one
+# ps call, and block a shared service (Xcode, the Simulator, herdr, claude, the login session ...).
+# Jobs (%1), probes (-0, -l) and non-literal arguments are skipped; no ps on PATH fails open.
+re_kp="(^|$w)kill[[:space:]]+([^;&|<>\`)]*)"
+rest="$cmd"
+pids=""
+set -f
+while [[ $rest =~ $re_kp ]]; do
+  m="${BASH_REMATCH[0]}"
+  args="${BASH_REMATCH[2]}"
+  rest="${rest#*"$m"}"
+  arr=($args)
+  n=${#arr[@]}
+  # an attached fd redirect (kill 1 2>/dev/null) is not a PID
+  if [ "$n" -gt 0 ] && [[ $rest == [\<\>]* ]] && [[ $args != *[[:space:]] ]]; then
+    n=$((n - 1))
+  fi
+  found=""
+  probe=0
+  sigval=0
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    tok="${arr[$i]//[\\\"\']/}"
+    i=$((i + 1))
+    if [ "$sigval" = 1 ]; then
+      sigval=0
+      [ "$tok" = 0 ] && probe=1
+      continue
+    fi
+    case $tok in
+      -s|-n) sigval=1 ;;
+      -0|-l|-L) probe=1 ;;
+      -*|%*|'') ;;
+      *[!0-9]*) ;;
+      *) found="$found,$tok" ;;
+    esac
+  done
+  [ "$probe" = 0 ] && pids="$pids$found"
+done
+set +f
+if [ -n "$pids" ] && command -v ps >/dev/null 2>&1; then
+  out="$(ps -o comm= -p "${pids#,}" 2>/dev/null)"
+  while IFS= read -r line; do
+    base="${line##*/}"
+    case $base in
+      Xcode|Simulator|mcpbridge|SourceKitService|com.apple.dt.*|com.apple.CoreSimulator*|herdr|claude|launchd|WindowServer|Finder|Dock|loginwindow)
+        echo "Blocked: kill ${pids#,} would stop $base, a service shared with the user and other sessions. Ask the user to stop it; do not kill it yourself." >&2
+        exit 2 ;;
+    esac
+  done <<< "$out"
+fi
 exit 0
