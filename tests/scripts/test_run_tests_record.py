@@ -55,3 +55,9 @@ def test_record_shadows_older_background_summary(tmp_path):
     assert pt_review.newest_summary_path(sl / "test-summary.json") == old
     assert record(tmp_path).returncode == 0
     assert pt_review.newest_summary_path(sl / "test-summary.json") == sl / "test-summary.json"
+
+
+def test_record_negative_passed_exits_2(tmp_path):
+    r = rt(tmp_path, "--record", "--passed", "-1", "--command", "x.sh")
+    assert r.returncode == 2 and "--passed" in r.stderr
+    assert not (tmp_path / ".superlite" / "test-summary.json").exists()
