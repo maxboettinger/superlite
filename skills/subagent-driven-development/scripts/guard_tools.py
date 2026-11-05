@@ -1190,11 +1190,34 @@ def _receiver(code: str, pos: int) -> list[str] | None:  # O(300 * len(code)) | 
     return None  # O(1)
 
 
+def _str_name(code: str, pos: int) -> bool:  # O(len(code)) | is the receiver ending at pos a name bound only to str values?
+    """`s = 'see X'; s.replace('X', 'Y')` is str.replace, no move: the bare name's every assignment is a single string
+    literal, f-string, os.path.join(...) or str(...) term; a for loop, an augmented or any other binding keeps it a Path."""
+    rm = re.search(r"(?<![\w.)\]])([A-Za-z_]\w*)\s*$", code[:pos])  # O(len(code))
+    if not rm:  # O(1)
+        return False  # O(1)
+    name = rm.group(1)  # O(1)
+    if re.search(r"(?<![\w.])for\s+[\w\s,()]*?\b" + name + r"\b[\w\s,()]*?\s+in\s", code):  # O(len(code))
+        return False  # O(1)
+    binds = [m for m in _ASSIGN.finditer(code) if m.group(1) == name]  # O(len(code))
+    if not binds:  # O(1)
+        return False  # O(1)
+    for m in binds:  # O(binds)
+        rhs = code[m.end():_stmt_end(code, m.end())].strip()  # O(len(code))
+        if m.group(2) or not (_STR_OPEN.match(rhs) or re.match(r"(?:os\.path\.join|os\.fspath|str)\s*\(", rhs)):  # O(1)
+            return False  # O(1)
+        if _compose_raw(rhs, {}, True) is None:  # more than one term: `'a' / p` is a Path  # O(len(rhs))
+            return False  # O(1)
+    return True  # O(1)
+
+
 def _py_methods(code: str) -> list[str]:  # O(len(code))
     out: list[str] = []  # O(1)
     for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|unlink|open|rename|replace)\s*\(", code):  # O(len(code))
         name = m.group(1)  # O(1)
         if re.search(r"\b(?:os|shutil)\s*$", code[max(0, m.start() - 12):m.start()]):  # a module function, matched by name  # O(1)
+            continue  # O(1)
+        if name == "replace" and _str_name(code, m.start()):  # str.replace on a name bound to strings is no move  # O(len(code))
             continue  # O(1)
         lits: list[str | None] = [None]  # O(1)
         recv = _receiver(code, m.start())  # O(300 * len(code))

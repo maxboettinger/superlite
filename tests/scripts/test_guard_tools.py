@@ -423,3 +423,17 @@ def test_a_for_loop_rebinding_a_name_yields_every_value():
     assert py("for p in files: open(p,'w')") == ["?"]
     assert py("for p in ('a', q): open(p,'w')") == ["?"]
     assert py("for a, b in (('x', 'y'),): open(a,'w')") == ["?"]
+
+
+def test_str_replace_on_a_name_bound_to_strings_is_no_move():
+    py = lambda code: targets(["python3", "-c", code])  # noqa: E731
+    # final review: `s = 'see X'; s.replace(...)` is str.replace; it named 'X' as a moved-onto file and blocked.
+    assert py("s = 'see X'\nt = s.replace('X', '.superlite/orchestrator.json')\nopen('/tmp/o/c.md','w').write(t)") == [
+        "/tmp/o/c.md"]
+    assert py("s = f'{a}/x'\nu = s.replace('a', 'b')") == []
+    assert py("s = os.path.join('a', b)\nu = s.replace('a', 'b')") == []
+    # a Path, a for-loop name or an unknown binding keeps the move reading
+    assert py("p = Path('/tmp/t')\np.replace('b')") == ["b"]
+    assert py("p = 'a' / Path('q')\np.replace('b')") == ["b"]
+    assert py("s = 'a'\ns = Path(s)\ns.replace('b')") == ["b"]
+    assert py("for p in ('a',): p.replace('b')") == ["b"]
