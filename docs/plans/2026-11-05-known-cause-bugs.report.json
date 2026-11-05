@@ -1,0 +1,859 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-05T13:34:36 (plan edited since)",
+ "headline": {
+  "wall_min": {
+   "projected": 5.937,
+   "actual": 16.955
+  },
+  "cost_usd_agents": {
+   "projected": 1.022524,
+   "actual": 2.288419
+  },
+  "task_min": {
+   "projected": 25.015,
+   "actual": 27.483
+  },
+  "agents": {
+   "projected": 14,
+   "actual": 15
+  }
+ },
+ "cost_split": {
+  "agents_usd": 2.00824,
+  "rework_usd": 0.280179,
+  "coordinator_usd": 6.458306,
+  "coordinator_session_usd": 10.418559,
+  "coordinator": {
+   "turns": 74,
+   "context_median": 306291,
+   "context_peak": 341388
+  },
+  "total_usd": 8.746725
+ },
+ "concurrency": {
+  "peak": 7,
+  "projected_peak": 10
+ },
+ "critical_path": {
+  "actual": [
+   "T3",
+   "T4"
+  ],
+  "projected": [
+   "T1",
+   "T2",
+   "T14"
+  ],
+  "projected_min": 5.937
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 12,
+   "cost_usd": 2.2589639999999997
+  },
+  "haiku": {
+   "tasks": 2,
+   "cost_usd": 0.029455
+  }
+ },
+ "coordinator_cost_by_model": {
+  "opus": 6.458306
+ },
+ "quality": {
+  "tests": {
+   "passed": 2640,
+   "failed": 0,
+   "skipped": 8,
+   "seconds": 201.9,
+   "mode": "full",
+   "failures": [],
+   "skipped_tests": [
+    "tests/e2e/test_tui.py::tests.e2e.test_tui",
+    "tests/e2e/test_harness_parse.py::test_never_runs_without_env",
+    "tests/e2e/test_headless.py::test_plugin_loads_clean",
+    "tests/e2e/test_headless.py::test_session_start_reports_project_state",
+    "tests/e2e/test_headless.py::test_rewrite_test_runs_during_a_run",
+    "tests/e2e/test_headless.py::test_run_hooks_record_agent_metrics",
+    "tests/scripts/test_fleet_io.py::test_real_herdr_binary_argv",
+    "tests/scripts/test_no_popup_windows.py::test_detached_helper_children_get_no_console_window"
+   ],
+   "files": {
+    "tests/e2e/test_tui.py": [
+     0,
+     0
+    ],
+    "tests/bench/test_build_shape_audit.py": [
+     4,
+     0
+    ],
+    "tests/bench/test_generalized.py": [
+     8,
+     0
+    ],
+    "tests/bench/test_language_runner.py": [
+     11,
+     0
+    ],
+    "tests/bench/test_mechanical.py": [
+     10,
+     0
+    ],
+    "tests/bench/test_mechanical_ab.py": [
+     3,
+     0
+    ],
+    "tests/bench/test_metrics.py": [
+     33,
+     0
+    ],
+    "tests/bench/test_predict_calibration.py": [
+     2,
+     0
+    ],
+    "tests/bench/test_real_formats.py": [
+     15,
+     0
+    ],
+    "tests/bench/test_routing_evidence.py": [
+     2,
+     0
+    ],
+    "tests/bench/test_start_dir.py": [
+     1,
+     0
+    ],
+    "tests/bench/test_task_records.py": [
+     2,
+     0
+    ],
+    "tests/e2e/test_harness_parse.py": [
+     6,
+     0
+    ],
+    "tests/e2e/test_headless.py": [
+     0,
+     0
+    ],
+    "tests/e2e/test_tui_driver_parse.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_0_3_1_scripts.py": [
+     29,
+     0
+    ],
+    "tests/scripts/test_accounts.py": [
+     11,
+     0
+    ],
+    "tests/scripts/test_autocommit.py": [
+     17,
+     0
+    ],
+    "tests/scripts/test_autocommit_squash.py": [
+     10,
+     0
+    ],
+    "tests/scripts/test_batching.py": [
+     13,
+     0
+    ],
+    "tests/scripts/test_block_coordinator_edits.py": [
+     81,
+     0
+    ],
+    "tests/scripts/test_block_unsafe_kill.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_build_prime_mini.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_capture_hooks.py": [
+     14,
+     0
+    ],
+    "tests/scripts/test_checkpoint_chain.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_commit_also.py": [
+     12,
+     0
+    ],
+    "tests/scripts/test_commit_also_owned.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_commit_baseline.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_commit_pix_v2.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_commit_plan_folder.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_commit_running_scope.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_commit_scope_batch.py": [
+     25,
+     0
+    ],
+    "tests/scripts/test_commit_shared_test.py": [
+     12,
+     0
+    ],
+    "tests/scripts/test_compact_due.py": [
+     15,
+     0
+    ],
+    "tests/scripts/test_coordinator_run_scope.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_coverage.py": [
+     19,
+     0
+    ],
+    "tests/scripts/test_coverage_docs.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_coverage_lint.py": [
+     11,
+     0
+    ],
+    "tests/scripts/test_coverage_reference.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_dispatch_evict.py": [
+     12,
+     0
+    ],
+    "tests/scripts/test_dispatch_fleet.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_dispatch_prime_budget.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_dispatch_skip.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_docs_contract.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_evals_suite.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_experiment.py": [
+     12,
+     0
+    ],
+    "tests/scripts/test_feedback.py": [
+     25,
+     0
+    ],
+    "tests/scripts/test_feedback_file.py": [
+     10,
+     0
+    ],
+    "tests/scripts/test_final_review_check.py": [
+     24,
+     0
+    ],
+    "tests/scripts/test_finish_grouping.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_finish_open_incidents.py": [
+     16,
+     0
+    ],
+    "tests/scripts/test_fixture_isolation.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_fleet.py": [
+     23,
+     0
+    ],
+    "tests/scripts/test_fleet_hooks.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_fleet_io.py": [
+     11,
+     0
+    ],
+    "tests/scripts/test_fleet_state.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_graphify_gate.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_guard_cd_mention_122.py": [
+     80,
+     0
+    ],
+    "tests/scripts/test_guard_false_blocks.py": [
+     59,
+     0
+    ],
+    "tests/scripts/test_guard_git_archive.py": [
+     79,
+     0
+    ],
+    "tests/scripts/test_guard_git_metadata.py": [
+     26,
+     0
+    ],
+    "tests/scripts/test_guard_outside.py": [
+     33,
+     0
+    ],
+    "tests/scripts/test_guard_quoted.py": [
+     40,
+     0
+    ],
+    "tests/scripts/test_guard_review_121.py": [
+     68,
+     0
+    ],
+    "tests/scripts/test_guard_review_124.py": [
+     203,
+     0
+    ],
+    "tests/scripts/test_guard_scratch_script.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_guard_segments.py": [
+     16,
+     0
+    ],
+    "tests/scripts/test_guard_stdin_shell.py": [
+     38,
+     0
+    ],
+    "tests/scripts/test_guard_targets.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_guard_wrappers.py": [
+     21,
+     0
+    ],
+    "tests/scripts/test_guard_writers.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_herdr_client.py": [
+     18,
+     0
+    ],
+    "tests/scripts/test_history_language.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_hooks_bash32.py": [
+     214,
+     0
+    ],
+    "tests/scripts/test_hooks_doc.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_human_gate.py": [
+     71,
+     0
+    ],
+    "tests/scripts/test_incident.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_incident_resolve.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_isolation_wording.py": [
+     10,
+     0
+    ],
+    "tests/scripts/test_ledger_utf8.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_lint_dispatch_now.py": [
+     10,
+     0
+    ],
+    "tests/scripts/test_lint_pix_v2.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_metrics_attribution.py": [
+     17,
+     0
+    ],
+    "tests/scripts/test_metrics_fable.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_metrics_handback.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_metrics_history.py": [
+     19,
+     0
+    ],
+    "tests/scripts/test_metrics_sidecar.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_no_popup_windows.py": [
+     1,
+     0
+    ],
+    "tests/scripts/test_orchestrator.py": [
+     23,
+     0
+    ],
+    "tests/scripts/test_orchestrator_end_summaries.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_packet_batch.py": [
+     24,
+     0
+    ],
+    "tests/scripts/test_packet_claimed_fix.py": [
+     15,
+     0
+    ],
+    "tests/scripts/test_packet_fast_forward.py": [
+     18,
+     0
+    ],
+    "tests/scripts/test_packet_inline.py": [
+     26,
+     0
+    ],
+    "tests/scripts/test_packet_run_start.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_packet_small_fixes.py": [
+     2,
+     0
+    ],
+    "tests/scripts/test_packet_stale.py": [
+     31,
+     0
+    ],
+    "tests/scripts/test_plan_load_errors.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_plan_tools.py": [
+     55,
+     0
+    ],
+    "tests/scripts/test_pool.py": [
+     15,
+     0
+    ],
+    "tests/scripts/test_pool_binding.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_predict_language.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_prime_root.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_probe_regression_portable.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_probe_run.py": [
+     20,
+     0
+    ],
+    "tests/scripts/test_project_python.py": [
+     9,
+     0
+    ],
+    "tests/scripts/test_project_python_callers.py": [
+     10,
+     0
+    ],
+    "tests/scripts/test_pt_review.py": [
+     29,
+     0
+    ],
+    "tests/scripts/test_pt_review_declarations.py": [
+     19,
+     0
+    ],
+    "tests/scripts/test_pt_review_noise.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_pt_review_noise_batch.py": [
+     27,
+     0
+    ],
+    "tests/scripts/test_pt_review_pix_v2.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_pyroots.py": [
+     11,
+     0
+    ],
+    "tests/scripts/test_re_keywords.py": [
+     2,
+     0
+    ],
+    "tests/scripts/test_report.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_rewrite_quoted_paths.py": [
+     11,
+     0
+    ],
+    "tests/scripts/test_rewrite_test_runs.py": [
+     99,
+     0
+    ],
+    "tests/scripts/test_routing.py": [
+     21,
+     0
+    ],
+    "tests/scripts/test_run_isolation_flow.py": [
+     2,
+     0
+    ],
+    "tests/scripts/test_run_scripts.py": [
+     34,
+     0
+    ],
+    "tests/scripts/test_run_state_binding.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_run_tests_plan_fallback.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_run_tests_record.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_run_tests_root.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_run_tests_sidecars.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_run_tests_summary.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_run_tests_tree_paths.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_run_tests_wait.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_session_cost_rewrite.py": [
+     2,
+     0
+    ],
+    "tests/scripts/test_session_cost_testcmd.py": [
+     24,
+     0
+    ],
+    "tests/scripts/test_session_handover.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_session_start.py": [
+     5,
+     0
+    ],
+    "tests/scripts/test_session_state.py": [
+     52,
+     0
+    ],
+    "tests/scripts/test_shape.py": [
+     17,
+     0
+    ],
+    "tests/scripts/test_sl_form.py": [
+     7,
+     0
+    ],
+    "tests/scripts/test_sl_tools.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_slim_prime.py": [
+     16,
+     0
+    ],
+    "tests/scripts/test_spawn_free.py": [
+     20,
+     0
+    ],
+    "tests/scripts/test_split.py": [
+     8,
+     0
+    ],
+    "tests/scripts/test_stable_split.py": [
+     28,
+     0
+    ],
+    "tests/scripts/test_start_gate.py": [
+     10,
+     0
+    ],
+    "tests/scripts/test_start_unattended.py": [
+     3,
+     0
+    ],
+    "tests/scripts/test_test_layers.py": [
+     23,
+     0
+    ],
+    "tests/scripts/test_testcmd.py": [
+     16,
+     0
+    ],
+    "tests/scripts/test_testcmd_xcode.py": [
+     12,
+     0
+    ],
+    "tests/scripts/test_tier_reason_wave0.py": [
+     6,
+     0
+    ],
+    "tests/scripts/test_tool_notes.py": [
+     4,
+     0
+    ],
+    "tests/scripts/test_trees.py": [
+     14,
+     0
+    ],
+    "tests/scripts/test_wave0.py": [
+     10,
+     0
+    ],
+    "tests/scripts/test_worktree.py": [
+     16,
+     0
+    ]
+   },
+   "started": 1793883159.0174642
+  },
+  "first_time_pass": 11,
+  "first_time_n": 14,
+  "rework_dispatches": 2,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T8",
+   "model": "haiku",
+   "pred_min": 1.567,
+   "actual_min": 2.642,
+   "delta": {
+    "abs": 1.0747,
+    "pct": 68.6
+   },
+   "cost_usd": 0.01613,
+   "first_time_pass": false
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 1.979,
+   "actual_min": 0.935,
+   "delta": {
+    "abs": -1.044,
+    "pct": -52.8
+   },
+   "cost_usd": 0.238042,
+   "first_time_pass": false
+  },
+  {
+   "task": "T13",
+   "model": "sonnet",
+   "pred_min": 1.954,
+   "actual_min": 2.82,
+   "delta": {
+    "abs": 0.866,
+    "pct": 44.3
+   },
+   "cost_usd": 0.19375,
+   "first_time_pass": true
+  },
+  {
+   "task": "T12",
+   "model": "haiku",
+   "pred_min": 1.567,
+   "actual_min": 2.388,
+   "delta": {
+    "abs": 0.8213,
+    "pct": 52.4
+   },
+   "cost_usd": 0.013325,
+   "first_time_pass": true
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 2.054,
+   "actual_min": 2.697,
+   "delta": {
+    "abs": 0.6427,
+    "pct": 31.3
+   },
+   "cost_usd": 0.244856,
+   "first_time_pass": true
+  },
+  {
+   "task": "T10",
+   "model": "sonnet",
+   "pred_min": 1.904,
+   "actual_min": 1.268,
+   "delta": {
+    "abs": -0.6357,
+    "pct": -33.4
+   },
+   "cost_usd": 0.093871,
+   "first_time_pass": true
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 1.738,
+   "actual_min": 2.125,
+   "delta": {
+    "abs": 0.387,
+    "pct": 22.3
+   },
+   "cost_usd": 0.381785,
+   "first_time_pass": false
+  },
+  {
+   "task": "T11",
+   "model": "sonnet",
+   "pred_min": 1.639,
+   "actual_min": 1.268,
+   "delta": {
+    "abs": -0.3707,
+    "pct": -22.6
+   },
+   "cost_usd": 0.093857,
+   "first_time_pass": true
+  },
+  {
+   "task": "T5",
+   "model": "sonnet",
+   "pred_min": 1.614,
+   "actual_min": 1.888,
+   "delta": {
+    "abs": 0.2743,
+    "pct": 17.0
+   },
+   "cost_usd": 0.109368,
+   "first_time_pass": true
+  },
+  {
+   "task": "T9",
+   "model": "sonnet",
+   "pred_min": 1.639,
+   "actual_min": 1.88,
+   "delta": {
+    "abs": 0.241,
+    "pct": 14.7
+   },
+   "cost_usd": 0.16455,
+   "first_time_pass": true
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 1.689,
+   "actual_min": 1.88,
+   "delta": {
+    "abs": 0.191,
+    "pct": 11.3
+   },
+   "cost_usd": 0.16456,
+   "first_time_pass": true
+  },
+  {
+   "task": "T14",
+   "model": "sonnet",
+   "pred_min": 1.904,
+   "actual_min": 2.028,
+   "delta": {
+    "abs": 0.1243,
+    "pct": 6.5
+   },
+   "cost_usd": 0.246883,
+   "first_time_pass": true
+  },
+  {
+   "task": "T6",
+   "model": "sonnet",
+   "pred_min": 1.979,
+   "actual_min": 1.888,
+   "delta": {
+    "abs": -0.0907,
+    "pct": -4.6
+   },
+   "cost_usd": 0.109368,
+   "first_time_pass": true
+  },
+  {
+   "task": "T7",
+   "model": "sonnet",
+   "pred_min": 1.788,
+   "actual_min": 1.775,
+   "delta": {
+    "abs": -0.013,
+    "pct": -0.7
+   },
+   "cost_usd": 0.218074,
+   "first_time_pass": true
+  }
+ ]
+}
