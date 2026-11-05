@@ -6,20 +6,31 @@ sys.path.insert(0, str(SCRIPTS))
 import accounts as ac  # noqa: E402
 FAKE = FIXTURES / "fleet" / "claude-profile"
 
-def acc(name, n, **limits):
+LIMIT_KEYS = {"kind", "label", "percent", "severity", "resets_at", "cap_percent"}
+LABELS = {"session": "Current session", "weekly_all": "Current week (all models)"}
+
+def lim(kind, percent, label=None, cap=None):
+    """One limit in the shape of `claude-profile usage --json` schema 1."""
+    return {"kind": kind, "label": label or LABELS.get(kind, kind), "percent": percent, "severity": "ok",
+            "resets_at": "2026-11-10T20:59:59+00:00", "cap_percent": cap}
+
+def acc(name, n, *extra, **limits):
     return {"name": name, "n": n, "email": "", "plan": "Ultra", "error": None,
-            "limits": [{"kind": k, "percent": v, "resets_at": "2026-11-10T20:59:59+00:00"} for k, v in limits.items()]}
+            "limits": [lim(k, v) for k, v in limits.items()] + list(extra)}
 
 def test_picks_lowest_weekly():
-    u = {"accounts": [acc("claude1", 1, weekly_all=65), acc("claude3", 3, weekly_all=3, five_hour=22)]}
+    u = {"accounts": [acc("claude1", 1, weekly_all=65), acc("claude3", 3, weekly_all=3, session=22)]}
     assert ac.pick_account(u, ["claude1", "claude3"]) == "claude3"
 
-def test_five_hour_90_is_skipped():
-    u = {"accounts": [acc("claude1", 1, five_hour=95, weekly_all=10)]}
-    assert ac.pick_account(u, ["claude1"]) is None and "claude1" in " ".join(ac.reasons(u, ["claude1"]))
+def test_session_kind_is_the_5_hour_cap():
+    u = {"accounts": [acc("claude1", 1, session=90, weekly_all=10)]}
+    assert ac.pick_account(u, ["claude1"]) is None and ac.reasons(u, ["claude1"]) == ["claude1: 5-hour 90%"]
+    assert ac.pick_account({"accounts": [acc("claude1", 1, session=89, weekly_all=10)]}, ["claude1"]) == "claude1"
+    old = {"accounts": [acc("claude1", 1, five_hour=95, weekly_all=10)]}  # the kind of older claude-profile reports
+    assert ac.pick_account(old, ["claude1"]) is None and ac.reasons(old, ["claude1"]) == ["claude1: 5-hour 95%"]
 
 def test_weekly_100_is_skipped():
-    u = {"accounts": [acc("claude1", 1, five_hour=0, weekly_all=100), acc("claude2", 2, weekly_all=99)]}
+    u = {"accounts": [acc("claude1", 1, session=0, weekly_all=100), acc("claude2", 2, weekly_all=99)]}
     assert ac.pick_account(u, ["claude1", "claude2"]) == "claude2"
 
 def test_tie_lowest_n_wins():
@@ -74,3 +85,43 @@ def test_default_dir_is_home_dot_claude_only():
 
 def test_current_without_config_dir_is_the_default_dir_of_that_env():
     assert ac.account_dir({}, "current", {"HOME": "/u"}) == "/u/.claude"
+
+def _spread_usage():
+    return {"accounts": [acc("a", 1, weekly_all=10), acc("b", 2, weekly_all=30)]}
+
+def test_spread_prefers_unused_account():
+    u = _spread_usage()
+    assert ac.pick_account(u, ["a", "b"]) == "a" and ac.pick_account(u, ["a", "b"], running={}) == "a"
+    assert ac.pick_account(u, ["a", "b"], running={"a": 1}) == "b"
+
+def test_spread_ties_by_weekly():
+    u = _spread_usage()
+    assert ac.pick_account(u, ["a", "b"], running={"a": 1, "b": 1}) == "a"
+    assert ac.pick_account(u, ["a", "b"], running={"a": 2, "b": 1}) == "b"
+
+def test_spread_does_not_pick_a_skipped_account():
+    u = {"accounts": [acc("a", 1, weekly_all=10), acc("b", 2, weekly_all=30, session=95)]}
+    assert ac.pick_account(u, ["a", "b"], running={"a": 3}) == "a"
+
+def test_spread_without_usage_takes_the_least_used_entry():
+    assert ac.pick_account({}, ["x", "y"], running={"x": 1}) == "y" and ac.pick_account({}, ["x", "y"], running={}) == "x"
+
+def test_weekly_scoped_counts_for_its_model():
+    sonnet = {"accounts": [acc("a", 1, lim("weekly_scoped", 50, "Sonnet", 50), weekly_all=10)]}
+    assert ac.pick_account(sonnet, ["a"], tier="sonnet") is None
+    assert ac.pick_account(sonnet, ["a"], tier="haiku") == "a" and ac.pick_account(sonnet, ["a"]) == "a"
+    assert ac.reasons(sonnet, ["a"], tier="sonnet") == ["a: weekly_scoped Sonnet 50%"] and ac.reasons(sonnet, ["a"]) == []
+    fable = {"accounts": [acc("a", 1, lim("weekly_scoped", 60, "Fable", 50))]}
+    assert ac.pick_account(fable, ["a"], tier="sonnet") == "a"
+    uncapped = {"accounts": [acc("a", 1, lim("weekly_scoped", 100, "Sonnet", None))]}
+    assert ac.pick_account(uncapped, ["a"], tier="sonnet") is None
+    below = {"accounts": [acc("a", 1, lim("weekly_scoped", 99, "Sonnet", None))]}
+    assert ac.pick_account(below, ["a"], tier="sonnet") == "a"
+
+def test_fixtures_use_real_shape():
+    u = {"accounts": [acc("a", 1, lim("weekly_scoped", 50, "Sonnet", 50), session=1, weekly_all=2)]}
+    limits = [l for a in u["accounts"] for l in a["limits"]]
+    assert {l["kind"] for l in limits} == {"session", "weekly_all", "weekly_scoped"} and all(set(l) == LIMIT_KEYS for l in limits)
+    for f in (FIXTURES / "fleet").glob("*.json"):
+        for a in json.loads(f.read_text()).get("accounts") or []:
+            assert all(LIMIT_KEYS <= set(l) for l in a.get("limits") or []), f

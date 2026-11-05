@@ -3,6 +3,7 @@ import json, os, sys, types
 from pathlib import Path
 import pytest
 from _fixtures import FIXTURES
+from test_accounts import LIMIT_KEYS, acc, lim
 from test_plan_tools import SCRIPTS, make_plan
 sys.path.insert(0, str(SCRIPTS))
 import fleet  # noqa: E402
@@ -50,8 +51,7 @@ def world(tmp_path, monkeypatch):
     else:
         fake_bin = FIXTURES / "fleet" / "herdr"
         monkeypatch.setenv("SUPERLITE_HERDR_BIN", str(fake_bin)); monkeypatch.setenv("FAKE_HERDR_LOG", str(tmp_path / "h.log"))
-    usage = {"accounts": [{"name": "claude1", "n": 1, "error": None, "limits": [{"kind": "weekly_all", "percent": 64}]},
-                          {"name": "claude3", "n": 3, "error": None, "limits": [{"kind": "weekly_all", "percent": 3}]}]}
+    usage = {"accounts": [acc("claude1", 1, weekly_all=64), acc("claude3", 3, weekly_all=3)]}
     listing = {"accounts": [{"name": "claude1", "dir": "/u/.claude-account1"}, {"name": "claude3", "dir": "/u/.claude-account3"}]}
     monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: usage); monkeypatch.setattr(fleet.ac, "read_listing", lambda env=None: listing)
     monkeypatch.chdir(proj)
@@ -133,7 +133,7 @@ def test_haiku_tier_uses_haiku_agent_and_prime(world):
 
 def test_no_account_is_blocked_exit_3(world, monkeypatch, capsys):
     fleet.main(["on", "--accounts", "claude1"])
-    monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: {"accounts": [{"name": "claude1", "n": 1, "error": None, "limits": [{"kind": "five_hour", "percent": 99}]}]})
+    monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: {"accounts": [acc("claude1", 1, session=99)]})
     with pytest.raises(SystemExit) as e: fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
     assert e.value.code == 3 and "BLOCKED: no account with headroom" in capsys.readouterr().out and not world.fh.calls
 
@@ -269,7 +269,7 @@ def test_current_account_spawns_although_usage_lists_other_accounts(world, capsy
     assert r["account"] == "current" and "W1 account=current" in capsys.readouterr().out
 
 def test_current_is_the_fallback_when_named_accounts_have_no_headroom(world, monkeypatch):
-    monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: {"accounts": [{"name": "claude1", "n": 1, "error": None, "limits": [{"kind": "weekly_all", "percent": 100}]}]})
+    monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: {"accounts": [acc("claude1", 1, weekly_all=100)]})
     fleet.main(["on", "--accounts", "claude1,current"])
     assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj, env={"CLAUDE_CONFIG_DIR": "/u/.claude-cur"})["account"] == "current"
 
@@ -309,3 +309,62 @@ def test_stop_handles_a_worker_record_written_before_names_were_stored(world):
     data["workers"]["W1"] = {"pane_id": "w6:p1", "account": "claude3", "agent": "superlite:implementer", "tier": "sonnet", "state": "blocked", "task": None}
     (world.sd / "fleet.json").write_text(json.dumps(data))
     assert fleet.stop(world.sd, all_=True) == ["W1"] and ("exit_agent", "sl-proj-w1") in world.fh.calls
+
+
+def _three_accounts(world, monkeypatch):
+    usage = {"accounts": [acc("claude1", 1, weekly_all=10), acc("claude2", 2, weekly_all=30), acc("claude3", 3, weekly_all=20)]}
+    listing = {"accounts": [{"name": f"claude{i}", "dir": f"/u/.claude-account{i}"} for i in (1, 2, 3)]}
+    monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: usage); monkeypatch.setattr(fleet.ac, "read_listing", lambda env=None: listing)
+
+def _accounts_in_fleet_json(world):
+    return {k: v["account"] for k, v in json.loads((world.sd / "fleet.json").read_text())["workers"].items()}
+
+def test_three_spawns_spread(world, monkeypatch):
+    _three_accounts(world, monkeypatch)
+    fleet.main(["on"])
+    for _ in range(3): fleet.main(["spawn", "--tier", "sonnet"])
+    assert _accounts_in_fleet_json(world) == {"W1": "claude1", "W2": "claude3", "W3": "claude2"}
+
+def test_stopped_worker_frees_account(world, monkeypatch):
+    _three_accounts(world, monkeypatch)
+    fleet.main(["on", "--accounts", "claude1,claude2"])
+    assert [fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["account"] for _ in range(2)] == ["claude1", "claude2"]
+    fleet.stop(world.sd, ["W2"])  # claude2 now runs nothing; counting the stopped worker would tie 1:1 and pick claude1 by its lower weekly
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["account"] == "claude2"
+
+def test_blocked_worker_holds_no_account(world, monkeypatch):
+    _three_accounts(world, monkeypatch)
+    fleet.main(["on", "--accounts", "claude1,claude2"])
+    data = json.loads((world.sd / "fleet.json").read_text())
+    data["workers"]["W1"] = {"name": "sl-proj-w1", "pane_id": "w6:p1", "account": "claude1", "agent": "superlite:implementer", "tier": "sonnet", "state": "blocked", "task": None}
+    data["next"] = 2; (world.sd / "fleet.json").write_text(json.dumps(data))
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["account"] == "claude1"
+
+def test_spawn_passes_its_tier_to_the_account_choice(world, monkeypatch):
+    seen = []
+    real = fleet.ac.pick_account
+    monkeypatch.setattr(fleet.ac, "pick_account", lambda usage, allowed, running=None, tier=None: (seen.append((dict(running or {}), tier)), real(usage, allowed, running, tier))[1])
+    fleet.main(["on"]); fleet.spawn(world.sd, world.plan, "haiku", world.proj); fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
+    assert seen == [({}, "haiku"), ({"claude3": 1}, "sonnet")]
+
+def test_scoped_limit_of_the_workers_model_blocks_the_account(world, monkeypatch, capsys):
+    usage = {"accounts": [acc("claude1", 1, lim("weekly_scoped", 70, "Sonnet", 70), weekly_all=1), acc("claude3", 3, weekly_all=50)]}
+    monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: usage)
+    fleet.main(["on"])
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["account"] == "claude3"
+    assert fleet.spawn(world.sd, world.plan, "haiku", world.proj)["account"] == "claude1"
+
+def test_fixtures_use_real_shape(world):
+    limits = [l for a in world.usage["accounts"] for l in a["limits"]]
+    assert limits and all(set(l) == LIMIT_KEYS for l in limits)
+
+def test_status_hides_stopped_rows(world, capsys):
+    fleet.main(["on"]); fleet.spawn(world.sd, world.plan, "sonnet", world.proj); fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
+    data = json.loads((world.sd / "fleet.json").read_text())
+    data["workers"]["W3"] = {"name": "sl-proj-w3", "pane_id": "w6:p9", "account": "claude1", "agent": "superlite:implementer", "tier": "sonnet", "state": "blocked", "task": None}
+    (world.sd / "fleet.json").write_text(json.dumps(data))
+    fleet.stop(world.sd, ["W1"]); capsys.readouterr()
+    fleet.main(["status"]); out = capsys.readouterr().out
+    assert "fleet: on" in out and "W2 ready" in out and "W1" not in out and "W3" not in out
+    fleet.main(["status", "--all"]); out = capsys.readouterr().out
+    assert "W1 stopped" in out and "W2 ready" in out and "W3 blocked" in out

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Herdr fleet CLI: workers are Claude Code sessions in Herdr panes, one per pane.
 
-    fleet.py on [--accounts A,B] [--plan P] | off | status
+    fleet.py on [--accounts A,B] [--plan P] | off | status [--all]
     fleet.py spawn --tier T --plan P | stop [IDS...] [--all]
     fleet.py send | keys | wait     (delegated to fleet_io)
 
@@ -101,13 +101,17 @@ def spawn(sd, plan, tier, project, cfg=None, env=None):  # O(a + w) plus herdr c
     entries = data.get("accounts") or [a["name"] for a in (usage.get("accounts") or listing.get("accounts") or [])] or ["current"]  # O(a)
     allowed = [ac.entry_name(e) for e in entries]  # config dir paths go by basename | O(a)
     entry_of = {ac.entry_name(e): e for e in entries}  # O(a)
-    account = ac.pick_account(usage, allowed)  # O(a)
+    running = {}  # live workers of this run per account: a stopped or blocked worker holds no pane | O(1)
+    for v in data["workers"].values():  # O(w)
+        if v.get("state") not in ("stopped", "blocked"):  # O(1)
+            running[v.get("account")] = running.get(v.get("account"), 0) + 1  # O(1)
+    account = ac.pick_account(usage, allowed, running, tier)  # O(a)
     if account is None:  # a path entry or `current` unknown to the usage report has no usage data, not a verdict | O(a)
         known = {u.get("name") for u in usage.get("accounts") or []}  # O(a)
         account = next((ac.entry_name(e) for e in entries if (ac.is_path(e) or e == "current") and ac.entry_name(e) not in known), None)  # O(a)
     if account is None:  # O(1)
         print("BLOCKED: no account with headroom")  # O(1)
-        for r in ac.reasons(usage, allowed):  # O(a)
+        for r in ac.reasons(usage, allowed, tier):  # O(a)
             print(r)  # O(1)
         raise SystemExit(3)  # O(1)
     cdir = ac.account_dir(listing, entry_of.get(account, account), base)  # O(a)
@@ -229,8 +233,10 @@ def main(argv=None):  # O(w) plus command cost
     s = sub.add_parser("on")  # O(1)
     s.add_argument("--accounts", default="")  # O(1)
     s.add_argument("--plan")  # O(1)
-    for name in ("off", "status"):  # O(1)
-        sub.add_parser(name).add_argument("--plan")  # O(1)
+    sub.add_parser("off").add_argument("--plan")  # O(1)
+    s = sub.add_parser("status")  # O(1)
+    s.add_argument("--plan")  # O(1)
+    s.add_argument("--all", action="store_true")  # O(1) also stopped and blocked workers
     s = sub.add_parser("spawn")  # O(1)
     s.add_argument("--tier", default="sonnet")  # O(1)
     s.add_argument("--plan")  # O(1)
@@ -257,6 +263,8 @@ def main(argv=None):  # O(w) plus command cost
             return 0  # O(1)
         print("fleet: on")  # O(1)
         for wid, w in fs.workers(sd).items():  # O(w)
+            if not a.all and w.get("state") in ("stopped", "blocked"):  # O(1)
+                continue  # O(1)
             print(f"{wid} {w.get('state')} account={w.get('account')} pane={w.get('pane_id')} task={w.get('task') or '-'}")  # O(1)
     elif a.cmd == "spawn":  # O(1)
         spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent)  # O(w)
