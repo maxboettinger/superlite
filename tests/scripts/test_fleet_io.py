@@ -78,6 +78,19 @@ def test_report_stays_in_latest_turn(tmp_path):
     rec(tr, user("first task"), assistant("Status: DONE"), user("second task"), assistant("still working"))
     assert io.report_text(tr) == "still working"
 
+def test_report_survives_a_broken_json_line_in_the_latest_turn(tmp_path):
+    tr = tmp_path / "t.jsonl"
+    tr.write_text(json.dumps(user("task")) + "\n" + json.dumps(assistant("Status: DONE")) + "\n{broken json\n" + json.dumps(assistant("Files: a.py")) + "\n", encoding="utf-8")
+    assert io.report_text(tr) == "Status: DONE"
+
+def test_report_empty_turn_returns_empty_and_wait_uses_last(world, tmp_path):
+    io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]
+    tr = tmp_path / "w1.jsonl"; rec(tr, user("task"), assistant("Status: DONE"), user("next"), assistant({"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}))
+    assert io.report_text(tr) == ""
+    (world.sd / "metrics.jsonl").write_text(json.dumps({"ev": "stop", "t": sent + 10, "agent_id": "W1", "type": "x", "transcript": str(tr), "last": "Status: BLOCKED - from last"}) + "\n")
+    world.fh.states = [{"sl-proj-w1": "done"}]
+    assert io.wait(world.sd, ["W1"], 5000)[0]["status"] == "BLOCKED"
+
 def test_verify_line_lists_test_folder_files(tmp_path):
     plan = make_plan(tmp_path, [{"id": "T2", "owns": "scripts/test_layers.py, tests/scripts/test_test_layers.py, docs/testing.md"}, {"id": "T5", "owns": "src/a_test.go, src/a.go"}, {"id": "T6", "owns": "src/x.py, docs/x.md"}])
     assert "`/sl/sl run_tests --fast tests/scripts/test_test_layers.py --task T2 --background`" in io.task_message(plan, ["T2"], "/sl/sl", "/sl")
@@ -87,7 +100,8 @@ def test_verify_line_lists_test_folder_files(tmp_path):
 def test_verify_line_skips_fixture_data_in_test_folder(tmp_path):
     plan = make_plan(tmp_path, [{"id": "T2", "owns": "src/h.py, tests/scripts/test_h.py, tests/scripts/fixtures/fleet/herdr"}, {"id": "T3", "owns": "src/h.py, tests/scripts/fixtures/fleet/herdr"}])
     assert "run_tests --fast tests/scripts/test_h.py --task T2 --background" in io.task_message(plan, ["T2"], "/sl/sl", "/sl")
-    assert "run_tests --fast src/h.py tests/scripts/fixtures/fleet/herdr --task T3" in io.task_message(plan, ["T3"], "/sl/sl", "/sl")
+    m = io.task_message(plan, ["T3"], "/sl/sl", "/sl")
+    assert "run_tests --fast src/h.py --task T3" in m and "run_tests --fast src/h.py tests/scripts/fixtures" not in m
 
 def test_send_marks_busy_and_prompts_until_working(world, capsys):
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl")

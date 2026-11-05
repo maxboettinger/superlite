@@ -52,7 +52,7 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
     dirs = lambda o: o.replace("\\", "/").lower().split("/")[:-1]  # O(depth)
     data = lambda o: any(d in ("fixtures", "fixture", "testdata") for d in dirs(o))  # fixture data is no test file | O(depth)
     in_tests = [o for o in owns if not data(o) and any(d in ("tests", "test") for d in dirs(o))]  # a `tests/` or `test/` folder | O(o*depth)
-    tests = in_tests or [o for o in owns if not data(o) and testcmd.is_test_path(o)] or owns  # O(o)
+    tests = in_tests or [o for o in owns if not data(o) and testcmd.is_test_path(o)] or [o for o in owns if not data(o)] or owns  # O(o)
     out = [f"# Task{'s' if len(tasks) > 1 else ''} {ids}", "", f"SUPERLITE={superlite_root}", f"PLAN={plan}", f"sl (type it literally in every command): {sl_path}"]  # O(1)
     if tier == "haiku":  # O(1)
         out += ["", "Your task text:", ""] + [taskmod.render(pl, t) for t in tasks]  # O(k*n*q*s)
