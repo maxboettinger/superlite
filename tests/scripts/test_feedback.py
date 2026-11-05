@@ -220,3 +220,56 @@ def test_triage_gh_failure_is_unmatched_not_new(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "unmatched" in r.stdout and "none (new)" not in r.stdout
     assert "not logged in" in r.stderr
+
+
+def _ids():
+    return [e["id"] for e in entries()]
+
+
+def test_triage_shows_filed_by_id(tmp_path):
+    run("add", "probe run hangs on windows", cwd=tmp_path)
+    run("add", "totally different stale lock problem", cwd=tmp_path)
+    run("add", "third separate cache complaint here", cwd=tmp_path)
+    a, b, c = _ids()
+    out = triage(tmp_path, issues=[{"number": 154, "title": "x", "body": f"cites {a} and {b}"}])
+    assert "3 untriaged entries" in out
+    assert "filed: #154" in out
+    assert f"sl feedback mark {a} {b}" in out
+    assert out.count("none (new)") == 1 and "third separate" in out
+
+
+def test_triage_filed_via_comment(tmp_path):
+    run("add", "probe run hangs on windows", cwd=tmp_path)
+    (a,) = _ids()
+    out = triage(tmp_path, issues=[{"number": 9, "title": "x", "body": "", "comments": [{"body": f"see {a}"}]}])
+    assert "filed: #9" in out and "none (new)" not in out
+
+
+def test_filed_function():
+    sys.path.insert(0, str(SCRIPT.parent))
+    import feedback
+    iss = [{"number": 154, "title": "x", "body": "cites aaaaaaaaaaaa"},
+           {"number": 3, "title": "y", "body": None, "comments": [{"body": "bbbbbbbbbbbb"}]}]
+    got = feedback.filed([{"id": "aaaaaaaaaaaa"}, {"id": "bbbbbbbbbbbb"}, {"id": "cccccccccccc"}], iss)
+    assert got == {"aaaaaaaaaaaa": 154, "bbbbbbbbbbbb": 3}
+
+
+@POSIX_ONLY
+def test_triage_requests_body(tmp_path):
+    run("add", "probe run hangs on windows", cwd=tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    log = tmp_path / "gh.log"
+    gh.write_text(f"#!/bin/sh\necho \"$@\" >> {log}\necho '[]'\n", encoding="utf-8")
+    gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+    r = run("triage", "--repo", "o/r", cwd=tmp_path, env={"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+    assert r.returncode == 0, r.stderr
+    args = log.read_text(encoding="utf-8")
+    assert "number,title,body,comments" in args
+
+
+def test_using_superlite_names_kinds():
+    f = Path(__file__).resolve().parents[2] / "skills" / "using-superlite" / "SKILL.md"
+    text = f.read_text(encoding="utf-8")
+    assert "--kind bug|slow|unclear|repeat|idea" in text and len(text) < 1500

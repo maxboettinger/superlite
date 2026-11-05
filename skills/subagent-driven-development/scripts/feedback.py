@@ -167,6 +167,18 @@ def match_issue(tk: set, issues: list):  # O(t*w)
     return best  # O(1)
 
 
+def filed(entries: list, issues: list) -> dict:  # O(i*t*w)
+    """{entry id: issue number} for every entry whose id appears in an issue's body or a comment's body."""
+    out = {}  # O(1)
+    for iss in issues:  # O(t) iterations
+        cs = iss.get("comments") if isinstance(iss.get("comments"), list) else []  # O(1)
+        blob = "\n".join(str(x) for x in [iss.get("body")] + [c.get("body") for c in cs if isinstance(c, dict)] if x)  # O(w)
+        for e in entries:  # O(i) iterations
+            if e["id"] not in out and e["id"] in blob:  # O(w)
+                out[e["id"]] = iss.get("number")  # O(1)
+    return out  # O(1)
+
+
 def origin_repo(folder):  # O(1) + one git process
     """OWNER/NAME of the GitHub origin of `folder` (a checkout of superlite first, then the working folder)."""
     try:  # O(1)
@@ -192,7 +204,7 @@ def open_issues(a):  # O(t) + up to two git processes and one gh process (networ
         print("feedback: no GitHub repository (pass --repo), issues not matched", file=sys.stderr)  # O(1)
         return None  # O(1)
     print(f"feedback: matching against open issues of {repo}", file=sys.stderr)  # O(1)
-    cmd = ["gh", "issue", "list", "--repo", repo, "--state", "open", "--json", "number,title", "--limit", "300"]  # O(1)
+    cmd = ["gh", "issue", "list", "--repo", repo, "--state", "open", "--json", "number,title,body,comments", "--limit", "300"]  # O(1)
     try:  # O(1)
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",  # O(t) + spawn
                            stdin=subprocess.DEVNULL, timeout=60)
@@ -248,11 +260,20 @@ def cmd_triage(a) -> int:  # O(i*g*w + g*t*w) + h ssh processes + one gh process
             entries.append(e)  # O(1)
     done = set() if a.all else triaged()  # O(x)
     entries = [e for e in entries if e["id"] not in done]  # O(i)
-    groups = group(entries)  # O(i*g*w)
-    print(f"feedback triage: {len(entries)} {'' if a.all else 'untriaged '}entries, {len(groups)} groups")  # O(1)
-    if not groups:  # O(1)
+    total = len(entries)  # O(1)
+    if not entries:  # O(1)
+        print(f"feedback triage: 0 {'' if a.all else 'untriaged '}entries, 0 groups")  # O(1)
         return 0  # O(1)
     issues = open_issues(a)  # O(t) + spawn
+    by_id = filed(entries, issues) if issues else {}  # O(i*t*w)
+    entries = [e for e in entries if e["id"] not in by_id]  # O(i)
+    groups = group(entries)  # O(i*g*w)
+    print(f"feedback triage: {total} {'' if a.all else 'untriaged '}entries, {len(groups) + len({by_id[k] for k in by_id})} groups")  # O(1)
+    if by_id:  # O(1)
+        for num in sorted(set(by_id.values())):  # O(t) iterations
+            ids = [k for k in by_id if by_id[k] == num]  # O(i)
+            print(f"\n## filed: #{num}\n- ids: " + " ".join(ids))  # O(i)
+        print("\nfiled already: `sl feedback mark " + " ".join(by_id) + "`")  # O(i)
     for n, g in enumerate(groups, 1):  # O(g) iterations
         es = g["entries"]  # O(1)
         texts = list(dict.fromkeys(scrub(e["text"]) for e in es))  # O(i*w) scrub again: older or remote entries
