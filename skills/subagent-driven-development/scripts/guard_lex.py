@@ -10,7 +10,8 @@ or `{name}` before the operator is dropped), the heredoc bodies in order, the bo
 `{ ...; }` is flattened, comments and line continuations are dropped, CRLF reads as LF, `;;` and a stray `)` (a case
 pattern) read as `;`. Nothing raises: an unterminated quote, `$(` or `${` makes the rest of the text one dyn word, and
 nesting deeper than MAX_DEPTH does the same, so the caller sees an unknown word instead of a crash. No `shlex`: it cannot
-keep redirects or heredocs. Stdlib only. A heredoc is read at the next newline of the same level.
+keep redirects or heredocs. Stdlib only. A heredoc is read at the next newline of the same level. Each word and redirect
+target carries a glob/brace flag (Segment.globs, Redirect.glob): its decoded text is a pattern, not the file it names.
 """
 # Complexity notation:
 #   n = characters of the text, w = words, d = nesting depth (at most MAX_DEPTH), h = heredocs on one line
@@ -56,7 +57,8 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
         self.n = len(text)  # O(1)
         self.i = 0  # O(1)
         self.depth = 0  # O(1)
-        self.glob = False  # the last word read has an unquoted `*`, `?` or `[` | O(1)
+        self.glob = False  # the last word read has an unquoted `*`, `?` or `[...]` | O(1)
+        self.flag = ""  # the last word read: its Segment.globs flag | O(1)
         self.close_at = 0  # index of the `)` that ended the last nested parse (n when none) | O(1)
 
     # ---- words -------------------------------------------------------------------------------------------------
@@ -292,7 +294,9 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
                 unq.append(c)  # O(1)
                 self.i = i + 1  # O(1)
         u = "".join(unq)  # O(n)
-        self.glob = any(g in u for g in "*?[")  # O(n)
+        self.glob = "*" in u or "?" in u or ("[" in u and "]" in u[u.index("[") + 1:])  # a lone `[` is no glob | O(n)
+        brace = "{" in u and "}" in u  # O(n)
+        self.flag = ("u" if quoted else "b") if brace else ("g" if self.glob else "")  # O(1)
         if "{" in u and ("," in u or ".." in u):  # brace expansion `{rm,x}` builds words the text does not show | O(1)
             dyn = True  # O(1)
         return "".join(parts), dyn, quoted  # O(n)
@@ -342,7 +346,7 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
         while self.i < n and (s[self.i] in _BLANK or s.startswith("\\\n", self.i)):  # O(n)
             self.i += 2 if s[self.i] == "\\" else 1  # O(1)
         target, _, quoted = self._word(cur.bodies)  # O(n)
-        cur.redirects.append(Redirect(op, target))  # O(1)
+        cur.redirects.append(Redirect(op, target, self.flag))  # O(1)
         if op in ("<<", "<<-"):  # O(1)
             pending.append((cur, target, op == "<<-", quoted))  # O(1)
 
@@ -431,6 +435,7 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
                 cur.words.append(text)  # O(1)
                 cur.dyn.append(True)  # O(1)
                 cur.quoted.append(False)  # O(1)
+                cur.globs.append("")  # O(1)
                 lastw = (j, text, True)  # O(1)
             elif c in "<>":  # a redirect operator | O(1)
                 if s.startswith("<<<", i):  # O(1)
@@ -448,10 +453,12 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
                     cur.words.pop()  # O(1)
                     cur.dyn.pop()  # O(1)
                     cur.quoted.pop()  # O(1)
+                    cur.globs.pop()  # O(1)
                 self.i = i + len(op)  # O(1)
                 self._redirect(cur, op, pending)  # O(n)
             else:  # a word | O(1)
                 text, dyn, quoted = self._word(cur.bodies)  # O(n)
+                flag = self.flag  # O(1)
                 lastw = (self.i, text, quoted)  # O(1)
                 if closed:  # O(1)
                     finish(";")  # O(1)
@@ -467,6 +474,7 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
                 cur.words.append(text)  # O(1)
                 cur.dyn.append(dyn)  # O(1)
                 cur.quoted.append(quoted)  # O(1)
+                cur.globs.append(flag)  # O(1)
         if pending:  # a heredoc whose body never started | O(1)
             for seg, _, _, _ in pending:  # O(h)
                 seg.heredocs.append("")  # O(1)

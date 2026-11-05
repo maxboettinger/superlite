@@ -261,7 +261,10 @@ def test_main_cli(P, tmp_path, monkeypatch, capsys):
     assert rows[0]["tool"] == "Bash" and rows[0]["target"] == "src/a"
 
     ok = json.dumps({"tool_name": "Bash", "tool_input": {"command": "rm docs/plans/a.md"}, "cwd": P})
-    assert run(ok) == (0, "", "")
+    assert run(ok) == (0, "guard: ok\n", "")  # the ack the hook needs before it trusts an exit 0
+    monkeypatch.setenv("SUPERLITE_GUARD_NONCE", "n42")
+    assert run(ok) == (0, "guard: ok n42\n", "")
+    monkeypatch.delenv("SUPERLITE_GUARD_NONCE")
     assert len((sd / "incidents.jsonl").read_text().splitlines()) == 1
 
     code, out, err = run(json.dumps({"tool_name": "PowerShell", "tool_input": {"command": "printf x > src/b"}, "cwd": P}))
@@ -283,7 +286,7 @@ def test_main_cli(P, tmp_path, monkeypatch, capsys):
     before = len((sd / "incidents.jsonl").read_text().splitlines())
     for bad in ("", "not json", "[]", json.dumps({"tool_name": "Bash"}), json.dumps({"tool_name": "Bash", "tool_input": []})):
         code, out, err = run(bad)
-        assert (code, out, err) == (0, "", ""), bad
+        assert (code, out, err) == (0, "guard: ok\n", ""), bad
     rows = [json.loads(line) for line in (sd / "incidents.jsonl").read_text().splitlines()]
     assert len(rows) == before + 5 and all(r["kind"] == "guard-error" for r in rows[before:])
 
@@ -298,7 +301,7 @@ def test_main_fails_open_on_crash(P, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(guard_judge.guard_lex, "split", boom)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {"command": "rm src/a"}})))
     assert main(["--mode", "active", "--project", P, "--sd", str(sd)]) == 0
-    assert capsys.readouterr() == ("", "")
+    assert capsys.readouterr() == ("guard: ok\n", "")
     row = json.loads((sd / "incidents.jsonl").read_text().splitlines()[-1])
     assert row["kind"] == "guard-error" and "lexer crashed" in row["target"]
 
@@ -352,3 +355,83 @@ def test_argv_words_reach_interpreter_code(P):
     assert blocked("python3 - docs/plans/p.md <<'EOF'\nimport sys\nopen(sys.argv[2],'w')\nEOF", P).rel == "?"
     passes("T=docs/plans/p.md; python3 - \"$T\" " + body, P)
     assert blocked("T=src/a.py; python3 - \"$T\" " + body, P).rel == "src/a.py"
+
+
+def test_glob_and_brace_targets_are_patterns(P, tmp_path):
+    # final review 1: a glob or brace target is not judged as the literal text `.superlite/*` or `docs/plans/*` matches
+    for mode in ("active", "idle", "human"):
+        for cmd in ("printf '{\"mode\":\"human\",\"approved\":true}' > .superlite/orchestrator.jso?",
+                    "tee .superlite/{orchestrator.json,x}", "rm .superlite/orch*", "rm .superlite/*",
+                    "rm .superlite/{orchestrator.json}", "cd .superlite && rm orch*", "rm .superl*/human-replies.jsonl"):
+            assert blocked(cmd, P, mode).kind == "protected", (mode, cmd)
+    assert blocked("touch docs/plans/{x,../../src/a.py}", P).rel == "src/a.py"
+    assert blocked("touch docs/plans/x > docs/plans/{y,../../src/b.py}", P).rel == "src/b.py"  # zsh writes both
+    assert blocked("touch src/*.py", P).rel == "src/?"
+    assert blocked("touch docs/{1..3}.py", P).rel == "?"
+    assert blocked("touch docs/plans/*/../../../src/a.py", P).rel == "?"
+    passes("touch docs/plans/{a,b}.md .superlite/*.md docs/plans/*", P)
+    passes(f"touch {tmp_path}/out/* {tmp_path}/out/{{a,b}}", P)
+    passes("ls src/* && cat .superlite/*.json", P)
+    passes("[ -f src/a.py ] && echo yes", P)
+    passes("touch src/{a,b}.py", P, "idle")
+
+
+def test_dynamic_command_word_judges_its_operands(P):
+    # final review 2: a command word the guard cannot read may be rm or tee
+    for cmd in ("/bin/r? -f src/a.py", "$(echo rm) src/a.py", "${RM:-rm} src/a.py", "{rm,-f} src/a.py"):
+        assert blocked(cmd, P).rel == "src/a.py", cmd
+    assert blocked("$X .superlite/orchestrator.json", P, "idle").kind == "protected"
+    passes("$(echo rm) -f docs/plans/a.md", P)
+    passes("$(echo rm) src/a.py", P, "idle")
+    passes("RM=rm; $RM docs/plans/a.md", P)
+
+
+def test_python_cache_is_protected(P, tmp_path, monkeypatch):
+    # final review 3: the hook trusts ~/.cache/superlite/python; a fake interpreter there would pass every command
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.delenv("SUPERLITE_CACHE_DIR", raising=False)
+    (tmp_path / "home" / ".cache" / "superlite").mkdir(parents=True)
+    for mode in ("idle", "active"):
+        assert blocked("printf '/usr/bin/true\\n' > ~/.cache/superlite/python", P, mode).kind == "protected"
+        assert blocked("cd ~/.cache/superlite && cp /tmp/x python", P, mode).kind == "protected"
+        assert blocked("mv /tmp/python ~/.cache/superlite/", P, mode).kind == "protected"
+        assert blocked("rm ~/.cache/superlite/pyth*", P, mode).kind == "protected"
+    passes("printf x > ~/.cache/other", P, "idle")
+
+
+def test_budget_makes_a_runaway_walk_unknown(P):
+    # final review 5: re-runs for each earlier value of a variable (and loop re-walks) multiply at every nesting level
+    import signal
+    import time
+    cmd = "echo $X"
+    for _ in range(6):
+        cmd = "( " + cmd + " )"
+    cmd = "".join(f"X=a{i}; " for i in range(16)) + cmd  # 16 values at 6 levels: 16**6 walks without a budget
+    alarm = getattr(signal, "SIGALRM", None)
+    if alarm is not None:  # the unfixed walk runs for hours: fail instead of hanging
+        def stop(*_):
+            raise TimeoutError("judge ran past 5 s")
+        old = signal.signal(alarm, stop)
+        signal.alarm(5)
+    try:
+        t = time.monotonic()
+        v = judge(cmd, P, P, "active")
+        took = time.monotonic() - t
+    finally:
+        if alarm is not None:
+            signal.alarm(0)
+            signal.signal(alarm, old)
+    assert took < 2.0 and v is not None and v.rel == "?", (took, v)
+    assert judge(cmd, P, P, "idle") is None
+
+
+def test_nul_in_a_target_is_unknown(P, tmp_path, monkeypatch, capsys):
+    # final review 6: os.path.realpath raises ValueError on a NUL; that was a guard-error and an allow
+    assert blocked("printf x > \"a\x00b\"", P).rel == "?"
+    assert blocked("cd \"a\x00b\" && cd .. && printf x > c", P).rel == "?"
+    sd = tmp_path / "sd"
+    sd.mkdir()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {"command": "rm 'a\u0000b'"}})))
+    assert main(["--mode", "active", "--project", P, "--sd", str(sd)]) == 2
+    assert "guard-error" not in (sd / "incidents.jsonl").read_text()

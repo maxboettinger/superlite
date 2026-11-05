@@ -17,10 +17,12 @@
 # Who judges what: the path of an Edit, Write or NotebookEdit call is judged here (project_code). A Bash or PowerShell
 # command is judged by skills/subagent-driven-development/scripts/guard_judge.py (Python, `python -I`; found like `sl`
 # finds it): the hook passes it the mode (idle, active or human), the project and the state folder, and the hook JSON
-# unchanged on stdin; the judge prints the block message and exits 2, or exits 0. The mode is decided here: human when
+# unchanged on stdin; the judge prints the block message and exits 2, or prints `guard: ok NONCE` and exits 0 (an exit 0
+# without that line re-runs the judge once on a Python found without the cache). The mode is decided here: human when
 # orchestrator.json says human and not approved, else active when a run marker exists, else idle. The judge runs only
-# when the guard enforces (active or human) or the command names a protected file; an idle command that does not is
-# never judged, so no Python starts. The sl dispatch gate of the human state and the Agent gate stay here.
+# when the guard enforces (active or human) or the command may name a protected file (also through quotes, backslashes,
+# `$'...'`, or a glob or brace near .superlite); an idle command that does not is never judged, so no Python starts.
+# The sl dispatch gate of the human state and the Agent gate stay here.
 # The hook fails open: when Python is missing or the judge fails (any exit other than 0 and 2) it appends a guard-error
 # incident to <state folder>/incidents.jsonl and exits 0. Sessions without a .superlite directory are never touched.
 # Bash builtins only until the judge starts (each spawn costs ~250 ms on Windows), cheap exits first. Exit 2 blocks
@@ -166,10 +168,11 @@ guard_error() {
     >> "$sd/incidents.jsonl" 2>/dev/null
 }
 
-# find_py: the Python 3.10+ that runs the judge, into PY (an array; empty when none is found), the way
+# find_py [nocache]: the Python 3.10+ that runs the judge, into PY (an array; empty when none is found), the way
 # skills/subagent-driven-development/scripts/sl finds it: $SUPERLITE_PYTHON (no version check), else the interpreter
 # sl cached for this PATH, working directory and VIRTUAL_ENV (the same file), else the first of python3, python,
-# `py -3` and `uv run --no-project python` that is 3.10+, whose real path is cached for the next call.
+# `py -3` and `uv run --no-project python` that is 3.10+, whose real path is cached for the next call. `nocache` skips
+# the cached interpreter (it lies outside the project, so the model may have planted a fake there) and rewrites it.
 find_py() {
   local cache_dir="${SUPERLITE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/superlite}" cache cached="" ckey="" key exe cand
   local -a c
@@ -180,7 +183,7 @@ find_py() {
     { [ -x "${PY[0]:-}" ] || command -v "${PY[0]:-}" >/dev/null 2>&1; } && return 0
     PY=()
   fi
-  if [ -f "$cache" ]; then
+  if [ "${1:-}" != nocache ] && [ -f "$cache" ]; then
     { IFS= read -r cached; IFS= read -r ckey; } < "$cache" 2>/dev/null || true
     if [ -n "$cached" ] && [ "$ckey" = "$key" ] && [ -x "$cached" ]; then PY=("$cached"); return 0; fi
   fi
@@ -201,19 +204,27 @@ find_py() {
   return 1
 }
 
-# run_judge MODE: runs guard_judge.py on the hook input. Exit 2 is its block (its stderr is the message, passed on);
-# 0 allows; any other outcome fails open after a guard-error incident. Never returns.
+# run_judge MODE: runs guard_judge.py on the hook input. Exit 2 is its block (its output is the message, passed on);
+# 0 allows only with the judge's `guard: ok NONCE` line: an exit 0 without it (a fake interpreter in the cache) re-probes
+# Python without the cache and runs the judge once more. Any other outcome fails open after a guard-error incident.
+# Never returns.
 run_judge() {
-  local judge="${BASH_SOURCE[0]%/*}/../skills/subagent-driven-development/scripts/guard_judge.py" err rc
+  local judge="${BASH_SOURCE[0]%/*}/../skills/subagent-driven-development/scripts/guard_judge.py" out rc try
+  local nonce="$RANDOM$RANDOM$$$RANDOM"
   [ -f "$judge" ] || { guard_error "guard_judge.py not found"; exit 0; }
   find_py || { guard_error "no Python 3.10+ found"; exit 0; }
-  err="$(printf '%s' "$input" | "${PY[@]}" -I -X utf8 "$judge" --mode "$1" --project "$proj" --sd "$sd" 2>&1 >/dev/null)"
-  rc=$?
-  case "$rc" in
-    0) exit 0 ;;
-    2) printf '%s\n' "$err" >&2; exit 2 ;;
-  esac
-  guard_error "guard_judge.py exited $rc: ${err##*$'\n'}"
+  for try in 1 2; do
+    out="$(printf '%s' "$input" | SUPERLITE_GUARD_NONCE="$nonce" "${PY[@]}" -I -X utf8 "$judge" --mode "$1" --project "$proj" --sd "$sd" 2>&1)"
+    rc=$?
+    case "$rc" in
+      2) printf '%s\n' "$out" >&2; exit 2 ;;
+      0) [[ $out == *"guard: ok $nonce"* ]] && exit 0
+         [ "$try" = 1 ] || break
+         find_py nocache || { guard_error "no Python 3.10+ found"; exit 0; } ;;
+      *) guard_error "guard_judge.py exited $rc: ${out##*$'\n'}"; exit 0 ;;
+    esac
+  done
+  guard_error "guard_judge.py exited 0 without its ok line"
   exit 0
 }
 
@@ -229,8 +240,21 @@ elif [ -z "$hit" ]; then
   cmd="${cmd//\\\"/\"}"; cmd="${cmd//\\t/ }"; cmd="${cmd//\\r/}"; cmd="${cmd//\\n/$'\n'}"
   cmd="${cmd//$'\x01'/\\}"
   lower "$cmd"; lc="$LOWER"
+  bare=${lc//\'/}; bare=${bare//\"/}; bare=${bare//\\/}   # orchestrator.js''on and orchestrator.j\son name it too
   mentions=0
-  [[ $lc == *human-replies.jsonl* || $lc == *orchestrator.json* ]] && mentions=1
+  [[ $bare == *human-replies.jsonl* || $bare == *orchestrator.json* || $bare == *superlite/python* ]] && mentions=1
+  if [ "$enforce" = 0 ] && [ "$mentions" = 0 ]; then
+    # $'\x6f...' may spell a protected name, and a glob or brace near .superlite may reach one (.superlite/orch*)
+    re_g='[][*?{]'; re_w='[^[:space:];&|<>()]*'
+    re_near="(superl|\\.s)${re_w}${re_g}|${re_g}${re_w}(superl|\\.s)|(^|[[:space:]/=,{])\\.${re_g}"
+    nob=${bare//\$\{/}   # ${VAR} is no brace
+    if [[ $cmd == *"\$'"* ]]; then
+      mentions=1
+    elif [[ $nob =~ $re_g ]]; then
+      jstr cwd
+      { [[ $nob =~ $re_near ]] || [[ $nob == *.superlite* ]] || [[ $REPLY == *.superlite* ]]; } && mentions=1
+    fi
+  fi
   # sl tools that start a build are denied until the plan is approved.
   re_sl='(sl|\$SL|\$\{SL\}|scripts/sl)"?[[:space:]]+(dispatch|assign|wave0|commit_task|finish|build_prime|run_tests)([[:space:]]|$)'
   if [ "$human" = 1 ] && [[ $cmd =~ $re_sl ]]; then

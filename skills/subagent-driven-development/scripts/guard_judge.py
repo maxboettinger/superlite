@@ -4,7 +4,9 @@
 Library: judge(command, cwd, project, mode) -> Verdict | None (None: the command is allowed).
 CLI: `python3 -I guard_judge.py --mode idle|active|human --project DIR --sd STATE_DIR` reads the hook JSON on stdin, prints
 the block message on stderr and exits 2 on a block; every other outcome, an internal error included, exits 0 (fail open,
-after a `guard-error` incident). Stdlib only.
+after a `guard-error` incident); a command it allows, and an internal error, also print
+`guard: ok [$SUPERLITE_GUARD_NONCE]` on stdout, which the hook requires before it trusts an exit 0. A NUL in a path or a
+spent step or time budget makes the command unknown. Stdlib only.
 
 The walk: `guard_lex.split` gives one Segment per simple command. A directory state (a small set of the directories the
 shell may sit in) follows `cd`, `pushd`, `popd`, `cd -` through `&&`/`||` chains; a subshell, a substitution, `bash -c`
@@ -19,6 +21,7 @@ import json  # O(1)
 import os  # O(1)
 import re  # O(1)
 import sys  # O(1)
+import time  # O(1)
 from dataclasses import dataclass  # O(1)
 from fnmatch import fnmatchcase  # O(1)
 
@@ -34,6 +37,9 @@ __all__ = ["Verdict", "judge", "main"]  # O(1)
 
 MAX_DEPTH = 8  # nested bodies judged before the rest counts as an unknown target | O(1)
 MAX_DIRS = 12  # directories tracked at once before the shell's directory counts as unknown | O(1)
+MAX_STEPS = 20000  # commands and bodies walked before the whole command counts as unknown (loop re-walks multiply) | O(1)
+MAX_SECONDS = 1.5  # wall-clock budget of one judge call, well inside the hook timeout | O(1)
+MAX_BRACE = 64  # words one brace expansion may give before it counts as unknown | O(1)
 PROTECTED = (".superlite/orchestrator.json", ".superlite/human-replies.jsonl")  # O(1)
 NAMES = ("orchestrator.json", "human-replies.jsonl")  # O(1)
 ACTIVE_OK = ("docs/plans/*", "docs/*/plans/*", "docs/*.md", "SPEC*.md", "*/SPEC*.md", "docs.md", "*/docs.md",  # O(1)
@@ -89,6 +95,31 @@ class _Ctx:  # O(p)
         self.kind = "human" if mode == "human" else "code"  # O(1)
         self.home = os.environ.get("HOME") or os.path.expanduser("~")  # O(1)
         self.cdpath = bool(os.environ.get("CDPATH")) or "cdpath" in low  # CDPATH may send a relative cd elsewhere | O(n)
+        self.steps = 0  # O(1)
+        self.deadline = time.monotonic() + MAX_SECONDS  # O(1)
+        cache = os.environ.get("SUPERLITE_CACHE_DIR") or os.path.join(  # O(p)
+            os.environ.get("XDG_CACHE_HOME") or os.path.join(self.home, ".cache"), "superlite")  # O(p)
+        dirs = {cache, os.path.join(self.home, ".cache", "superlite")}  # the folder of the Python cache the hook trusts | O(1)
+        dirs = {_clean(_winpath(d)) for d in dirs if "\0" not in d}  # O(p)
+        self.cache_dirs = {x.lower() for d in dirs for x in (d, os.path.realpath(d))}  # as written and resolved | O(p)
+        self.caches = {d.rstrip("/") + "/python" for d in self.cache_dirs}  # protected in every mode | O(1)
+
+
+class _Unknown(Exception):  # O(1)
+    """The command cannot be judged (a NUL in a path, the step or time budget spent): the whole command is unknown."""
+
+
+def _tick(ctx):  # O(1) | one step of the walk; past the budget the whole command is unknown
+    ctx.steps += 1  # O(1)
+    if ctx.steps > MAX_STEPS or time.monotonic() > ctx.deadline:  # O(1)
+        raise _Unknown("budget")  # O(1)
+
+
+def _real(p):  # O(p) syscalls | os.path.realpath; a path the OS cannot take (a NUL in it) makes the command unknown
+    try:  # O(1)
+        return os.path.realpath(p)  # O(p)
+    except ValueError:  # O(1)
+        raise _Unknown("path") from None  # O(1)
 
 
 class _State:  # O(1)
@@ -192,8 +223,10 @@ def _judge_path(path, base, ctx, name=None):  # O(p + depth) | the policy's verd
         prefix = "/".join(parts[:k]) or ("/" if p.startswith("/") else "")  # O(p)
         if not prefix or (base is None and not prefix.startswith("/")) or ".." in parts[k:]:  # O(p)
             return _unknown(ctx)  # O(1)
-        real = os.path.realpath(_clean(prefix if prefix.startswith("/") else base + "/" + prefix))  # O(p) syscalls
+        real = _real(_clean(prefix if prefix.startswith("/") else base + "/" + prefix))  # O(p) syscalls
         rel = _rel(real, ctx.projreal)  # O(p)
+        if real.lower() in ctx.cache_dirs:  # an unknown name in the Python cache folder may be the cache | O(p)
+            return Verdict(real, real, "protected")  # O(1)
         if rel is None:  # outside: allowed unless the folder holds the project, where the unknown part may lead in | O(p)
             holds = (ctx.projreal.lower() + "/").startswith(real.lower().rstrip("/") + "/")  # O(p)
             return _unknown(ctx) if holds else None  # O(1)
@@ -215,7 +248,10 @@ def _judge_path(path, base, ctx, name=None):  # O(p + depth) | the policy's verd
             return Verdict(p, ctx.projn + "/" + p, ctx.kind)  # O(p)
         return None  # O(1)
     full = _clean(p if p.startswith("/") else base + "/" + p)  # O(p)
-    rel = _rel(os.path.realpath(full), ctx.projreal)  # O(p) syscalls
+    real = _real(full)  # O(p) syscalls
+    if real.lower() in ctx.caches:  # the Python cache the hook trusts: a fake interpreter there would pass everything | O(p)
+        return Verdict(real, real, "protected")  # O(1)
+    rel = _rel(real, ctx.projreal)  # O(p)
     if rel is None:  # outside the project | O(1)
         return None  # O(1)
     absolute = ctx.projn + "/" + rel if rel else ctx.projn  # O(p)
@@ -249,8 +285,118 @@ def _expand(text, st, ctx):  # O(p + v) | ~ and the variables the guard knows; u
     return VAR.sub(sub, text) if "$" in text else text  # O(p)
 
 
-def _check(t, inn, st, ctx, name=None):  # O(d * (p + depth)) | verdict for one target from every possible directory
+def _is_glob(w):  # O(p) | does the text hold a glob: `*`, `?` or `[...]`
+    return "*" in w or "?" in w or ("[" in w and "]" in w[w.index("[") + 1:])  # O(p)
+
+
+def _braces(w, depth=0):  # O(MAX_BRACE * p) | bash brace expansion of w; None for a sequence {a..b}, too many words or groups
+    if depth > MAX_BRACE:  # O(1)
+        return None  # O(1)
+    i = w.find("{")  # O(p)
+    while i >= 0:  # O(p)
+        lvl, j, commas = 0, i, []  # O(1)
+        while j < len(w):  # the matching `}` and the commas at the group's own level | O(p)
+            if w[j] == "{":  # O(1)
+                lvl += 1  # O(1)
+            elif w[j] == "}":  # O(1)
+                lvl -= 1  # O(1)
+                if lvl == 0:  # O(1)
+                    break  # O(1)
+            elif w[j] == "," and lvl == 1:  # O(1)
+                commas.append(j)  # O(1)
+            j += 1  # O(1)
+        if j < len(w) and commas:  # O(1)
+            out = []  # O(1)
+            for a, b in zip([i] + commas, commas + [j]):  # each alternative, with the rest of the word expanded too | O(alts)
+                sub = _braces(w[:i] + w[a + 1:b] + w[j + 1:], depth + 1)  # O(MAX_BRACE * p)
+                if sub is None:  # O(1)
+                    return None  # O(1)
+                out.extend(x for x in sub if x not in out)  # O(MAX_BRACE^2)
+                if len(out) > MAX_BRACE:  # O(1)
+                    return None  # O(1)
+            return out  # O(1)
+        if j < len(w) and ".." in w[i + 1:j]:  # a sequence {1..9}: words the guard does not build | O(p)
+            return None  # O(1)
+        i = w.find("{", i + 1)  # a group without a comma is literal | O(p)
+    return [w]  # O(1)
+
+
+def _loose(w):  # O(MAX_BRACE * p) | every word a brace word may reach, a comma-less `{x}` read as `x` too
+    s = w  # O(1)
+    while True:  # O(p) rounds
+        s2 = re.sub(r"\{([^{},]*)\}", r"\1", s)  # O(p)
+        if s2 == s:  # O(p)
+            break  # O(1)
+        s = s2  # O(1)
+    out = []  # O(1)
+    for x in (w, s):  # O(1)
+        for a in (_braces(x) or [x.replace("{", "").replace("}", "")]):  # O(MAX_BRACE * p)
+            if a not in out:  # O(MAX_BRACE)
+                out.append(a)  # O(1)
+    return out  # O(1)
+
+
+def _flags(seg):  # O(w) | word -> its glob/brace flag ("g", "b", "u"), for the flagged words of the segment
+    return {w: f for w, f in zip(seg.words, seg.globs) if f}  # O(w)
+
+
+def _flag_of(t, fl):  # O(w * p) | the flag of the word a target came from ("" for a literal)
+    if not fl or not any(ch in t for ch in "*?[{"):  # O(p)
+        return ""  # O(1)
+    if t in fl:  # O(1)
+        return fl[t]  # O(1)
+    return next((f for w, f in fl.items() if t in w or w in t), "")  # a target cut from a word (of=, --out=) | O(w * p)
+
+
+def _glob_check(t, inn, st, ctx, name=None, protect_only=False):  # O(d * p) | a glob target, from every directory
+    """Protected when the glob may match a protected file (also `orch*` from inside .superlite), in every mode; else the
+    glob's part of the path is unknown ("?"): `docs/plans/*` stays in docs/plans, `*/x` may be anywhere."""
+    m = re.match(r"^\$(?:\{\w+\}|\w+)/+(.+)$", t)  # `$VAR/rest`: rest judged from an unknown directory | O(p)
+    if m and "$" not in m.group(1) and "`" not in m.group(1):  # O(p)
+        t, inn = m.group(1), (None,)  # O(1)
+    p = _winpath(t).replace("\\", "/")  # O(p)
+    parts = p.split("/")  # O(p)
+    k = next((i for i, x in enumerate(parts) if _is_glob(x)), None)  # O(p)
+    found = None  # O(1)
+    for base in inn:  # O(d)
+        full = p if p.startswith("/") else (base + "/" + p if base else p)  # O(p)
+        full = _clean(full) if full.startswith("/") else full  # O(p)
+        comps = [x for x in full.lower().split("/") if x not in ("", ".")]  # O(p)
+        fpat, dpat = (comps[-1] if comps else ""), (comps[-2] if len(comps) > 1 else None)  # O(1)
+        near = dpat is None or dpat == ".." or "$" in dpat or (dpat.startswith(".") and fnmatchcase(".superlite", dpat))  # O(p)
+        if near and any(fnmatchcase(nm, fpat) for nm in NAMES):  # O(p)
+            return Verdict(t, full, "protected")  # O(1)
+        if full.startswith("/") and any(fnmatchcase(cf, full.lower()) for cf in ctx.caches):  # O(p)
+            return Verdict(t, full, "protected")  # O(1)
+        if protect_only:  # O(1)
+            continue  # O(1)
+        q = "/".join(parts[:k] + ["?"] + parts[k + 1:]) if k is not None else p  # O(p)
+        v = _judge_path(q, base, ctx, name)  # O(p + depth)
+        if v is not None and (found is None or v.kind == "protected"):  # O(1)
+            found = v  # O(1)
+    return found  # O(1)
+
+
+def _check_flagged(t, inn, st, ctx, name, flag):  # O(MAX_BRACE * d * p) | a glob or brace target
+    for a in _loose(t):  # a protected file reached through a glob or brace (orch*, {orchestrator.json}): every mode | O(alts)
+        v = _glob_check(a, inn, st, ctx, name, True) if _is_glob(a) else _check(a, inn, st, ctx, name)  # O(d * p)
+        if v is not None and v.kind == "protected":  # O(1)
+            return v  # O(1)
+    alts = [t] if flag == "g" else _braces(t) if flag == "b" else None  # O(MAX_BRACE * p)
+    if alts is None:  # a brace the guard cannot expand ({1..9}, a quoted part, too many words): unknown | O(1)
+        return _unknown(ctx)  # O(1)
+    found = None  # O(1)
+    for a in alts:  # a literal brace word: each word it expands to | O(alts)
+        v = _glob_check(a, inn, st, ctx, name) if _is_glob(a) else _check(a, inn, st, ctx, name)  # O(d * p)
+        if v is not None and (found is None or v.kind == "protected"):  # O(1)
+            found = v  # O(1)
+    return found  # O(1)
+
+
+def _check(t, inn, st, ctx, name=None, flag=""):  # O(d * (p + depth)) | verdict for one target from every possible directory
     t = _expand(t, st, ctx)  # O(p + v)
+    if flag:  # a glob or brace word: its text is a pattern, not the file | O(alts * d * p)
+        return _check_flagged(t, inn, st, ctx, name, flag)  # O(MAX_BRACE * d * p)
     m = re.match(r"^\$(?:\{\w+\}|\w+)/+(.+)$", t)  # `$VAR/rest`: rest judged from an unknown directory | O(p)
     if m and "$" not in m.group(1) and "`" not in m.group(1):  # O(p)
         t, inn = m.group(1), (None,)  # O(1)
@@ -352,6 +498,7 @@ def _unwrap(words, dyn, c, st, ctx):  # O(w) | (command words, dyn, directories,
 def _walk_text(text, st, ctx, depth, force_cond=False):  # O(n) | verdict for a command line of its own
     if depth > MAX_DEPTH:  # O(1)
         return _unknown(ctx)  # O(1)
+    _tick(ctx)  # O(1)
     segs = guard_lex.split(text)  # O(n)
     for seg in segs:  # a heredoc whose delimiter line is missing: its body is judged as commands too | O(s)
         for r in seg.redirects:  # O(redirects)
@@ -494,8 +641,10 @@ def _cd(base, words, c, st, ctx):  # O(d * p) | the directories after cd, pushd,
             new = st.old  # O(1)
         else:  # O(1)
             new = _cd_to(inn, _expand(ops[0], st, ctx), ctx.cdpath)  # O(d * p)
+            if _flags(c.seg).get(ops[0]):  # `cd .superl*`: a glob or brace folder the guard cannot name | O(w)
+                new = (None,)  # O(1)
         if ops and (ops[0] == "-" or ".." in ops[0].split("/")) and any(  # O(d * p)
-                d is None or _rel(os.path.realpath(d), ctx.projreal) is None for d in inn):  # `cd ..` / `cd -` from outside | O(d * p)
+                d is None or _rel(_real(d), ctx.projreal) is None for d in inn):  # `cd ..` / `cd -` from outside | O(d * p)
             new = (None,)  # the old guard's rule: a step back from outside lands nowhere it can name | O(1)
     if st.nested or st.shared.get("void"):  # a cd in a -c body, or after a cd spelled with quotes: unknown | O(1)
         new = (None,)  # O(1)
@@ -503,7 +652,7 @@ def _cd(base, words, c, st, ctx):  # O(d * p) | the directories after cd, pushd,
         st.shared["void"] = True  # the old guard could not read such a cd; parity keeps every later cd unknown | O(1)
     sure = (not c.cond and not st.shared["disturbed"]  # O(d)
             and all(d is not None and d not in st.shared["written"]  # O(d)
-                    and ((os.path.isdir(d) and os.access(d, os.X_OK)) or d in st.made) for d in new))  # O(d) syscalls
+                    and ((os.path.isdir(d) and os.access(_real(d), os.X_OK)) or d in st.made) for d in new))  # O(d) syscalls
     missing = any(d is not None and d not in st.made and not os.path.isdir(d) for d in new)  # O(d) syscalls
     st.old = inn  # O(1)
     c.ok = _union(new, inn) if c.cond else tuple(new)  # O(d)
@@ -552,16 +701,17 @@ def _find(words, c, st, ctx, depth):  # O(w * d) | find -delete, -fprint and -ex
         i += 1  # O(1)
     starts = starts or ["."]  # O(1)
     reach = [p.rstrip("/") + "/" + v if p.rstrip("/") else "/" + v for p in starts for v in FIND_VARIANTS]  # O(w)
+    fl = _flags(c.seg)  # O(w)
     j = i  # O(1)
     while j < n:  # O(w)
         tok = words[j]  # O(1)
         if tok == "-delete":  # O(1)
             for t in reach:  # O(w)
-                v = _check(t, c.inn, st, ctx)  # O(d * p)
+                v = _check(t, c.inn, st, ctx, None, _flag_of(t, fl))  # O(d * p)
                 if v is not None:  # O(1)
                     return v  # O(1)
         elif tok in ("-fprint", "-fprint0", "-fls", "-fprintf") and j + 1 < n:  # O(1)
-            v = _check(words[j + 1], c.inn, st, ctx)  # O(d * p)
+            v = _check(words[j + 1], c.inn, st, ctx, None, _flag_of(words[j + 1], fl))  # O(d * p)
             if v is not None:  # O(1)
                 return v  # O(1)
         elif tok in ("-exec", "-execdir", "-ok", "-okdir"):  # O(1)
@@ -664,8 +814,9 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
     inn = c.inn  # O(1)
     if m and "chdir" in " ".join(w[1:]) + "".join(c.docs) + (script[0] if script else ""):  # the code moves: unknown | O(n)
         inn = (None,)  # O(1)
+    fl = _flags(c.seg)  # O(w)
     for t, name in pairs:  # O(t)
-        v = _check(t, inn, st, ctx, name)  # O(d * p)
+        v = _check(t, inn, st, ctx, name, _flag_of(t, fl))  # O(d * p)
         if v is not None:  # O(1)
             return v  # O(1)
     return None  # O(1)
@@ -687,8 +838,14 @@ def _run_words(words, dyn, c, st, ctx, depth):  # O(n) | judge one command's wor
     if base == "mkdir":  # O(1)
         _mkdir(words, c, st, ctx)  # O(w)
     v = None  # O(1)
-    if dyn[0]:  # a command word the guard cannot read | O(1)
-        pass  # O(1)
+    fl = _flags(c.seg)  # O(w)
+    if dyn[0] or fl.get(words[0]):  # a command word the guard cannot read ($(echo rm), ${RM:-rm}, /bin/r?) | O(w * d * p)
+        for w in words[1:]:  # it may be rm or tee: every operand is a write target | O(w)
+            if w.startswith("-") or w == "":  # O(1)
+                continue  # O(1)
+            v = _check(w, c.inn, st, ctx, None, fl.get(w, ""))  # O(d * p)
+            if v is not None:  # O(1)
+                break  # O(1)
     elif base in SHELLS:  # O(1)
         v = _shell(words, dyn, c, st, ctx, depth)  # O(n)
     elif base in ("eval", "source", "."):  # O(1)
@@ -706,6 +863,7 @@ def _run_words(words, dyn, c, st, ctx, depth):  # O(n) | judge one command's wor
 
 def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, then the command
     seg = c.seg  # O(1)
+    _tick(ctx)  # O(1)
     for body in seg.bodies:  # substitutions run in a subshell | O(bodies)
         v = _walk_text(body, st.fork(c.inn), ctx, depth + 1)  # O(body)
         if v is not None:  # O(1)
@@ -721,7 +879,7 @@ def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, th
         if r.op == ">&" and (tgt.isdigit() or tgt.rstrip("-").isdigit()):  # an fd duplicate | O(1)
             continue  # O(1)
         tgt = tgt.lstrip(" \t")  # a target re-read from a decoded -c word keeps the space after `>` | O(p)
-        v = _check(tgt, c.inn, st, ctx)  # O(d * p)
+        v = _check(tgt, c.inn, st, ctx, None, r.glob)  # O(d * p)
         if v is not None:  # O(1)
             return v  # O(1)
         if seg.heredocs and seg.words and _base(seg.words[0]) == "cat" and r.op in (">", ">|", ">>"):  # O(p)
@@ -833,7 +991,10 @@ def judge(command, cwd, project, mode):  # O(s * n * d) | Verdict for the first 
     here = _clean(_winpath(cwd)) if cwd else ctx.projn  # O(p)
     if not here.startswith("/"):  # O(1)
         here = _clean(ctx.projn + "/" + here)  # O(p)
-    return _walk_text(command, _State((here,)), ctx, 0)  # O(s * n * d)
+    try:  # O(1)
+        return _walk_text(command, _State((here,)), ctx, 0)  # O(s * n * d)
+    except _Unknown:  # a NUL in a path, or the step or time budget spent: blocks when the guard enforces | O(1)
+        return _unknown(ctx)  # O(1)
 
 
 MESSAGES = {  # O(1)
@@ -890,6 +1051,11 @@ def _err(text):  # O(len) | print on stderr whatever the stream's encoding
         print(text.encode("ascii", "replace").decode("ascii"), file=sys.stderr)  # O(len)
 
 
+def _ack():  # O(1) | the allow line the hook waits for: an exit 0 without it was no judge (a fake cached Python)
+    nonce = os.environ.get("SUPERLITE_GUARD_NONCE", "")  # O(1)
+    print("guard: ok" + (" " + nonce if nonce else ""))  # O(1)
+
+
 def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every internal error
     try:  # O(1)
         mode, project, sd = _args(sys.argv[1:] if argv is None else argv)  # O(a)
@@ -909,8 +1075,10 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
         v = judge(cmd, cwd or project, project, mode)  # O(s * n * d)
     except Exception as e:  # noqa: BLE001  fail open on anything | O(1)
         _incident(sd, "guard-error", tool, f"{type(e).__name__}: {e}")  # O(len)
+        _ack()  # the judge ran and logged its own error | O(1)
         return 0  # O(1)
     if v is None:  # O(1)
+        _ack()  # O(1)
         return 0  # O(1)
     named = v.rel not in ("?", ".")  # O(1)
     _incident(sd, "rule-block", tool, v.rel if named else cmd)  # O(len)
