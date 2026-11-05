@@ -2,7 +2,10 @@
 # PreToolUse hook (Bash): during an active superlite run, rewrite the COORDINATOR's raw test runs
 # (pytest, npm test, npx vitest|jest, go test, cargo test, dotnet test, ...) into a background
 # `sl run_tests --full`, or `sl run_tests --fast <files>` when the raw command names test/source paths.
-# Subagents (agent_id): bare full-suite runners are DENIED (exit 2); other subagent calls are untouched.
+# Subagents (agent_id) and fleet workers (SUPERLITE_FLEET_WORKER): bare full-suite runners are DENIED (exit 2), and so is a
+# run of the project's own test command (.superlite/test-cmd.json) on an isolate stack (language swift, go, rust or
+# csharp: a sibling's half-edit breaks a shared build); the message gives `sl run_tests --fast <files> --task <Tn>`,
+# the task read from pool.json. Other subagent calls are untouched.
 # Commands that already contain run_tests, and sessions without a run marker (stable.json,
 # prime.md or pool.json in the state folder) are untouched. Chained commands keep their other work: only the test segment
 # is replaced, separators stay, and the whole command then runs in the background. Anything ambiguous
@@ -92,16 +95,32 @@ re_in_loop="(^|[;&|({]|(^|$sp)(until|while|do|then|elif|if))$sp*(!$sp*)?$re_env$
 re_null="(^|[^0-9])(>>?|$ph2>?)$sp*(/dev/null|[Nn][Uu][Ll])([^[:alnum:]_./]|\$)|(^|$sp)1>>?$sp*(/dev/null|[Nn][Uu][Ll])([^[:alnum:]_./]|\$)"
 
 # The project's own test command (.superlite/test-cmd.json "test", "test_file"): its leading words up to the
-# first flag, placeholder or quote (two words or a path, no glob characters) count as a known runner.
-pp=()
+# first flag, placeholder or quote (two words or a path, no glob characters) count as a known runner. In a linked
+# worktree without its own file, the main checkout's is used (as testcmd.py does): the worktree's `.git` file names
+# `<main>/.git/worktrees/<name>`.
+pp=(); tcj=""
+test_cmd_file() {
+  local g
+  REPLY="$sd/test-cmd.json"
+  [ -f "$REPLY" ] && return 0
+  REPLY=""
+  [ -n "${SL_PROJ:-}" ] || return 0
+  _sl_line "$SL_PROJ/.git"
+  g="${SL_LINE#gitdir: }"
+  case "$g" in *"/.git/worktrees/"*) ;; *) return 0 ;; esac
+  g="${g//\\//}"
+  case "$g" in /*|?:/*) ;; *) g="$SL_PROJ/$g" ;; esac
+  [ -f "${g%/.git/worktrees/*}/.superlite/test-cmd.json" ] && REPLY="${g%/.git/worktrees/*}/.superlite/test-cmd.json"
+  return 0
+}
 load_project_runner() {
-  local tc w words key re f n p
-  f="$sd/test-cmd.json"
-  [ -f "$f" ] || return 0
-  read -r -d '' tc < "$f"
+  local w words key re f n p
+  test_cmd_file; f="$REPLY"
+  [ -n "$f" ] || return 0
+  read -r -d '' tcj < "$f"
   for key in test test_file; do
     re='"'"$key"'"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
-    [[ $tc =~ $re ]] || continue
+    [[ $tcj =~ $re ]] || continue
     read -r -a words <<< "${BASH_REMATCH[1]}"
     p=""; n=0
     for w in "${words[@]}"; do
@@ -110,6 +129,30 @@ load_project_runner() {
     done
     if [ "$n" -ge 2 ] || { [ "$n" = 1 ] && [[ $p == */* ]]; }; then pp+=("$p"); fi
   done
+}
+# isolate_stack: 0 when test-cmd.json names a compiled stack whose runs need their own tree (an explicit
+# "isolate": true|false wins over "language" swift, go, rust, csharp, as in testcmd.py).
+isolate_stack() {
+  local re='"isolate"[[:space:]]*:[[:space:]]*(true|false)'
+  if [[ $tcj =~ $re ]]; then [ "${BASH_REMATCH[1]}" = true ]; return; fi
+  re='"language"[[:space:]]*:[[:space:]]*"(swift|go|rust|csharp)"'
+  [[ $tcj =~ $re ]]
+}
+# current_task ID: the first task of pool.json agent ID's `current` ("T3", "T5,T6" or a list) into REPLY (empty if unknown).
+current_task() {
+  local pool re rest
+  REPLY=""
+  [[ $1 =~ ^[A-Za-z0-9_.-]+$ ]] && [ -f "$sd/pool.json" ] || return 0
+  read -r -d '' pool < "$sd/pool.json"
+  re='"id"[[:space:]]*:[[:space:]]*"'"$1"'"'
+  [[ $pool =~ $re ]] || return 0
+  rest="${pool#*"${BASH_REMATCH[0]}"}"
+  rest="${rest%%\}*}"   # this agent's fields only: the object has no nested braces
+  re='"current"[[:space:]]*:[[:space:]]*\[?[[:space:]]*"([^",]*)'
+  [[ $rest =~ $re ]] || return 0
+  rest="${BASH_REMATCH[1]}"   # a second match would overwrite BASH_REMATCH
+  [[ $rest =~ ^[A-Za-z0-9_.-]+$ ]] && REPLY="$rest"
+  return 0
 }
 # project_hit TEXT MODE: 0 when TEXT holds a project runner (MODE seg: at its start; loop: at any command position).
 project_hit() {
@@ -145,8 +188,27 @@ deny_subagent_full() {
   exit 2
 }
 
-# Subagents: deny a bare full-suite runner; leave everything else untouched.
-if [ "$has_agent" = 1 ]; then
+deny_isolate() {
+  local t="${cmd:0:100}" task="$1"; t="${t//[\"\\$'\n\r\t']/ }"
+  t="${t//$ph1/>&}"; t="${t//$ph2/&>}"
+  printf '{"kind":"rule-block","agent":"subagent","tool":"Bash","target":"isolated test run: %s"}\n' "$t" \
+    >> "$sd/incidents.jsonl" 2>/dev/null
+  printf '%s\n' \
+    'Blocked: this project'"'"'s tests build one shared tree, where another agent'"'"'s half-edit breaks the run, so a raw run of its test command is not allowed here.' \
+    "Run only your own test files in your task's tree: use $sl_base --fast <test files> --task ${task:-<Tn>} --background"', then `sl run_tests --wait`.' >&2
+  exit 2
+}
+
+# Subagents and fleet workers (top-level sessions with SUPERLITE_FLEET_WORKER): on an isolate stack deny the project's
+# test command; deny a bare full-suite runner; leave everything else untouched.
+if [ "$has_agent" = 1 ] || [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then
+  iso=0
+  load_project_runner
+  if [ "${#pp[@]}" -gt 0 ] && isolate_stack; then
+    iso=1
+    if [ "$has_agent" = 1 ]; then jstr agent_id; else REPLY="$SUPERLITE_FLEET_WORKER"; fi
+    current_task "$REPLY"; iso_task="$REPLY"
+  fi
   _dq='"'; _sq="'"
   _rest="$cmd"; _last=0
   while :; do
@@ -154,6 +216,7 @@ if [ "$has_agent" = 1 ]; then
     else _seg="$_rest"; _last=1; fi
     _q="${_seg//[^\"]/}"; _q2="${_seg//[^\']/}"
     if [ $(( ${#_q} % 2 )) = 1 ] || [ $(( ${#_q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
+    [ "$iso" = 1 ] && project_hit "$_seg" seg && deny_isolate "$iso_task"
     if [[ $_seg =~ $re_test ]]; then
       files_from_seg "$_seg"
       if [ -z "$REPLY" ]; then   # a quoted path ("my test.py") is a path; a quoted flag value (-m "not slow") is not
