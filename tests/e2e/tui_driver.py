@@ -9,8 +9,8 @@ from pathlib import Path  # O(1)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # O(1)
 _COUNTER = itertools.count()  # O(1)
-ISOLATE = ["CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_BRIDGE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_PLUGIN_DIRS", "SUPERLITE_SESSION_ID", "SUPERLITE_STATE_DIR", "CLAUDE_ENV_FILE"]  # O(1)
-SUMMARY_KEYS = {"timer_fired": "[AgentSummary] Timer fired", "forking": "Forking for summary", "notes": "Asking for summary from", "stopped": "Stopping summarization"}  # O(1)
+ISOLATE = ["CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_BRIDGE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_PLUGIN_DIRS", "SUPERLITE_SESSION_ID", "SUPERLITE_STATE_DIR", "SUPERLITE_FLEET_WORKER", "SUPERLITE_FLEET_AGENT", "CLAUDE_ENV_FILE"]  # O(1)
+SUMMARY_KEYS = {"timer_fired": r"\[AgentSummary\] Timer fired", "forking": r"Forking for summary", "notes": r"Asking (?:\S+ )?for summary from", "stopped": r"Stopping summarization"}  # O(1)
 
 
 class TuiError(RuntimeError):  # O(1)
@@ -27,7 +27,7 @@ def is_ready(pane: str) -> bool:  # O(n)
 
 
 def summary_counts(log: str) -> dict:  # O(n)
-    return {key: len(re.findall(re.escape(needle), log)) for key, needle in SUMMARY_KEYS.items()}  # O(n)
+    return {key: len(re.findall(pattern, log)) for key, pattern in SUMMARY_KEYS.items()}  # O(n)
 
 
 class TuiSession:  # O(1)
