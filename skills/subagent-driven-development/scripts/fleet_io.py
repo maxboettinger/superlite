@@ -2,23 +2,27 @@
 """Fleet worker I/O: build the task message, send it to a Herdr pane, wait for the report.
 
     fleet_io.py send WID Tn [Tm ...] [--plan P]     (also as `sl fleet send`)
+    fleet_io.py send WID --brief FILE [--label L] [--plan P]
     fleet_io.py send WID --text TEXT [--plan P]
     fleet_io.py keys WID KEY [KEY ...]
     fleet_io.py wait [--timeout MS] [WID ...]
 
-`wait` prints one line per finished worker (`W1 T3 DONE <report file>`), `BLOCKED-UI` plus the screen for a
-blocked one, and `TIMEOUT W2 ...` for the rest. Its exit code is always 0.
+`wait` prints one line per finished worker (`W1 T3 DONE findings=0 <report json>`; a layer worker: `W3 layer-headless
+GREEN exit=0 <log>` plus its last log line), `BLOCKED-UI` plus the screen for a blocked one, and `TIMEOUT W2 ...` for the
+rest. Its exit code is always 0. A report is written as `<id>.md` (the text) and `<id>.json` (`fleet_report.parse`);
+a one-turn worker (fixer, reviewer, research, layer) is stopped once its status is final.
 """
 # Complexity notation:
 # n = tasks in the plan, k = tasks in a message, w = workers, m = lines of metrics.jsonl, T = transcript lines, s = screen bytes
 import argparse  # O(1)
+import importlib  # O(1)
 import json  # O(1)
-import re  # O(1)
 import sys  # O(1)
 import time  # O(1)
 from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+import fleet_report  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
 import herdr_client as hc  # noqa: E402 | O(1)
 import metrics as mx  # noqa: E402 | O(1)
@@ -30,6 +34,7 @@ import task as taskmod  # noqa: E402 | O(1)
 import testcmd  # noqa: E402 | O(1)
 
 STATUS_LINE = "Status: DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED"  # O(1)
+FINAL = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "APPROVED", "CHANGES_REQUESTED")  # a one-turn worker with one of these is stopped | O(1)
 SETTLE_MS = 10000  # a stop record must appear within this long after the state change | O(1)
 HERE = Path(__file__).resolve().parent  # O(1)
 
@@ -157,12 +162,19 @@ def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
     sent = now_ms()  # O(1)
     hc.prompt(fs.name_of(sd, wid, data["workers"][wid]), msg, ["working"], 15000)  # O(len msg)
     label = ",".join(tasks)  # O(k)
-    fs.set_state(sd, wid, "busy", label)  # O(w)
-    data = fs.load(sd)  # O(w)
-    data["workers"][wid]["sent"] = sent  # O(1)
-    fs.save(sd, data)  # O(w)
-    pp = sd / "pool.json"  # O(1)
-    with fs.locked(sd):  # serialise the pool.json read-change-save | O(1) plus wait
+    _busy(sd, wid, label, sent)  # O(w + pool bytes)
+    print(f"{wid} {label} sent")  # O(1)
+    return label  # O(1)
+
+
+def _busy(sd, wid, label, sent):  # worker busy on LABEL since SENT, in the pool too (a worker the pool lacks is fine) | O(w + pool bytes)
+    pp = Path(sd) / "pool.json"  # O(1)
+    with fs.locked(sd):  # serialise the fleet.json and pool.json read-change-save | O(1) plus wait
+        data = fs.load(sd)  # O(w)
+        if wid not in data["workers"]:  # O(1)
+            raise KeyError(wid)  # O(1)
+        data["workers"][wid].update({"state": "busy", "task": label, "sent": sent})  # O(1)
+        fs.save(sd, data)  # O(w)
         if pp.exists():  # O(1)
             pdata = pool.load(pp)  # O(pool bytes)
             try:  # O(1)
@@ -170,17 +182,38 @@ def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
                 pool.save(pp, pdata)  # O(pool bytes)
             except KeyError:  # a worker the pool does not know | O(1)
                 pass  # O(1)
+
+
+def send_brief(sd, wid, brief, label=""):  # O(w + len brief path + pool bytes)
+    """Tell worker WID to read the brief file and answer as its role's report contract says; returns the label
+    (LABEL, else the brief's stem). FileNotFoundError for a missing brief, KeyError for an unknown worker."""
+    sd = Path(sd)  # O(1)
+    path = Path(brief).resolve()  # O(1)
+    if not path.is_file():  # O(1)
+        raise FileNotFoundError(str(brief))  # O(1)
+    w = fs.load(sd)["workers"][wid]  # KeyError for an unknown worker | O(w)
+    msg = fleet_report.brief_message(w.get("role") or "implementer", str(path))  # O(1)
+    label = label or path.stem  # O(1)
+    sent = now_ms()  # O(1)
+    hc.prompt(fs.name_of(sd, wid, w), msg, ["working"], 15000)  # O(len msg)
+    _busy(sd, wid, label, sent)  # O(w + pool bytes)
     print(f"{wid} {label} sent")  # O(1)
     return label  # O(1)
 
 
-def _status(report, tid):  # O(len)
-    first = (report or "").lstrip().split("\n", 1)[0]  # O(len)
-    m = mx.STATUS.search(report or "") or mx.LEAD.search(first)  # O(len)
-    if m:  # O(1)
-        return m.group(1).upper()  # O(1)
-    m = re.search(mx.TASK_STATUS.format(re.escape(tid)), report or "")  # O(len)
-    return m.group(1).upper() if m else "UNKNOWN"  # O(1)
+def send_text(sd, wid, text):  # O(w + len text)
+    """Answer a worker with free text. It is busy again on its last task, so a bare `wait` waits for the answer; the pool stays as it was."""
+    sd = Path(sd)  # O(1)
+    name = fs.worker_name(sd, wid)  # KeyError for an unknown worker | O(w)
+    sent = now_ms()  # O(1)
+    hc.prompt(name, text, ["working"], 15000)  # O(len text)
+    with fs.locked(sd):  # O(1) plus wait
+        data = fs.load(sd)  # O(w)
+        w = data["workers"].get(wid)  # O(1)
+        if w is not None:  # O(1)
+            w.update({"state": "busy", "task": w.get("task") or w.get("last_task") or wid, "sent": sent})  # O(1)
+            fs.save(sd, data)  # O(w)
+    print(f"{wid} text sent")  # O(1)
 
 
 def _write(path, text):  # O(len)
@@ -188,14 +221,46 @@ def _write(path, text):  # O(len)
     path.write_text(text, encoding="utf-8")  # O(len)
 
 
+def _ready(sd, wid, label):  # one lock-held write: ready, no task, LABEL remembered as the last task | O(w)
+    with fs.locked(sd):  # O(1) plus wait
+        data = fs.load(sd)  # O(w)
+        if wid in data["workers"]:  # O(1)
+            data["workers"][wid].update({"state": "ready", "task": None, "last_task": label})  # O(1)
+            fs.save(sd, data)  # O(w)
+
+
+def _stop_worker(sd, wid):  # O(w) plus herdr calls
+    try:  # a failed stop must not lose the report | O(1)
+        importlib.import_module("fleet").stop(sd, [wid])  # O(w)
+    except Exception:  # O(1)
+        pass  # O(1)
+
+
 def _finish(sd, wid, w, text, source):  # O(len + w)
-    tid = (w.get("task") or wid).split(",")[0]  # O(1)
-    rp = Path(sd) / "fleet" / "reports" / f"{tid}.md"  # O(1)
-    _write(rp, text)  # O(len)
-    fs.set_state(sd, wid, "ready")  # O(w)
-    res = {"id": wid, "task": w.get("task") or wid, "status": _status(text, tid), "report": str(rp), "source": source}  # O(len)
-    print(f"{res['id']} {res['task']} {res['status']} {rp}" + (" (screen)" if source == "screen" else ""))  # O(1)
-    return res  # O(1)
+    label = w.get("task") or wid  # O(1)
+    rid = label.split(",")[0]  # O(1)
+    rdir = Path(sd) / "fleet" / "reports"  # O(1)
+    mp, jp = rdir / f"{rid}.md", rdir / f"{rid}.json"  # O(1)
+    _write(mp, text)  # O(len)
+    rep = fleet_report.parse(text, rid, allow_json=source == "transcript")  # a screen holds no trustworthy json block | O(len)
+    _write(jp, json.dumps({**rep, "id": wid, "label": label, "role": w.get("role") or "implementer", "source": source, "report": str(mp)}, indent=2) + "\n")  # O(len)
+    n = len(rep["findings"])  # O(1)
+    print(f"{wid} {label} {rep['status']} findings={n} {jp}" + (" (screen)" if source == "screen" else ""))  # O(1)
+    _ready(sd, wid, label)  # O(w)
+    if w.get("one_turn") and rep["status"] in FINAL:  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker | O(1)
+        _stop_worker(sd, wid)  # O(w)
+    return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n}  # O(1)
+
+
+def _finish_layer(sd, wid, w, r):  # a finished layer worker: its result as json and two lines, then the worker is stopped | O(w)
+    label = w.get("task") or wid  # O(1)
+    jp = Path(sd) / "fleet" / "reports" / f"{label.split(',')[0]}.json"  # O(1)
+    _write(jp, json.dumps({**r, "id": wid, "label": label, "role": "layer"}, indent=2) + "\n")  # O(1)
+    print(f"{wid} {label} {r['status']} exit={r['exit']} {r['log']}")  # O(1)
+    print(f"  {r['last']}")  # O(1)
+    _ready(sd, wid, label)  # O(w)
+    _stop_worker(sd, wid)  # O(w)
+    return {"id": wid, "task": label, "status": r["status"], "report": str(jp), "source": "layer", "findings": 0}  # O(1)
 
 
 def _blocked(sd, wid, w):  # O(s + w)
@@ -226,6 +291,12 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None):  # O(timeout/poll * (w + 
         now = clock()  # O(1)
         for wid in list(pending):  # O(w) iterations
             w = fs.load(sd)["workers"].get(wid, {})  # O(w)
+            if w.get("role") == "layer":  # a shell pane: its exit file tells, herdr has no agent state for it | O(1)
+                r = importlib.import_module("fleet_layer").result(sd, wid, w)  # O(l)
+                if r is not None:  # O(1)
+                    results.append(_finish_layer(sd, wid, w, r))  # O(w)
+                    pending.remove(wid)  # O(w)
+                continue  # O(1)
             st = states.get(fs.name_of(sd, wid, w))  # herdr lists agents by name, not by worker id | O(1)
             if st == "blocked":  # O(1)
                 results.append(_blocked(sd, wid, w))  # O(s + w)
@@ -262,6 +333,8 @@ def main(argv=None):  # O(wait)
     sp.add_argument("wid")  # O(1)
     sp.add_argument("tasks", nargs="*")  # O(1)
     sp.add_argument("--text")  # O(1)
+    sp.add_argument("--brief")  # O(1)
+    sp.add_argument("--label", default="")  # O(1)
     sp.add_argument("--plan")  # O(1)
     sp.add_argument("--sl", default=str(HERE / "sl"))  # O(1)
     sp.add_argument("--root", default=str(HERE.parents[2]))  # O(1)
@@ -283,10 +356,14 @@ def main(argv=None):  # O(wait)
         elif a.cmd == "wait":  # O(1)
             wait(sd, a.ids or None, a.timeout, a.poll)  # O(wait)
         elif a.text is not None:  # O(1)
-            hc.prompt(fs.worker_name(sd, a.wid), a.text, ["working"], 15000)  # O(w + len text)
-            print(f"{a.wid} text sent")  # O(1)
+            send_text(sd, a.wid, a.text)  # O(w + len text)
+        elif a.brief:  # O(1)
+            if not Path(a.brief).is_file():  # before any prompt | O(1)
+                print(f"error: brief not found: {Path(a.brief).resolve()}", file=sys.stderr)  # O(1)
+                return 2  # O(1)
+            send_brief(sd, a.wid, a.brief, a.label)  # O(w + pool bytes)
         elif not a.tasks:  # O(1)
-            print("error: send needs task ids or --text", file=sys.stderr)  # O(1)
+            print("error: send needs task ids, --text or --brief", file=sys.stderr)  # O(1)
             return 2  # O(1)
         else:  # O(1)
             send(sd, a.plan or nt.DEFAULT_PLAN, a.wid, a.tasks, a.sl, a.root)  # O(w + n + k*s)

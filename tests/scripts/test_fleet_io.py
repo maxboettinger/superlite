@@ -127,9 +127,9 @@ def test_wait_reads_report_from_transcript(world, tmp_path, capsys):
     (world.sd / "metrics.jsonl").write_text(json.dumps({"ev": "stop", "t": sent + 10, "agent_id": "W1", "type": "fleet:superlite:implementer", "transcript": str(tr), "last": "Status: DONE"}) + "\n")
     world.fh.states = [{"sl-proj-w1": "working", "sl-proj-w2": "idle"}, {"sl-proj-w1": "done", "sl-proj-w2": "idle"}]
     out = io.wait(world.sd, ["W1"], 10000)
-    assert out == [{"id": "W1", "task": "T3", "status": "DONE", "report": str(world.sd / "fleet" / "reports" / "T3.md"), "source": "transcript"}]
+    assert out == [{"id": "W1", "task": "T3", "status": "DONE", "report": str(world.sd / "fleet" / "reports" / "T3.json"), "source": "transcript", "findings": 0}]
     assert (world.sd / "fleet" / "reports" / "T3.md").read_text() == "Status: DONE\nFiles changed: src/c.py"
-    assert f"W1 T3 DONE {world.sd / 'fleet' / 'reports' / 'T3.md'}" in capsys.readouterr().out
+    assert f"W1 T3 DONE findings=0 {world.sd / 'fleet' / 'reports' / 'T3.json'}" in capsys.readouterr().out
     assert json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]["state"] == "ready"
 
 def test_wait_ignores_stop_older_than_send(world, tmp_path, capsys):
