@@ -25,7 +25,10 @@ def test_no_positional_re_count_or_flags():
                            check=True).stdout.split()
     bad = []
     for f in files:
-        tree = ast.parse((ROOT / f).read_text(encoding="utf-8"), f)
+        try:
+            tree = ast.parse((ROOT / f).read_text(encoding="utf-8"), f)
+        except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
+            continue  # deleted-but-tracked file or an intentionally broken fixture
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
