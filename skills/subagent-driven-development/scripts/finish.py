@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Print the closing summary of a run.
 
-    finish.py [--ledger .superlite/progress.md] [--log .superlite/incidents.jsonl]
+    finish.py [--plan PLAN] [--ledger .superlite/progress.md] [--log .superlite/incidents.jsonl]
 
 Collects, from the progress ledger, every `Ruling:` line (in order), the
 commits and the last test counts, plus the open incidents from the log. Open means what the
 review packet counts: a location whose newest entry is resolved, and a test-failure the newest
 covering test summary shows green (a later full run covers every run_tests failure), are not open.
+Ledger and log default to the run folder of `--plan` once it holds a run (else the session's run, #178). The
+superlite-side stops of the run (guard blocks and rewrites, guard errors, test runs with no result, commit scope
+blocks) print as one line, `superlite stops this run: N kind (tool), ...`, and each is also logged as an `auto`
+feedback entry (`feedback.add_auto`; a failure to write feedback never fails finish, #140).
 Deterministic: the same files give the same text. Stdlib only.
 """
 # Complexity notation:
@@ -135,6 +139,65 @@ def group_incidents(incidents, limit=15):  # O(I + G log G + limit*w)
     return lines  # O(1)
 
 
+STOP_KINDS = ("rule-block", "rule-rewrite", "guard-error", "no-result")  # incident kinds the hooks, lint and run_tests log for a stop | O(1)
+UNRESOLVED = ("", "none", "open", "unresolved")  # as commit_task reads a block's state | O(1)
+
+
+def read_stops(path):  # O(I*w) the stops of a run: (kind, tool, target) per incident, in log order
+    """Superlite-side stops from the incident log: the kinds in STOP_KINDS, and an open `exception` of commit_task (a
+    commit scope block or a refused commit). `tool` is the entry's `tool` (the hook or command that stopped), else its
+    `agent`; hook entries carry no file, so `target` is the entry's `target`, else its file."""
+    p = Path(path)  # O(1)
+    out = []  # O(1)
+    if not p.is_file():  # O(1)
+        return out  # O(1)
+    for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():  # O(I) iterations
+        try:  # O(1)
+            e = json.loads(ln)  # O(w)
+        except ValueError:  # O(1)
+            continue  # O(1)
+        if not isinstance(e, dict):  # O(1)
+            continue  # O(1)
+        kind = e.get("kind")  # O(1)
+        if kind == "exception" and e.get("agent") == "commit_task":  # O(1)
+            if str(e.get("resolution") or "").lower() not in UNRESOLVED:  # a block a later commit resolved is not a stop | O(1)
+                continue  # O(1)
+        elif kind not in STOP_KINDS:  # O(1)
+            continue  # O(1)
+        file = str(e.get("file") or "")  # O(1)
+        out.append((kind, str(e.get("tool") or e.get("agent") or "unknown"),  # O(1)
+                    str(e.get("target") or ("" if file in ("", "-") else file))))
+    return out  # O(1)
+
+
+def stops_line(stops):  # O(I + G log G) None when the run had no stops
+    """`superlite stops this run: 2 rule-block (block-coordinator-edits), 1 no-result (run_tests)`: most frequent first."""
+    counts = {}  # (kind, tool) -> count, insertion order is log order | O(1)
+    for kind, tool, _target in stops:  # O(I) iterations
+        counts[(kind, tool)] = counts.get((kind, tool), 0) + 1  # O(1)
+    if not counts:  # O(1)
+        return None  # O(1)
+    ranked = sorted(counts.items(), key=lambda kv: -kv[1])  # O(G log G); stable: ties keep log order
+    return "superlite stops this run: " + ", ".join(f"{n} {kind} ({tool})" for (kind, tool), n in ranked)  # O(G)
+
+
+def log_auto(stops):  # O(I*w) one `feedback.add_auto` per stop; the number written; never raises
+    """Each stop becomes one `auto` feedback entry (tool, kind as the reason, target); triage groups the repeats."""
+    try:  # feedback is optional here: finish must not die over it | O(1)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+        import feedback  # lazy | O(1)
+        version = feedback.version()  # O(size of package.json)
+    except Exception:  # noqa: BLE001 | O(1)
+        return 0  # O(1)
+    written = 0  # O(1)
+    for kind, tool, target in stops:  # O(I) iterations
+        try:  # O(1)
+            written += bool(feedback.add_auto(tool, kind, target, version))  # O(w) + locked append
+        except Exception:  # noqa: BLE001 | O(1)
+            continue  # O(1)
+    return written  # O(1)
+
+
 def unblocked_report(ledger, lint_log):  # O(R*w + L*n)
     """One line: were all stable tasks dispatched before the next patch, and the largest stable-to-dispatch lag."""
     lp = Path(lint_log)  # O(1)
@@ -241,6 +304,9 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     import orchestrator  # O(1)
     out.append(orchestrator.summary_line(Path(ledger).resolve().parent))  # mode, and the approval time in human mode | O(file)
     out.append("after finishing: `sl orchestrator end` archives the run markers (the coordinator guard stops)")  # O(1)
+    stops = stops_line(read_stops(log))  # O(I*w)
+    if stops:  # O(1)
+        out.append(stops)  # O(1)
     out.append("superlite friction this run (broken, slow, unclear, repeated work)? "  # O(1)
                "`sl feedback add \"<what, where, expected>\"` once per finding")
     out.append("")  # O(1)
@@ -266,13 +332,16 @@ def main(argv=None):  # O(R*w + I*w)
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
     import state  # O(1)
-    ap.add_argument("--ledger", default=state.ledger_path())  # the session's run, else ./.superlite | O(d)
-    ap.add_argument("--log", default=state.incident_log())  # the session's run, else ./.superlite | O(d)
-    ap.add_argument("--plan", help="record this run into history (needs .superlite/metrics.jsonl)")  # O(1)
+    ap.add_argument("--ledger", help="default: progress.md in the run folder (--plan's own, else the session's run)")  # O(1)
+    ap.add_argument("--log", help="default: incidents.jsonl in the run folder")  # O(1)
+    ap.add_argument("--plan", help="record this run into history (needs .superlite/metrics.jsonl); its run folder is the default")  # O(1)
     ap.add_argument("--lint-log", help="default: lint-log.jsonl next to the ledger")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    sd = state.for_plan(a.plan) if a.plan else state.resolve()  # the defaults follow --plan once its run started (#178) | O(d)
+    ledger, log = a.ledger or str(sd / "progress.md"), a.log or str(sd / "incidents.jsonl")  # O(1)
     sys.stdout.reconfigure(encoding="utf-8")  # O(1)
-    sys.stdout.write(summary(a.ledger, a.log, a.lint_log or str(Path(a.ledger).with_name("lint-log.jsonl")), a.plan))  # O(output)
+    sys.stdout.write(summary(ledger, log, a.lint_log or str(Path(ledger).with_name("lint-log.jsonl")), a.plan))  # O(output)
+    log_auto(read_stops(log))  # after the summary: a feedback failure never costs the closing text (#140) | O(I*w)
     return 0  # O(1)
 
 
