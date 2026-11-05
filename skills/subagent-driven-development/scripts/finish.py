@@ -181,7 +181,7 @@ def stops_line(stops):  # O(I + G log G) None when the run had no stops
     return "superlite stops this run: " + ", ".join(f"{n} {kind} ({tool})" for (kind, tool), n in ranked)  # O(G)
 
 
-def log_auto(stops):  # O(I*w) one `feedback.add_auto` per stop; the number written; never raises
+def log_auto(stops, run=""):  # O(I*w) one `feedback.add_auto` per stop; the number written; never raises
     """Each stop becomes one `auto` feedback entry (tool, kind as the reason, target); triage groups the repeats."""
     try:  # feedback is optional here: finish must not die over it | O(1)
         sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
@@ -189,12 +189,32 @@ def log_auto(stops):  # O(I*w) one `feedback.add_auto` per stop; the number writ
         version = feedback.version()  # O(size of package.json)
     except Exception:  # noqa: BLE001 | O(1)
         return 0  # O(1)
+    marker = Path(run).with_name("finish-auto.json") if run else None  # per run folder: stops already fed to feedback | O(1)
+    have = {}  # "tool|kind|target" -> how many a finish of this run already logged: a repeat adds only the new ones | O(1)
+    try:  # O(1)
+        have = json.loads(marker.read_text(encoding="utf-8")) if marker and marker.is_file() else {}  # O(size)
+        have = have if isinstance(have, dict) else {}  # O(1)
+    except (OSError, ValueError):  # O(1)
+        have = {}  # O(1)
+    seen = {}  # stops of this call per key | O(1)
     written = 0  # O(1)
     for kind, tool, target in stops:  # O(I) iterations
         try:  # O(1)
-            written += bool(feedback.add_auto(tool, kind, target, version))  # O(w) + locked append
+            k = "|".join((tool, kind, target))  # O(w)
+            seen[k] = seen.get(k, 0) + 1  # O(1)
+            if seen[k] <= int(have.get(k, 0)):  # an earlier finish of this run logged it | O(1)
+                continue  # O(1)
+            if feedback.add_auto(tool, kind, target, version):  # O(w) + locked append
+                written += 1  # O(1)
+            else:  # not written: a later finish tries again | O(1)
+                seen[k] -= 1  # O(1)
         except Exception:  # noqa: BLE001 | O(1)
-            continue  # O(1)
+            seen[k] = seen.get(k, 1) - 1  # O(1)
+    if marker:  # O(1)
+        try:  # O(1)
+            marker.write_text(json.dumps({k: max(n, int(have.get(k, 0))) for k, n in seen.items()}), encoding="utf-8")  # O(k)
+        except OSError:  # O(1)
+            pass  # O(1)
     return written  # O(1)
 
 
@@ -341,7 +361,7 @@ def main(argv=None):  # O(R*w + I*w)
     ledger, log = a.ledger or str(sd / "progress.md"), a.log or str(sd / "incidents.jsonl")  # O(1)
     sys.stdout.reconfigure(encoding="utf-8")  # O(1)
     sys.stdout.write(summary(ledger, log, a.lint_log or str(Path(ledger).with_name("lint-log.jsonl")), a.plan))  # O(output)
-    log_auto(read_stops(log))  # after the summary: a feedback failure never costs the closing text (#140) | O(I*w)
+    log_auto(read_stops(log), str(Path(log).resolve()))  # after the summary: a feedback failure never costs the closing text (#140) | O(I*w)
     return 0  # O(1)
 
 
