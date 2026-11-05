@@ -245,3 +245,9 @@ def test_agents_md_runs_layers_through_test_layers():
     assert "-m pytest" not in text
     assert "test_layers.py run headless" in text and "test_layers.py run tui" in text
     assert "coordinator's step" in text
+
+
+def test_tools_doc_matches_record_and_claim_code():
+    text = (Path(__file__).resolve().parents[2] / "docs" / "tools.md").read_text(encoding="utf-8")
+    assert "--record --passed N --command CMD" in text and "[--failed N]" not in text
+    assert "not with `--also`" in text
