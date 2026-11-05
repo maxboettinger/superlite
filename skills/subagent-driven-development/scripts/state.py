@@ -3,11 +3,13 @@
 
     state.py where [--plan P]        print the resolved .superlite folder and how it was found
 
-Resolution, the same order as the hooks (hooks/superlite-state.sh):
+Resolution, the same order as the hooks (hooks/superlite-state.sh), plus step 2 (#178):
   1. $SUPERLITE_STATE_DIR (a .superlite path), for hosts without session ids;
-  2. the session's binding: $SUPERLITE_HOME/sessions/<session id> (default ~/.superlite/sessions/) holds the absolute
+  2. the run of the linked worktree the cwd is in: its `.superlite` when that holds a run marker (stable.json, prime.md or
+     pool.json), so one coordinator working on several plans reaches each plan's run from that plan's worktree;
+  3. the session's binding: $SUPERLITE_HOME/sessions/<session id> (default ~/.superlite/sessions/) holds the absolute
      path of the bound .superlite folder; used while that folder exists and no other session owns it;
-  3. ./.superlite, unless another live session owns it; then the session's private folder
+  4. ./.superlite, unless another live session owns it; then the session's private folder
      $SUPERLITE_HOME/sessions/<session id>.d/.superlite (state set before any plan, moved to the plan's folder on the
      next bind; the hooks judge paths against the launch directory meanwhile).
 A bind refuses a folder another live session owns, except that a session launched in the folder's own project (launch
@@ -21,7 +23,7 @@ id), moves a pending gate (orchestrator.json, human-replies.jsonl) from the sess
 folder another live session owns (`force` takes it over). An owner is live while its binding points at the folder.
 Paths stay as given (absolute, symlinks not resolved, a relative path joined to $PWD), as the hooks see them. A
 binding also records $CLAUDE_PID, so the SessionStart hook moves it to the new id after /clear (same process). Bindings
-older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, resolve, pool_path, bind, unbind, owner, live_owner. Stdlib only.
+older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, worktree_run, for_plan, resolve, pool_path, bind, unbind, owner, live_owner. Stdlib only.
 """
 # Complexity notation:
 #   d = depth of a path (parents walked), b = bindings in $SUPERLITE_HOME/sessions
@@ -34,6 +36,7 @@ from pathlib import Path  # O(1)
 
 OWNER = "session"  # .superlite/session: the id of the session bound to this folder | O(1)
 GATE_FILES = ("orchestrator.json", "human-replies.jsonl")  # a pending gate follows its session to the plan's folder | O(1)
+RUN_MARKERS = ("stable.json", "prime.md", "pool.json")  # a .superlite holding one of these is a started run | O(1)
 PRUNE_S = 14 * 24 * 3600  # O(1)
 _SID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")  # a session id is also a file name | O(1)
 
@@ -187,13 +190,39 @@ def bound(sid=None):  # O(d)
     return t  # O(1)
 
 
+def has_run(sd) -> bool:  # O(1)
+    """True when the .superlite folder sd holds a run marker (stable.json, prime.md or pool.json)."""
+    return any((Path(sd) / m).is_file() for m in RUN_MARKERS)  # O(1) iterations (3)
+
+
+def worktree_run():  # O(d)
+    """The `.superlite` of the linked worktree the cwd is in (the nearest `.git` above it is a file), while it holds a
+    run marker; else None. A main checkout, a folder outside git and a worktree with no run give None."""
+    top = git_root(".")  # O(d)
+    if top is None or not (top / ".git").is_file():  # a main checkout keeps `.git` as a folder | O(1)
+        return None  # O(1)
+    sd = top / ".superlite"  # O(1)
+    return sd if has_run(sd) else None  # O(1)
+
+
+def for_plan(plan) -> Path:  # O(d)
+    """The run folder of an explicit plan: its `.superlite` (`plan_dir`) once that holds a run marker, else what `resolve()`
+    names, so a plan whose run has not started keeps the session's folder (#178)."""
+    sd = plan_dir(plan)  # O(d)
+    return sd if has_run(sd) else resolve()  # O(d)
+
+
 def resolve(plan_or_dir=None) -> Path:  # O(d)
-    """An explicit plan or folder wins; else $SUPERLITE_STATE_DIR, the session's binding, ./.superlite or the private folder."""
+    """An explicit plan or folder wins; else $SUPERLITE_STATE_DIR, the cwd's worktree run, the session's binding,
+    ./.superlite or the private folder."""
     if plan_or_dir is not None:  # O(1)
         return plan_dir(plan_or_dir)  # O(d)
     env = os.environ.get("SUPERLITE_STATE_DIR", "")  # O(1)
     if env:  # O(1)
         return _abs(env)  # O(d)
+    w = worktree_run()  # O(d)
+    if w is not None:  # O(1)
+        return w  # O(1)
     b = bound()  # O(d)
     if b is not None:  # O(1)
         return b  # O(1)
@@ -295,6 +324,8 @@ def main(argv=None):  # O(d)
         how = "plan"  # O(1)
     elif os.environ.get("SUPERLITE_STATE_DIR"):  # O(1)
         how = "SUPERLITE_STATE_DIR"  # O(1)
+    elif worktree_run() is not None:  # O(d)
+        how = "worktree run"  # O(1)
     else:  # O(1)
         how = "session binding" if bound() else "current directory"  # O(d)
     print(f"{_abs(sd)} ({how})")  # O(d)

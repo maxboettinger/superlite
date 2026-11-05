@@ -17,7 +17,9 @@ Batching: `split.choose` picks how many new implementers and which ready tasks e
 batch, a stable.json `critical_path` task alone, summed context within the tier's max_context_k).
 `--batch 1` turns batching off: one task per line.
 
-Defaults when a flag is omitted: committed tasks come from the ledger's `- commit Tn <sha>`
+Defaults when a flag is omitted: `--pool` and `--ledger` live in the run folder of `--plan` once that plan's
+`.superlite` holds a run marker (stable.json, prime.md or pool.json; so a coordinator bound to run A still dispatches
+run B's plan from B's pool and ledger), else in the folder `state.resolve()` names. Committed tasks come from the ledger's `- commit Tn <sha>`
 lines; running tasks are the pool agents' `current` tasks (`Tn` or a batch `Tn,Tm`) not yet committed (busy or not:
 a FAILED or BLOCKED task keeps its `current` until commit_task commits it). An agent with
 a `current` gets no new task, and no agent appears on two lines of one call (`agent=` or
@@ -283,13 +285,16 @@ def drop_evicted(pool_path, evict):  # O(pool bytes + a*len(evict))
 def main(argv=None):  # O(c + L + n + e + R*a*(F + o))
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     ap.add_argument("--plan")  # O(1)
-    ap.add_argument("--pool", default=state.pool_path())  # the session's run, else ./.superlite | O(d)
-    ap.add_argument("--ledger", default=state.ledger_path())  # the session's run, else ./.superlite | O(d)
+    ap.add_argument("--pool", help="default: pool.json of the run folder")  # O(1)
+    ap.add_argument("--ledger", help="default: progress.md of the run folder")  # O(1)
     ap.add_argument("--committed", help="default: the ledger's commit lines")  # O(1)
     ap.add_argument("--running", help="default: `current` of each busy pool agent")  # O(1)
     ap.add_argument("--cap", type=int, default=10)  # O(1)
     ap.add_argument("--batch", type=int, help="1 = one task per agent (batching off)")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    sd = state.for_plan(a.plan) if a.plan else state.resolve()  # the run folder: --plan's own once started (#178), else the session's | O(d)
+    a.pool = a.pool or str(sd / "pool.json")  # defaults follow the parsed --plan, not the session's binding | O(1)
+    a.ledger = a.ledger or str(sd / "progress.md")  # O(1)
     plan = a.plan or load_pool(a.pool).get("plan") or nt.DEFAULT_PLAN  # O(pool bytes)
     import orchestrator  # O(1)
     blocked = orchestrator.require(plan, "dispatch")  # human mode waits for approval | O(file)
