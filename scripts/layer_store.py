@@ -98,6 +98,13 @@ def end_run(store: Path, layer: str) -> None:  # O(1)
 
 
 def pid_alive(pid: int) -> bool:  # O(1)
+    try:  # O(1)
+        return _pid_alive(pid)  # O(1)
+    except Exception:  # O(1)  huge pid (OverflowError), ctypes.windll or ArgumentError: unknown means not alive
+        return False  # O(1)
+
+
+def _pid_alive(pid: int) -> bool:  # O(1)
     if os.name == "nt":  # O(1)  os.kill(pid, 0) would terminate the process on Windows
         import ctypes  # O(1)
         kernel32 = ctypes.windll.kernel32  # O(1)

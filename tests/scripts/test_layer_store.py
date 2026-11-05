@@ -111,3 +111,9 @@ def test_no_temp_files_left(ls, s):
     ls.record_green(s, "unit", "h1", {"a.py": "1"})
     ls.start_run(s, "unit", "h1", os.getpid())
     assert sorted(p.name for p in s.parent.iterdir()) == ["running.json", "test-layers.json"]
+
+
+def test_running_huge_pid_does_not_raise(ls, s):
+    ls.start_run(s, "unit", "d", 2 ** 70)
+    assert ls.running(s, "unit", "d") is False
+    assert ls.pid_alive(2 ** 70) is False
