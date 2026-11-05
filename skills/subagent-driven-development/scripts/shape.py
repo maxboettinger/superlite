@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import plan_tools as pt  # noqa: E402 | O(1)
 
 PRIMITIVE = re.compile(r"^(none|void|unit|null|undefined|bool|boolean|int|integer|float|number|str|string|bytes|any)$", re.I)  # O(1)
-CALL = re.compile(r"^`?(?:(?:let|var|const)\s+\w+\s*(?::[^=]+)?=\s*)?(?:(?:try[?!]?|await|new|return)\s+)*([A-Za-z_][\w.]*)\s*\(")  # await/try/let x = before the call | O(1)
+CALL = re.compile(r"`?(?:(?:let|var|const)\s+\w+\s*(?::[^=]+)?=\s*)?(?:(?:try[?!]?|await|new|return)\s+)*([A-Za-z_][\w.]*)\s*\(")  # await/try/let x = before the call; searched, not anchored: the call may follow prose | O(1)
 
 
 def structured(ret) -> bool:  # O(s)
@@ -32,8 +32,7 @@ def structured(ret) -> bool:  # O(s)
 def example_names(task) -> set:  # O(k*s)
     out = set()  # O(1)
     for ex in task.examples:  # O(k)
-        m = CALL.match(pt.strip_ticks(ex))  # O(s)
-        if m:  # O(1)
+        for m in CALL.finditer(pt.strip_ticks(ex)):  # every call in the line, not only the first: `e.g. after a(): b() -> []` | O(s)
             out.update((m.group(1), m.group(1).rsplit(".", 1)[-1]))  # O(1)
     return out  # O(1)
 
@@ -67,8 +66,10 @@ def resolve_consumes(plan):  # O(n*q)
 
 
 def example_issues(plan, frozen=()) -> list:  # O(n*q)
-    """EXAMPLE: a consumer of a structured Produces without an `e.g.` line is a fix task until the producer has one."""
+    """EXAMPLE: a consumer of a structured Produces without an `e.g.` line is a fix task until the producer has one;
+    a consumer on a hard edge (`A -->|hard| B`) is exempt, as it builds against the real producer."""
     issues, seen = [], set()  # O(1)
+    hard = pt.hard_edges(plan)  # a hard edge waits for the built producer, so no example stands in for it | O(L*s)
     for cid, sig, cands in resolve_consumes(plan):  # O(q)
         if not cands:  # lint reports the missing Produces on its own | O(1)
             continue  # O(1)
@@ -77,6 +78,8 @@ def example_issues(plan, frozen=()) -> list:  # O(n*q)
             if pt.param_names(c_sig["args"]) == pt.param_names(sig["args"]):  # O(s)
                 pid, psig = c_id, c_sig  # O(1)
                 break  # O(1)
+        if (pid, cid) in hard:  # O(1)
+            continue  # O(1)
         if structured(psig["ret"]) and not has_example(plan.by_id[pid], psig) and (cid, psig["name"]) not in seen:  # O(k*s)
             seen.add((cid, psig["name"]))  # O(1)
             hint = f" (producer {pid} is dispatched and frozen: drop this Consumes entry or move it to a follow-up task)" if pid in frozen else ""  # O(1)

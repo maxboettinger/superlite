@@ -1117,6 +1117,47 @@ def load_coverage():  # O(1) after the first call; the PyPI `coverage` package m
     return mod  # O(1)
 
 
+def required_params(args: str, method: bool = False) -> int:  # O(s)
+    """Arguments a call must pass: no default, not `*args` or `**kw`; a method's `self`/`cls` is not passed by the caller."""
+    n = 0  # O(1)
+    for i, p in enumerate(split_top_level(args)):  # O(params)
+        p = p.strip()  # O(s)
+        if p in ("/", "*") or p.startswith("*") or "=" in p:  # O(1)
+            continue  # O(1)
+        if method and i == 0 and re.split(r"[:\s]", p, maxsplit=1)[0] in ("self", "cls"):  # O(s)
+            continue  # O(1)
+        n += 1  # O(1)
+    return n  # O(1)
+
+
+def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
+    """PROBE: a `call=` Probe entry must name a Produces of this plan that takes exactly one required parameter (probes pass
+    one text argument). The entry's task is a fix task; an entry outside every task block (plan header, a section) is plan-scoped."""
+    sigs = [(t.id, sig) for t in plan.tasks for sig in (parse_signature(i) for i in t.produces) if sig]  # O(n*q*s)
+    spans = [(t.line, t.line + t.text.count("\n"), t.id) for t in plan.tasks]  # O(n)
+    issues, seen = [], set()  # O(1)
+    for i, ln in enumerate(plan.lines):  # O(L)
+        fm = None if plan.fenced[i] else FIELD_RE.match(ln.strip())  # O(s)
+        if not fm or fm.group(1).strip().lower() != "probe entry":  # O(1)
+            continue  # O(1)
+        holder = next((tid for lo, hi, tid in spans if lo <= i <= hi), None)  # O(n)
+        for part in re.split(r"\s*·\s*", fm.group(2)):  # O(parts)
+            key, eq, val = strip_ticks(part).partition("=")  # O(s)
+            target = strip_ticks(val)  # O(s)
+            if not eq or key.strip().lower() != "call" or not target:  # O(1)
+                continue  # O(1)
+            cands = [s for _, s in sigs if s["name"] == target or target.endswith("." + s["name"]) or s["name"].endswith("." + target)]  # O(n*q)
+            counts = [required_params(c["args"], bool(c["cls"]) and c["member"] != "__init__") for c in cands]  # O(n*q*s)
+            if cands and 1 in counts:  # O(q)
+                continue  # O(1)
+            msg = (f"PROBE: call={target} takes {counts[0]} required parameters; probes pass one text argument" if cands  # O(1)
+                   else f"PROBE: call={target} is not a Produces of this plan")
+            if (holder, msg) not in seen:  # O(1)
+                seen.add((holder, msg))  # O(1)
+                issues.append(Issue(msg, [holder] if holder else (), scope="task" if holder else "plan"))  # O(1)
+    return issues  # O(issues)
+
+
 def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e*n + C*P + n*p + merge/simulate) total
     issues: list[str] = []  # O(1)
     warnings: list[str] = []  # O(1)
@@ -1202,6 +1243,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
     except (OSError, ValueError):  # O(1)
         frozen = set()  # O(1)
     issues.extend(shape.example_issues(plan, frozen))  # a consumer of structured data without examples is a fix task | O(n*q)
+    issues.extend(probe_issues(plan))  # a `call=` entry the probes cannot call is a fix task (#177) | O(L*s + n*q)
     warnings.extend(shape.split_notes(plan))  # O(n*q)
 
     # diagrams
@@ -1430,6 +1472,16 @@ def block_hash(task: Task) -> str:  # O(block bytes) whitespace-insensitive dige
     return hashlib.sha1(" ".join(task.text.split()).encode("utf-8")).hexdigest()[:12]  # O(block bytes)
 
 
+def log_refusal(sl_dir: Path, tool: str, target: str) -> None:  # O(len) | append the `rule-block` row the guards write; never raises
+    try:  # O(1)
+        sl_dir.mkdir(parents=True, exist_ok=True)  # O(1)
+        row = {"kind": "rule-block", "agent": "coordinator", "tool": tool, "target": " ".join(target.split())[:200]}  # O(len)
+        with open(sl_dir / "incidents.jsonl", "a", encoding="utf-8") as f:  # O(1)
+            f.write(json.dumps(row) + "\n")  # O(len)
+    except (OSError, TypeError, ValueError):  # O(1)
+        pass  # O(1)
+
+
 def cmd_lint_stable(args) -> int:  # O(lint + n*k*s)
     import orchestrator  # human mode: no lint --stable (and so no dispatch) before approval | O(1)
     import state  # O(1)
@@ -1440,11 +1492,13 @@ def cmd_lint_stable(args) -> int:  # O(lint + n*k*s)
         return 2  # O(1)
     blocked = orchestrator.require(args.plan, "lint --stable")  # O(file)
     if blocked:  # O(1)
+        log_refusal(stable_root(args.plan) / ".superlite", "lint --stable", orchestrator.BLOCK)  # a refusal is a superlite-side stop (#140) | O(len)
         return blocked  # O(1)
     import start_gate  # O(1)
     gate = start_gate.check(stable_root(args.plan), Path(args.plan), Path.cwd(), (Path(__file__).resolve().parent / "sl").as_posix())  # O(f)
     start_gate.report(gate, stable_root(args.plan))  # O(m)
     if not gate.ok:  # no stable.json is written when blocked | O(1)
+        log_refusal(stable_root(args.plan) / ".superlite", "lint --stable", gate.messages[0] if gate.messages else gate.mode)  # O(len)
         return 2  # O(1)
     plan = Plan.load(args.plan)  # O(C+L)
     issues, warnings = lint_plan(plan, args)  # O(lint)
