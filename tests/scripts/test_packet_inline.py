@@ -215,3 +215,10 @@ def test_spec_section_keeps_fenced_heading_lines(repo):
     (repo / "spec.md").write_text("# Spec\n\n```\n# not a heading\n```\n\n## Review Focus\n- x\n", encoding="utf-8")
     spec = section(inline(repo), "## 0. Spec")
     assert "\n# not a heading\n" in spec and "### Spec" in spec
+
+
+def test_final_reviewer_lists_what_it_checked():
+    agent = (HERE.parent.parent / "agents" / "final-reviewer.md").read_text(encoding="utf-8")
+    assert "`Checked:`" in agent and "8 words" in agent and "unverified" in agent
+    assert "outside the 300-word cap" in agent
+    assert "starting directly with:\n`Verdict:" in agent

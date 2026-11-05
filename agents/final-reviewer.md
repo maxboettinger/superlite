@@ -21,4 +21,6 @@ then one finding per line as `file:line - problem - fix - tier N`. No preamble, 
 2. Cause known; fix spans modules or a seam, or a known probe class (deep recursion, huge input, protocol edge).
 3. Cause unknown and needs diagnosis.
 
+After the findings, add `Checked:` and one line per packet section or task you read (`T3 diff: read`) and per Review Focus item (`RF2: checked, holds`), each at most 8 words. These lines sit outside the 300-word cap. List a truncated part or a `Left out:` part as `unverified`. On the fast path reply with the bare verdict line, no `Checked:`.
+
 Split findings by file where you can, so each goes to one fixer.
