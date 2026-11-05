@@ -135,7 +135,7 @@ def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int) -> 
 def route(sd: Path, plan: Path, reports: list[str], sl_path: str) -> list[str]:  # O(r + k log k + n*o + f)
     """Write one fixer brief per owning task; return the `fixer ...` lines in plan task order."""
     sd = Path(sd).resolve()  # O(d)
-    root = sd.parent  # O(1)
+    root = Path(state.git_root(sd) or sd.parent)  # the project root, as fleet.py does | O(d)
     plan = Path(plan).resolve()  # O(d)
     tasks = pt.Plan.load(str(plan)).tasks  # O(C+L)
     if not tasks:  # O(1)
