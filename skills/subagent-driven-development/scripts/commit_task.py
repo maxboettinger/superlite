@@ -7,7 +7,8 @@
                       [--dispatch [--pool .superlite/pool.json] [--running T3] [--cap 10] [--batch N]]
 
 Several ids commit in order in one process (one plan parse, one exclude check). Output:
-the SHA for one task; `Tn <sha>` or `Tn FAILED` per task for several. Each committed
+the SHA for one task; `Tn <sha>` per task for several. A task that is not checkpointed prints `Tn FAILED: <reason>`
+(one task or several) and the call exits non-zero. Each committed
 task's agent in the pool (`current: Tn`) gets `current` cleared, `busy: false`, and Tn in
 its `tasks`. `--dispatch` then prints `next:` and the `dispatch` lines (ready tasks and
 agents) for the updated ledger, with the run's batch setting (`--batch`, else the plan's experiment claim, as
@@ -23,8 +24,10 @@ branch or the user's index) is stored under refs/superlite/<run>/<Tn> and its SH
 the ledger, probes and seam checks use; `sl autocommit on` (or SUPERLITE_AUTOCOMMIT=1)
 makes real commits.
 
-Steps: scope check (changes outside every task's Owns block the commit and are logged as
-incidents; files another task owns are left uncommitted, silently), py_compile plus an import check on each touched .py file, commit
+Steps: scope check (a change outside every task's Owns blocks the commit and is logged as an incident when it was dirty
+before the run (stable.json `baseline_dirty`) or the run recorded no baseline; with a baseline, any other such file is
+unrelated to the task: it is left uncommitted and listed as `left uncommitted (outside every Owns): F`; files another
+task owns are left uncommitted, silently), py_compile plus an import check on each touched .py file, commit
 with the task title, append the SHA to the progress ledger, then launch in the
 background `sl probe_run --commit SHA` and, for every seam of the task graph
 (`sl plan_tools taskgraph --format full`) that involves this task and whose both
@@ -465,15 +468,19 @@ def baseline_dirty(plan):  # O(b) paths dirty before the run from stable.json; N
 
 
 def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (status, add, commit, rev-parse)
-    """Commit one task; (exit code, sha or None). Files other tasks own are left alone."""
+    """Commit one task; (exit code, sha or None). Files other tasks own are left alone. A task not committed leaves its
+    reason in a.failed[tid] for the `Tn FAILED: <reason>` line."""
+    def fail(code, why):  # O(1)
+        a.failed[tid] = why  # O(1)
+        return code, None  # O(1)
     if tid not in info:  # O(1)
         print(f"error: unknown task {tid}", file=sys.stderr)  # O(1)
-        return 2, None  # O(1)
+        return fail(2, "unknown task")  # O(1)
     task = info[tid]  # O(1)
     owns = task["owns"]  # O(1)
     if not owns:  # O(1)
         print(f"error: {tid} has no Owns line", file=sys.stderr)  # O(1)
-        return 2, None  # O(1)
+        return fail(2, "no Owns line")  # O(1)
     owns = owns + [o for o in SHARED_OWNS if o not in owns]  # O(f)
     other = [o for t, i in info.items() if t != tid for o in i["owns"]  # O(o)
              if o not in SHARED_OWNS]
@@ -535,17 +542,23 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         out_of_scope = []  # O(1)
     if out_of_scope:  # O(1)
         base = baseline_dirty(a.plan)  # O(b)
-        why = {f: (" (dirty before the run)" if base and f in base else " (changed during the run, not by a task)" if base is not None else "")  # O(1)
-               for f in out_of_scope}  # O(m)
+        unrelated = [f for f in out_of_scope if base is not None and f not in base]  # the run recorded its start and this file is not in it: not this task's (#179) | O(m)
+        out_of_scope = [f for f in out_of_scope if f not in unrelated]  # a file dirty before the run, or with no baseline known, blocks as before | O(m)
+        for f in unrelated:  # O(m) iterations
+            if f not in a.left:  # once per call, not per task | O(1)
+                a.left.add(f)  # O(1)
+                print(f"left uncommitted (outside every Owns): {f}")  # O(1)
+    if out_of_scope:  # O(1)
+        why = {f: (" (dirty before the run)" if base and f in base else "") for f in out_of_scope}  # O(m)
         for f in out_of_scope:  # O(m) iterations
             print(f"out-of-scope {f}{why[f]}")  # O(1)
             a.blocked.add(f)  # O(1)
         log_incidents(a.log, tid, [(f, 0, f"change outside Owns{why[f]} blocked by commit_task; "  # O(m) one append
                                     "nothing committed") for f in out_of_scope])
-        return 1, None  # O(1)
+        return fail(1, "out-of-scope " + ", ".join(out_of_scope[:5]) + (" ..." if len(out_of_scope) > 5 else ""))  # O(m)
     if not mine:  # O(1)
         print(f"nothing to commit for {tid}", file=sys.stderr)  # O(1)
-        return 1, None  # O(1)
+        return fail(1, "nothing to commit")  # O(1)
 
     for f in shared:  # O(m) iterations
         print(f"shared-test {f}", file=sys.stderr)  # O(1)
@@ -555,12 +568,12 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     if not problems:  # O(1)
         problems = import_errors([f for f in py if is_module(f)], a.roots)  # O(m_py * import cost) + process spawn
     if problems:  # O(1)
-        for f, line, msg in problems:  # O(problems) iterations
-            print(f"{'syntax' if msg.startswith('SyntaxError') else 'import'} "  # O(1)
-                  f"{f}:{line} {msg}")  # O(1)
+        shown = [f"{'syntax' if msg.startswith('SyntaxError') else 'import'} {f}:{line} {msg}" for f, line, msg in problems]  # O(problems)
+        for ln in shown:  # O(problems) iterations
+            print(ln)  # O(1)
         log_incidents(a.log, tid, [(f, line, f"{msg}; nothing committed")  # O(problems) one append
                                    for f, line, msg in problems])
-        return 1, None  # O(1)
+        return fail(1, "; ".join(shown[:3]) + (" ..." if len(shown) > 3 else ""))  # O(problems)
 
     if shared:  # O(1)
         nt.add_incidents(a.log, [(f, 0, f"{tid}: shared test adjusted", "workaround", "commit_task", "accepted")  # O(m) one append
@@ -570,8 +583,9 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         title = autocommit.message(tid, task["title"], a.plan)  # O(L) file read
         r = git("commit", "-m", title, check=False)  # O(1) + process spawn
         if r.returncode != 0:  # O(1)
-            print((r.stderr or r.stdout).strip(), file=sys.stderr)  # O(1)
-            return 1, None  # O(1)
+            err = (r.stderr or r.stdout).strip()  # O(len)
+            print(err, file=sys.stderr)  # O(1)
+            return fail(1, "git commit failed: " + (err.splitlines() or ["no output"])[0][:120])  # O(len)
         sha = git("rev-parse", "HEAD").stdout.strip()  # O(1) + process spawn
     else:  # default: shadow checkpoint under refs/superlite, HEAD/branch/index/tree untouched | O(m) + git spawns
         sha = autocommit.checkpoint(tid, task["title"], mine, a.plan)  # O(m) + process spawn
@@ -587,14 +601,14 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
 def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for all tasks
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     ap.add_argument("task", nargs="*", help="one or more task ids, committed in order")  # O(1)
-    ap.add_argument("--plan", default=nt.DEFAULT_PLAN)  # O(1)
-    ap.add_argument("--ledger", default=state.ledger_path())  # the session's run, else ./.superlite | O(d)
-    ap.add_argument("--log", default=state.incident_log())  # the session's run, else ./.superlite | O(d)
+    ap.add_argument("--plan", help=f"default: {nt.DEFAULT_PLAN}")  # O(1)
+    ap.add_argument("--ledger", help="default: progress.md of the run folder")  # O(1)
+    ap.add_argument("--log", help="default: incidents.jsonl of the run folder")  # O(1)
     ap.add_argument("--allow-other-tasks", action="store_true",  # O(1)
                     help="no-op alias (kept for compatibility): other tasks' files are always left alone")  # O(1)
     ap.add_argument("--dispatch", action="store_true",  # O(1)
                     help="after committing, print `dispatch` output (next tasks and agents)")  # O(1)
-    ap.add_argument("--pool", default=state.pool_path(), help="pool for --dispatch")  # the session's run, else ./.superlite | O(d)
+    ap.add_argument("--pool", help="pool for --dispatch; default: pool.json of the run folder")  # O(1)
     ap.add_argument("--running", help="running tasks for --dispatch (default: from the pool)")  # O(1)
     ap.add_argument("--cap", type=int, default=10, help="cap for --dispatch")  # O(1)
     ap.add_argument("--batch", type=int, help="batch for --dispatch (1 = one task per agent); default: the plan's experiment claim")  # O(1)
@@ -604,6 +618,11 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
                     help="record that the one named task also commits FILE (needs --ruling); commits nothing")  # O(1)
     ap.add_argument("--ruling", help="why --also or --claim is needed; written to the ledger")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    sd = state.for_plan(a.plan) if a.plan else state.resolve()  # the run folder: --plan's own once started (#178), else the session's | O(d)
+    a.plan = a.plan or nt.DEFAULT_PLAN  # O(1)
+    a.ledger = a.ledger or str(sd / "progress.md")  # defaults follow the parsed --plan, not the session's binding | O(1)
+    a.log = a.log or str(sd / "incidents.jsonl")  # O(1)
+    a.pool = a.pool or str(sd / "pool.json")  # O(1)
     ids = [x for x in a.also + a.claim if re.fullmatch(r"T\d+", x) and not os.path.exists(x)]  # `--also F T1`: the greedy flag took the task id | O(k)
     a.also = [x for x in a.also if x not in ids]  # O(k)
     a.claim = [x for x in a.claim if x not in ids]  # `--claim F T1` too | O(k)
@@ -657,6 +676,8 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
 
     a.roots = pyroots.import_roots(Path("."), a.plan)  # O(dirs) once per process
     a.blocked = set()  # files reported out-of-scope by any task | O(1)
+    a.left = set()  # unrelated files already listed as left uncommitted | O(1)
+    a.failed = {}  # task -> why it was not checkpointed | O(1)
     worst = 0  # O(1)
     committed = []  # O(1)
     also_all = a.also  # only the first task receives --also | O(1)
@@ -668,8 +689,8 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
         if sha:  # O(1)
             committed.append(tid)  # O(1)
             print(sha if len(a.task) == 1 else f"{tid} {sha}")  # O(1)
-        elif len(a.task) > 1:  # O(1)
-            print(f"{tid} FAILED")  # O(1)
+        else:  # a task that is not checkpointed always says so, one task or several (#179) | O(1)
+            print(f"{tid} FAILED: {a.failed.get(tid, 'not checkpointed')}")  # O(1)
     if a.blocked:  # one hint for every task, not one per task | O(1)
         print("hint: commit or exclude these files, they are outside every Owns: " + ", ".join(sorted(a.blocked)))  # O(b log b)
     release_agents(a.pool, committed)  # O(pool bytes)
