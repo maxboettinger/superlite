@@ -30,7 +30,7 @@ class FakeHerdr:
     def read_screen(self, name, lines=40, source="visible"):
         self.calls.append(("read_screen", name))
         if self.screen_after is not None and any(c[0] == "send_keys" for c in self.calls): return self.screen_after
-        return self.screen
+        return "\n".join(self.screen.splitlines()[-lines:]) + "\n"  # like herdr: the bottom `lines` rows of the pane
     def prompt(self, name, text, until, timeout_ms): self.calls.append(("prompt", name, text)); return self.prompt_state
     def send_keys(self, name, keys): self.calls.append(("send_keys", name, keys))
     def wait_state(self, name, until, timeout_ms): self.calls.append(("wait_state", name, until)); return "idle"
@@ -52,7 +52,7 @@ def world(tmp_path, monkeypatch):
         monkeypatch.setenv("SUPERLITE_HERDR_BIN", str(fake_bin)); monkeypatch.setenv("FAKE_HERDR_LOG", str(tmp_path / "h.log"))
     usage = {"accounts": [{"name": "claude1", "n": 1, "error": None, "limits": [{"kind": "weekly_all", "percent": 64}]},
                           {"name": "claude3", "n": 3, "error": None, "limits": [{"kind": "weekly_all", "percent": 3}]}]}
-    listing = {"accounts": [{"name": "claude1", "config_dir": "/u/.claude-account1"}, {"name": "claude3", "config_dir": "/u/.claude-account3"}]}
+    listing = {"accounts": [{"name": "claude1", "dir": "/u/.claude-account1"}, {"name": "claude3", "dir": "/u/.claude-account3"}]}
     monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: usage); monkeypatch.setattr(fleet.ac, "read_listing", lambda env=None: listing)
     monkeypatch.chdir(proj)
     return types.SimpleNamespace(proj=proj, sd=sd, plan=plan, fh=fh, usage=usage)
@@ -73,13 +73,24 @@ def test_worker_env_contents(world):
     assert env == {"CLAUDE_CONFIG_DIR": "/u/.claude-account3", "SUPERLITE_FLEET_WORKER": "W1", "SUPERLITE_FLEET_AGENT": "superlite:implementer",
                    "SUPERLITE_STATE_DIR": str(world.sd.resolve()), "SUPERLITE_FINAL_REVIEW": "off", "CLAUDE_CODE_PLUGIN_CACHE_DIR": "/u/.claude/plugins"}
 
-def test_current_account_worker_env_has_config_dir(world, monkeypatch):
-    monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: {}); monkeypatch.setattr(fleet.ac, "read_listing", lambda env=None: {})
+def _spawn_env(world, monkeypatch, accounts, env):
     seen = {}
     real = fleet.worker_env
     monkeypatch.setattr(fleet, "worker_env", lambda *a: seen.setdefault("env", real(*a)))
-    fleet.main(["on"]); fleet.spawn(world.sd, world.plan, "sonnet", world.proj, env={"HOME": "/u"})
-    assert seen["env"]["CLAUDE_CONFIG_DIR"] == os.path.expanduser("~/.claude")
+    fleet.main(["on"] + (["--accounts", accounts] if accounts else [])); fleet.spawn(world.sd, world.plan, "sonnet", world.proj, env=env)
+    return seen["env"]
+
+def test_current_account_on_the_default_dir_leaves_config_dir_unset(world, monkeypatch):
+    """CLAUDE_CONFIG_DIR=~/.claude makes Claude Code start first-run onboarding; the default dir is chosen by not setting it."""
+    monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: {}); monkeypatch.setattr(fleet.ac, "read_listing", lambda env=None: {})
+    assert "CLAUDE_CONFIG_DIR" not in _spawn_env(world, monkeypatch, "", {"HOME": "/u"})
+
+def test_current_account_keeps_the_coordinators_config_dir(world, monkeypatch):
+    assert _spawn_env(world, monkeypatch, "current", {"HOME": "/u", "CLAUDE_CONFIG_DIR": "/u/.claude-account1"})["CLAUDE_CONFIG_DIR"] == "/u/.claude-account1"
+
+def test_named_account_on_the_default_dir_leaves_config_dir_unset(world, monkeypatch):
+    monkeypatch.setattr(fleet.ac, "read_listing", lambda env=None: {"accounts": [{"name": "claude3", "dir": "/u/.claude"}]})
+    assert "CLAUDE_CONFIG_DIR" not in _spawn_env(world, monkeypatch, "claude3", {"HOME": "/u"})
 
 @pytest.mark.skipif(REAL, reason="scripted failure needs the in-process fake")
 def test_spawn_accepts_trust_dialog(world):
@@ -88,7 +99,7 @@ def test_spawn_accepts_trust_dialog(world):
     r = fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
     names = [c[0] for c in world.fh.calls]
     assert names[:5] == ["create_workspace", "start_agent", "read_screen", "send_keys", "wait_state"] and r["id"] == "W1"
-    assert ("send_keys", "W1", ["Down", "Enter"]) in world.fh.calls
+    assert ("send_keys", "sl-proj-w1", ["Down", "Enter"]) in world.fh.calls
 
 @pytest.mark.skipif(REAL, reason="scripted failure needs the in-process fake")
 def test_spawn_login_screen_is_blocked(world, capsys):
@@ -251,3 +262,50 @@ def test_named_account_without_claude_profile_is_blocked(world, monkeypatch, cap
     fleet.main(["on", "--accounts", "claude1"]); assert "claude-profile list unavailable" in capsys.readouterr().err
     with pytest.raises(SystemExit) as e: fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
     assert e.value.code == 3 and "BLOCKED: no config dir for account claude1 (claude-profile list unavailable; pass a config dir path instead)" in capsys.readouterr().out
+
+def test_current_account_spawns_although_usage_lists_other_accounts(world, capsys):
+    fleet.main(["on", "--accounts", "current"])
+    r = fleet.spawn(world.sd, world.plan, "sonnet", world.proj, env={"CLAUDE_CONFIG_DIR": "/u/.claude-cur"})
+    assert r["account"] == "current" and "W1 account=current" in capsys.readouterr().out
+
+def test_current_is_the_fallback_when_named_accounts_have_no_headroom(world, monkeypatch):
+    monkeypatch.setattr(fleet.ac, "read_usage", lambda env=None: {"accounts": [{"name": "claude1", "n": 1, "error": None, "limits": [{"kind": "weekly_all", "percent": 100}]}]})
+    fleet.main(["on", "--accounts", "claude1,current"])
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj, env={"CLAUDE_CONFIG_DIR": "/u/.claude-cur"})["account"] == "current"
+
+@pytest.mark.skipif(REAL, reason="call list is read from the in-process fake")
+def test_spawn_and_stop_address_herdr_by_one_valid_agent_name(world):
+    fleet.main(["on"]); world.fh.start_error = "agent_not_ready"; world.fh.screen = "Yes, I trust this folder\n"; world.fh.screen_after = "READY"
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["id"] == "W1"
+    fleet.stop(world.sd, ["W1"])
+    by_name = ("start_agent", "read_screen", "send_keys", "wait_state", "prompt", "exit_agent")
+    assert {c[0] for c in world.fh.calls if c[0] in by_name} == set(by_name)
+    assert {c[1] for c in world.fh.calls if c[0] in by_name} == {"sl-proj-w1"}
+    assert json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]["name"] == "sl-proj-w1"
+
+@pytest.mark.skipif(REAL, reason="scripted screen needs the in-process fake")
+def test_ready_at_the_top_of_a_tall_fullscreen_pane_is_seen(world):
+    fleet.main(["on"]); world.fh.screen = "❯ Read /x/.superlite/prime.md, then reply READY\n\n⏺ READY\n" + "\n" * 62 + "❯\n  ⏵⏵ auto mode on\n"
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["id"] == "W1"
+
+@pytest.mark.skipif(REAL, reason="scripted failure needs the in-process fake")
+def test_trust_dialog_at_the_top_of_a_tall_pane_is_accepted(world):
+    fleet.main(["on"]); world.fh.start_error = "agent_not_ready"; world.fh.screen = "Yes, I trust this folder\n" + "\n" * 70; world.fh.screen_after = "READY"
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["id"] == "W1"
+
+@pytest.mark.skipif(REAL, reason="argv is read from the in-process fake")
+def test_prime_prompt_also_settles_on_idle(world):
+    """A pane the user is looking at settles as `idle`, never `done` (herdr 0.9.5)."""
+    fleet.main(["on"]); seen = []; world.fh.prompt_state = "idle"
+    orig = world.fh.prompt
+    world.fh.prompt = lambda n, t, u, ms: (seen.append(u), orig(n, t, u, ms))[1]
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["id"] == "W1" and set(seen[0]) == {"idle", "done", "blocked"}
+
+@pytest.mark.skipif(REAL, reason="call list is read from the in-process fake")
+def test_stop_handles_a_worker_record_written_before_names_were_stored(world):
+    """A fleet.json of 1.5.0 holds blocked workers without `name`; `fleet stop --all` and `fleet off` must still close them."""
+    fleet.main(["on"])
+    data = json.loads((world.sd / "fleet.json").read_text())
+    data["workers"]["W1"] = {"pane_id": "w6:p1", "account": "claude3", "agent": "superlite:implementer", "tier": "sonnet", "state": "blocked", "task": None}
+    (world.sd / "fleet.json").write_text(json.dumps(data))
+    assert fleet.stop(world.sd, all_=True) == ["W1"] and ("exit_agent", "sl-proj-w1") in world.fh.calls

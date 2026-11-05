@@ -33,10 +33,10 @@ def test_split_pane_returns_new_id(fake):
     assert fake()[0][:4] == ["pane", "split", "w6:p1", "--direction"]
 
 def test_start_agent_ok_and_not_ready(fake, monkeypatch):
-    assert hc.start_agent("W1", "w6:p1", ["--agent", "superlite:implementer"]) == "idle"
+    assert hc.start_agent("sl-proj-w1", "w6:p1", ["--agent", "superlite:implementer"]) == "idle"
     argv = fake()[0]; assert "--" in argv and argv[argv.index("--") + 1:] == ["--agent", "superlite:implementer"]
     monkeypatch.setenv("FAKE_HERDR_REPLY", json.dumps({"error": {"code": "agent_not_ready", "message": "blocked during startup"}}))
-    with pytest.raises(hc.HerdrError) as e: hc.start_agent("W1", "w6:p1", [])
+    with pytest.raises(hc.HerdrError) as e: hc.start_agent("sl-proj-w1", "w6:p1", [])
     assert e.value.code == "agent_not_ready"
 
 def test_prompt_passes_each_until_flag(fake):
@@ -59,8 +59,8 @@ def test_nonzero_exit_with_json_error_keeps_code(fake, monkeypatch):
     with pytest.raises(hc.HerdrError) as e: hc.call(["agent", "list"])
     assert e.value.code == "agent_not_ready" and e.value.message == "trust"
 
-def test_agent_states_maps_name_to_status(fake):
-    assert hc.agent_states() == {"W1": "done", "W2": "working"} and hc.agent_state("W2") == "idle"
+def test_agent_states_maps_name_to_status_and_skips_unnamed_agents(fake):
+    assert hc.agent_states() == {"sl-proj-w1": "done", "sl-proj-w2": "working"} and hc.agent_state("sl-proj-w2") == "idle"
 
 def test_read_text_returns_plain_stdout(fake):
     assert "Yes, I trust this folder" in hc.read_screen("W1")
@@ -104,3 +104,8 @@ def test_success_reply_without_result_shape_is_parse_error(fake, monkeypatch, ca
     with pytest.raises(hc.HerdrError) as e:
         call()
     assert e.value.code == "parse"
+
+@pytest.mark.parametrize("name", ["W1", "1w", ".claude-account1", "a" * 33])
+def test_start_agent_surfaces_invalid_agent_name_of_herdr_0_9_5(fake, name):
+    with pytest.raises(hc.HerdrError) as e: hc.start_agent(name, "w6:p1", [])
+    assert e.value.code == "invalid_agent_name"

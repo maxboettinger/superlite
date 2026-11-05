@@ -62,3 +62,13 @@ def test_wave0_agent_line_absolute():
 
 def test_using_superlite_cap():
     assert len((ROOT / "skills" / "using-superlite" / "SKILL.md").read_text(encoding="utf-8")) <= 1500
+
+
+def test_a_fleet_request_maps_to_fleet_on_before_the_first_dispatch():
+    """#154: a coordinator told "use fleet" never ran `fleet on`; the skill named only the state file."""
+    sdd = (ROOT / "skills" / "subagent-driven-development" / "SKILL.md").read_text(encoding="utf-8")
+    line = next(l for l in sdd.splitlines() if l.startswith("Fleet mode"))
+    assert '"$SL" fleet on' in line and "before the first dispatch" in line and "`fleet.md`" in line
+    for doc in ("skills/subagent-driven-development/fleet.md", "docs/fleet.md"):
+        text = (ROOT / doc).read_text(encoding="utf-8")
+        assert "before the first dispatch" in text and "sl-<run folder>-w" in text and "implementer" in text and "in-process" in text, doc

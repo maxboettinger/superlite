@@ -1,4 +1,5 @@
-import json, sys
+import json, re, sys
+import pytest
 from pathlib import Path
 from test_plan_tools import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
@@ -19,7 +20,7 @@ def test_set_on_then_is_on_and_ids(tmp_path):
 def test_worker_lifecycle(tmp_path):
     d = sd(tmp_path); fs.set_on(d, "sl:x", ["claude1"])
     w = fs.add_worker(d, "W1", "w6:p1", "claude1", "superlite:implementer", "sonnet")
-    assert w["state"] == "starting" and w["pane_id"] == "w6:p1"
+    assert w["state"] == "starting" and w["pane_id"] == "w6:p1" and w["name"] == fs.agent_name(d, "W1")
     assert fs.set_state(d, "W1", "busy", "T3")["task"] == "T3"
     assert list(fs.workers(d, "busy")) == ["W1"] and fs.workers(d, "ready") == {}
     fs.set_workspace(d, "w6", "w6:p1"); assert fs.load(d)["workspace_id"] == "w6"
@@ -55,3 +56,14 @@ def test_set_off_under_concurrent_writer(tmp_path):
     t = threading.Thread(target=writer); t.start(); held.wait()
     fs.set_off(d); t.join()
     assert not fs.path(d).exists()
+
+def test_agent_name_is_run_folder_plus_lowercase_worker_id(tmp_path):
+    d = tmp_path / "maxOS" / ".superlite"; d.mkdir(parents=True)
+    assert fs.agent_name(d, "W1") == "sl-maxos-w1" and fs.agent_name(d, "W12") == "sl-maxos-w12"
+
+@pytest.mark.parametrize("folder", ["maxOS", ".claude-account1", "My Project (v2)", "x" * 60, "-", "ünïcödé", "9lives"])
+def test_agent_name_always_matches_the_herdr_pattern(tmp_path, folder):
+    d = tmp_path / folder / ".superlite"; d.mkdir(parents=True)
+    for wid in ("W1", "W12", "W999"):
+        name = fs.agent_name(d, wid)
+        assert re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", name) and name.startswith("sl-") and name.endswith("-" + wid.lower())

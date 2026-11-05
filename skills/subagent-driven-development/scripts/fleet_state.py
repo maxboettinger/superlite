@@ -7,6 +7,7 @@ import contextlib  # O(1)
 import fcntl  # O(1)
 import json  # O(1)
 import os  # O(1)
+import re  # O(1)
 import tempfile  # O(1)
 from pathlib import Path  # O(1)
 
@@ -78,10 +79,29 @@ def next_id(sd):  # O(w)
         return "W%d" % n  # O(1)
 
 
+def agent_name(sd, wid):  # O(len of the run folder name)
+    """Herdr agent name of a worker: `sl-<run folder>-<worker id>`, within herdr's `[a-z][a-z0-9_-]{0,31}`.
+
+    Herdr keeps names unique among the live agents of a server; the run folder keeps parallel fleets apart."""
+    tail = "-" + wid.lower()  # O(1)
+    run = re.sub(r"[^a-z0-9_-]+", "-", Path(sd).resolve().parent.name.lower()).strip("-_")  # O(len)
+    return ("sl-" + run)[:32 - len(tail)].rstrip("-_") + tail  # O(1)
+
+
+def name_of(sd, wid, w):  # O(1)
+    """Herdr agent name of the worker record `w`; a record written by 1.5.0 has none stored."""
+    return w.get("name") or agent_name(sd, wid)  # O(1)
+
+
+def worker_name(sd, wid):  # O(w)
+    """Herdr agent name of a worker; KeyError for an unknown worker."""
+    return name_of(sd, wid, load(sd)["workers"][wid])  # O(w)
+
+
 def add_worker(sd, wid, pane_id, account, agent, tier):  # O(w)
     with locked(sd):  # O(1)
         data = load(sd)  # O(w)
-        w = {"pane_id": pane_id, "account": account, "agent": agent, "tier": tier, "state": "starting", "task": None}  # O(1)
+        w = {"name": agent_name(sd, wid), "pane_id": pane_id, "account": account, "agent": agent, "tier": tier, "state": "starting", "task": None}  # O(1)
         data["workers"][wid] = w  # O(1)
         save(sd, data)  # O(w)
         return w  # O(1)

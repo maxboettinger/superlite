@@ -40,7 +40,7 @@ def test_allowed_filters_usage():
     assert ac.pick_account(u, ["claude2"]) == "claude2"
 
 def test_account_dir_and_current(monkeypatch):
-    listing = {"accounts": [{"name": "claude1", "config_dir": "/x/.claude-account1"}]}
+    listing = {"accounts": [{"name": "claude1", "dir": "/x/.claude-account1"}]}
     assert ac.account_dir(listing, "claude1") == "/x/.claude-account1"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/y"); assert ac.account_dir(listing, "current") == "/y"
     monkeypatch.delenv("CLAUDE_CONFIG_DIR"); assert ac.account_dir(listing, "current") == os.path.expanduser("~/.claude")
@@ -61,3 +61,16 @@ def test_account_dir_path_entry_needs_no_listing(monkeypatch):
     assert ac.account_dir({}, "/tmp/.claude-x") == "/tmp/.claude-x" and ac.account_dir({}, "~/.claude-y") == "/h/.claude-y"
     assert ac.entry_name("/tmp/.claude-x/") == ".claude-x" and ac.entry_name("claude1") == "claude1"
     assert ac.account_dir({}, "claude1") is None
+
+def test_account_dir_reads_dir_field_of_claude_profile_schema_1():
+    listing = {"schema_version": 1, "active": "claude2", "accounts": [
+        {"name": "claude2", "n": 2, "dir": "/Users/max/.claude", "available": True, "active": True, "plan": "Ultra", "signed_in": True}]}
+    assert ac.account_dir(listing, "claude2") == "/Users/max/.claude"
+
+def test_default_dir_is_home_dot_claude_only():
+    env = {"HOME": "/u"}
+    assert ac.is_default_dir("/u/.claude", env) and ac.is_default_dir("/u/.claude/", env)
+    assert not ac.is_default_dir("/u/.claude-account1", env) and not ac.is_default_dir("/v/.claude", env)
+
+def test_current_without_config_dir_is_the_default_dir_of_that_env():
+    assert ac.account_dir({}, "current", {"HOME": "/u"}) == "/u/.claude"

@@ -18,7 +18,7 @@ Shorthand: `SUPERLITE` = plugin root, two levels above this skill's "Base direct
 - Run root: a worktree (`"$SL" worktree ensure <topic>`; a plan header `**Worktree:** none`: in place, branch `superlite/<topic>` off the default branch). Write the start SHA to `.superlite/progress.md` (`- start <sha>`). `commit_task` excludes `.superlite/` in `.git/info/exclude` itself.
 - Wave 0 is not yours: `lint --stable` builds `.superlite/briefs/wave0.md` and prints `START FIRST:` with the Agent line for `superlite:implementer-haiku` (T0; `wave0 --plan $PLAN` reprints). Send it first with the stable set; `commit_task T0`. `Ruling: skip T0` or `**Wave0:** none` mutes it. Then `"$SL" plan_tools adapter --plan $PLAN`.
 
-Fleet mode (`.superlite/fleet.json` on): implementers run in Herdr panes: `fleet.md`.
+Fleet mode (user asks): `"$SL" fleet on` before the first dispatch, then `fleet.md`.
 - Prime: `"$SL" build_prime --plan $PLAN` prints `hash size`, writes `.superlite/prime.md`: slim for sonnet (rules and interfaces, no plan; no `--spec`). `--prime full --spec SPEC --sections "1,3"` restores the old one. Never paste it.
 - Incidents: `.superlite/incidents.jsonl` (`"$SL" incident add`); log BLOCKED and NEEDS_CONTEXT as `--agent coordinator`.
 - Graphify: `"$SL" graphify_gate` prints JSON. `use` false: skip. Installed: `graphify update .`. `needs_install` and `allowed`: `uv tool install graphifyy`, `graphify extract . --code-only`. Only you run it.

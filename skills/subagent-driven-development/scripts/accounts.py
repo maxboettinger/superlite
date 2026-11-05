@@ -89,12 +89,24 @@ def entry_name(entry):  # O(1)
     return os.path.basename(entry.rstrip("/")) or entry if is_path(entry) else entry  # O(1)
 
 
+def _default_dir(env):  # O(1)
+    return os.path.join((os.environ if env is None else env).get("HOME") or os.path.expanduser("~"), ".claude")  # O(1)
+
+
+def is_default_dir(path, env=None):  # O(1)
+    """True for Claude Code's default config dir `~/.claude`.
+
+    That dir is chosen by leaving CLAUDE_CONFIG_DIR unset: set to it, Claude Code looks for `.claude.json` inside it
+    instead of in the home dir and starts first-run onboarding."""
+    return os.path.normpath(os.path.expanduser(path)) == os.path.normpath(_default_dir(env))  # O(1)
+
+
 def account_dir(listing, name, env=None):  # O(a)
     if is_path(name):  # O(1) a config dir path needs no listing
         return os.path.expanduser(name)  # O(1)
     if name == "current":  # O(1)
-        return (os.environ if env is None else env).get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")  # O(1)
+        return (os.environ if env is None else env).get("CLAUDE_CONFIG_DIR") or _default_dir(env)  # O(1)
     for a in (listing or {}).get("accounts") or []:  # O(a)
         if a.get("name") == name:  # O(1)
-            return a.get("config_dir") or None  # O(1)
+            return a.get("dir") or None  # `claude-profile list --json` schema 1 names the config dir `dir` | O(1)
     return None  # O(1)
