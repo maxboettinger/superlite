@@ -92,6 +92,17 @@ content="${content}"$'
 
 '"Project state: ${state}."  # O(s)
 
+# Name the running copy: the physical plugin root (pwd -P) and its version, so no one searches for another copy.
+root="$(cd "${PLUGIN_ROOT}" && pwd -P)"  # O(1) + subshell
+version="unknown"  # O(1)
+re_ver='"version"[[:space:]]*:[[:space:]]*"([^"]+)"'  # O(1)
+if [ -f "$root/package.json" ]; then  # O(1)
+  pkg=$(<"$root/package.json") || pkg=""  # O(pkg) builtin read, no spawned process
+  [[ $pkg =~ $re_ver ]] && version="${BASH_REMATCH[1]}"  # O(pkg)
+fi  # O(1)
+content="${content}"$'
+'"superlite ${version} at ${root}: run its tools as ${root}/skills/subagent-driven-development/scripts/sl <tool>; never search for another copy."  # O(s)
+
 escaped=$(escape_for_json "$content")  # O(s) + subshell
 session_context="You have superlite. Its 'superlite:using-superlite' skill follows; load other skills with the Skill tool.\n\n${escaped}"  # O(s)
 
