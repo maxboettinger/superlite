@@ -1,4 +1,4 @@
-import json, os, sys
+import json, os, subprocess, sys
 from pathlib import Path
 import pytest
 from _fixtures import FIXTURES
@@ -76,10 +76,27 @@ def test_missing_binary_is_herdr_error(monkeypatch):
     with pytest.raises(hc.HerdrError) as e: hc.call(["agent", "list"])
     assert e.value.code == "missing"
 
-def test_exit_agent_sends_exit_without_wait(fake):
-    hc.exit_agent("W1")
-    argv = fake()[0]
-    assert argv == ["agent", "prompt", "W1", "/exit", "--timeout", "5000"]
+def test_exit_sends_no_bare_timeout(fake):
+    hc.exit_agent("sl-x-w1")
+    assert fake() == [["agent", "prompt", "sl-x-w1", "/exit"],
+                      ["agent", "wait", "sl-x-w1", "--until", "unknown", "--timeout", "10000"]]
+
+def test_exit_wait_error_counts_as_gone(fake, monkeypatch):
+    monkeypatch.setenv("FAKE_HERDR_FAIL", "agent wait")
+    hc.exit_agent("sl-x-w1")
+    assert [c[:2] for c in fake()] == [["agent", "prompt"], ["agent", "wait"]]
+
+def test_exit_prompt_error_raises(fake, monkeypatch):
+    monkeypatch.setenv("FAKE_HERDR_FAIL", "agent prompt")
+    with pytest.raises(hc.HerdrError):
+        hc.exit_agent("sl-x-w1")
+    assert [c[:2] for c in fake()] == [["agent", "prompt"]]
+
+def test_fake_herdr_rejects_bare_timeout(fake):
+    bare = subprocess.run([str(FAKE), "agent", "prompt", "X", "hi", "--timeout", "5000"], capture_output=True, text=True)
+    assert bare.returncode != 0 and "--timeout requires --wait" in bare.stderr
+    ok = subprocess.run([str(FAKE), "agent", "prompt", "X", "hi", "--wait", "--timeout", "5000"], capture_output=True, text=True)
+    assert ok.returncode == 0
 
 def test_string_error_is_herdr_error(fake, monkeypatch):
     monkeypatch.setenv("FAKE_HERDR_REPLY", json.dumps({"error": "boom"}))

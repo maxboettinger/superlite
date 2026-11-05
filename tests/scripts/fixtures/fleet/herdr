@@ -2,7 +2,8 @@
 """Fake herdr CLI for tests: logs argv, prints canned JSON (or $FAKE_HERDR_REPLY).
 
 Mirrors herdr 0.9.5: errors are JSON on stderr with a non-zero exit, agent names must match NAME,
-and `agent list` carries no `name` for an agent nobody named."""
+`agent list` carries no `name` for an agent nobody named, and `agent prompt --timeout` needs `--wait`.
+$FAKE_HERDR_FAIL="agent wait" (a two-word command) makes that command fail with an error JSON."""
 import json, os, re, sys
 
 NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}")
@@ -12,6 +13,12 @@ log = os.environ.get("FAKE_HERDR_LOG")
 if log:
     with open(log, "a") as f:
         f.write(json.dumps(a) + "\n")
+if a[:2] == ["agent", "prompt"] and "--timeout" in a and "--wait" not in a:
+    sys.stderr.write("--timeout requires --wait\n")
+    sys.exit(2)
+if os.environ.get("FAKE_HERDR_FAIL") == " ".join(a[:2]):
+    sys.stderr.write(json.dumps({"error": {"code": "agent_not_found", "message": "agent target not found"}}))
+    sys.exit(1)
 reply = os.environ.get("FAKE_HERDR_REPLY")
 if reply is not None:
     if reply.startswith("EXIT "):
