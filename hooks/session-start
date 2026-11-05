@@ -39,6 +39,14 @@ if [ -n "$sid" ] && [[ $input =~ $re_clear ]] && [[ ${CLAUDE_PID:-} =~ ^[0-9]+$ 
   fi  # O(1)
 fi  # O(1)
 
+# After /compact the nudge window restarts: touch last-compact.<sid> in the session's state folder, only if it exists.
+re_compact='"source"[[:space:]]*:[[:space:]]*"compact"'  # O(1)
+if [ -n "$sid" ] && [[ $input =~ $re_compact ]] && . "${0%/*}/superlite-state.sh" 2>/dev/null; then  # O(input)
+  if superlite_state 2>/dev/null && [ -n "$SL_SD" ] && [ -d "$SL_SD" ]; then  # O(1)
+    : > "$SL_SD/last-compact.$sid" 2>/dev/null || true  # O(1)
+  fi  # O(1)
+fi  # O(1)
+
 # Fleet worker: a short worker note instead of the start menu. printf only (no heredoc).
 if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then  # O(1)
   wnote="You are superlite fleet worker ${SUPERLITE_FLEET_WORKER} (${SUPERLITE_FLEET_AGENT:-superlite:implementer}). The coordinator sends your task as a message; build it, then finish with your report. Do not start a superlite run."  # O(1)
@@ -65,7 +73,8 @@ escape_for_json() {  # O(s)
 state="empty folder"  # O(1)
 shopt -s nullglob dotglob  # O(1)
 entries=(./*)  # O(n) directory entries
-if [ -f .superlite/orchestrator.json ] && { [ -d docs/plans ] || [ -d docs/superpowers/plans ]; }; then  # O(1)
+sd=.superlite  # O(1)
+if [ -f "$sd/stable.json" ] || [ -f "$sd/prime.md" ] || [ -f "$sd/pool.json" ]; then  # a run's own files, not just the orchestrator flag | O(1)
   state="run in progress"  # O(1)
 elif [ -d .git ] || [ "${#entries[@]}" -gt 0 ]; then  # O(1)
   state="existing code"  # O(1)
