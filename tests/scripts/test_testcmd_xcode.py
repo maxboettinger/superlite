@@ -90,3 +90,29 @@ def test_xctest_bundles_summed_from_top_level_suites():
          "\t Executed 3 tests, with 1 failure (0 unexpected) in 0.1 (0.1) seconds\n")
     r = testcmd.parse_output(a + b, 65)
     assert (r["passed"], r["failed"]) == (4, 1)
+
+
+def test_key_value_counts():
+    r = testcmd.parse_output("passed=7 failed=0", 0)
+    assert (r["passed"], r["failed"]) == (7, 0)
+    r = testcmd.parse_output("passed=5 failed=2", 1)
+    assert (r["passed"], r["failed"]) == (5, 2)
+    r = testcmd.parse_output("Passed!  - Failed: 0, PASSED: 3", 0)
+    assert (r["passed"], r["failed"]) == (3, 0)
+
+
+def test_unknown_format_falls_back_to_exit_code():
+    r = testcmd.parse_output("done", 0)
+    assert (r["passed"], r["failed"]) == (1, 0)
+    r = testcmd.parse_output("done", 1)
+    assert r["failed"] == 1
+
+
+def test_error_and_marker_extracted():
+    r = testcmd.parse_output("Foo.swift:3:5: error: cannot find 'Date' in scope\n** TEST FAILED **", 65)
+    assert r["failed"] == 1
+    assert r["error"] == "Foo.swift:3:5: error: cannot find 'Date' in scope"
+    assert r["marker"] == "** TEST FAILED **"
+    r = testcmd.parse_output("1) frontend\n** TEST SUCCEEDED **", 0)
+    assert (r["passed"], r["failed"], r["names"], r["error"]) == (1, 0, [], "")
+    assert r["marker"] == "** TEST SUCCEEDED **"

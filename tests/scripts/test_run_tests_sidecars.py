@@ -67,3 +67,27 @@ def test_log_has_no_ansi_escapes(tmp_path):
     assert "warning" in log and "\x1b" not in log
     s = summary(tmp_path)
     assert s["failures"] and all("\x1b" not in f for f in s["failures"])
+
+
+ERR_RUNNER = """import sys
+for i in range(60):
+    print(f"filler {i}")
+print("Foo.swift:3:5: error: cannot find 'Date' in scope")
+for i in range(50):
+    print(f"more {i}")
+print("** TEST FAILED **")
+sys.exit(65)
+"""
+
+
+def test_compile_error_leads_failures_and_log(tmp_path):
+    (tmp_path / "runner.py").write_text(ERR_RUNNER, encoding="utf-8")
+    sl = tmp_path / ".superlite"
+    sl.mkdir()
+    cmd = f"{sys.executable} runner.py"
+    (sl / "test-cmd.json").write_text(json.dumps({"language": "swift", "test": cmd, "test_file": cmd, "junit": "", "setup": ""}), encoding="utf-8")
+    cp = run(RUN_TESTS, "--full", cwd=tmp_path)
+    assert cp.returncode == 1, cp.both
+    assert "build error: Foo.swift:3:5: error:" in summary(tmp_path)["failures"][0]
+    log = (sl / "test-output.log").read_text(encoding="utf-8")
+    assert "Foo.swift:3:5: error: cannot find 'Date' in scope" in log and "** TEST FAILED **" in log

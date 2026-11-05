@@ -386,9 +386,14 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
             p = testcmd.parse_output(strip_ansi(text), r.returncode)  # O(o)
             counts = {"passed": p["passed"], "failed": p["failed"], "skipped": p["skipped"], "skipped_tests": []}  # O(1)
             last = next((ln for ln in reversed(p["tail"]) if ln.strip()), "no output")  # O(1)
-            failures = [("-", 0, f"{n}: failed") for n in p["names"]] or ([("-", 0, f"exit code {r.returncode}: {last}"[:160])] if r.returncode else [])  # O(k)
+            failures = [("-", 0, f"{n}: failed") for n in p["names"]]  # O(k)
+            if r.returncode and not failures:  # a red exit with no names: name the command | O(1)
+                failures = [("-", 0, f"exit code {r.returncode} from `{spec['command']}`: {last}"[:200])]  # O(1)
+            if r.returncode and p["error"]:  # a compile error leads the failures | O(1)
+                failures.insert(0, ("-", 0, f"build error: {p['error']}"[:160]))  # O(1)
             files = {}  # O(1)
-            atomic_write(Path(a.summary).with_name("test-output.log"), "\n".join(p["tail"]) + "\n")  # the last 40 lines | O(40)
+            kept = [x for x in (p["error"], p["marker"]) if x and x not in p["tail"]]  # the error and marker may sit above the last 40 lines | O(40)
+            atomic_write(Path(a.summary).with_name("test-output.log"), "\n".join([*kept, *p["tail"]]) + "\n")  # O(40)
     return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
 
 

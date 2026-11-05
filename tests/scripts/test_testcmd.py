@@ -222,3 +222,21 @@ def test_main_checkout_without_config_is_none(tmp_path):
     assert testcmd.main_checkout_config(wt) is None
     assert testcmd.main_checkout_config(tmp_path / "nowhere") is None
     assert resolved(wt)["source"] == "markers" and resolved(wt)["command"] == "go test ./..."
+
+
+def test_green_run_lists_no_names(tmp_path):
+    (tmp_path / "runner.py").write_text('print("1) frontend")\nprint("** TEST SUCCEEDED **")\n', encoding="utf-8")
+    config(tmp_path, language="bash", test=f"{sys.executable} runner.py")
+    cp = rt(tmp_path, "--full")
+    assert cp.returncode == 0, cp.both
+    assert summary(tmp_path)["failures"] == []
+
+
+def test_rejected_config_warns(tmp_path):
+    sl = tmp_path / ".superlite"
+    sl.mkdir()
+    (sl / "test-cmd.json").write_text("{", encoding="utf-8")
+    (tmp_path / "test_x.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    cp = run(TESTCMD, "--root", tmp_path)
+    assert "test-cmd.json ignored" in cp.err, cp.both
+    assert json.loads(cp.out) is not None
