@@ -221,3 +221,57 @@ def test_ff_explicit_sha_base(ff_repo, pt_review):
     assert pt_review.changed_diffs(repo, new, []) == pt_review.changed_diffs(repo, "HEAD", [])
     packet = packet_for(repo, new)
     assert "social/feed.py" not in packet and "src/b.py" in packet
+
+
+def _shown(pt_review, repo):
+    new = git(repo, "rev-parse", "HEAD")
+    changed, diffs = pt_review.changed_diffs(repo, new, [])
+    return changed, dict(diffs)
+
+
+def test_ff_run_only_deletes_lines_checkpointed_before_merge(tmp_path, pt_review):
+    """#158: a run that only deletes lines of a file the merge then extends shows its deletions, not the merged lines."""
+    repo = make_repo(tmp_path)
+    write(repo, "src/b.py", "".join(f"L{i} = {i}\n" for i in range(10)))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "c")
+    write(repo, "src/b.py", "".join(f"L{i} = {i}\n" for i in range(2, 10)))
+    assert checkpoint(repo, "T2").returncode == 0
+    git(repo, "checkout", "-q", "--", "src/b.py")
+    fast_forward(repo, tmp_path, {"src/b.py": "".join(f"L{i} = {i}\n" for i in range(10)) + "M1 = 1\nM2 = 2\n"})
+    changed, diffs = _shown(pt_review, repo)
+    lines = diffs["src/b.py"]
+    assert "-L0 = 0" in lines and "-L1 = 1" in lines
+    assert not any("M1" in ln or "M2" in ln for ln in lines)
+
+
+def test_ff_run_only_deletes_lines_checkpointed_after_merge(tmp_path, pt_review):
+    repo = make_repo(tmp_path)
+    write(repo, "src/b.py", "".join(f"L{i} = {i}\n" for i in range(10)))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "c")
+    fast_forward(repo, tmp_path, {"src/b.py": "".join(f"L{i} = {i}\n" for i in range(10)) + "M1 = 1\nM2 = 2\n"})
+    write(repo, "src/b.py", "".join(f"L{i} = {i}\n" for i in range(2, 10)) + "M1 = 1\nM2 = 2\n")
+    assert checkpoint(repo, "T2").returncode == 0
+    changed, diffs = _shown(pt_review, repo)
+    lines = diffs["src/b.py"]
+    assert "-L0 = 0" in lines and not any("M1" in ln for ln in lines)
+
+
+def test_ff_merge_deletes_file_run_changed(tmp_path, pt_review):
+    repo = make_repo(tmp_path)
+    write(repo, "src/b.py", "A = 1\nB = 2\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "d")
+    write(repo, "src/b.py", "A = 1\nB = 2\nRUN = 3\n")
+    assert checkpoint(repo, "T2").returncode == 0
+    git(repo, "checkout", "-q", "--", "src/b.py")
+    git(repo, "branch", "-f", "social", "HEAD")
+    side = tmp_path / "social"
+    git(repo, "worktree", "add", "-q", str(side), "social")
+    git(side, "rm", "-q", "src/b.py")
+    git(side, "commit", "-q", "-m", "rm")
+    git(repo, "merge", "-q", "--ff-only", "social")
+    changed, diffs = _shown(pt_review, repo)
+    lines = diffs.get("src/b.py", [])
+    assert "+RUN = 3" in lines and "-A = 1" not in lines
