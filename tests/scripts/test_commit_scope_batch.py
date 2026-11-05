@@ -305,3 +305,17 @@ def test_claim_without_ruling_exits_2(tmp_path):
     r = commit(repo, "T5", "--claim", "x.md")
     assert r.returncode == 2
     assert "--ruling" in r.stderr
+
+
+def test_claim_accepts_task_id_after_files(tmp_path):
+    repo = setup(tmp_path)
+    r = commit(repo, "--claim", "x.md", "T5", "--ruling", RULING)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "T5 claimed x.md" in r.stdout
+
+
+def test_claim_with_also_exits_2(tmp_path):
+    repo = setup(tmp_path)
+    r = commit(repo, "T5", "--claim", "x.md", "--also", "y.md", "--ruling", RULING)
+    assert r.returncode == 2
+    assert "cannot be combined" in r.stderr
