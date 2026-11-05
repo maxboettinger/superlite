@@ -25,8 +25,21 @@ export PYTHONUTF8=1 PYTHONIOENCODING=utf-8  # O(1)
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # O(1) + subshell
 tool="${1:-}"  # O(1)
+
+# Error path only: print the sorted tool names (no _* helpers) from both script directories.
+list_tools() {  # O(F) files in the two directories
+  local f n  # O(1)
+  for f in "$here"/*.sh "$here"/*.py "$here"/../probes/*.sh "$here"/../probes/*.py; do  # O(F)
+    [ -f "$f" ] || continue  # O(1)
+    n="${f##*/}"; n="${n%.*}"  # O(1)
+    case "$n" in _*) continue ;; esac  # O(1)
+    printf '%s\n' "$n"  # O(1)
+  done | LC_ALL=C sort -u | tr '\n' ' '  # O(F log F) one pipeline
+}
+
 if [ -z "$tool" ]; then  # O(1)
   echo "usage: sl <tool> [args...]" >&2  # O(1)
+  echo "tools: $(list_tools)" >&2  # O(F)
   exit 2  # O(1)
 fi  # O(1)
 shift  # O(1)
@@ -37,6 +50,18 @@ for dir in "$here" "$here/../probes"; do  # O(1)
 done  # O(1)
 if [ -z "${script:-}" ]; then  # O(1)
   echo "sl: unknown tool '$tool'" >&2  # O(1)
+  names="$(list_tools)"  # O(F)
+  if [ "$tool" = "status" ]; then echo "try: sl orchestrator status; sl metrics" >&2  # O(1)
+  else  # O(1)
+    for py in python3 python; do  # O(1) error path only; skipped silently without python
+      if command -v "$py" >/dev/null 2>&1; then  # O(1)
+        guess="$("$py" -c 'import difflib,sys; m=difflib.get_close_matches(sys.argv[1], sys.argv[2].split(), 1); print(m[0] if m else "")' "$tool" "$names" 2>/dev/null)" || guess=""  # O(F) + spawn
+        [ -n "$guess" ] && echo "did you mean '$guess'?" >&2  # O(1)
+        break  # O(1)
+      fi  # O(1)
+    done  # O(1)
+  fi  # O(1)
+  echo "tools: $names" >&2  # O(1)
   exit 2  # O(1)
 fi  # O(1)
 
