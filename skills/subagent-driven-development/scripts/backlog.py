@@ -4,6 +4,7 @@
 import argparse  # O(1)
 import copy  # O(1)
 import json  # O(1)
+import os  # O(1)
 import re  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
@@ -120,6 +121,9 @@ def cmd_plan(a) -> int:
     shown = {}
 
     def apply(data):
+        live = [b for b in data["batches"] if b["state"] != "shipped" and (not a.reset or b["state"] in ("running", "needs_decision"))]
+        if live:  # a batch changed while the triage worker ran: never overwrite it
+            raise RuntimeError("backlog changed while triage ran (" + ", ".join(f"{b['id']} {b['state']}" for b in live) + ")")
         data["batches"] = [b for b in data["batches"] if b["state"] == "shipped"]
         data["repo"] = info["nameWithOwner"]
         data["titles"] = {str(t["number"]): t["title"] for t in trusted}
@@ -134,6 +138,9 @@ def cmd_plan(a) -> int:
 def cmd_decide(a) -> int:
     import backlog_checks as bc  # O(1)
     import backlog_state as bs  # O(1)
+    if os.environ.get("SUPERLITE_FLEET_WORKER"):  # only Max's session records answers; never a lead or worker
+        print("refused: sl backlog decide runs only in the main session")
+        return 2
     root = _root()
     p = bs.path(root)
     d = bs.load(p)
