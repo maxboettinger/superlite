@@ -2,15 +2,21 @@
 """Find or create the run's own git worktree, so a change never starts in a shared checkout.
 
     worktree.py ensure TOPIC [--repo DIR]     print the absolute path of the run folder
+    worktree.py inplace --reason TEXT         opt the marked inline flow out of the main-checkout write refusal
 
 From a linked worktree the tool returns that worktree. Otherwise it returns (or creates)
 `<main root>/.claude/worktrees/superlite-<slug>` on branch `superlite/<slug>`. The main checkout's
 branch and files are never changed. No repository, a bare one, or no commit yet: the start folder.
 Exit 2 when a plain folder sits at the target path. A new worktree gets a stderr line naming the ignored
-top-level entries of the main checkout it lacks (`.env`, `.venv/`; names only, nothing is copied). Stdlib only.
+top-level entries of the main checkout it lacks (`.env`, `.venv/`; names only, nothing is copied).
+`inplace` sets `inplace` to the reason in the marker `<state folder>/inline-flow.json` that hooks/mark-inline-flow wrote
+(hooks/inline-worktree-guard then lets edits in the main checkout pass) and appends `Ruling: in place - TEXT` to the
+state folder's progress.md; no marker: nothing changes, exit 0 (#148). Stdlib only.
 """
-# Complexity notation: n = length of the topic, w = registered worktrees, e = lines of info/exclude, i = ignored entries
+# Complexity notation: n = length of the topic, w = registered worktrees, e = lines of info/exclude, i = ignored entries,
+# r = length of the reason, f = size of the marker file
 import argparse  # O(1)
+import json  # O(1)
 import re  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
@@ -19,6 +25,7 @@ from pathlib import Path  # O(1)
 PARENT = ".claude/worktrees"  # O(1)
 INTERNAL = {".git", ".superlite", ".claude", "__pycache__", ".DS_Store"}  # (.DS_Store: OS noise a global gitignore lists) never listed as missing (#141) | O(1)
 SHOWN = 10  # names in the "missing here" line | O(1)
+MARKER = "inline-flow.json"  # in the state folder: written by hooks/mark-inline-flow, read by hooks/inline-worktree-guard | O(1)
 
 
 class Taken(Exception):  # O(1)
@@ -123,13 +130,42 @@ def ensure(topic, start):  # O(w) + spawns
     return target, "created"  # O(1)
 
 
+def inplace(reason, sd):  # O(f + r)
+    """Record the in-place opt-out in the inline-flow marker of state folder `sd` and the ledger -> False when no marker."""
+    f = Path(sd) / MARKER  # O(1)
+    try:  # O(1)
+        data = json.loads(f.read_text(encoding="utf-8"))  # O(f)
+    except (OSError, ValueError):  # O(1) absent or unreadable
+        return False  # O(1)
+    if not isinstance(data, dict):  # O(1)
+        return False  # O(1)
+    data["inplace"] = reason  # O(1)
+    f.write_text(json.dumps(data) + "\n", encoding="utf-8")  # O(f + r)
+    with (Path(sd) / "progress.md").open("a", encoding="utf-8") as fh:  # O(1)
+        fh.write(f"Ruling: in place - {reason}\n")  # O(r)
+    return True  # O(1)
+
+
 def main(argv=None):  # O(w) + spawns
     ap = argparse.ArgumentParser(prog="worktree")  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
     e = sub.add_parser("ensure")  # O(1)
     e.add_argument("topic")  # O(1)
     e.add_argument("--repo", default=".")  # O(1)
+    i = sub.add_parser("inplace")  # O(1)
+    i.add_argument("--reason", required=True)  # O(1)
     a = ap.parse_args(argv)  # O(args)
+    if a.cmd == "inplace":  # O(1)
+        import state  # noqa: E402  # O(1) module load, only for this subcommand
+        reason = " ".join(a.reason.split())  # one ledger line | O(r)
+        if not reason:  # O(1)
+            print("worktree: inplace needs a non-empty --reason", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        if not inplace(reason, state.resolve()):  # O(d + f)
+            print("worktree: no inline flow is marked here; nothing to opt out of", file=sys.stderr)  # O(1)
+            return 0  # O(1)
+        print(f"worktree: in place - {reason}; edits in this checkout are no longer refused")  # O(r)
+        return 0  # O(1)
     try:  # O(1)
         path, state = ensure(a.topic, Path(a.repo))  # O(w) + spawns
     except Taken as ex:  # O(1)

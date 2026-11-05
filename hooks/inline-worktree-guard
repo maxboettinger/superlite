@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# PreToolUse hook (Edit, Write, NotebookEdit): once an inline superlite flow is marked (hooks/mark-inline-flow writes
+# <state folder>/inline-flow.json) an edit of a path inside the MAIN checkout is refused until the work moves into a
+# worktree (`sl worktree ensure TOPIC`) or `sl worktree inplace --reason TEXT` recorded an opt-out (#148). Exit 2 blocks,
+# with the message on stderr and a rule-block incident in <state folder>/incidents.jsonl.
+# Passes (exit 0) when:
+#   - the call is a subagent's (agent_id) or a fleet worker session's (SUPERLITE_FLEET_WORKER);
+#   - there is no marker, its flow is none of small|debug|tdd|debugging, or its inplace is not null;
+#   - a plan run is active (stable.json, prime.md or pool.json): the coordinator guard (block-coordinator-edits) judges it;
+#   - the project root's .git is not a folder: the session runs in a linked worktree (whose .git is a file) or no repo;
+#   - the path is outside the project, under .superlite/ or .claude/, or below a folder whose .git is a file (a linked
+#     worktree inside the project, e.g. .claude/worktrees/superlite-x).
+# A relative path is the input cwd's (else the project's); . and .. segments are collapsed; the project-relative comparison
+# is case-insensitive. Bash 3.2 builtins only (no git call, no process spawned). Fails open: any other error exits 0.
+
+IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
+
+re_agent='"agent_id"[[:space:]]*:[[:space:]]*"'
+[[ $input =~ $re_agent ]] && exit 0   # subagent call
+[ -n "${SUPERLITE_FLEET_WORKER:-}" ] && exit 0   # fleet worker session
+re_tool='"tool_name"[[:space:]]*:[[:space:]]*"([A-Za-z]+)"'
+[[ $input =~ $re_tool ]] || exit 0
+tool="${BASH_REMATCH[1]}"
+case "$tool" in Edit|Write|NotebookEdit|MultiEdit) ;; *) exit 0 ;; esac
+
+# jstr KEY: first JSON string value for KEY, decoded (\\ \" \/), into REPLY (empty if absent).
+jstr() {
+  local re='"'"$1"'"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"' s
+  REPLY=""
+  [[ $input =~ $re ]] || return 0
+  s="${BASH_REMATCH[1]}"
+  s="${s//\\\\/$'\x01'}"; s="${s//\\\"/\"}"; s="${s//\\\//\/}"
+  REPLY="${s//$'\x01'/\\}"
+}
+
+# norm PATH: forward slashes, no duplicate or trailing slashes, C:/x -> /c/x, into NORM.
+norm() {
+  local p="${1//\\//}" re='^([A-Za-z]):/(.*)$'
+  while [[ $p == *//* ]]; do p="${p//\/\//\/}"; done
+  [[ $p =~ $re ]] && { lower "${BASH_REMATCH[1]}"; p="/$LOWER/${BASH_REMATCH[2]}"; }
+  while [[ $p == */ && $p != / ]]; do p="${p%/}"; done
+  NORM="$p"
+}
+
+# lower S: S in lower case (ASCII, same length), into LOWER. bash 3.2 has no ${var,,} and a `tr` spawn costs ~250 ms on
+# Windows: a string without capitals is returned as is, else one builtin substitution per letter.
+lower() {
+  local s="$1"
+  if [[ $s == *[[:upper:]]* ]]; then
+    s="${s//A/a}"; s="${s//B/b}"; s="${s//C/c}"; s="${s//D/d}"; s="${s//E/e}"; s="${s//F/f}"; s="${s//G/g}"
+    s="${s//H/h}"; s="${s//I/i}"; s="${s//J/j}"; s="${s//K/k}"; s="${s//L/l}"; s="${s//M/m}"; s="${s//N/n}"
+    s="${s//O/o}"; s="${s//P/p}"; s="${s//Q/q}"; s="${s//R/r}"; s="${s//S/s}"; s="${s//T/t}"; s="${s//U/u}"
+    s="${s//V/v}"; s="${s//W/w}"; s="${s//X/x}"; s="${s//Y/y}"; s="${s//Z/z}"
+  fi
+  LOWER="$s"
+}
+
+# canon PATH: an absolute normalized PATH with "." and ".." segments collapsed, into CANON.
+canon() {
+  local rest="${1#/}" seg out=""
+  while [ -n "$rest" ]; do
+    case "$rest" in */*) seg="${rest%%/*}"; rest="${rest#*/}" ;; *) seg="$rest"; rest="" ;; esac
+    case "$seg" in
+      ""|.) ;;
+      ..) out="${out%/*}" ;;
+      *) out="$out/$seg" ;;
+    esac
+  done
+  CANON="${out:-/}"
+}
+
+jstr file_path; f="$REPLY"
+if [ -z "$f" ]; then jstr notebook_path; f="$REPLY"; fi
+[ -n "$f" ] || exit 0
+
+. "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
+superlite_state || exit 0
+sd="$SL_SD"; proj="$SL_PROJ"
+[ -f "$sd/inline-flow.json" ] || exit 0
+{ [ -f "$sd/stable.json" ] || [ -f "$sd/prime.md" ] || [ -f "$sd/pool.json" ]; } && exit 0   # a plan run: the coordinator guard
+IFS= read -r -d '' mj < "$sd/inline-flow.json"
+re_flow='"flow"[[:space:]]*:[[:space:]]*"(small|debug|tdd|debugging)"'
+re_null='"inplace"[[:space:]]*:[[:space:]]*null'
+[[ $mj =~ $re_flow && $mj =~ $re_null ]] || exit 0
+
+[ -n "$proj" ] && [ -d "$proj/.git" ] || exit 0   # not a main checkout (a linked worktree's .git is a file)
+norm "$proj"; projn="$NORM"
+norm "$f"; p="$NORM"
+case "$p" in
+  /*) ;;
+  *) jstr cwd; norm "${REPLY:-$projn}"; p="$NORM/$p" ;;
+esac
+canon "$p"; p="$CANON"
+
+lower "$p"; pl="$LOWER"
+lower "$projn"; prl="$LOWER"
+case "$pl" in
+  "$prl"/*) ;;
+  *) exit 0 ;;   # outside the project
+esac
+rel="${p:${#prl}+1}"
+lower "$rel"
+case "$LOWER" in .superlite|.superlite/*|.claude|.claude/*) exit 0 ;; esac
+
+d="${p%/*}"
+while [ "${#d}" -gt "${#projn}" ]; do
+  [ -f "$d/.git" ] && exit 0   # below a linked worktree inside the project
+  d="${d%/*}"
+done
+
+hit="${rel:0:120}"; hit="${hit//[\"\\$'\n\r\t']/}"
+printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s"}\n' "$tool" "$hit" \
+  >> "$sd/incidents.jsonl" 2>/dev/null
+printf '%s\n' \
+  'Blocked: an inline superlite flow is running and this path is in the main checkout, not in a worktree. Create the flow'"'"'s worktree and edit there: run `sl worktree ensure <topic>` (it prints the folder; make every edit below it). For a trivial change that should stay in this checkout, run `sl worktree inplace --reason "<why>"` once, then repeat the edit.' >&2
+printf 'Blocked target: %s (%s)\n' "$rel" "$p" >&2
+exit 2
