@@ -249,5 +249,5 @@ def test_agents_md_runs_layers_through_test_layers():
 
 def test_tools_doc_matches_record_and_claim_code():
     text = (Path(__file__).resolve().parents[2] / "docs" / "tools.md").read_text(encoding="utf-8")
-    assert "--record --passed N --command CMD" in text and "[--failed N]" not in text
+    assert "--record --passed N [--failed N] [--skipped N] [--seconds S] --command CMD" in text
     assert "not with `--also`" in text
