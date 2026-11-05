@@ -35,3 +35,5 @@ Run `"$SL" fleet wait --timeout 540000 --plan $PLAN` in the foreground instead o
 - `TIMEOUT Wn Wm`: run `fleet wait` again.
 
 `"$SL" fleet status` lists workers; `fleet stop Wn` or `--all` closes them. At freeze, `"$SL" fleet stop --all` runs before `trees clean` (no-op without fleet mode).
+
+Batch leads and backlog mode (`/superlite:backlog`): `backlog.md`.
