@@ -18,7 +18,7 @@ Shorthand: `SUPERLITE` = plugin root, two levels above this skill's "Base direct
 - Run root: a worktree (`"$SL" worktree ensure <topic>`; a plan header `**Worktree:** none`: in place, branch `superlite/<topic>` off the default branch). Write the start SHA to `.superlite/progress.md` (`- start <sha>`). `commit_task` excludes `.superlite/` in `.git/info/exclude` itself.
 - Wave 0 is not yours: `lint --stable` builds `.superlite/briefs/wave0.md` and prints `START FIRST:` with the Agent line for `superlite:implementer-haiku` (T0; `wave0 --plan $PLAN` reprints). Send it first with the stable set; then `commit_task T0`. `Ruling: skip T0` or `**Wave0:** none` mutes it. Then `"$SL" plan_tools adapter --plan $PLAN`.
 
-Fleet mode (user asks): `"$SL" fleet on` before the first dispatch, then `fleet.md`. Missing or BLOCKED: report BLOCKED; never in-process.
+Fleet mode (user asks): `"$SL" fleet on` before the first dispatch, then `fleet.md`: every role a worker, never in-process; missing or BLOCKED: report BLOCKED.
 - Prime: `"$SL" build_prime --plan $PLAN` prints `hash size`, writes `.superlite/prime.md`: slim for sonnet (rules and interfaces, no plan, no `--spec`). `--prime full --spec SPEC --sections "1,3"` restores the old one. Never paste it.
 - Incidents: `.superlite/incidents.jsonl` (`"$SL" incident add`); log BLOCKED and NEEDS_CONTEXT as `--agent coordinator`.
 - MCP: agents inherit the session's MCP tools; a project MCP server is approved before dispatch (background agents prompt in the main session).
@@ -28,7 +28,7 @@ Fleet mode (user asks): `"$SL" fleet on` before the first dispatch, then `fleet.
 
 Order: plan -> `"$SL" plan_tools prune --plan $PLAN` (drops removable edges) -> `"$SL" plan_tools lint --plan $PLAN --spec SPEC --stable` (lists STABLE and FIX tasks, writes `.superlite/stable.json`; prints `SEND BEFORE ANY PLAN EDIT:`, ends `DISPATCH NOW: T2 T4` or `none`) -> `dispatch` and start every task on that line this turn -> only then patch the FIX tasks -> re-lint -> dispatch the newly stable tasks -> repeat until lint passes. Never patch or re-lint while a `DISPATCH NOW` task is unsent.
 
-Each dispatch round, with the Agent calls, run the `THEN LOG` line lint prints (appends `unblocked:` to `.superlite/progress.md`). `finish` checks it against `lint-log.jsonl`.
+Each dispatch round, run the `THEN LOG` line lint prints (appends `unblocked:` to `.superlite/progress.md`). `finish` checks it against `lint-log.jsonl`.
 
 Dispatched tasks are frozen: keep blocks byte-identical, else lint says `FROZEN:` (restore; a real change is a follow-up). `MISSED TARGET:` warns: split or stub those tasks, or `Ruling: accept predicted <N> min - <why sequential> - <cost>`.
 
