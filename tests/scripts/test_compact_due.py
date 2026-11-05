@@ -38,8 +38,9 @@ def _env(tmp_path, **extra):
     return env
 
 
-def _run(tmp_path, **extra):
-    return subprocess.run([BASH, str(HOOK)], input="{}", capture_output=True, text=True,
+def _run(tmp_path, sid=None, **extra):
+    inp = json.dumps({"session_id": sid}) if sid else "{}"
+    return subprocess.run([BASH, str(HOOK)], input=inp, capture_output=True, text=True,
                           env=_env(tmp_path, **extra), cwd=str(tmp_path))
 
 
@@ -98,3 +99,42 @@ def test_mark_writes_last_compact(tmp_path):
     sl = _sl(tmp_path)
     compact_due.mark(str(sl))
     assert (sl / "last-compact").exists()
+
+
+def _age(path, secs):
+    t = path.stat().st_mtime - secs
+    os.utime(path, (t, t))
+
+
+def test_new_session_not_nudged_by_old_folder_stamp(tmp_path):
+    sl = _sl(tmp_path, compact_mtime=0)
+    r = _run(tmp_path, sid="s1")
+    assert r.returncode == 0 and r.stdout == ""
+    assert (sl / "last-compact.s1").exists()
+
+
+def test_session_nudged_once_after_window(tmp_path):
+    sl = _sl(tmp_path)
+    (sl / "last-compact.s1").write_text("", encoding="utf-8")
+    _age(sl / "last-compact.s1", 1801)
+    first = _run(tmp_path, sid="s1")
+    assert "compact" in first.stdout.lower()
+    second = _run(tmp_path, sid="s1")
+    assert second.stdout == ""
+
+
+def test_sessions_independent(tmp_path):
+    sl = _sl(tmp_path)
+    (sl / "last-compact.s1").write_text("", encoding="utf-8")
+    (sl / "last-compact.s2").write_text("", encoding="utf-8")
+    _age(sl / "last-compact.s2", 1801)
+    assert _run(tmp_path, sid="s1").stdout == ""
+    assert "compact" in _run(tmp_path, sid="s2").stdout.lower()
+
+
+def test_is_due_sid_first_sight(tmp_path):
+    sl = _sl(tmp_path)
+    assert compact_due.is_due(str(sl), 10**10, sid="s1") is False
+    assert (sl / "last-compact.s1").exists()
+    _age(sl / "last-compact.s1", 1801)
+    assert compact_due.is_due(str(sl), (sl / "last-compact.s1").stat().st_mtime + 1801, sid="s1") is True

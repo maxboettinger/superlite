@@ -42,27 +42,38 @@ def _launch_t(sl: Path) -> float:  # O(L)
     return 0.0 if earliest is None else earliest  # O(1)
 
 
-def _compact_mtime(sl: Path) -> float | None:  # O(1)
-    path = sl / "last-compact"  # O(1)
+def _stamp_name(sid: str | None) -> str:  # O(1)
+    safe = "".join(c for c in (sid or "") if c.isalnum() or c in "-_.")  # O(|sid|)
+    return "last-compact." + safe if safe else "last-compact"  # O(1)
+
+
+def _compact_mtime(sl: Path, sid: str | None = None) -> float | None:  # O(1)
+    path = sl / _stamp_name(sid)  # O(1)
     try:  # O(1)
         return path.stat().st_mtime  # O(1)
     except OSError:  # O(1)
         return None  # O(1)
 
 
-def is_due(sl_dir: str, now: float, window_s: float = _DEFAULT_WINDOW_S) -> bool:  # O(L)
-    """True when the compact window has elapsed since last compact or session launch."""
+def is_due(sl_dir: str, now: float, window_s: float = _DEFAULT_WINDOW_S, sid: str | None = None) -> bool:  # O(L)
+    """True when the window has elapsed since the last compact (per session when sid is given).
+
+    A session seen for the first time gets its stamp and is not due.
+    """
     sl = Path(sl_dir)  # O(1)
-    stamp = _compact_mtime(sl)  # O(1)
+    stamp = _compact_mtime(sl, sid)  # O(1)
+    if stamp is None and _stamp_name(sid) != "last-compact":  # O(1)
+        mark(sl_dir, sid)  # O(1)
+        return False  # O(1)
     if stamp is None:  # O(1)
         stamp = _launch_t(sl)  # O(L)
     return (now - stamp) >= window_s  # O(1)
 
 
-def mark(sl_dir: str) -> None:  # O(1)
-    """Stamp last-compact now, so the nudge shows once per window."""
+def mark(sl_dir: str, sid: str | None = None) -> None:  # O(1)
+    """Stamp last-compact (per session when sid is given) now, so the nudge shows once per window."""
     try:  # O(1)
-        (Path(sl_dir) / "last-compact").write_text("", encoding="utf-8")  # O(1)
+        (Path(sl_dir) / _stamp_name(sid)).write_text("", encoding="utf-8")  # O(1)
     except OSError:  # O(1)
         pass  # O(1)
 
@@ -84,8 +95,9 @@ if __name__ == "__main__":  # O(L) CLI for hooks
     if not sl:  # O(1)
         proj = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()  # O(1)
         sl = str(Path(proj) / ".superlite")  # O(1)
-    if is_due(sl, time.time()):  # O(L)
+    sid = sys.argv[2] if len(sys.argv) > 2 else None  # O(1)
+    if is_due(sl, time.time(), sid=sid):  # O(L)
         print(nudge_line(), flush=True)  # O(1)
-        mark(sl)  # O(1)
+        mark(sl, sid)  # O(1)
         sys.exit(0)  # O(1)
     sys.exit(1)  # O(1) not due

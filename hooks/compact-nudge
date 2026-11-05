@@ -28,7 +28,11 @@ if [ -z "$py" ]; then
 fi
 script="$root/skills/subagent-driven-development/scripts/compact_due.py"
 
-line="$("$py" "$script" "$sl_dir" 2>/dev/null)" || exit 0
+sid=""
+re='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_.-]+)"'
+[[ $input =~ $re ]] && sid="${BASH_REMATCH[1]}"
+
+line="$("$py" "$script" "$sl_dir" "$sid" 2>/dev/null)" || exit 0
 [ -n "$line" ] || exit 0
 
 esc="$line"
