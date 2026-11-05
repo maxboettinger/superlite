@@ -168,7 +168,12 @@ def test_cli_stdout_is_only_the_path(repo):
     r = cli("ensure", "Add Login!", "--repo", repo)
     assert r.returncode == 0
     assert r.stdout.splitlines() == [(repo / ".claude/worktrees/superlite-add-login").as_posix()]
-    assert "dependencies" in r.stderr
+    assert "missing here" not in r.stderr  # nothing ignored in the main checkout: no note
+    (repo / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (repo / ".env").write_text("K=1\n", encoding="utf-8")
+    r = cli("ensure", "Other", "--repo", repo)
+    assert r.stdout.splitlines() == [(repo / ".claude/worktrees/superlite-other").as_posix()]
+    assert "missing here: .env" in r.stderr
 
 
 def test_deleted_worktree_folder_is_recreated(repo):

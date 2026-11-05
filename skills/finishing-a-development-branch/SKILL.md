@@ -33,7 +33,7 @@ Prepare: branch, base, commits ahead (`git log --oneline <base>..HEAD`), `git di
 2. Push and open a pull request
 3. Keep the branch as is
 
-If `finish` printed NOTHING WAS COMMITTED (superlite default), options 1 and 2 read "Commit, then ...": after the answer run `sl autocommit apply` (or `/superlite:commit`), which refuses if HEAD moved or the tree has unrelated changes; option 3 leaves the work uncommitted. Never run `git commit` yourself.
+If `finish` printed NOTHING WAS COMMITTED (superlite default), options 1 and 2 read "Commit, then ...": after the answer run `sl autocommit apply` (or `/superlite:commit`), which refuses only when commits since the run touched checkpointed files or a checkpointed file changed again, and leaves unrelated changes uncommitted; option 3 leaves the work uncommitted. Never run `git commit` yourself.
 
 No further menus or typed confirmations. Act on the answer.
 

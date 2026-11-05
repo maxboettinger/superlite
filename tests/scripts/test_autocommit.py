@@ -223,8 +223,11 @@ def test_apply_refuses_unrelated_changes(tmp_path):
     two_tasks(repo)
     write(repo, "notes.txt", "mine\n")
     r = run("autocommit", "apply", cwd=repo)
-    assert r.returncode != 0 and "unrelated" in r.stderr and "notes.txt" in r.stderr
-    assert git(repo, "rev-list", "--count", "HEAD") == "1"
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert git(repo, "rev-list", "--count", "HEAD") == "3"  # the task files are committed
+    assert "notes.txt" not in git(repo, "ls-tree", "-r", "--name-only", "HEAD")
+    assert (repo / "notes.txt").read_text() == "mine\n"  # the unrelated change stays in the tree
+    assert any("left uncommitted" in ln and "notes.txt" in ln for ln in r.stdout.splitlines())
 
 
 def test_apply_allows_plan_folder_files(tmp_path):
@@ -248,12 +251,12 @@ def test_apply_allows_nested_plan_files(tmp_path):
     r = run("commit_task", "T1", "--plan", "docs/plans/p.md", cwd=repo)
     assert r.returncode == 0, r.stdout + r.stderr
     write(repo, "docs/plans/other.md", "x\n")
-    r = run("autocommit", "apply", cwd=repo)
-    assert r.returncode != 0 and "unrelated" in r.stderr and "docs/plans/other.md" in r.stderr
-    (repo / "docs" / "plans" / "other.md").unlink()
     write(repo, "docs/plans/p.review.md", "review\n")
     r = run("autocommit", "apply", cwd=repo)
-    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.returncode == 0, r.stdout + r.stderr  # applies, names the unrelated plan-folder file, not the plan's own
+    left = [ln for ln in r.stdout.splitlines() if "left uncommitted" in ln]
+    assert len(left) == 1 and "docs/plans/other.md" in left[0] and "p.review.md" not in left[0]
+    assert "docs/plans/other.md" not in git(repo, "ls-tree", "-r", "--name-only", "HEAD")
 
 
 def test_clean_removes_refs(tmp_path):
