@@ -8,7 +8,10 @@
 
 Prints `passed failed skipped seconds` (errors count as failed). Each failing
 test becomes a `test-failure` incident; on a --full run each test file whose
-tests all pass becomes a `verified` incident (once per distinct entry). Appends
+tests all pass becomes a `verified` incident (once per distinct entry). With `--task Tn` each
+`test-failure` incident carries `task`, and a later run closes that task's open ones whose test
+now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a pytest run that produces
+no results logs one `no-result` incident. Appends
 a `tests` line to the progress ledger. On every run it also writes
 `.superlite/test-summary.json` (--summary), the file `pt_review packet` reads:
 `{"passed": N, "failed": N, "skipped": N, "seconds": S, "mode": "fast|full",
@@ -291,10 +294,55 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
     tmp.replace(p)  # O(1) rename
 
 
-def add_incidents(log, items):  # O(total c) + one locked append (no spawn in process)
-    """items: (file, line, context, kind, resolution)."""
-    nt.add_incidents(log, [(f, line, ctx, kind, "run_tests", res)  # O(k)
-                           for f, line, ctx, kind, res in items])
+def add_incidents(log, items, task=None):  # O(total c) + one locked append (no spawn in process)
+    """items: (file, line, context, kind, resolution). A --task run stamps `task` on each entry; a kind outside
+    incident.KINDS (`no-result`) is set after make_entry, as the hooks write theirs."""
+    if not nt.in_process():  # SUPERLITE_SL swaps the launcher: the spawned `incident add` takes no task | O(1)
+        nt.add_incidents(log, [(f, line, ctx, kind, "run_tests", res) for f, line, ctx, kind, res in items])  # O(k)
+        return  # O(1)
+    inc = nt.sibling("incident")  # O(1)
+    entries = []  # O(1)
+    for f, line, ctx, kind, res in items:  # O(k); a bad item is skipped, not the batch
+        try:  # O(1)
+            e = inc.make_entry(str(f), int(line), ctx, agent="run_tests", kind=kind if kind in inc.KINDS else None, resolution=res or None)  # O(c)
+        except (ValueError, TypeError) as err:  # O(1)
+            print(f"warning: incident not logged ({f}:{line}): {err}", file=sys.stderr)  # O(1)
+            continue  # O(1)
+        if kind and kind not in inc.KINDS:  # O(1)
+            e["kind"] = kind  # O(1)
+        if task:  # O(1)
+            e["task"] = task  # O(1)
+        entries.append(e)  # O(1)
+    try:  # O(1)
+        inc.append(log, entries)  # O(total c) one locked write
+    except OSError as err:  # O(1)
+        print(f"warning: incidents not logged: {err}", file=sys.stderr)  # O(1)
+
+
+def resolve_passed(log, task, failures, files):  # O(B + I + k) read the log once, one append (#180)
+    """Close `task`'s open test-failure incidents whose file ran in this run and whose test no longer fails:
+    the entry `sl incident resolve` writes (kind of the open entry, resolution `fixed`, ruling as context)."""
+    p = Path(log)  # O(1)
+    if not task or not files or not p.exists():  # O(1)
+        return  # O(1)
+    resolved = nt.sibling("pt_review").RESOLVED  # the resolutions the packet counts as closed; lazy | O(module)
+    newest = {}  # location -> its newest non-verified entry, as the packet and `finish` count open | O(1)
+    for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():  # O(I) iterations; read O(B)
+        try:  # O(1)
+            e = json.loads(ln)  # O(w)
+        except ValueError:  # O(1)
+            continue  # O(1)
+        if isinstance(e, dict) and "file" in e and "line" in e and e.get("kind") != "verified":  # O(1)
+            newest[(e["file"], e["line"])] = e  # O(1)
+    norm = lambda x: str(x).replace("\\", "/")  # noqa: E731 | O(len)
+    ran = {norm(f) for f in files}  # O(F)
+    failing = {(norm(f), ctx.split(": ", 1)[0]) for f, _line, ctx in failures}  # (file, test name) still red | O(k)
+    items = [(f, line, "fixed: passed on a later run", "test-failure", "fixed")  # O(1) each
+             for (f, line), e in newest.items()  # O(I) iterations
+             if e.get("kind") == "test-failure" and e.get("task") == task  # O(1)
+             and str(e.get("resolution", "")).lower() not in resolved  # O(1)
+             and norm(f) in ran and (norm(f), str(e.get("context", "")).split(": ", 1)[0]) not in failing]  # O(len)
+    add_incidents(log, items, task)  # O(total c) one append
 
 
 def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident append
@@ -312,7 +360,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--wait", nargs="?", const="", default=None, dest="wait_path", metavar="PATH",  # O(1)
                     help="wait for PATH's run (the `summary:` line); bare: the latest background run")  # O(1)
     ap.add_argument("--timeout", type=float, default=None, help=f"--wait limit in seconds (default {DEFAULT_WAIT:.0f})")  # O(1)
-    ap.add_argument("--task", default=None, help="task id: compiled stacks run in .superlite/trees/<task> (own files only)")  # O(1)
+    ap.add_argument("--task", default=None, help="task id: compiled stacks run in .superlite/trees/<task> (own files only); incidents carry it and a green run closes its red ones")  # O(1)
     ap.add_argument("--plan", default=None, help=f"plan for --task Owns (default: the plan in .superlite/stable.json, else {nt.DEFAULT_PLAN})")  # O(1)
     ap.add_argument("--record", action="store_true", help="record a result run outside run_tests (needs --passed and --command), no test run")  # O(1)
     ap.add_argument("--passed", type=int, default=None, help="--record: tests that passed")  # O(1)
@@ -513,6 +561,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                                              "skipped_tests": []}, [], seconds,  # O(1)
                           error=reason if r.returncode != 5 else None)  # O(1)
             publish_summary(a)  # O(summary size)
+            add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
             print(f"0 0 0 {seconds:.1f}")  # O(1)
             return 1 if r.returncode == 5 else 2  # O(1)
         counts, failures, files = parse_junit(xml_path)  # O(X + T*d)
@@ -529,7 +578,8 @@ def finish_run(a, label, counts, failures, files, seconds, returncode):  # O(k +
             ctx = f"run_tests full: {ok} tests pass"  # O(1)
             if ok and not bad and (f, ctx) not in seen:  # O(1) set lookup
                 items.append((f, 0, ctx, "verified", None))  # O(1)
-    add_incidents(a.log, items)  # O(k + F) one append
+    add_incidents(a.log, items, a.task)  # O(k + F) one append
+    resolve_passed(a.log, a.task, failures, files)  # O(B + I + k) a --task run closes its tests that pass now (#180)
 
     summary = (f"{counts['passed']} {counts['failed']} {counts['skipped']} "  # O(1)
                f"{seconds:.1f}")  # O(1)
