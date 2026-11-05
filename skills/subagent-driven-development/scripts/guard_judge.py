@@ -1,0 +1,782 @@
+#!/usr/bin/env python3
+"""Coordinator guard judge: names the project files a Bash or PowerShell command writes and applies the path policy.
+
+Library: judge(command, cwd, project, mode) -> Verdict | None (None: the command is allowed).
+CLI: `python3 -I guard_judge.py --mode idle|active|human --project DIR --sd STATE_DIR` reads the hook JSON on stdin, prints
+the block message on stderr and exits 2 on a block; every other outcome, an internal error included, exits 0 (fail open,
+after a `guard-error` incident). Stdlib only.
+
+The walk: `guard_lex.split` gives one Segment per simple command. A directory state (a small set of the directories the
+shell may sit in) follows `cd`, `pushd`, `popd`, `cd -` through `&&`/`||` chains; a subshell, a substitution, `bash -c`
+and a pipeline get a copy, `eval` and `source /dev/stdin` the shell's own state. Wrappers (env, sudo, nice, timeout,
+command, exec, nohup, time, xargs, find -exec) are unwrapped. Targets come from `guard_files` and `guard_tools` and are
+resolved against each possible directory, then judged by the path policy.
+"""
+# Complexity notation:
+#   n = characters of the command text, s = segments, d = directories the shell may sit in (<= MAX_DIRS),
+#   t = targets of one command, p = path length, b = nesting depth (<= MAX_DEPTH), v = shell variables set so far
+import json  # O(1)
+import os  # O(1)
+import re  # O(1)
+import sys  # O(1)
+from dataclasses import dataclass  # O(1)
+from fnmatch import fnmatchcase  # O(1)
+
+_HERE = os.path.dirname(os.path.abspath(__file__))  # O(1)
+if _HERE not in sys.path:  # O(1) python3 -I does not put the script's folder on the path
+    sys.path.insert(0, _HERE)  # O(1)
+
+import guard_files  # noqa: E402  O(1)
+import guard_lex  # noqa: E402  O(1)
+import guard_tools  # noqa: E402  O(1)
+
+__all__ = ["Verdict", "judge", "main"]  # O(1)
+
+MAX_DEPTH = 8  # nested bodies judged before the rest counts as an unknown target | O(1)
+MAX_DIRS = 12  # directories tracked at once before the shell's directory counts as unknown | O(1)
+PROTECTED = (".superlite/orchestrator.json", ".superlite/human-replies.jsonl")  # O(1)
+NAMES = ("orchestrator.json", "human-replies.jsonl")  # O(1)
+ACTIVE_OK = ("docs/plans/*", "docs/*/plans/*", "docs/*.md", "SPEC*.md", "*/SPEC*.md", "docs.md", "*/docs.md",  # O(1)
+             ".superlite/*", ".git/info/exclude")  # O(1)
+HUMAN_OK = ("docs/plans/*.review.md", "docs/*/plans/*.review.md", ".superlite/*", ".git/info/exclude")  # O(1)
+SHELLS = frozenset({"sh", "bash", "zsh", "ksh", "dash"})  # O(1)
+REMOVE = frozenset({"rm", "rmdir", "unlink", "shred"})  # commands whose operand is the path itself, not a directory to fill | O(1)
+LEAD_KW = frozenset({"if", "then", "else", "elif", "while", "until", "do", "!"})  # a command follows | O(1)
+NO_CMD_KW = frozenset({"fi", "done", "esac", "for", "case", "select", "function", "in", "}", "{"})  # no command in the segment | O(1)
+OPEN_KW = frozenset({"if", "while", "until", "for", "case", "select"})  # O(1)
+CLOSE_KW = frozenset({"fi", "done", "esac"})  # O(1)
+DECLARE = frozenset({"export", "declare", "typeset", "readonly", "local"})  # O(1)
+POISON = frozenset({"alias", "unalias", "enable", "trap"})  # commands that can redefine cd or run it unseen | O(1)
+DISTURB = frozenset({"rm", "rmdir", "mv", "unlink", "shred", "chmod", "chown", "chgrp", "rsync", "find", "git", "tar",  # O(1)
+                     "unzip", "7z", "cpio", "patch", "xargs", "eval", "source", ".", "trap", "alias", "unalias", "enable"})  # O(1)
+WRITE_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>", ">&"})  # O(1)
+ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")  # O(1)
+VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")  # O(1)
+FUNC = re.compile(r"(^|[;&|{}\s])(function\s+\S+|[A-Za-z_][\w.:-]*\s*\(\s*\)\s*\{)")  # a function definition: its body runs later | O(1)
+WRAP = {  # wrapper: (short options that take a value, long options that take a value) | O(1)
+    "env": ("CuaPS", ("chdir", "unset", "argv0", "split-string", "block-signal", "default-signal", "ignore-signal")),
+    "sudo": ("CDghprtTUu", ("chdir", "user", "group", "host", "prompt", "role", "type", "close-from", "other-user",
+                            "command-timeout", "chroot")),
+    "nice": ("n", ("adjustment",)), "timeout": ("sk", ("signal", "kill-after")), "exec": ("a", ()), "command": ("", ()),
+    "builtin": ("", ()), "nohup": ("", ()), "time": ("fo", ("format", "output")), "setsid": ("", ()),
+    "xargs": ("InPsLdEa", ("max-args", "max-procs", "max-lines", "max-chars", "delimiter", "eof", "arg-file", "process-slot-var")),
+}  # O(1)
+UV_VAL = ("--with", "--python", "--project", "--directory", "--env-file", "--with-requirements", "-p", "-w")  # O(1)
+FIND_VARIANTS = ("?", "orchestrator.json", "human-replies.jsonl", ".superlite/orchestrator.json",  # O(1)
+                 ".superlite/human-replies.jsonl")  # names a find may reach below a start path
+INTERP = re.compile(r"^(python[0-9.]*|pypy[0-9.]*|node|nodejs|bun|perl|ruby|php)$")  # O(1)
+
+
+@dataclass
+class Verdict:  # O(1)
+    rel: str  # project-relative path, "." for the whole tree, "?" for an unknown target  | O(1)
+    abs: str  # absolute path, same exceptions | O(1)
+    kind: str  # "protected" | "human" | "code" | O(1)
+
+
+class _Ctx:  # O(p)
+    def __init__(self, command, project, mode):  # O(n + p)
+        self.mode = mode  # O(1)
+        self.enforce = mode in ("active", "human")  # O(1)
+        self.projn = _clean(_winpath(project))  # O(p)
+        self.projreal = os.path.realpath(self.projn)  # O(p)
+        low = command.lower()  # O(n)
+        self.mentions = any(x in low for x in NAMES)  # a protected name in the text | O(n)
+        self.kind = "human" if mode == "human" else "code"  # O(1)
+        self.home = os.environ.get("HOME") or os.path.expanduser("~")  # O(1)
+
+
+class _State:  # O(1)
+    """The shell: possible directories, previous directories, pushd stack, variables, dirs made by `mkdir -p`."""
+    def __init__(self, dirs):  # O(1)
+        self.dirs, self.old, self.stack, self.vars, self.made = tuple(dirs), tuple(dirs), [], {}, set()  # O(1)
+        self.shared = {"disturbed": False}  # O(1)
+        self.cond = False  # O(1)
+
+    def fork(self, dirs):  # O(v)
+        s = _State(dirs)  # O(1)
+        s.old, s.stack, s.vars, s.made = self.old, list(self.stack), dict(self.vars), set(self.made)  # O(v)
+        s.shared, s.cond = self.shared, self.cond  # O(1)
+        return s  # O(1)
+
+
+class _Cmd:  # O(1)
+    """One simple command as walked: its segment, the directories it runs in, and the directories it leaves."""
+    def __init__(self, seg, inn, persist, piped, docs, cond):  # O(1)
+        self.seg, self.inn, self.persist, self.piped, self.docs, self.cond = seg, inn, persist, piped, docs, cond  # O(1)
+        self.ok = self.fail = inn  # directories after the command succeeds / fails | O(1)
+
+
+def _winpath(p):  # O(p)
+    m = re.match(r"^([A-Za-z]):[\\/](.*)$", p)  # O(p)
+    return "/" + m.group(1).lower() + "/" + m.group(2).replace("\\", "/") if m else p  # O(p)
+
+
+def _clean(p):  # O(p) | lexically normalised, one leading slash
+    n = os.path.normpath(p)  # O(p)
+    return "/" + n.lstrip("/") if n.startswith("/") else n  # O(p)
+
+
+def _union(*sets):  # O(d) | ordered union, (None,) when too many
+    out = []  # O(1)
+    for s in sets:  # O(1)
+        for d in s:  # O(d)
+            if d not in out:  # O(d)
+                out.append(d)  # O(1)
+    return tuple(out) if len(out) <= MAX_DIRS else (None,)  # O(1)
+
+
+def _base(w):  # O(p) | command name: no folder, no .exe
+    b = w.replace("\\", "/").rsplit("/", 1)[-1]  # O(p)
+    return b[:-4] if b.lower().endswith(".exe") else b  # O(1)
+
+
+def _unknown(ctx):  # O(1) | verdict for a target the guard cannot name
+    if ctx.enforce:  # O(1)
+        return Verdict("?", "?", ctx.kind)  # O(1)
+    return Verdict("?", "?", "protected") if ctx.mentions else None  # O(1)
+
+
+def _allowed(rel, mode):  # O(patterns) | may the coordinator write the project-relative path?
+    return any(fnmatchcase(rel, pat) for pat in (HUMAN_OK if mode == "human" else ACTIVE_OK))  # O(patterns * p)
+
+
+def _wt_rel(rel, projreal):  # O(depth) | the path below the deepest linked worktree root it lies in, or None
+    r, pre, wrel = rel, "", None  # O(1)
+    while "/" in r:  # O(depth)
+        head, r = r.split("/", 1)  # O(p)
+        pre = pre + "/" + head if pre else head  # O(p)
+        gitf = os.path.join(projreal, pre, ".git")  # O(p)
+        if not os.path.isfile(gitf):  # O(1)
+            continue  # O(1)
+        try:  # O(1)
+            with open(gitf, encoding="utf-8", errors="replace") as f:  # O(1)
+                line = f.readline()  # O(1)
+        except OSError:  # O(1)
+            continue  # O(1)
+        if re.match(r"^gitdir:.*/worktrees/[^/]+$", line.strip().replace("\\", "/").rstrip("/")):  # a submodule's points into modules/ | O(p)
+            wrel = r  # O(1)
+    return wrel  # O(1)
+
+
+def _rel(real, projreal):  # O(p) | project-relative (case-insensitive prefix), "" for the root, None outside
+    a, b = real.lower(), projreal.lower()  # O(p)
+    if a == b:  # O(p)
+        return ""  # O(1)
+    return real[len(projreal) + 1:] if a.startswith(b.rstrip("/") + "/") else None  # O(p)
+
+
+def _isdir(p, base):  # O(1) | is p an existing folder from base?
+    try:  # O(1)
+        full = p if p.startswith("/") else (base + "/" + p if base else None)  # O(p)
+        return full is not None and os.path.isdir(full)  # O(1)
+    except (OSError, ValueError):  # O(1)
+        return False  # O(1)
+
+
+def _judge_path(path, base, ctx, name=None):  # O(p + depth) | the policy's verdict for one path from directory base
+    p = _winpath(path)  # O(p)
+    if p == "" or p.startswith("/dev/"):  # O(1)
+        return None  # O(1)
+    if name is not None and p not in (".", "./") and (p.endswith("/") or _isdir(p, base)):  # a folder: the file lands inside | O(p)
+        p = p.rstrip("/") + "/" + name  # O(p)
+    elif p.endswith("/") and len(p) > 1:  # O(1)
+        p = p.rstrip("/")  # O(p)
+    if base is None and not p.startswith("/"):  # the shell's directory is unknown: judged from the project root, strictly | O(1)
+        if p.replace("\\", "/").rsplit("/", 1)[-1].lower() in NAMES:  # O(p)
+            return Verdict(p, ctx.projn + "/" + p, "protected")  # O(p)
+        if not ctx.enforce:  # O(1)
+            return None  # O(1)
+        parts = p.split("/")  # O(p)
+        if ".." in parts or not (_allowed(p, ctx.mode) and _allowed("x/" + p, ctx.mode)):  # allowed only by its prefix: not sure | O(p)
+            return Verdict(p, ctx.projn + "/" + p, ctx.kind)  # O(p)
+        return None  # O(1)
+    full = _clean(p if p.startswith("/") else base + "/" + p)  # O(p)
+    rel = _rel(os.path.realpath(full), ctx.projreal)  # O(p) syscalls
+    if rel is None:  # outside the project | O(1)
+        return None  # O(1)
+    absolute = ctx.projn + "/" + rel if rel else ctx.projn  # O(p)
+    if rel == "":  # the project root itself: a rewrite of the whole tree | O(1)
+        return Verdict(".", absolute, ctx.kind) if ctx.enforce else None  # O(1)
+    if rel.lower() in PROTECTED:  # O(p)
+        return Verdict(rel, absolute, "protected")  # O(1)
+    wt = _wt_rel(rel, ctx.projreal) if (ctx.enforce or rel.lower().endswith(NAMES)) else None  # O(depth)
+    if wt is not None and wt.lower() in PROTECTED:  # also inside a linked worktree | O(p)
+        return Verdict(rel, absolute, "protected")  # O(1)
+    if not ctx.enforce or _allowed(rel, ctx.mode):  # O(patterns)
+        return None  # O(1)
+    if wt is not None and _allowed(wt, ctx.mode):  # judged from the worktree's root | O(patterns)
+        return None  # O(1)
+    return Verdict(rel, absolute, ctx.kind)  # O(1)
+
+
+def _expand(text, st, ctx):  # O(p + v) | ~ and the variables the guard knows; unknown ones stay as written
+    if text == "~" or text.startswith("~/"):  # O(1)
+        text = ctx.home + text[1:]  # O(p)
+
+    def sub(m):  # O(1)
+        name = m.group(1) or m.group(2)  # O(1)
+        if name in st.vars:  # O(1)
+            return m.group(0) if st.vars[name] is None else st.vars[name]  # O(1)
+        if name == "HOME":  # O(1)
+            return ctx.home  # O(1)
+        if name == "CLAUDE_PROJECT_DIR":  # O(1)
+            return ctx.projn  # O(1)
+        if name == "PWD" and len(st.dirs) == 1 and st.dirs[0]:  # O(1)
+            return st.dirs[0]  # O(1)
+        return m.group(0)  # O(1)
+    return VAR.sub(sub, text) if "$" in text else text  # O(p)
+
+
+def _check(t, inn, st, ctx, name=None):  # O(d * (p + depth)) | verdict for one target from every possible directory
+    t = _expand(t, st, ctx)  # O(p + v)
+    if t == "?" or "$" in t or "`" in t:  # not a literal: unknown | O(p)
+        return _unknown(ctx)  # O(1)
+    found = None  # O(1)
+    for base in inn:  # O(d)
+        v = _judge_path(t, base, ctx, name)  # O(p + depth)
+        if v is not None and (found is None or v.kind == "protected"):  # protected wins | O(1)
+            found = v  # O(1)
+    return found  # O(1)
+
+
+def _cd_to(dirs, target):  # O(d * p) | each directory after `cd target`; None when unreadable
+    if target is None or "$" in target or "`" in target:  # O(p)
+        return tuple(None for _ in dirs[:1]) or (None,)  # O(1)
+    out = []  # O(1)
+    for d in dirs:  # O(d)
+        if target.startswith("/"):  # O(1)
+            n = _clean(_winpath(target))  # O(p)
+        elif d is None or (os.environ.get("CDPATH") and not target.startswith(("./", "../"))):  # CDPATH: unknown | O(1)
+            n = None  # O(1)
+        else:  # O(1)
+            n = _clean(d + "/" + target)  # O(p)
+        if n not in out:  # O(d)
+            out.append(n)  # O(1)
+    return tuple(out)  # O(d)
+
+
+def _skip_opts(words, i, short_vals, long_vals):  # O(w) | index after the options of a wrapper, and the values found
+    found, n = {}, len(words)  # O(1)
+    while i < n:  # O(w)
+        x = words[i]  # O(1)
+        if x == "--":  # O(1)
+            return i + 1, found  # O(1)
+        if x.startswith("--"):  # O(1)
+            if "=" in x:  # O(1)
+                found[x[2:].split("=", 1)[0]] = x.split("=", 1)[1]  # O(p)
+            elif x[2:] in long_vals and i + 1 < n:  # O(1)
+                found[x[2:]] = words[i + 1]  # O(1)
+                i += 1  # O(1)
+        elif x.startswith("-") and len(x) > 1:  # O(1)
+            for j in range(1, len(x)):  # a cluster: a value option takes the rest, or the next word | O(len)
+                if x[j] in short_vals:  # O(1)
+                    if x[j + 1:]:  # O(1)
+                        found[x[j]] = x[j + 1:]  # O(1)
+                    elif i + 1 < n:  # O(1)
+                        found[x[j]] = words[i + 1]  # O(1)
+                        i += 1  # O(1)
+                    break  # O(1)
+                found.setdefault(x[j], "")  # a flag | O(1)
+        elif ASSIGN.match(x) and short_vals == WRAP["env"][0]:  # env NAME=value | O(1)
+            pass  # O(1)
+        else:  # O(1)
+            break  # O(1)
+        i += 1  # O(1)
+    return i, found  # O(1)
+
+
+def _unwrap(words, dyn, c, st, ctx):  # O(w) | (command words, dyn, directories, xargs?, shell-on-stdin?)
+    inn, xargs, sh = c.inn, False, False  # O(1)
+    while words:  # O(w) per wrapper
+        base = _base(words[0])  # O(p)
+        if base in ("uv", "poetry", "pipenv") and words[1:2] == ["run"]:  # O(1)
+            i = 2  # O(1)
+            while i < len(words) and words[i].startswith("-"):  # O(w)
+                i += 2 if words[i] in UV_VAL else 1  # O(1)
+            words, dyn = words[i:], dyn[i:]  # O(w)
+            continue  # O(1)
+        if base not in WRAP:  # O(1)
+            break  # O(1)
+        shorts, longs = WRAP[base]  # O(1)
+        i, got = _skip_opts(words, 1, shorts, longs)  # O(w)
+        if base == "command" and ("v" in got or "V" in got):  # a lookup, not a run | O(1)
+            return [], [], inn, xargs, sh  # O(1)
+        if base == "timeout" and i < len(words):  # the DURATION | O(1)
+            i += 1  # O(1)
+        if base in ("sudo", "env") and ("s" in got or "i" in got or "shell" in got or "login" in got) and base == "sudo":  # O(1)
+            sh = i >= len(words)  # sudo -s / -i with no command runs a shell on stdin | O(1)
+        chdir = got.get("C") if base == "env" else got.get("D")  # O(1)
+        chdir = got.get("chdir", chdir)  # O(1)
+        if chdir is not None:  # env -C and sudo -D change the directory of the command | O(1)
+            inn = _cd_to(inn, _expand(chdir, st, ctx))  # O(d * p)
+        split = got.get("S", got.get("split-string"))  # env -S STRING is a command line | O(1)
+        rest, rdyn = words[i:], dyn[i:]  # O(w)
+        if split is not None:  # O(1)
+            segs = guard_lex.split(split)  # O(p)
+            if segs:  # O(1)
+                rest, rdyn = list(segs[0].words) + rest, list(segs[0].dyn) + rdyn  # O(w)
+        xargs = xargs or base == "xargs"  # O(1)
+        words, dyn = rest, rdyn  # O(1)
+    if sh and not words:  # O(1)
+        words, dyn = ["sh"], [False]  # O(1)
+    return words, dyn, inn, xargs, sh  # O(1)
+
+
+def _walk_text(text, st, ctx, depth, force_cond=False):  # O(n) | verdict for a command line of its own
+    if depth > MAX_DEPTH:  # O(1)
+        return _unknown(ctx)  # O(1)
+    segs = guard_lex.split(text)  # O(n)
+    for seg in segs:  # a heredoc whose delimiter line is missing: its body is judged as commands too | O(s)
+        for r in seg.redirects:  # O(redirects)
+            if r.op in ("<<", "<<-") and not re.search(r"(?m)^\t*" + re.escape(r.target) + r"[ \t]*\r?$", text):  # O(n)
+                v = _walk_docs(seg.heredocs, _Cmd(seg, st.dirs, False, False, [], False), st, ctx, depth)  # O(n)
+                if v is not None:  # O(1)
+                    return v  # O(1)
+    return _walk(segs, st, ctx, depth, force_cond or FUNC.search(text) is not None)  # O(n)
+
+
+def _walk_docs(docs, c, st, ctx, depth, shared=False):  # O(sum of docs) | judge heredoc programs as shell text
+    for doc in docs:  # O(docs)
+        st2 = st.fork(c.inn)  # O(v)
+        v = _walk_text(doc, st2, ctx, depth + 1)  # O(doc)
+        if v is not None:  # O(1)
+            return v  # O(1)
+        if shared:  # the shell's own state keeps the program's cd | O(1)
+            c.ok = c.fail = st2.dirs  # O(1)
+            st.vars.update(st2.vars)  # O(v)
+    return None  # O(1)
+
+
+def _is_sl(words):  # O(w) | an sl call: judged by what it does, not by its path
+    def slish(w):  # O(p)
+        return w in ("$SL", "${SL}") or "subagent-driven-development/scripts/" in w  # O(p)
+    if not words:  # O(1)
+        return False  # O(1)
+    if slish(words[0]):  # O(1)
+        return True  # O(1)
+    if _base(words[0]) in SHELLS:  # the script operand | O(1)
+        for w in words[1:]:  # O(w)
+            if not w.startswith("-"):  # O(1)
+                return slish(w)  # O(1)
+    return False  # O(1)
+
+
+def _shell(words, dyn, c, st, ctx, depth):  # O(n) | a shell's -c body, stdin program or process substitution
+    i, n, body, bi, has_s = 1, len(words), None, -1, False  # O(1)
+    while i < n:  # O(w)
+        x = words[i]  # O(1)
+        if x == "--":  # O(1)
+            i += 1  # O(1)
+            break  # O(1)
+        if x in ("-o", "+o", "-O", "+O", "--rcfile", "--init-file"):  # O(1)
+            i += 2  # O(1)
+        elif x.startswith(("-", "+")) and not x.startswith("--") and len(x) > 1:  # O(1)
+            has_s = has_s or "s" in x[1:]  # O(1)
+            if "c" in x[1:] and x[0] == "-" and i + 1 < n:  # O(1)
+                body, bi = words[i + 1], i + 1  # O(1)
+                i += 1  # O(1)
+            i += 1  # O(1)
+        elif x.startswith("--"):  # O(1)
+            i += 1  # O(1)
+        else:  # O(1)
+            break  # O(1)
+    if body is not None:  # O(1)
+        text = _expand(body, st, ctx) if dyn[bi] else body  # O(p)
+        v = _walk_text(text, st.fork(c.inn), ctx, depth + 1)  # O(n)
+        if v is None and dyn[bi]:  # a body made by a substitution may read the heredocs | O(1)
+            v = _walk_docs(c.docs, c, st, ctx, depth)  # O(docs)
+        return v  # O(1)
+    script = words[i] if i < n else None  # O(1)
+    if script is not None and (script.startswith(("<(", ">("))):  # process substitution: a program the guard cannot read | O(1)
+        return _unknown(ctx)  # O(1)
+    if script is not None and not has_s and script not in ("/dev/stdin", "/dev/fd/0", "-"):  # a script file | O(1)
+        return None  # O(1)
+    if c.docs:  # O(1)
+        return _walk_docs(c.docs, c, st, ctx, depth)  # O(docs)
+    return _unknown(ctx) if c.piped else None  # a program piped in: unknown | O(1)
+
+
+def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and source/. run in the shell's own state
+    if base == "eval":  # O(1)
+        parts = [_expand(w, st, ctx) if d else w for w, d in zip(words[1:], dyn[1:])]  # O(w * p)
+        st2 = st.fork(c.inn)  # O(v)
+        v = _walk_text(" ".join(parts), st2, ctx, depth + 1)  # O(n)
+        if v is not None:  # O(1)
+            return v  # O(1)
+        c.ok = c.fail = st2.dirs  # O(1)
+        if c.persist:  # O(1)
+            st.vars.update(st2.vars)  # O(v)
+        if any("$" in p or "`" in p for p in parts):  # a body the guard cannot read: it may cd, and may read the heredocs | O(w * p)
+            c.ok = c.fail = (None,)  # O(1)
+            return _walk_docs(c.docs, c, st, ctx, depth)  # O(docs)
+        return None  # O(1)
+    operand = words[1] if len(words) > 1 else None  # source / . | O(1)
+    if operand is not None and operand.startswith(("<(", ">(")):  # O(1)
+        return _unknown(ctx)  # O(1)
+    if operand in ("/dev/stdin", "/dev/fd/0") or (operand is None and c.docs):  # O(1)
+        if c.docs:  # O(1)
+            return _walk_docs(c.docs, c, st, ctx, depth, shared=True)  # O(docs)
+        return _unknown(ctx) if c.piped else None  # O(1)
+    c.ok = c.fail = (None,)  # a script file may cd | O(1)
+    return None  # O(1)
+
+
+def _cd(base, words, c, st, ctx):  # O(d * p) | the directories after cd, pushd, popd
+    if not c.persist:  # a cd in a pipeline or a background job does not move the shell | O(1)
+        return  # O(1)
+    inn = c.inn  # O(1)
+    ops = [w for w in words[1:] if w not in ("-L", "-P", "-e", "-@", "--")]  # O(w)
+    new = None  # O(1)
+    if base == "popd":  # O(1)
+        if not st.stack:  # fails: the directory stays | O(1)
+            return  # O(1)
+        new = st.stack.pop()  # O(1)
+    elif base == "pushd" and not ops:  # swaps with the top of the stack | O(1)
+        if not st.stack:  # O(1)
+            return  # O(1)
+        new = st.stack.pop()  # O(1)
+        st.stack.append(inn)  # O(1)
+    else:  # O(1)
+        if len(ops) > 1:  # more than one operand: cd fails | O(1)
+            return  # O(1)
+        if base == "pushd":  # O(1)
+            st.stack.append(inn)  # O(1)
+        if not ops:  # O(1)
+            new = _cd_to(inn, ctx.home)  # O(d * p)
+        elif ops[0] == "-":  # O(1)
+            new = st.old  # O(1)
+        else:  # O(1)
+            new = _cd_to(inn, _expand(ops[0], st, ctx))  # O(d * p)
+    sure = (not c.cond and not st.shared["disturbed"]  # O(d)
+            and all(d is not None and (os.path.isdir(d) or d in st.made) for d in new))  # O(d)
+    st.old = inn  # O(1)
+    c.ok = _union(new, inn) if c.cond else tuple(new)  # O(d)
+    c.fail = () if sure else inn  # O(1)
+
+
+def _mkdir(words, c, st, ctx):  # O(t) | `mkdir -p X && cd X`: the folder exists after mkdir succeeds
+    flags = [w for w in words[1:] if w.startswith("-")]  # O(w)
+    if not c.persist or c.seg.sep != "&&" or not any(f == "--parents" or (not f.startswith("--") and "p" in f) for f in flags):  # O(w)
+        return  # O(1)
+    if any(f.startswith(("-m", "--mode")) or (not f.startswith("--") and "m" in f) for f in flags):  # a mode may lock it | O(w)
+        return  # O(1)
+    sure = not c.cond and not st.shared["disturbed"]  # O(1)
+    for w in words[1:]:  # O(w)
+        if not w.startswith("-"):  # O(1)
+            for d in _cd_to(c.inn, _expand(w, st, ctx)):  # O(d * p)
+                if d is None:  # O(1)
+                    sure = False  # O(1)
+                    continue  # O(1)
+                st.made.add(d)  # O(1)
+                while d != "/" and not os.path.exists(d):  # the nearest existing ancestor must be a folder | O(depth)
+                    d = os.path.dirname(d) or "/"  # O(p)
+                sure = sure and os.path.isdir(d)  # O(1)
+    if sure:  # mkdir -p cannot fail here: the chain goes on | O(1)
+        c.fail = ()  # O(1)
+
+
+def _source_name(w, t):  # O(w) | the file name a cp/mv/ln/install of the first source would give inside folder t
+    for x in w[1:]:  # O(w)
+        if not x.startswith("-") and x.rstrip("/") != t.rstrip("/"):  # O(1)
+            nm = x.rstrip("/").rsplit("/", 1)[-1]  # O(p)
+            return nm if nm and not any(ch in nm for ch in "$`*?[") else "?"  # O(p)
+    return "?"  # O(1)
+
+
+def _find(words, c, st, ctx, depth):  # O(w * d) | find -delete, -fprint and -exec over the start paths
+    i, n, starts = 1, len(words), []  # O(1)
+    while i < n and words[i] in ("-H", "-L", "-P"):  # O(1)
+        i += 1  # O(1)
+    while i < n and not (words[i].startswith("-") or words[i] in ("(", "!", ")")):  # O(w)
+        starts.append(words[i])  # O(1)
+        i += 1  # O(1)
+    starts = starts or ["."]  # O(1)
+    reach = [p.rstrip("/") + "/" + v if p.rstrip("/") else "/" + v for p in starts for v in FIND_VARIANTS]  # O(w)
+    j = i  # O(1)
+    while j < n:  # O(w)
+        tok = words[j]  # O(1)
+        if tok == "-delete":  # O(1)
+            for t in reach:  # O(w)
+                v = _check(t, c.inn, st, ctx)  # O(d * p)
+                if v is not None:  # O(1)
+                    return v  # O(1)
+        elif tok in ("-fprint", "-fprint0", "-fls", "-fprintf") and j + 1 < n:  # O(1)
+            v = _check(words[j + 1], c.inn, st, ctx)  # O(d * p)
+            if v is not None:  # O(1)
+                return v  # O(1)
+        elif tok in ("-exec", "-execdir", "-ok", "-okdir"):  # O(1)
+            k = j + 1  # O(1)
+            while k < n and words[k] not in (";", "+"):  # O(w)
+                k += 1  # O(1)
+            cmd = words[j + 1:k]  # O(w)
+            for t in reach:  # {} stands for a file below each start path | O(w)
+                sub = [x.replace("{}", t) for x in cmd]  # O(w)
+                c2 = _Cmd(c.seg, c.inn, False, False, [], c.cond)  # O(1)
+                v = _run_words(sub, [False] * len(sub), c2, st, ctx, depth)  # O(t)
+                if v is not None:  # O(1)
+                    return v  # O(1)
+            j = k  # O(1)
+        j += 1  # O(1)
+    return None  # O(1)
+
+
+def _argv_sub(w):  # O(len(w) + code) | Python code with sys.argv[N] replaced by the N-th word after the code, when it is plain
+    if "-c" not in w[1:] or w.index("-c", 1) + 1 >= len(w):  # O(w)
+        return w  # O(1)
+    k = w.index("-c", 1) + 1  # O(w)
+    rest = w[k + 1:]  # O(w)
+
+    def sub(m):  # O(1)
+        n = int(m.group(1))  # O(1)
+        a = rest[n - 1] if 1 <= n <= len(rest) else None  # O(1)
+        return m.group(0) if a is None or any(ch in a for ch in "'\"\\\n$`") else repr(a)  # O(len(a))
+    return w[:k] + [re.sub(r"\b(?:sys\.)?argv\[(\d+)\]", sub, w[k])] + rest  # O(code)
+
+
+def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judge the paths guard_files and guard_tools name
+    w = [base] + list(words[1:]) + (["?"] if xargs else [])  # xargs adds operands read from stdin | O(w)
+    pairs = []  # (target, file name for a folder target) | O(1)
+    if base in guard_files.COMMANDS:  # O(1)
+        for t in guard_files.targets(w):  # O(w)
+            pairs.append((t, None if base in REMOVE else _source_name(w, t)))  # O(w)
+    flag = "-c"  # the flag that gives an interpreter inline code | O(1)
+    m = INTERP.match(base)  # O(1)
+    if m:  # O(1)
+        flag = {"node": "-e", "nodejs": "-e", "bun": "-e", "perl": "-e", "ruby": "-e", "php": "-r"}.get(base, "-c")  # O(1)
+    has_code = m is not None and (flag in w[1:] or (flag == "-c" and "-m" in w[1:]))  # O(w)
+    if base in guard_tools.COMMANDS or base.lower() in guard_tools.COMMANDS or m:  # O(1)
+        progs = c.docs if (m and not has_code) else []  # a heredoc or here-string is the program | O(docs)
+        if progs:  # O(docs)
+            for doc in progs:  # O(docs)
+                k = w.index("-", 1) if "-" in w[1:] else len(w)  # O(w)
+                w2 = _argv_sub(w[:k] + [flag, doc] + w[k + 1:])  # O(w + doc)
+                pairs.extend((t, "?") for t in guard_tools.targets(w2))  # O(doc)
+        elif m and not has_code and c.piped and (len(w) == 1 or "-" in w[1:]):  # a program piped in | O(w)
+            pairs.append(("?", None))  # O(1)
+        else:  # O(1)
+            pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub(w) if m and flag == "-c" else w))  # O(w)
+    for t, name in pairs:  # O(t)
+        v = _check(t, c.inn, st, ctx, name)  # O(d * p)
+        if v is not None:  # O(1)
+            return v  # O(1)
+    return None  # O(1)
+
+
+def _run_words(words, dyn, c, st, ctx, depth):  # O(n) | judge one command's words (after keywords and assignments)
+    words, dyn, inn, xargs, _sh = _unwrap(list(words), list(dyn), c, st, ctx)  # O(w)
+    if not words:  # O(1)
+        return None  # O(1)
+    c.inn = c.ok = c.fail = inn  # the wrapper may have changed the directory | O(1)
+    words = [_expand(w, st, ctx) if d else w for w, d in zip(words, dyn)]  # the variables the guard knows | O(w * p)
+    dyn = [d and ("$" in w or "`" in w) for w, d in zip(words, dyn)]  # O(w)
+    base = _base(words[0])  # O(p)
+    if _is_sl(words):  # O(w)
+        return None  # O(1)
+    if base in ("cd", "pushd", "popd"):  # O(1)
+        _cd(base, words, c, st, ctx)  # O(d * p)
+        return None  # O(1)
+    if base == "mkdir":  # O(1)
+        _mkdir(words, c, st, ctx)  # O(w)
+    v = None  # O(1)
+    if dyn[0]:  # a command word the guard cannot read | O(1)
+        pass  # O(1)
+    elif base in SHELLS:  # O(1)
+        v = _shell(words, dyn, c, st, ctx, depth)  # O(n)
+    elif base in ("eval", "source", "."):  # O(1)
+        v = _source_or_eval(base, words, dyn, c, st, ctx, depth)  # O(n)
+    elif base == "find":  # O(1)
+        v = _find(words, c, st, ctx, depth)  # O(w * d)
+    else:  # O(1)
+        v = _targets(words, dyn, base, xargs, c, st, ctx, depth)  # O(t * d * p)
+    if base in DISTURB or base in SHELLS or INTERP.match(base):  # a later cd into a folder this may remove is not sure | O(1)
+        st.shared["disturbed"] = True  # O(1)
+    if base in POISON:  # O(1)
+        c.ok = c.fail = (None,)  # O(1)
+    return v  # O(1)
+
+
+def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, then the command
+    seg = c.seg  # O(1)
+    for body in seg.bodies:  # substitutions run in a subshell | O(bodies)
+        v = _walk_text(body, st.fork(c.inn), ctx, depth + 1)  # O(body)
+        if v is not None:  # O(1)
+            return v  # O(1)
+    if seg.subshell is not None:  # O(1)
+        v = _walk_text(seg.subshell, st.fork(c.inn), ctx, depth + 1)  # O(subshell)
+        if v is not None:  # O(1)
+            return v  # O(1)
+    for r in seg.redirects:  # O(redirects)
+        tgt = r.target  # O(1)
+        if r.op not in WRITE_REDIRECTS or tgt in ("", "-") or tgt.startswith(("(", "<(", ">(")):  # O(1)
+            continue  # O(1)
+        if r.op == ">&" and (tgt.isdigit() or tgt.rstrip("-").isdigit()):  # an fd duplicate | O(1)
+            continue  # O(1)
+        v = _check(tgt, c.inn, st, ctx)  # O(d * p)
+        if v is not None:  # O(1)
+            return v  # O(1)
+    words, dyn, i = list(seg.words), list(seg.dyn), 0  # O(w)
+    while i < len(words) and words[i] in LEAD_KW:  # O(w)
+        i += 1  # O(1)
+    if i < len(words) and words[i] in NO_CMD_KW:  # O(1)
+        return None  # O(1)
+    assigns = []  # O(1)
+    while i < len(words) and ASSIGN.match(words[i]):  # leading NAME=value words | O(w)
+        assigns.append((words[i], dyn[i]))  # O(1)
+        i += 1  # O(1)
+    if i < len(words) and words[i] in DECLARE:  # export NAME=value | O(1)
+        assigns = [(w, d) for w, d in zip(words[i + 1:], dyn[i + 1:]) if ASSIGN.match(w)]  # O(w)
+        i = len(words)  # O(1)
+    if i >= len(words):  # nothing but assignments: the shell's variables | O(1)
+        if c.persist:  # O(1)
+            for w, d in assigns:  # O(w)
+                name, val = w.split("=", 1)  # O(p)
+                name = name.rstrip("+")  # O(1)
+                val = _expand(val, st, ctx) if d else val  # O(p)
+                st.vars[name] = None if ("$" in val or "`" in val) else val  # O(1)
+        return None  # O(1)
+    return _run_words(words[i:], dyn[i:], c, st, ctx, depth)  # O(n)
+
+
+def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segments in order; st.dirs follows the cds
+    n, i, ok, fail, depth_c = len(segs), 0, None, None, 0  # O(1)
+    start = st.dirs  # O(1)
+    while i < n:  # O(s)
+        j = i  # O(1)
+        while j < n - 1 and segs[j].sep == "|":  # a pipeline: every part runs in its own subshell | O(s)
+            j += 1  # O(1)
+        op = segs[i - 1].sep if i > 0 else ""  # O(1)
+        sep = segs[j].sep  # O(1)
+        if op in ("&&", "||") and ok is not None:  # O(1)
+            inn = ok if op == "&&" else fail  # O(1)
+        else:  # a new chain | O(1)
+            inn, ok, fail, start = st.dirs, None, None, st.dirs  # O(1)
+        u_ok = u_fail = inn  # O(1)
+        for k in range(i, j + 1):  # O(pipeline)
+            seg = segs[k]  # O(1)
+            w0 = seg.words[0] if seg.words and not seg.dyn[0] else ""  # O(1)
+            if w0 in OPEN_KW:  # O(1)
+                depth_c += 1  # O(1)
+            elif w0 in CLOSE_KW:  # O(1)
+                depth_c = max(0, depth_c - 1)  # O(1)
+            if not inn:  # a branch that cannot run | O(1)
+                continue  # O(1)
+            docs, m = list(seg.heredocs) + [r.target + "\n" for r in seg.redirects if r.op == "<<<"], k + 1  # O(docs)
+            while m < n and not segs[m].words and segs[m].subshell is None:  # redirects of a closing group: `{ ...; } <<EOF` | O(s)
+                docs += list(segs[m].heredocs) + [r.target + "\n" for r in segs[m].redirects if r.op == "<<<"]  # O(docs)
+                m += 1  # O(1)
+            persist = i == j and sep != "&"  # O(1)
+            c = _Cmd(seg, inn, persist, k > 0 and segs[k - 1].sep == "|", docs, st.cond or force_cond or depth_c > 0)  # O(1)
+            v = _run(c, st, ctx, depth)  # O(n)
+            if v is not None:  # O(1)
+                return v  # O(1)
+            if i == j:  # O(1)
+                u_ok, u_fail = c.ok, c.fail  # O(1)
+        if ok is None:  # O(1)
+            ok, fail = u_ok, u_fail  # O(1)
+        elif op == "&&":  # O(1)
+            ok, fail = u_ok, _union(fail, u_fail)  # O(d)
+        else:  # O(1)
+            ok, fail = _union(ok, u_ok), u_fail  # O(d)
+        if sep not in ("&&", "||"):  # the chain ends: the shell may sit in any directory the chain can leave it | O(d)
+            st.dirs = _union(ok, fail) or start  # O(d)
+            ok = fail = None  # O(1)
+        i = j + 1  # O(1)
+    return None  # O(1)
+
+
+def judge(command, cwd, project, mode):  # O(s * n * d) | Verdict for the first write the policy denies, else None
+    ctx = _Ctx(command, project, mode)  # O(n + p)
+    here = _clean(_winpath(cwd)) if cwd else ctx.projn  # O(p)
+    if not here.startswith("/"):  # O(1)
+        here = _clean(ctx.projn + "/" + here)  # O(p)
+    return _walk_text(command, _State((here,)), ctx, 0)  # O(s * n * d)
+
+
+MESSAGES = {  # O(1)
+    "protected": ["Blocked: .superlite/orchestrator.json and .superlite/human-replies.jsonl are never written directly. "
+                  "Change the orchestrator state only with `sl orchestrator ...` (for example `sl orchestrator approve "
+                  "--review <path>`); human-replies.jsonl is written only by the hook that records the human's replies."],
+    "human": ["Human orchestrator: no build starts until the human approves the plan. Write the review plan "
+              "docs/plans/<date>-<topic>.review.md (see skills/writing-plans/review-plan.md), show its path with a "
+              "five-line summary, ask the human to reply approve, end your turn, then run sl orchestrator approve "
+              "--review <path>."],
+    "code": ["Blocked: the superlite coordinator must not write project code. Dispatch it instead:",
+             "- Fix: give a fixer a finding id F-<Tn>-<n> and the note path .superlite/fixes/<id>.md, tiered per "
+             "skills/subagent-driven-development/fixing.md: known cause, one module -> fixer-sonnet; cross-module -> "
+             "fixer-sonnet-high; unknown cause -> fixer-opus.",
+             "- Wave 0 skeleton/stub/config files belong to an implementer-haiku task.",
+             "- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
+             "docs/**/*.md, any docs.md and .superlite/**.",
+             "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
+             ".superlite by hand."],
+}  # O(1)
+
+
+def _flat(s, limit=120):  # O(len) | one line, no control characters
+    s = re.sub(r"[\r\n\t]", " ", s)  # O(len)
+    return re.sub(r"[\x00-\x1f\x7f]", "", s)[:limit].strip()  # O(len)
+
+
+def _incident(sd, kind, tool, target):  # O(1) | append one incident line; never raises
+    try:  # O(1)
+        row = {"kind": kind, "agent": "coordinator", "tool": tool, "target": _flat(target)}  # O(len)
+        with open(os.path.join(sd, "incidents.jsonl"), "a", encoding="utf-8") as f:  # O(1)
+            f.write(json.dumps(row) + "\n")  # O(len)
+    except (OSError, TypeError, ValueError):  # O(1)
+        pass  # O(1)
+
+
+def _args(argv):  # O(a) | (mode, project, sd)
+    opts = {}  # O(1)
+    it = iter(argv)  # O(1)
+    for a in it:  # O(a)
+        if a in ("--mode", "--project", "--sd"):  # O(1)
+            opts[a[2:]] = next(it)  # O(1)
+        else:  # O(1)
+            raise ValueError("unknown argument " + a)  # O(1)
+    if opts.get("mode") not in ("idle", "active", "human") or "project" not in opts or "sd" not in opts:  # O(1)
+        raise ValueError("--mode, --project and --sd are required")  # O(1)
+    return opts["mode"], opts["project"], opts["sd"]  # O(1)
+
+
+def _err(text):  # O(len) | print on stderr whatever the stream's encoding
+    try:  # O(1)
+        print(text, file=sys.stderr)  # O(len)
+    except UnicodeEncodeError:  # O(1)
+        print(text.encode("ascii", "replace").decode("ascii"), file=sys.stderr)  # O(len)
+
+
+def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every internal error
+    try:  # O(1)
+        mode, project, sd = _args(sys.argv[1:] if argv is None else argv)  # O(a)
+    except (ValueError, StopIteration):  # O(1)
+        return 0  # O(1)
+    tool, cmd = "", ""  # O(1)
+    try:  # O(1)
+        data = json.loads(sys.stdin.read())  # O(n)
+        if not isinstance(data, dict):  # O(1)
+            raise ValueError("hook input is not an object")  # O(1)
+        tool = str(data.get("tool_name") or "")  # O(1)
+        tin = data.get("tool_input")  # O(1)
+        cmd = tin.get("command") if isinstance(tin, dict) else None  # O(1)
+        if not isinstance(cmd, str):  # O(1)
+            raise ValueError("no command in the hook input")  # O(1)
+        cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else None  # O(1)
+        v = judge(cmd, cwd or project, project, mode)  # O(s * n * d)
+    except Exception as e:  # noqa: BLE001  fail open on anything | O(1)
+        _incident(sd, "guard-error", tool, f"{type(e).__name__}: {e}")  # O(len)
+        return 0  # O(1)
+    if v is None:  # O(1)
+        return 0  # O(1)
+    named = v.rel not in ("?", ".")  # O(1)
+    _incident(sd, "rule-block", tool, v.rel if named else cmd)  # O(len)
+    for line in MESSAGES[v.kind]:  # O(1)
+        _err(line)  # O(len)
+    if v.kind != "protected":  # the protected message names no target | O(1)
+        _err(f"Blocked target: {_flat(v.rel, 500)} ({_flat(v.abs, 500)})" if named else f"Blocked command: {_flat(cmd)}")  # O(len)
+    return 2  # O(1)
+
+
+if __name__ == "__main__":  # O(1)
+    sys.exit(main())  # O(1)
