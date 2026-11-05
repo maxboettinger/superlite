@@ -21,6 +21,7 @@ import sys  # O(1)
 from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+import next_tasks as nt  # noqa: E402 | O(1)
 import plan_tools as pt  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
 
@@ -110,7 +111,7 @@ def last_n(sd: Path, tid: str) -> int:  # O(f)
 def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int) -> str:  # O(k + o)
     ids = ", ".join(i["id"] for i in items)  # O(k)
     owns = task.owns  # O(o)
-    outside = sorted({i["file"] for i in items if i["file"] not in owns})  # files no Owns of this task lists | O(k)
+    outside = sorted({i["file"] for i in items if not nt.owns_match(i["file"], owns)})  # files no Owns of this task lists | O(k)
     lines = [f"# Fix {ids} · tier {tier} · task {task.id}",  # O(1)
              f"sl (type it literally in every command): {sl_path}",  # O(1)
              f"PLAN={plan}",  # O(1)
@@ -139,13 +140,11 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str) -> list[str]: 
     tasks = pt.Plan.load(str(plan)).tasks  # O(C+L)
     if not tasks:  # O(1)
         raise pt.PlanError(f"plan has no tasks: {plan}")  # O(1)
-    owner = {}  # file -> task, the first owner wins | O(1)
-    for t in tasks:  # O(n) iterations
-        for o in t.owns:  # O(o_t) iterations
-            owner.setdefault(o, t)  # O(1)
+    def owner_of(path):  # the first task whose Owns match (file, directory or glob), else the last task | O(o)
+        return next((t for t in tasks if nt.owns_match(path, t.owns)), tasks[-1])  # O(o)
     groups = {t.id: [] for t in tasks}  # O(n)
     for f in collect(reports, root):  # O(k) iterations
-        groups[owner.get(f["file"], tasks[-1]).id].append(f)  # a file in no Owns belongs to the last task | O(1)
+        groups[owner_of(f["file"]).id].append(f)  # a file in no Owns belongs to the last task | O(1)
     lines = []  # O(1)
     for t in tasks:  # O(n) iterations
         items = sorted(groups[t.id], key=lambda f: (f["file"], f["line"]))  # O(k_t log k_t)
