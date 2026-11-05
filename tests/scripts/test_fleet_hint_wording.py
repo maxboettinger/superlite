@@ -16,13 +16,14 @@ OLD_RULES = [
     "inline only if small (few files, one chain; say so)", "Bounded (existing flow)", "fresh `superlite:final-reviewer`",
     "<skill-dir>/../subagent-driven-development/scripts/sl <tool>", "never `python`", "`sl graphify_gate`",
     "sl feedback add --kind bug|slow|unclear|repeat|idea", "don't fix mid-task",
+    "**Superlite broke/unclear?**", '"<what, where, expected>"',
     "references/<harness>-tools.md", "agents/*.md",
 ]
 
 
 def test_root_skill_names_fleet_on():
     assert "`sl fleet on` before the first dispatch" in TEXT
-    assert "taskgraph implementers" in TEXT and "inline starts no worker" in TEXT
+    assert "taskgraph implementers only" in TEXT and "inline starts no worker" in TEXT
 
 
 def test_root_skill_under_cap():
