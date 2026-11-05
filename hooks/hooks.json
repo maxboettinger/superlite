@@ -77,6 +77,17 @@
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/deny-worker-permission\"",
+            "shell": "bash"
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [

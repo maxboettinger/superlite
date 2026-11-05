@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# PermissionRequest hook: in a fleet pane (SUPERLITE_FLEET_WORKER set) every permission dialog is answered no,
+# because no human watches the pane (spike S3). Silent outside a worker. Bash builtins only. Always exits 0.
+
+[ -n "${SUPERLITE_FLEET_WORKER:-}" ] || exit 0
+IFS= read -r -d '' input   # builtin; drain stdin
+printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"No human watches this pane: permission dialogs are answered no. Do not retry: a lead writes .superlite/question.json and ends with Status: NEEDS_DECISION; any other worker ends with Status: BLOCKED and the command it needed."}}}'
+exit 0

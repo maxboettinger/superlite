@@ -9,6 +9,7 @@
 # Bash builtins only (each external process costs ~250 ms on Windows). Never blocks: exit 0 always.
 
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
+[ -n "${SUPERLITE_FLEET_WORKER:-}" ] && exit 0   # a fleet pane prompt is never a human reply
 
 # jstr KEY: first JSON string value for KEY, decoded, into REPLY (empty if absent).
 jstr() {

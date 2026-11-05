@@ -26,9 +26,14 @@ esc() {
 re_active='"stop_hook_active"[[:space:]]*:[[:space:]]*true'
 [[ $input =~ $re_active ]] && exit 0
 
-. "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
-superlite_state || exit 0
-sd="$SL_SD"
+# A lead's stop record goes to the parent run's folder when it exists (never created here).
+if [ -n "${SUPERLITE_FLEET_PARENT_DIR:-}" ] && [ -d "$SUPERLITE_FLEET_PARENT_DIR" ]; then
+  sd="$SUPERLITE_FLEET_PARENT_DIR"
+else
+  . "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
+  superlite_state || exit 0
+  sd="$SL_SD"
+fi
 [ -d "$sd" ] || exit 0
 
 id="$SUPERLITE_FLEET_WORKER"; type="fleet:${SUPERLITE_FLEET_AGENT:-unknown}"
