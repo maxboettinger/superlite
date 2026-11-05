@@ -4,11 +4,24 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "block-unsafe-kill"
 # Git Bash on Windows (WSL's bash.exe in System32 would not see Windows paths), bash elsewhere.
 _GIT_BASH = r"C:\Program Files\Git\bin\bash.exe"
 BASH = _GIT_BASH if os.name == "nt" and os.path.exists(_GIT_BASH) else shutil.which("bash")
+
+
+@pytest.fixture(autouse=True)
+def fake_ps(tmp_path, monkeypatch):
+    """A `ps` first on PATH that names a harmless command, so no test reaches the real process table."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    ps = bindir / "ps"
+    ps.write_text("#!/bin/sh\necho /usr/bin/true\n", encoding="utf-8")
+    ps.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ.get("PATH", ""))
 
 
 def run(payload, tool="Bash", raw=None):

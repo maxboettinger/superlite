@@ -47,6 +47,14 @@ if [ -n "$sid" ] && [[ $input =~ $re_compact ]] && . "${0%/*}/superlite-state.sh
   fi  # O(1)
 fi  # O(1)
 
+# A new session (startup or /clear) ends any inline-flow marker (#148); /compact keeps it.
+re_new='"source"[[:space:]]*:[[:space:]]*"(startup|clear)"'  # O(1)
+if [ -n "$sid" ] && [[ $input =~ $re_new ]] && . "${0%/*}/superlite-state.sh" 2>/dev/null; then  # O(input)
+  if superlite_state 2>/dev/null && [ -n "$SL_SD" ] && [ -d "$SL_SD" ]; then  # O(1)
+    rm -f "$SL_SD/inline-flow.json" 2>/dev/null || true  # O(1)
+  fi  # O(1)
+fi  # O(1)
+
 # Fleet worker: a short worker note instead of the start menu. printf only (no heredoc).
 if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then  # O(1)
   wnote="You are superlite fleet worker ${SUPERLITE_FLEET_WORKER} (${SUPERLITE_FLEET_AGENT:-superlite:implementer}). The coordinator sends your task as a message; build it, then finish with your report. Do not start a superlite run."  # O(1)
