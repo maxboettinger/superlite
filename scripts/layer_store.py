@@ -4,6 +4,7 @@ from __future__ import annotations  # O(1)
 import json  # O(1)
 import os  # O(1)
 import subprocess  # O(1)
+import contextlib  # O(1)
 import tempfile  # O(1)
 from pathlib import Path  # O(1)
 
@@ -61,14 +62,52 @@ def is_green(store: Path, layer: str, digest: str) -> bool:  # O(1)
     return isinstance(green, list) and digest in green  # O(KEEP)
 
 
+def _lock(store: Path):  # O(1)  exclusive sidecar lock around a read-modify-write; unlocked when unavailable
+    return _locked(Path(store).with_name("test-layers.lock"))  # O(1)
+
+
+@contextlib.contextmanager
+def _locked(path: Path):  # O(1)
+    fd = None  # O(1)
+    kind = ""  # O(1)
+    try:  # O(1)
+        path.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)  # O(1)
+        if os.name == "nt":  # O(1)
+            import msvcrt  # O(1)
+            os.write(fd, b"0") if os.fstat(fd).st_size == 0 else None  # O(1)
+            os.lseek(fd, 0, 0)  # O(1)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)  # O(wait)
+            kind = "nt"  # O(1)
+        else:  # O(1)
+            import fcntl  # O(1)
+            fcntl.flock(fd, fcntl.LOCK_EX)  # O(wait)
+            kind = "posix"  # O(1)
+    except (OSError, ImportError):  # O(1)
+        kind = ""  # O(1)  proceed unlocked
+    try:  # O(1)
+        yield  # O(1)
+    finally:  # O(1)
+        if fd is not None:  # O(1)
+            try:  # O(1)
+                if kind == "nt":  # O(1)
+                    import msvcrt  # O(1)
+                    os.lseek(fd, 0, 0)  # O(1)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)  # O(1)
+            except OSError:  # O(1)
+                pass  # O(1)
+            os.close(fd)  # O(1)
+
+
 def record_green(store: Path, layer: str, digest: str, files: dict[str, str]) -> None:  # O(1)
-    data = read_json(store)  # O(size)
-    layers = data.get("layers") if isinstance(data.get("layers"), dict) else {}  # O(1)
-    entry = layers.get(layer) if isinstance(layers.get(layer), dict) else {}  # O(1)
-    old = entry.get("green") if isinstance(entry.get("green"), list) else []  # O(1)
-    green = [d for d in old if d != digest] + [digest]  # O(KEEP)
-    layers[layer] = {"green": green[-KEEP:], "files": dict(files)}  # O(files)
-    write_json(store, {"version": 1, "layers": layers})  # O(size)
+    with _lock(store):  # O(wait)
+        data = read_json(store)  # O(size)
+        layers = data.get("layers") if isinstance(data.get("layers"), dict) else {}  # O(1)
+        entry = layers.get(layer) if isinstance(layers.get(layer), dict) else {}  # O(1)
+        old = entry.get("green") if isinstance(entry.get("green"), list) else []  # O(1)
+        green = [d for d in old if d != digest] + [digest]  # O(KEEP)
+        layers[layer] = {"green": green[-KEEP:], "files": dict(files)}  # O(files)
+        write_json(store, {"version": 1, "layers": layers})  # O(size)
 
 
 def changed_files(store: Path, layer: str, files: dict[str, str]) -> list[str]:  # O(1)
@@ -85,16 +124,18 @@ def lock_path(store: Path) -> Path:  # O(1)
 
 
 def start_run(store: Path, layer: str, digest: str, pid: int) -> None:  # O(1)
-    lock = read_json(lock_path(store))  # O(size)
-    lock[layer] = {"pid": pid, "digest": digest}  # O(1)
-    write_json(lock_path(store), lock)  # O(size)
+    with _lock(store):  # O(wait)
+        lock = read_json(lock_path(store))  # O(size)
+        lock[layer] = {"pid": pid, "digest": digest}  # O(1)
+        write_json(lock_path(store), lock)  # O(size)
 
 
 def end_run(store: Path, layer: str) -> None:  # O(1)
-    lock = read_json(lock_path(store))  # O(size)
-    if layer in lock:  # O(1)
-        del lock[layer]  # O(1)
-        write_json(lock_path(store), lock)  # O(size)
+    with _lock(store):  # O(wait)
+        lock = read_json(lock_path(store))  # O(size)
+        if layer in lock:  # O(1)
+            del lock[layer]  # O(1)
+            write_json(lock_path(store), lock)  # O(size)
 
 
 def pid_alive(pid: int) -> bool:  # O(1)

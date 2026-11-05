@@ -110,10 +110,43 @@ def test_corrupt_store(ls, s):
 def test_no_temp_files_left(ls, s):
     ls.record_green(s, "unit", "h1", {"a.py": "1"})
     ls.start_run(s, "unit", "h1", os.getpid())
-    assert sorted(p.name for p in s.parent.iterdir()) == ["running.json", "test-layers.json"]
+    assert sorted(p.name for p in s.parent.iterdir()) == ["running.json", "test-layers.json", "test-layers.lock"]
 
 
 def test_running_huge_pid_does_not_raise(ls, s):
     ls.start_run(s, "unit", "d", 2 ** 70)
     assert ls.running(s, "unit", "d") is False
     assert ls.pid_alive(2 ** 70) is False
+
+
+def test_running_permission_error_counts_alive(ls, s, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("POSIX os.kill semantics")
+    ls.start_run(s, "unit", "h1", 999999)
+
+    def deny(pid, sig):
+        raise PermissionError
+
+    monkeypatch.setattr(ls.os, "kill", deny)
+    assert ls.running(s, "unit", "h1") is True
+
+
+WRITER = """
+import importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("layer_store", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+store, layer = Path(sys.argv[2]), sys.argv[3]
+for i in range(40):
+    m.record_green(store, layer, layer + str(i), {})
+    m.start_run(store, layer, "d", i + 1)
+"""
+
+
+def test_concurrent_writers_keep_every_entry(ls, s):
+    procs = [subprocess.Popen([sys.executable, "-c", WRITER, str(SCRIPT), str(s), layer]) for layer in ("a", "b", "c")]
+    assert [p.wait() for p in procs] == [0, 0, 0]
+    for layer in ("a", "b", "c"):
+        assert ls.is_green(s, layer, layer + "39")
+        assert ls.is_green(s, layer, layer + "0")
+        assert layer in json.loads((s.parent / "running.json").read_text())
