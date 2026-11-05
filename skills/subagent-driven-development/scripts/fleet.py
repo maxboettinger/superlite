@@ -3,17 +3,23 @@
 
     fleet.py on [--accounts A,B] [--plan P] | off | status [--all]
     fleet.py spawn --tier T --plan P | stop [IDS...] [--all]
+    fleet.py spawn --for-dispatch --plan P    (one dispatch round: dispatch, spawn, send)
     fleet.py send | keys | wait     (delegated to fleet_io)
 
-Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start.
+Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-dispatch` prints one
+`Wn Tn[,Tm] sent` line per worker, `BLOCKED: Tn[,Tm] not sent (<reason>)` for a line that got no worker
+(the other lines still go out; exit 3), and `T0: run the Wave 0 Agent line yourself` for the Wave 0 line.
 """
 
 # Complexity notation:
-# w = workers in the fleet, a = accounts, s = screen lines
+# w = workers in the fleet, a = accounts, s = screen lines, R = lines of one dispatch round
 import argparse  # O(1)
+import contextlib  # O(1)
 import importlib  # O(1)
+import io  # O(1)
 import json  # O(1)
 import os  # O(1)
+import re  # O(1)
 import sys  # O(1)
 import time  # O(1)
 from pathlib import Path  # O(1)
@@ -190,6 +196,58 @@ def spawn(sd, plan, tier, project, cfg=None, env=None):  # O(a + w) plus herdr c
     return {"id": wid, "account": account, "pane_id": pane, "agent": agent, "model": model}  # O(1)
 
 
+def _spawn_quiet(sd, plan, tier, project):  # O(spawn) -> (worker dict, None) or (None, reason of the BLOCKED lines)
+    buf = io.StringIO()  # O(1)
+    try:  # spawn prints its own worker or BLOCKED line; a dispatch round reports one line per dispatch line instead | O(1)
+        with contextlib.redirect_stdout(buf):  # O(1)
+            return spawn(sd, plan, tier, project), None  # O(spawn)
+    except SystemExit as e:  # O(1)
+        if e.code != 3:  # O(1)
+            raise  # O(1)
+        lines = [x.strip() for x in buf.getvalue().splitlines() if x.strip()]  # O(s)
+        return None, "; ".join(x[len("BLOCKED: "):] if x.startswith("BLOCKED: ") else x for x in lines) or "spawn blocked"  # O(s)
+
+
+def for_dispatch(sd, plan, project):  # O(R * (spawn + send)): one dispatch round, a line after the other
+    import dispatch as dp  # noqa: E402 | O(1) lazy: only this command needs it
+    import fleet_io as fio  # noqa: E402 | O(1) lazy
+    import orchestrator  # noqa: E402 | O(1) lazy
+    sd = Path(sd)  # O(1)
+    plan = plan or dp.load_pool(sd / "pool.json").get("plan") or dp.nt.DEFAULT_PLAN  # as `dispatch` | O(pool bytes)
+    shut = orchestrator.require(plan, "dispatch")  # human mode waits for approval, as `dispatch` | O(file)
+    if shut:  # O(1)
+        return shut  # O(1)
+    lines, evict = dp.run(plan, sd / "pool.json", sd / "progress.md")  # O(dispatch)
+    dp.render([], evict)  # the `evict=` lines on stderr; the dispatch lines themselves become the worker lines below | O(a)
+    sl, root = str(fio.HERE / "sl"), str(fio.HERE.parents[2])  # O(1)
+    blocked = False  # O(1)
+    for tasks, decision in lines:  # O(R) iterations
+        if decision.startswith("wave0"):  # its own Agent line, not a worker | O(1)
+            print(f"{tasks}: run the Wave 0 Agent line yourself")  # O(1)
+            continue  # O(1)
+        why, wid = None, None  # O(1)
+        if decision.startswith("fresh"):  # O(1)
+            tier = (re.search(r"\btier=(\S+)", decision) or [None, "sonnet"])[1]  # O(len)
+            w, why = _spawn_quiet(sd, plan, tier, project)  # O(spawn)
+            wid = w["id"] if w else None  # O(1)
+        elif decision.startswith("agent="):  # an idle worker of an earlier round | O(1)
+            wid = decision.split()[0].split("=", 1)[1]  # O(len)
+            why = None if wid in fs.load(sd)["workers"] else f"unknown worker {wid}"  # O(w)
+        else:  # `poll ...` never resolves outside fleet mode | O(1)
+            why = f"no fleet decision: {decision}"  # O(1)
+        if why is None:  # O(1)
+            try:  # O(1)
+                fio.send(sd, plan, wid, tasks.split(","), sl, root)  # prints `Wn Tn[,Tm] sent` | O(w + n)
+            except KeyError as e:  # a task id the plan does not know | O(1)
+                why = f"unknown task {e.args[0]}"  # O(1)
+            except fio.hc.HerdrError as e:  # O(1)
+                why = e.message or e.code  # O(1)
+        if why is not None:  # O(1)
+            print(f"BLOCKED: {tasks} not sent ({why})")  # O(1)
+            blocked = True  # the next line still goes out | O(1)
+    return 3 if blocked else 0  # O(1)
+
+
 def stop(sd, ids=None, all_=False):  # O(w) plus herdr calls
     sd = Path(sd)  # O(1)
     live = {k: v for k, v in fs.workers(sd).items() if v.get("state") != "stopped"}  # O(w)
@@ -240,6 +298,7 @@ def main(argv=None):  # O(w) plus command cost
     s = sub.add_parser("spawn")  # O(1)
     s.add_argument("--tier", default="sonnet")  # O(1)
     s.add_argument("--plan")  # O(1)
+    s.add_argument("--for-dispatch", action="store_true")  # O(1) run dispatch, spawn per `fresh` line, send each line's tasks
     s = sub.add_parser("stop")  # O(1)
     s.add_argument("ids", nargs="*")  # O(1)
     s.add_argument("--all", action="store_true")  # O(1)
@@ -267,6 +326,8 @@ def main(argv=None):  # O(w) plus command cost
                 continue  # O(1)
             print(f"{wid} {w.get('state')} account={w.get('account')} pane={w.get('pane_id')} task={w.get('task') or '-'}")  # O(1)
     elif a.cmd == "spawn":  # O(1)
+        if a.for_dispatch:  # O(1)
+            return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent)  # O(R * (spawn + send))
         spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent)  # O(w)
     elif a.cmd == "stop":  # O(w)
         for wid in stop(sd, a.ids, a.all):  # O(w)
