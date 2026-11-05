@@ -1,4 +1,4 @@
-"""commit_task: an out-of-scope file is labelled by the stable.json baseline_dirty list."""
+"""commit_task: an out-of-scope file is labelled by the stable.json baseline_dirty list; a file not in a recorded baseline is left uncommitted (#179)."""
 import json
 import sys
 from pathlib import Path
@@ -34,11 +34,12 @@ def test_baseline_file_labelled_dirty_before(tmp_path):
     assert "dirty before the run" in (repo / ".superlite" / "incidents.jsonl").read_text(encoding="utf-8")
 
 
-def test_new_foreign_file_labelled_during_run(tmp_path):
+def test_new_foreign_file_left_uncommitted_during_run(tmp_path):  # #179: no longer a block, was "(changed during the run, not by a task)"
     repo = setup(tmp_path, {"baseline_dirty": ["notes.txt"]}, ["other.py"])
     r = commit(repo)
-    assert r.returncode == 1
-    assert "out-of-scope other.py (changed during the run, not by a task)" in r.stdout
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "left uncommitted (outside every Owns): other.py" in r.stdout
+    assert "out-of-scope" not in r.stdout
 
 
 def test_no_baseline_key_keeps_plain_line(tmp_path):
@@ -57,8 +58,9 @@ def test_missing_or_broken_stable_json_keeps_plain_line(tmp_path, stable):
     assert "Traceback" not in r.stderr
 
 
-def test_empty_baseline_list_labels_foreign_file_during_run(tmp_path):
+def test_empty_baseline_list_leaves_foreign_file_uncommitted_during_run(tmp_path):  # #179: as above
     repo = setup(tmp_path, {"baseline_dirty": []}, ["other.py"])
     r = commit(repo)
-    assert r.returncode == 1
-    assert "out-of-scope other.py (changed during the run, not by a task)" in r.stdout
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "left uncommitted (outside every Owns): other.py" in r.stdout
+    assert "out-of-scope" not in r.stdout

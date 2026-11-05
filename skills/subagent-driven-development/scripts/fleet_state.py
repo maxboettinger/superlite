@@ -5,6 +5,7 @@
 # w = workers in the fleet, p = panes of a tab, a = agents herdr lists
 import contextlib  # O(1)
 import fcntl  # O(1)
+import hashlib  # O(1)
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
@@ -85,10 +86,13 @@ def next_id(sd):  # O(w)
 
 
 def agent_name(sd, wid):  # O(len of the run folder name)
-    """Herdr agent name of a worker: `sl-<run folder>-<worker id>`, within herdr's `[a-z][a-z0-9_-]{0,31}`.
+    """Herdr agent name of a worker: `sl-<run folder>-<hash>-<worker id>`, within herdr's `[a-z][a-z0-9_-]{0,31}`.
 
-    Herdr keeps names unique among the live agents of a server; the run folder keeps parallel fleets apart."""
-    tail = "-" + wid.lower()  # O(1)
+    Herdr keeps names unique among the live agents of a server. `<hash>` is the first 4 hex digits of the sha1 of the
+    run root's absolute path: it keeps equal folder names and long shared prefixes (worktrees `...-phase-2`, `...-phase-3`) apart.
+    The folder name is cut so that `-<hash>-<worker id>` always fits."""
+    h = hashlib.sha1(str(Path(sd).resolve().parent).encode()).hexdigest()[:4]  # O(len path)
+    tail = "-%s-%s" % (h, wid.lower())  # O(1)
     run = re.sub(r"[^a-z0-9_-]+", "-", Path(sd).resolve().parent.name.lower()).strip("-_")  # O(len)
     return ("sl-" + run)[:32 - len(tail)].rstrip("-_") + tail  # O(1)
 

@@ -2,9 +2,18 @@
 
 ## What it is
 
-With fleet mode on, a superlite run executes its implementer tasks in real Claude Code sessions that live in Herdr panes: one worker per pane (`W1`, `W2`, ...), each started under the subscription account with the most headroom. The coordinator keeps the same loop (dispatch, task message, report, `commit_task`, reviews). You can watch and steer every worker in Herdr: worker `W1` appears there as the agent `sl-<run folder>-w1` (lowercase, at most 32 characters). Herdr keeps agent names unique per server, so two runs at the same time need run folders with different names.
+With fleet mode on, a superlite run executes its implementer tasks in real Claude Code sessions that live in Herdr panes: one worker per pane (`W1`, `W2`, ...), each started under the subscription account with the most headroom. The coordinator keeps the same loop (dispatch, task message, report, `commit_task`, reviews). You can watch and steer every worker in Herdr: worker `W1` appears there as the agent `sl-<run folder>-<hash>-w1` (lowercase, at most 32 characters; `<hash>` is 4 hex digits of the run root's path, so equal folder names and worktrees with a long shared prefix stay apart). Herdr keeps agent names unique per server.
 
 Turn it on by asking the coordinator to "use fleet": it runs `sl fleet on` before the first dispatch. Without that every agent stays in-process and Herdr shows only the coordinator. Fleet covers the implementer tasks of a plan with a taskgraph. Reviewers, fixers and the final reviewer stay in-process and get no pane (an in-process subagent has no terminal for Herdr to show); an inline build without a taskgraph starts no worker.
+
+Fleet covers the implementer tasks of one taskgraph plan in one checkout: several tickets go into one plan and one run, not one worktree each. Fleet asked for but `sl fleet` unknown (compare `sl version` with the session-start line) or `fleet spawn` exits 3: report BLOCKED with the exact error before any dispatch; never fall back to in-process agents. `sl feedback add` comes in addition, never instead.
+
+## Capacity
+
+- A tab holds 4 panes and a pane never splits below 20 rows. The fifth worker, or a split that would leave a pane under 20 rows, opens a new tab in the same workspace; the next workers split that tab again.
+- Accounts spread over every superlite session on the machine: each spawn records the worker's account in `~/.superlite/fleet/agents/<agent name>`, and the next spawn counts the live workers (`herdr agent list`) of other sessions too, a lead and its workers included, before it picks the account. Without an agent list it counts this run only.
+- `current` and config dir entries that `claude-profile` knows are checked against that account's usage and caps like a named account; at its cap they are refused (`BLOCKED: no account with headroom`) and the others get the worker.
+- A prime that stalls (`agent_prompt_stalled`) is resent once; a second stall is `BLOCKED`. `BLOCKED: Wn no READY` names the pane size (rows and columns), since a pane too small to show the reply is the usual cause.
 
 ## Prerequisites
 
@@ -40,13 +49,14 @@ From the 2026-11-05 spike. Run in a scratch project with Herdr running.
 | 3 Blocked on a dialog | Send a task whose work triggers a permission dialog, then `fleet wait` | `W1 T1 BLOCKED-UI <screen>`; `fleet keys W1 Enter` (or another answer) lets it continue |
 | 4 Three workers | `fleet on` without `--accounts`, spawn three workers | Panes split in one workspace; accounts spread by headroom (two or three accounts) |
 | 5 Subagents read as working | Send a task that makes a worker start its own subagents | Observe whether Herdr keeps the worker in state `working` while its subagents run, so `wait` does not report early. If it reads `idle` or `done` early, note it as a finding; this is not guaranteed |
+| 6 8 workers | `fleet on`, spawn eight workers | Two tabs of 4, all ready |
 
 ## Troubleshooting
 
 - Trust dialog (`Yes, I trust this folder`): accepted automatically at spawn.
 - `Select login method` or another startup block: the account's login expired. Run `claude` once in that account's config dir. The screen is in `.superlite/fleet/screens/Wn.txt`.
-- `BLOCKED: Wn no READY`: the prime prompt did not land. Check with `herdr agent read sl-<run folder>-wn`.
-- `agent_prompt_stalled` (a herdr error code, shown in the `error:` line): the worker was mid-turn. Run `fleet wait`, then resend.
+- `BLOCKED: Wn no READY (pane R rows, C cols)`: the prime prompt did not land. Check with `herdr agent read sl-<run folder>-<hash>-wn`.
+- `agent_prompt_stalled` (a herdr error code, shown in the `error:` line): spawn resends the prime once; a second stall is BLOCKED. For a `fleet send` to a worker that was mid-turn: run `fleet wait`, then resend.
 
 ## Limits
 

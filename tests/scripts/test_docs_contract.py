@@ -71,4 +71,4 @@ def test_a_fleet_request_maps_to_fleet_on_before_the_first_dispatch():
     assert '"$SL" fleet on' in line and "before the first dispatch" in line and "`fleet.md`" in line
     for doc in ("skills/subagent-driven-development/fleet.md", "docs/fleet.md"):
         text = (ROOT / doc).read_text(encoding="utf-8")
-        assert "before the first dispatch" in text and "sl-<run folder>-w" in text and "implementer" in text and "in-process" in text, doc
+        assert "before the first dispatch" in text and "sl-<run folder>-<hash>-w" in text and "implementer" in text and "in-process" in text, doc

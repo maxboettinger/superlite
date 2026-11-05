@@ -57,9 +57,16 @@ def test_set_off_under_concurrent_writer(tmp_path):
     fs.set_off(d); t.join()
     assert not fs.path(d).exists()
 
-def test_agent_name_is_run_folder_plus_lowercase_worker_id(tmp_path):
-    d = tmp_path / "maxOS" / ".superlite"; d.mkdir(parents=True)
-    assert fs.agent_name(d, "W1") == "sl-maxos-w1" and fs.agent_name(d, "W12") == "sl-maxos-w12"
+def test_agent_name_is_run_folder_hash_and_worker_id():
+    sd = Path("/u/github/maxOS/.superlite")
+    assert fs.agent_name(sd, "W1") == "sl-maxos-ff82-w1" and fs.agent_name(sd, "W12") == "sl-maxos-ff82-w12"
+
+def test_long_shared_prefixes_and_equal_folder_names_stay_apart():
+    """Spike S1: worktrees superlite-fleet-leads-phase-2 and -phase-3 both gave sl-superlite-fleet-leads-phas-w1."""
+    wt = Path("/u/github/superlite/.claude/worktrees")
+    assert fs.agent_name(wt / "superlite-fleet-leads-phase-2" / ".superlite", "W1") == "sl-superlite-fleet-leads-48ae-w1"
+    assert fs.agent_name(wt / "superlite-fleet-leads-phase-3" / ".superlite", "W1") == "sl-superlite-fleet-leads-293e-w1"
+    assert fs.agent_name(Path("/u/a/superlite/.superlite"), "W1") == "sl-superlite-c4bd-w1" != fs.agent_name(Path("/u/b/superlite/.superlite"), "W1")
 
 @pytest.mark.parametrize("folder", ["maxOS", ".claude-account1", "My Project (v2)", "x" * 60, "-", "ünïcödé", "9lives"])
 def test_agent_name_always_matches_the_herdr_pattern(tmp_path, folder):

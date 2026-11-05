@@ -16,14 +16,22 @@ class FakeHerdr:
         self.screen_after = None
         self.create_error = None
         self.split_error = None
+        self.layout, self.agent_rows, self.tab_panes = None, [], []  # scripted pane_layout and agents replies; panes of the newest tab
         self.HerdrError = type("HerdrError", (Exception,), {"__init__": lambda s, code, message="": (setattr(s, "code", code), setattr(s, "message", message), None)[-1]})
     def create_workspace(self, label, cwd, env_vars):
         if self.create_error: raise self.HerdrError(self.create_error, "missing")
-        self.calls.append(("create_workspace", label, env_vars)); return ("w6", "w6:p1")
+        self.calls.append(("create_workspace", label, env_vars)); self.tab_panes = ["w6:p1"]; return ("w6", "w6:p1")
     def split_pane(self, pane_id, direction, cwd, env_vars):
         self.calls.append(("split_pane", pane_id, direction))
         if self.split_error: e, self.split_error = self.split_error, None; raise self.HerdrError(e, "pane gone")
-        return f"w6:p{len(self.calls) + 1}"
+        pane = f"w6:p{len(self.calls) + 1}"; self.tab_panes.append(pane); return pane
+    def create_tab(self, workspace_id, cwd, env_vars):
+        self.calls.append(("create_tab", workspace_id)); pane = f"w6:p{len(self.calls) + 1}"; self.tab_panes = [pane]
+        return (f"w6:t{len(self.calls)}", pane)
+    def pane_layout(self, pane_id):
+        self.calls.append(("pane_layout", pane_id))
+        return self.layout if self.layout is not None else [{"pane_id": p, "rows": 64, "cols": 73} for p in self.tab_panes]
+    def agents(self): return list(self.agent_rows)  # a read, not logged: the call-order tests stay as they are
     def start_agent(self, name, pane_id, argv, timeout_ms=90000):
         self.calls.append(("start_agent", name, argv))
         if self.start_error: e, self.start_error = self.start_error, None; raise self.HerdrError(e, "blocked during startup")
@@ -36,7 +44,9 @@ class FakeHerdr:
     def send_keys(self, name, keys): self.calls.append(("send_keys", name, keys))
     def wait_state(self, name, until, timeout_ms): self.calls.append(("wait_state", name, until)); return "idle"
     def exit_agent(self, name): self.calls.append(("exit_agent", name))
-    def close_pane(self, pane_id): self.calls.append(("close_pane", pane_id))
+    def close_pane(self, pane_id):
+        self.calls.append(("close_pane", pane_id))
+        if pane_id in self.tab_panes: self.tab_panes.remove(pane_id)
     def close_workspace(self, ws): self.calls.append(("close_workspace", ws))
 
 @pytest.fixture
@@ -99,7 +109,7 @@ def test_spawn_accepts_trust_dialog(world):
     r = fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
     names = [c[0] for c in world.fh.calls]
     assert names[:5] == ["create_workspace", "start_agent", "read_screen", "send_keys", "wait_state"] and r["id"] == "W1"
-    assert ("send_keys", "sl-proj-w1", ["Down", "Enter"]) in world.fh.calls
+    assert ("send_keys", fleet.fs.agent_name(world.sd, "W1"), ["Down", "Enter"]) in world.fh.calls
 
 @pytest.mark.skipif(REAL, reason="scripted failure needs the in-process fake")
 def test_spawn_login_screen_is_blocked(world, capsys):
@@ -280,8 +290,8 @@ def test_spawn_and_stop_address_herdr_by_one_valid_agent_name(world):
     fleet.stop(world.sd, ["W1"])
     by_name = ("start_agent", "read_screen", "send_keys", "wait_state", "prompt", "exit_agent")
     assert {c[0] for c in world.fh.calls if c[0] in by_name} == set(by_name)
-    assert {c[1] for c in world.fh.calls if c[0] in by_name} == {"sl-proj-w1"}
-    assert json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]["name"] == "sl-proj-w1"
+    assert {c[1] for c in world.fh.calls if c[0] in by_name} == {fleet.fs.agent_name(world.sd, "W1")}
+    assert json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]["name"] == fleet.fs.agent_name(world.sd, "W1")
 
 @pytest.mark.skipif(REAL, reason="scripted screen needs the in-process fake")
 def test_ready_at_the_top_of_a_tall_fullscreen_pane_is_seen(world):
@@ -308,7 +318,7 @@ def test_stop_handles_a_worker_record_written_before_names_were_stored(world):
     data = json.loads((world.sd / "fleet.json").read_text())
     data["workers"]["W1"] = {"pane_id": "w6:p1", "account": "claude3", "agent": "superlite:implementer", "tier": "sonnet", "state": "blocked", "task": None}
     (world.sd / "fleet.json").write_text(json.dumps(data))
-    assert fleet.stop(world.sd, all_=True) == ["W1"] and ("exit_agent", "sl-proj-w1") in world.fh.calls
+    assert fleet.stop(world.sd, all_=True) == ["W1"] and ("exit_agent", fleet.fs.agent_name(world.sd, "W1")) in world.fh.calls
 
 
 def _three_accounts(world, monkeypatch):
@@ -343,7 +353,7 @@ def test_blocked_worker_holds_no_account(world, monkeypatch):
 def test_spawn_passes_its_tier_to_the_account_choice(world, monkeypatch):
     seen = []
     real = fleet.ac.pick_account
-    monkeypatch.setattr(fleet.ac, "pick_account", lambda usage, allowed, running=None, tier=None: (seen.append((dict(running or {}), tier)), real(usage, allowed, running, tier))[1])
+    monkeypatch.setattr(fleet.ac, "pick_account", lambda usage, allowed, running=None, tier=None, alias=None: (seen.append((dict(running or {}), tier)), real(usage, allowed, running, tier, alias))[1])
     fleet.main(["on"]); fleet.spawn(world.sd, world.plan, "haiku", world.proj); fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
     assert seen == [({}, "haiku"), ({"claude3": 1}, "sonnet")]
 
