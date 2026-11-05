@@ -152,6 +152,10 @@ def exit_agent(name):  # a bare --timeout needs --wait in herdr 0.9.5, so send /
         pass  # O(1)
 
 
+def run_in_pane(pane_id, command):  # O(len command): types `command` into the pane's shell and runs it; raw stdout, the reply shape is not pinned
+    return read_text(["pane", "run", pane_id, command])  # O(len command)
+
+
 def close_pane(pane_id):  # O(1)
     call(["pane", "close", pane_id])  # O(1)
 
