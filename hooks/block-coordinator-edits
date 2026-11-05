@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse hook (Edit, Write, NotebookEdit, Bash, PowerShell, Agent): guards the COORDINATOR, i.e.
-# the main session, whose calls carry no agent_id. Subagent calls always pass. Three rules, in order:
+# the main session, whose calls carry no agent_id. Subagent calls and fleet worker sessions always pass. Four rules, in order
+# (rule 4 is checked first for an Agent call):
 #  1. Protected files, in every state: .superlite/orchestrator.json (changed only by `sl orchestrator`)
 #     and .superlite/human-replies.jsonl (written only by hooks/record-human-reply) are never written
 #     by the model, also inside a linked worktree in the project.
@@ -12,6 +13,9 @@
 #  3. Active run (.superlite/stable.json, prime.md or pool.json exists): project code is not written
 #     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, any docs.md,
 #     .superlite/** and .git/info/exclude, in the project or a linked worktree in it. `sl orchestrator end` closes the run.
+#  4. Fleet on (.superlite/fleet.json says "on": true): an Agent call of a superlite role (implementer, implementer-haiku,
+#     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher) is denied with the
+#     `sl fleet spawn --role` hint, as the role is a fleet worker then. Other agents (Explore, general-purpose) fall through.
 # The .superlite folder is the session's own (hooks/superlite-state.sh): its binding, else the launch
 # directory's unless another session owns that one.
 # Who judges what: the path of an Edit, Write or NotebookEdit call is judged here (project_code). A Bash or PowerShell
@@ -85,8 +89,28 @@ enforce=0
 { [ "$active" = 1 ] || [ "$human" = 1 ]; } && enforce=1
 
 if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
-  [ "$human" = 1 ] || exit 0
   jstr subagent_type
+  if [ -f "$sd/fleet.json" ]; then   # rule 4: fleet on, so a superlite role is a worker, never an in-process Agent
+    IFS= read -r -d '' fj < "$sd/fleet.json"
+    re_fon='"on"[[:space:]]*:[[:space:]]*true'
+    if [[ $fj =~ $re_fon ]]; then
+      frole=""
+      case "$REPLY" in
+        superlite:implementer) frole="implementer" ;;
+        superlite:implementer-haiku) frole="implementer --tier haiku" ;;
+        superlite:fixer-sonnet|superlite:fixer-sonnet-high|superlite:fixer-opus) frole="fixer --tier ${REPLY#superlite:fixer-}" ;;
+        superlite:package-reviewer|superlite:final-reviewer) frole="${REPLY#superlite:}" ;;
+        superlite:researcher) frole="research" ;;
+      esac
+      if [ -n "$frole" ]; then
+        printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)"}\n' "$tool" "$REPLY" \
+          >> "$sd/incidents.jsonl" 2>/dev/null
+        printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). sl fleet off goes back to in-process agents." >&2
+        exit 2
+      fi
+    fi
+  fi
+  [ "$human" = 1 ] || exit 0
   case "$REPLY" in Explore|Plan|claude-code-guide) exit 0 ;; esac
   hit="Agent ${REPLY:-general-purpose}"
 fi
