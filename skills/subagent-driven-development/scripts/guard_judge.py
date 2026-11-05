@@ -41,8 +41,8 @@ MAX_DIRS = 12  # directories tracked at once before the shell's directory counts
 MAX_STEPS = 20000  # commands and bodies walked before the whole command counts as unknown (loop re-walks multiply) | O(1)
 MAX_SECONDS = 1.5  # wall-clock budget of one judge call, well inside the hook timeout | O(1)
 MAX_BRACE = 64  # words one brace expansion may give before it counts as unknown | O(1)
-PROTECTED = (".superlite/orchestrator.json", ".superlite/human-replies.jsonl")  # O(1)
-NAMES = ("orchestrator.json", "human-replies.jsonl")  # O(1)
+PROTECTED = (".superlite/orchestrator.json", ".superlite/human-replies.jsonl", ".superlite/backlog.json")  # O(1)
+NAMES = ("orchestrator.json", "human-replies.jsonl", "backlog.json")  # O(1)
 ACTIVE_OK = ("docs/plans/*", "docs/*/plans/*", "docs/*.md", "SPEC*.md", "*/SPEC*.md", "docs.md", "*/docs.md",  # O(1)
              ".superlite/*", ".git/info/exclude")  # O(1)
 HUMAN_OK = ("docs/plans/*.review.md", "docs/*/plans/*.review.md", ".superlite/*", ".git/info/exclude")  # O(1)
@@ -85,7 +85,7 @@ class Verdict:  # O(1)
 
 
 class _Ctx:  # O(p)
-    def __init__(self, command, project, mode):  # O(n + p)
+    def __init__(self, command, project, mode, sds=()):  # O(n + p)
         self.mode = mode  # O(1)
         self.enforce = mode in ("active", "human")  # O(1)
         self.projn = _clean(_winpath(project))  # O(p)
@@ -104,6 +104,8 @@ class _Ctx:  # O(p)
         dirs = {_clean(_winpath(d)) for d in dirs if "\0" not in d}  # O(p)
         self.cache_dirs = {x.lower() for d in dirs for x in (d, os.path.realpath(d))}  # as written and resolved | O(p)
         self.caches = {d.rstrip("/") + "/python" for d in self.cache_dirs}  # protected in every mode | O(1)
+        folders = [_clean(_winpath(d)) for d in sds if isinstance(d, str) and d and "\0" not in d]  # O(s * p)
+        self.prot_abs = {x.lower() for d in folders for n in NAMES for x in (d.rstrip("/") + "/" + n, os.path.realpath(d).rstrip("/") + "/" + n)}  # run files of state folders, by absolute path | O(s * p)
 
 
 class _Unknown(Exception):  # O(1)
@@ -264,6 +266,8 @@ def _judge_path(path, base, ctx, name=None):  # O(p + depth) | the policy's verd
         return None  # O(1)
     full = _clean(p if p.startswith("/") else base + "/" + p)  # O(p)
     real = _real(full)  # O(p) syscalls
+    if real.lower() in ctx.prot_abs or full.lower() in ctx.prot_abs:  # a run file of a state folder, even outside the project | O(1)
+        return Verdict(real, real, "protected")  # O(1)
     if real.lower() in ctx.caches:  # the Python cache the hook trusts: a fake interpreter there would pass everything | O(p)
         return Verdict(real, real, "protected")  # O(1)
     rel = _rel(real, ctx.projreal)  # O(p)
@@ -1046,8 +1050,8 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
     return None  # O(1)
 
 
-def judge(command, cwd, project, mode):  # O(s * n * d) | Verdict for the first write the policy denies, else None
-    ctx = _Ctx(command, project, mode)  # O(n + p)
+def judge(command, cwd, project, mode, sds=()):  # O(s * n * d) | Verdict for the first write the policy denies, else None
+    ctx = _Ctx(command, project, mode, sds)  # O(n + p)
     here = _clean(_winpath(cwd)) if cwd else ctx.projn  # O(p)
     if not here.startswith("/"):  # O(1)
         here = _clean(ctx.projn + "/" + here)  # O(p)
@@ -1060,7 +1064,9 @@ def judge(command, cwd, project, mode):  # O(s * n * d) | Verdict for the first 
 MESSAGES = {  # O(1)
     "protected": ["Blocked: .superlite/orchestrator.json and .superlite/human-replies.jsonl are never written directly. "
                   "Change the orchestrator state only with `sl orchestrator ...` (for example `sl orchestrator approve "
-                  "--review <path>`); human-replies.jsonl is written only by the hook that records the human's replies."],
+                  "--review <path>`); human-replies.jsonl is written only by the hook that records the human's replies. "
+                  ".superlite/backlog.json is written only by `sl backlog`; the run files of a state folder outside the "
+                  "project are protected by their absolute path."],
     "human": ["Human orchestrator: no build starts until the human approves the plan. Write the review plan "
               "docs/plans/<date>-<topic>.review.md (see skills/writing-plans/review-plan.md), show its path with a "
               "five-line summary, ask the human to reply approve, end your turn, then run sl orchestrator approve "
@@ -1132,7 +1138,8 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
         if not isinstance(cmd, str):  # O(1)
             raise ValueError("no command in the hook input")  # O(1)
         cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else None  # O(1)
-        v = judge(cmd, cwd or project, project, mode)  # O(s * n * d)
+        pd = os.environ.get("SUPERLITE_FLEET_PARENT_DIR")  # O(1)
+        v = judge(cmd, cwd or project, project, mode, (sd, pd) if pd else (sd,))  # O(s * n * d)
     except Exception as e:  # noqa: BLE001  fail open on anything | O(1)
         _incident(sd, "guard-error", tool, f"{type(e).__name__}: {e}")  # O(len)
         _ack()  # the judge ran and logged its own error | O(1)
