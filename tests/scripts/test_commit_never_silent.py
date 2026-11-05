@@ -56,13 +56,13 @@ def test_unowned_dirty_file_does_not_block(tmp_path):
     r = commit(repo)
     assert r.returncode == 0, r.stdout + r.stderr
     lines = r.stdout.strip().splitlines()
-    assert "left uncommitted (outside every Owns): notes/x.txt" in lines
+    assert "left uncommitted (outside every Owns): notes/x.txt" in r.stderr
     assert not any("out-of-scope" in ln or "FAILED" in ln for ln in lines)
     sha = lines[-1]  # one task: the SHA stays the last line
     assert sha == git(repo, "rev-parse", "HEAD")
     assert git(repo, "show", "--name-only", "--format=", sha).split() == ["src/a.py"]
     assert "notes/x.txt" in git(repo, "status", "--porcelain", "--untracked-files=all")  # still in the tree, never staged
-    assert "notes/x.txt" not in log_text(repo)
+    assert "notes/x.txt" in log_text(repo)  # one workaround incident for the dropped file
 
 
 def test_unowned_dirty_file_listed_once_for_several_tasks(tmp_path):
@@ -73,7 +73,7 @@ def test_unowned_dirty_file_listed_once_for_several_tasks(tmp_path):
     write(repo, "notes/x.txt", "mine\n")
     r = run("commit_task", "T5", "T6", "--plan", "plan.md", cwd=repo, env=ENV)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert r.stdout.splitlines().count("left uncommitted (outside every Owns): notes/x.txt") == 1
+    assert r.stderr.splitlines().count("left uncommitted (outside every Owns): notes/x.txt") == 1
     assert sum(ln.startswith(("T5 ", "T6 ")) and "FAILED" not in ln for ln in r.stdout.splitlines()) == 2
 
 

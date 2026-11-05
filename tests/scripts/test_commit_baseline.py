@@ -38,7 +38,7 @@ def test_new_foreign_file_left_uncommitted_during_run(tmp_path):  # #179: no lon
     repo = setup(tmp_path, {"baseline_dirty": ["notes.txt"]}, ["other.py"])
     r = commit(repo)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "left uncommitted (outside every Owns): other.py" in r.stdout
+    assert "left uncommitted (outside every Owns): other.py" in r.stderr
     assert "out-of-scope" not in r.stdout
 
 
@@ -62,5 +62,5 @@ def test_empty_baseline_list_leaves_foreign_file_uncommitted_during_run(tmp_path
     repo = setup(tmp_path, {"baseline_dirty": []}, ["other.py"])
     r = commit(repo)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "left uncommitted (outside every Owns): other.py" in r.stdout
+    assert "left uncommitted (outside every Owns): other.py" in r.stderr
     assert "out-of-scope" not in r.stdout

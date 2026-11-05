@@ -547,7 +547,10 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         for f in unrelated:  # O(m) iterations
             if f not in a.left:  # once per call, not per task | O(1)
                 a.left.add(f)  # O(1)
-                print(f"left uncommitted (outside every Owns): {f}")  # O(1)
+                print(f"left uncommitted (outside every Owns): {f}", file=sys.stderr)  # stdout stays the bare SHA | O(1)
+        if unrelated:  # O(1)
+            nt.add_incidents(a.log, [(f, 0, f"{tid}: {f} left uncommitted (outside every Owns)", "workaround", "commit_task", "accepted")  # O(m) one append
+                                     for f in unrelated])
     if out_of_scope:  # O(1)
         why = {f: (" (dirty before the run)" if base and f in base else "") for f in out_of_scope}  # O(m)
         for f in out_of_scope:  # O(m) iterations
