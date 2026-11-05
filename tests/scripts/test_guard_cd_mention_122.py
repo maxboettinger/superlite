@@ -248,6 +248,6 @@ def test_hooks_doc_cites_the_cwd_source_and_the_new_rules():
     doc = (ROOT / "docs" / "hooks.md").read_text(encoding="utf-8")
     line = next(x for x in doc.splitlines() if x.startswith("- `block-coordinator-edits`"))
     for needle in ("the new directory after Claude runs `cd`", "`mkdir -p X && cd X`", "names a protected file",
-                   "when the command also holds a writer call"):
+                   "a move, copy or link API next to it"):   # #124 dropped the writer-call condition
         assert needle in line, needle
     assert re.search(r"own `&&` chain", line)
