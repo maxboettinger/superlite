@@ -57,3 +57,13 @@ def test_proposal_from_takes_the_last_block_with_batches():
     text = 'x\n```json\n{"batches": [1]}\n```\nStatus: DONE\n```json\n{"status": "DONE", "batches": []}\n```'
     assert bc.proposal_from(text) == {"status": "DONE", "batches": []}
     assert bc.proposal_from('```json\n{"status": "DONE"}\n```') is None and bc.proposal_from("```json\n" + "[" * 5000 + "\n```") is None
+
+def test_decisions_are_rebuilt_from_validated_fields_only():
+    deep = cur = {}
+    for _ in range(5000):
+        cur["x"] = {}
+        cur = cur["x"]
+    dirty = {"questions": [{**Q0, "extra": deep, "options": [{**o, "evil": deep} for o in OPT]}], "also": deep}
+    out = norm(bt("B1", [1], ["a.py"], decisions=[dirty]))
+    assert out[0]["decisions"] == [{"questions": [Q0]}]
+    assert bc.clean_question(dirty) == {"questions": [Q0]}

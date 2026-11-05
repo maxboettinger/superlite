@@ -62,6 +62,18 @@ def check_question(q: dict) -> list[str]:
     return errs
 
 
+def clean_question(q: dict) -> dict:
+    """Rebuild a question that check_question accepted from its validated fields only: unknown keys never pass."""
+    out = []
+    for e in q["questions"]:  # O(4 * options)
+        c = {"question": e["question"], "header": e["header"],
+             "options": [{k: o[k] for k in ("label", "description") if k in o} for o in e["options"]]}
+        if "multiSelect" in e:
+            c["multiSelect"] = e["multiSelect"]
+        out.append(c)
+    return {"questions": out}
+
+
 def _plain(f) -> str | None:
     if not isinstance(f, str) or not f or "\0" in f or "\\" in f or f[0] in "/~":  # O(len)
         return None
@@ -145,10 +157,14 @@ def check_proposal(obj: dict, known: set[int]) -> tuple[list[dict], list[str]]:
         if not isinstance(decisions, list):
             errs.append(f"{bid}: decisions must be a list")
             decisions = []
+        cleaned = []
         for k, d in enumerate(decisions, 1):
-            errs.extend(f"{bid} decision {k}: {e}" for e in check_question(d))
+            bad = check_question(d)
+            errs.extend(f"{bid} decision {k}: {e}" for e in bad)
+            if not bad:
+                cleaned.append(clean_question(d))
         out.append({"id": bid, "topic": topic, "issues": sorted(set(issues)), "files": sorted(clean), "depends": list(dict.fromkeys(deps)),
-                    "decisions": copy.deepcopy(decisions), **copy.deepcopy(DEFAULTS)})
+                    "decisions": cleaned, **copy.deepcopy(DEFAULTS)})
     for b in out:  # O(batches * deps)
         for d in b["depends"]:
             if d not in ids or d == b["id"]:
