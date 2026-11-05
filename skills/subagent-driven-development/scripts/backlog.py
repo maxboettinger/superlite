@@ -158,7 +158,7 @@ def cmd_decide(a) -> int:
         if errs:
             print(f"BLOCKED: {a.batch} question.json invalid: " + "; ".join(errs[:5]))
             return 3
-        print(json.dumps(q, indent=2))
+        print(json.dumps(bc.clean_question(q), indent=2))
         return 0
     if not a.file:
         print("BLOCKED: decide needs --print or --file")
