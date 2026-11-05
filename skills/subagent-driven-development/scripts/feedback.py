@@ -173,8 +173,9 @@ def filed(entries: list, issues: list) -> dict:  # O(i*t*w)
     for iss in issues:  # O(t) iterations
         cs = iss.get("comments") if isinstance(iss.get("comments"), list) else []  # O(1)
         blob = "\n".join(str(x) for x in [iss.get("body")] + [c.get("body") for c in cs if isinstance(c, dict)] if x)  # O(w)
+        toks = set(re.findall(r"[0-9A-Za-z]+", blob))  # O(w) whole alphanumeric tokens: no match inside a longer string
         for e in entries:  # O(i) iterations
-            if e["id"] not in out and e["id"] in blob:  # O(w)
+            if e["id"] not in out and e["id"] in toks:  # O(1)
                 out[e["id"]] = iss.get("number")  # O(1)
     return out  # O(1)
 

@@ -254,6 +254,14 @@ def test_filed_function():
     assert got == {"aaaaaaaaaaaa": 154, "bbbbbbbbbbbb": 3}
 
 
+def test_filed_requires_whole_token():
+    sys.path.insert(0, str(SCRIPT.parent))
+    import feedback
+    iss = [{"number": 1, "body": "deadbeef0123456 and 0deadbeef0123 and (deadbeef0123)"}, {"number": 2}, {"number": 3, "comments": None}]
+    assert feedback.filed([{"id": "deadbeef0123"}], iss) == {"deadbeef0123": 1}
+    assert feedback.filed([{"id": "deadbeef0123"}], [{"number": 1, "body": "xdeadbeef01234"}]) == {}
+
+
 @POSIX_ONLY
 def test_triage_requests_body(tmp_path):
     run("add", "probe run hangs on windows", cwd=tmp_path)
