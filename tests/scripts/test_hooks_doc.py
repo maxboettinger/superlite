@@ -43,3 +43,22 @@ def test_guard_line_names_the_124_rules():
                    "reads stdin as its program"):
         assert needle in line, needle
     assert "File APIs without a writer call" not in line
+
+
+def test_new_hooks_documented():
+    for name in ("mark-inline-flow", "inline-worktree-guard"):
+        assert any(x.startswith(f"- `{name}`") for x in HOOKS.splitlines()), name
+    line = next(x for x in HOOKS.splitlines() if x.startswith("- `block-coordinator-edits`"))
+    assert "guard_judge.py" in line
+
+
+def test_commands_name_inplace():
+    for name in ("small", "debug"):
+        text = (ROOT / "commands" / f"{name}.md").read_text(encoding="utf-8")
+        assert "sl worktree inplace --reason" in text, name
+
+
+def test_tools_row_names_inplace():
+    tools = (ROOT / "docs" / "tools.md").read_text(encoding="utf-8")
+    row = next(x for x in tools.splitlines() if x.startswith("| `worktree` |"))
+    assert "inplace --reason" in row
