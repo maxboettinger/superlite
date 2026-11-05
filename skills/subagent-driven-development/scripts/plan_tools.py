@@ -1014,7 +1014,7 @@ DIAGRAM_TYPES = ("flowchart", "graph", "sequencediagram", "statediagram", "state
                  "erdiagram", "journey", "pie", "mindmap", "timeline", "gitgraph", "quadrantchart", "requirementdiagram")  # O(1)
 SPEC_SKIP = {"overview", "introduction", "background", "goals", "non-goals", "glossary", "contents",  # O(1)
              "table of contents", "references", "open questions", "appendix", "summary", "status",
-             "intent", "decisions", "validation", "out of scope", "out-of-scope", "acceptance", "open"}  # O(1) sections no task builds (also as a prefix)
+             "intent", "decisions", "validation", "out of scope", "out-of-scope", "acceptance", "open", "coverage"}  # O(1) sections no task builds (also as a prefix)
 
 
 def check_diagram(block: FenceBlock) -> str | None:  # O(B) total, B = block chars
@@ -1104,6 +1104,17 @@ def size_band(coef: dict, args=None) -> tuple[float, float]:  # O(1)
     if override is not None:  # O(1)
         high = float(override)  # O(1)
     return low, high  # O(1)
+
+
+def load_coverage():  # O(1) after the first call; the PyPI `coverage` package may already own sys.modules["coverage"]
+    """Load this directory's coverage.py under the private name sl_coverage, so a same-named installed package never shadows it."""
+    mod = sys.modules.get("sl_coverage")  # O(1)
+    if mod is None:  # O(1)
+        spec = importlib.util.spec_from_file_location("sl_coverage", Path(__file__).with_name("coverage.py"))  # O(1)
+        mod = importlib.util.module_from_spec(spec)  # O(1)
+        sys.modules["sl_coverage"] = mod  # O(1)
+        spec.loader.exec_module(mod)  # O(size of coverage.py)
+    return mod  # O(1)
 
 
 def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e*n + C*P + n*p + merge/simulate) total
@@ -1302,6 +1313,19 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
                     covered = bool(re.search(rf"(?:§|section\s+|sec\.\s*)\s*{re.escape(num)}\b", plan_l))  # O(C) regex
                 if not covered:  # O(1)
                     issues.append(Issue(f"SPEC section {raw!r} has no task", scope="plan"))  # O(1)
+    spec_off = False  # O(1)
+    if getattr(args, "spec", None) and Path(args.spec).is_file():  # the spec may switch the coverage pass off | O(1)
+        coverage = load_coverage()  # O(1)
+        spec_off = coverage.coverage_off(Path(args.spec).read_text(encoding="utf-8-sig").replace("\r\n", "\n"))  # O(S)
+    if not spec_off:  # O(1)
+        coverage = load_coverage()  # O(1)
+        try:  # O(1)
+            croot = stable_root(str(plan.path)) if plan.path else None  # O(d)
+        except (OSError, ValueError):  # O(1)
+            croot = None  # O(1)
+        cissues, cnotes = coverage.check(plan.text, set(ids), croot)  # O(L + K*R)
+        issues.extend(Issue(m, scope="plan") for m in cissues)  # O(K)
+        warnings.extend(cnotes)  # O(1)
     return issues, warnings  # O(1)
 
 

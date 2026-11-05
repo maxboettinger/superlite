@@ -1,0 +1,1 @@
+/superlite:brainstorming Implement the change described in docs/spec.md. It replaces the storage layer the CLI depends on, so it is architectural work. AI orchestrator. I am at my desk and will answer your questions before you plan.

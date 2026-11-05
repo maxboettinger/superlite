@@ -19,10 +19,11 @@ reply recorded by the hook; records the path and its sha256 in `.superlite/orche
 5. `## How it gets built`: a mermaid diagram of the build flow: what runs in parallel and what must wait (waves or lanes),
    at most 12 nodes. Optionally a mermaid `gantt` of the rough schedule.
 6. `## Decisions you can change`: each open choice with its default, for example `Storage: files on disk (default) | a database`.
-7. `## Risks`: what could go wrong and what we do about it.
-8. `## Out of scope`: what this will not do.
-9. `## How we will know it works`: acceptance checks a human can verify.
-10. `## Rough time and cost`: a range from the sizes, labelled rough until the machine plan is linted.
+7. `## Coverage`: the coverage table in plain words: settled with where, ruled with the default, not applicable, spike, or open with the question. No row is open when you ask for approval.
+8. `## Risks`: what could go wrong and what we do about it.
+9. `## Out of scope`: what this will not do.
+10. `## How we will know it works`: acceptance checks a human can verify.
+11. `## Rough time and cost`: a range from the sizes, labelled rough until the machine plan is linted.
 
 ## One-page form (small requests)
 

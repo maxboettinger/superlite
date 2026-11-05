@@ -13,7 +13,7 @@ Save to `<plans>/YYYY-MM-DD-<topic>.md`; `<plans>` is `docs/superpowers/plans/` 
 
 ## Lint, extract what's stable, fix the rest
 
-`lint --stable` splits the plan into STABLE and FIX tasks (with reasons) and writes `.superlite/stable.json`. A task is stable when its own checks pass, every Consumes has a clean Produces line somewhere (even in an unstable task), it has no taskgraph edge to an unstable task, and it is not on a flagged `CHAIN:`. Plan-level issues (SPEC coverage, `CHAIN:`, the size cap, `MISSED TARGET`) never block stable tasks. `dispatch` offers only stable tasks. The order is fixed: lint, dispatch the whole stable set (`lint --stable` ends with `DISPATCH NOW: ...`), and only then patch the FIX tasks (edits or a full rewrite, as many rounds as needed), re-lint and dispatch the newly stable ones. No agent waits on plan polishing. Dispatched tasks are frozen: a rewrite keeps their blocks byte-identical, else lint reports `FROZEN:` and the change becomes a follow-up fix task, not a restart. `**Status:** draft` stays as an optional manual hold: `next_tasks` and `dispatch` skip draft tasks and their dependents, and draft tasks may keep placeholders.
+`lint --stable` splits the plan into STABLE and FIX tasks (with reasons) and writes `.superlite/stable.json`. A task is stable when its own checks pass, every Consumes has a clean Produces line somewhere (even in an unstable task), it has no taskgraph edge to an unstable task, and it is not on a flagged `CHAIN:`. Plan-level issues (SPEC coverage, `COVERAGE:`, `CHAIN:`, the size cap, `MISSED TARGET`) never block stable tasks. `dispatch` offers only stable tasks. The order is fixed: lint, dispatch the whole stable set (`lint --stable` ends with `DISPATCH NOW: ...`), and only then patch the FIX tasks (edits or a full rewrite, as many rounds as needed), re-lint and dispatch the newly stable ones. No agent waits on plan polishing. Dispatched tasks are frozen: a rewrite keeps their blocks byte-identical, else lint reports `FROZEN:` and the change becomes a follow-up fix task, not a restart. `**Status:** draft` stays as an optional manual hold: `next_tasks` and `dispatch` skip draft tasks and their dependents, and draft tasks may keep placeholders.
 
 ## Write for the split
 
@@ -22,7 +22,7 @@ Save to `<plans>/YYYY-MM-DD-<topic>.md`; `<plans>` is `docs/superpowers/plans/` 
   1. Write the review plan, small requests too (one-page form): `<plans>/<date>-<topic>.review.md`, plain words with diagrams, no code or taskgraph (`review-plan.md`). Nothing is built, dispatched or written except this file before the human's approving reply.
   2. Show it in plain text, not AskUserQuestion (the hook checks your typed reply; an AskUserQuestion answer does not count): the path, a five-line summary and "Reply approve to start, or tell me what to change". END THE TURN and do nothing else until the human replies; changes mean revise and ask again.
   3. Only after an approving reply: `sl orchestrator approve --review <path>` (refused without a fresh human reply; `lint --stable`, `dispatch`, `wave0` and `build_prime` refuse until then).
-  4. Write the machine plan `<plans>/<date>-<topic>.md` from the approved review plan, in the order below (same tasks and scope, header `**Review plan:** <path>`), then `schedule --insert`, `lint --stable`, and dispatch the stable set in the same turn.
+  4. Write the machine plan `<plans>/<date>-<topic>.md` from the approved review plan, in the order below (same tasks and scope, header `**Review plan:** <path>`, and the review plan's `## Coverage` table copied unchanged), then `schedule --insert`, `lint --stable`, and dispatch the stable set in the same turn.
   5. It patches the FIX tasks, re-lints and dispatches the newly stable ones without asking again, as long as each fix stays inside what was approved (sizes, splits, stubs, field corrections). A fix that changes scope, an interface the human saw, or the spec coverage goes back to the human as one question. AI orchestrator: no review plan, straight to the machine plan.
 - **AI orchestrator** (plans, lints and dispatches itself; asks only major or uncertain decisions while planning, nothing when unattended): write a queue that starts building while the fixes are made. Lint splits what you write into stable tasks, which build now, and fix tasks, which wait. Follow all six rules. Record minor and medium choices as `Ruling:` lines; a major or uncertain one that surfaces while writing the plan is asked once, before the first dispatch (brainstorming step 2), unless the run is unattended.
 
@@ -38,14 +38,15 @@ In both modes, write for the split:
 
 ## Plan shape, in this order
 
-1. **Header** (an Xcode project: put `.superlite/test-cmd.json` `{"language":"swift","test":"xcodebuild test -scheme X {only_testing}"}` in the plan's setup; `{only_testing}` expands per test file): Goal, Architecture, Tech stack, Spec path, `**Detail:** contracts | tests | full` (default `tests`), `**Target-min:** N` (predicted-total target, default 11), `**Ticket:** KEY` (prefixes commit messages `KEY Tn: title`), `**Wave0:** none` (no Wave 0 skeleton; use it when the project already builds), global constraints (exact values copied from the spec: version floors, names, formats). Task briefs point here, so do not repeat constraints per task.
-2. **Main diagram** (always): Mermaid of components and data flow.
-3. **File structure:** every file and its one responsibility. Split by responsibility, not by layer, and follow the repo's patterns.
-4. **Task graph** (always, machine-readable): see below.
-5. **Predicted schedule:** generated, never hand-written.
-6. **Sections, one per component or package:** its tasks, a mini diagram only if the section interacts, and a `**Probe entry:**` line.
-7. **Review Focus:** the probe plan.
-8. **Self-review.**
+1. **Header** (an Xcode project: put `.superlite/test-cmd.json` `{"language":"swift","test":"xcodebuild test -scheme X {only_testing}"}` in the plan's setup; `{only_testing}` expands per test file): Goal, Architecture, Tech stack, Spec path, `**Detail:** contracts | tests | full` (default `tests`), `**Target-min:** N` (predicted-total target, default 11), `**Ticket:** KEY` (prefixes commit messages `KEY Tn: title`), `**Wave0:** none` (no Wave 0 skeleton; use it when the project already builds), `**Coverage:** off` (skips the coverage check), global constraints (exact values copied from the spec: version floors, names, formats). Task briefs point here, so do not repeat constraints per task.
+2. **Coverage:** the `## Coverage` table from brainstorming (`../brainstorming/coverage.md`); spike tasks (`S1`, ...) come first.
+3. **Main diagram** (always): Mermaid of components and data flow.
+4. **File structure:** every file and its one responsibility. Split by responsibility, not by layer, and follow the repo's patterns.
+5. **Task graph** (always, machine-readable): see below.
+6. **Predicted schedule:** generated, never hand-written.
+7. **Sections, one per component or package:** its tasks, a mini diagram only if the section interacts, and a `**Probe entry:**` line.
+8. **Review Focus:** the probe plan.
+9. **Self-review.**
 
 ## Diagram rules
 
@@ -167,7 +168,7 @@ Run both. Replace `PLAN` and `SPEC` with the paths. `<superlite-root>` is two le
 Read the lint output:
 - **`MISSED TARGET`** is a warning, not a failure. Consider re-splitting or stubbing the tasks on the named critical path. If the chain is inherently sequential, accept the plan and record `Ruling: <why>`.
 - **`NOTE:`** (under low_min) is advice only.
-- **Every other error must be fixed**: placeholders, Consumes/Produces mismatches, diagram parse errors, `SIZE:` (over high_min), `CHAIN:`, `KIND:`, `OPUS-TASK:`, spec sections with no task. First dispatch every task on the `DISPATCH NOW:` line, then patch the FIX tasks listed under `--stable` (edit or rewrite; keep dispatched blocks unchanged), rerun `schedule --insert` then `lint --stable`, until only `MISSED TARGET` and `NOTE:` remain. Stable tasks need no rework: in delegated mode they dispatch now; with a human approver they wait for the yes (see "Who decides sets the mode").
+- **Every other error must be fixed**: placeholders, Consumes/Produces mismatches, diagram parse errors, `SIZE:` (over high_min), `CHAIN:`, `KIND:`, `OPUS-TASK:`, `COVERAGE:`, spec sections with no task. First dispatch every task on the `DISPATCH NOW:` line, then patch the FIX tasks listed under `--stable` (edit or rewrite; keep dispatched blocks unchanged), rerun `schedule --insert` then `lint --stable`, until only `MISSED TARGET` and `NOTE:` remain. Stable tasks need no rework: in delegated mode they dispatch now; with a human approver they wait for the yes (see "Who decides sets the mode").
 
 ## Self-review checklist
 

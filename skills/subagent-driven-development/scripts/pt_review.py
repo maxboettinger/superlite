@@ -2149,6 +2149,7 @@ def cap_text(s: str, limit: int, note: str = "(truncated)") -> str:  # O(len(s))
 
 SPEC_CHARS = 6000  # O(1) cap on an inline packet's spec section (#130)
 PREVIOUS_CHARS = 4000  # O(1) cap on the earlier review rounds section (#130)
+COVERAGE_CHARS = 3000  # O(1) cap on a plan packet's coverage section (#144)
 
 
 def spec_text(plan: Plan) -> str:  # O(L) total
@@ -2255,6 +2256,13 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         front += ["## 0. Spec", cap_text(spec_text(plan) or "(empty spec)", SPEC_CHARS), ""]  # O(L)
     if previous:  # O(1)
         front += ["## 0b. Earlier review rounds (findings and their fixes)", cap_text(previous, PREVIOUS_CHARS), ""]  # O(P)
+    if not inline:  # a plan's decision-category table; an inline packet's section 0 already shows the spec's (#144) | O(L)
+        from plan_tools import load_coverage  # lazy: plan_tools imports this module | O(1)
+        coverage = load_coverage()  # O(1)
+        span = coverage.section_span(plan.lines)  # O(L)
+        if span:  # O(1)
+            body = "\n".join(plan.lines[span[0] + 1:span[1]]).strip()  # O(L)
+            front += ["## 0c. Coverage (decision categories from the plan)", cap_text(body, COVERAGE_CHARS), ""]  # O(L)
     if a.max_tokens is None:  # the default cap grows by these sections, as it does for the excerpts | O(1)
         cap += len("\n".join(front))  # O(1)
     title = ("FAST PATH" if fast else "REVIEW REQUIRED (inline build)" if inline  # O(1)

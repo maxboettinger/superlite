@@ -1,13 +1,14 @@
 """Eval suite layout: cases, graders, frontmatter keys, scaffolds, runner flags."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EVALS = ROOT / "evals"
-CASES = {"brainstorm-first", "setup-report", "debug-flow"}
+CASES = {"brainstorm-first", "setup-report", "debug-flow", "brainstorm-coverage"}
 PROMPT_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs", "expected_outcome", "model",
                "max_turns", "timeout_seconds", "allowed_tools", "append_system_prompt", "env"}
 GRADER_TYPES = {"regex", "tool_used", "tool_order", "file_exists", "llm", "baseline"}
@@ -53,7 +54,7 @@ def test_frontmatter_keys_are_known():
 
 def test_scaffold_scripts_are_executable_bash(tmp_path):
     scripts = sorted(EVALS.glob("*/scaffold.sh"))
-    assert {s.parent.name for s in scripts} == {"setup-report", "debug-flow"}
+    assert {s.parent.name for s in scripts} == {"setup-report", "debug-flow", "brainstorm-coverage"}
     for s in scripts:
         assert s.read_text().startswith("#!/usr/bin/env bash")
         assert os.access(s, os.X_OK), s
@@ -68,6 +69,15 @@ def test_scaffold_scripts_are_executable_bash(tmp_path):
     assert "2024" in (debug / "tests/test_core.py").read_text()
     assert "pythonpath" in (debug / "pyproject.toml").read_text()
     assert (tmp_path / "setup-report/src/app/__init__.py").exists()
+
+
+def test_coverage_scaffold_spec_is_thin(tmp_path):
+    subprocess.run([str(EVALS / "brainstorm-coverage" / "scaffold.sh")], cwd=tmp_path, check=True)
+    spec = (tmp_path / "docs/spec.md").read_text().lower()
+    for word in ("migrat", "error", "corrupt", "fail", "recover"):
+        assert word not in spec, word
+    assert len(json.loads((tmp_path / "notes.json").read_text())) == 2
+    assert "json.load" in (tmp_path / "src/notes/store.py").read_text()
 
 
 def test_runner_flags():
@@ -100,3 +110,15 @@ def test_regex_graders_nest_file_targets_under_target():
             assert "source" not in fm and "path" not in fm, g
             if "source" in fm.get("target", ""):
                 assert "path" in fm["target"], g
+
+
+def test_coverage_case_grades_the_final_message():
+    graders = EVALS / "brainstorm-coverage" / "graders"
+    assert not any(frontmatter(g).get("tool") == "AskUserQuestion" for g in graders.glob("*.md"))
+    for name in ("raises-migration", "raises-errors"):
+        fm = frontmatter(graders / f"{name}.md")
+        assert fm.get("type") == "llm" and fm.get("criteria"), name
+    fm = frontmatter(graders / "reads-coverage.md")
+    assert fm.get("type") == "tool_used" and fm.get("tool") == "Read" and fm.get("arm") == "with-only"
+    assert (EVALS / "brainstorm-coverage" / "prompt.md").read_text().startswith("/superlite:brainstorming ")
+    assert not (graders / "skill-fired.md").exists()

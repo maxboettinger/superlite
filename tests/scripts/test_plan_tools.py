@@ -603,7 +603,7 @@ def test_lint_notes_stated_context_off_by_more_than_25_percent(tmp_path):
     near = round(pred / 1000)
     p = make_plan(tmp_path, [dict(id="T1", ctx=near, **SKILL_BIG)], name="near.md")
     cp = pt("lint", "--plan", p)
-    assert cp.returncode == 0 and "NOTE" not in cp.out, cp.out
+    assert cp.returncode == 0 and "NOTE: T1 states Est. context" not in cp.out, cp.out
     far = int(pred / 1000 * 0.5)
     p = make_plan(tmp_path, [dict(id="T1", ctx=far, **SKILL_BIG)], name="far.md")
     cp = pt("lint", "--plan", p)
