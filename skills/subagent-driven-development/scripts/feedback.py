@@ -13,6 +13,10 @@ Files: `$SUPERLITE_HOME/feedback.jsonl` (default `~/.superlite/`), append-only, 
 `feedback-triaged.json` there holds the triaged ids; `feedback-hosts` there lists other machines (one ssh host per
 line, `#` comments) whose inbox triage reads over ssh (`$SUPERLITE_SSH` replaces the ssh command). Text is scrubbed
 when logged: home paths become `~`, e-mail addresses `<email>`, tokens `<secret>`. Stdlib only.
+
+Library: `add_auto(tool, reason, target, version) -> bool` logs one machine-found stop as an entry of kind `auto` (`finish`
+calls it per distinct stop, #140). Triage lists an auto group (signature = tool + reason, the target left out) only from
+two entries on, and matches entry ids against the open issues and those closed within 30 days (#182).
 """
 # Complexity notation:
 #   i = inbox entries (all hosts), w = width of one entry, g = groups, t = open issues, h = hosts, x = triaged ids
@@ -31,8 +35,10 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 from incident import append  # locked append with fsync | O(1)
 
-KINDS = ("bug", "slow", "unclear", "repeat", "idea", "other")  # O(1)
+KINDS = ("bug", "slow", "unclear", "repeat", "idea", "other", "auto")  # `auto`: logged by `add_auto` | O(1)
 MAX_TEXT = 500  # O(1)
+CLOSED_DAYS = 30  # triage matches entry ids against issues closed within this many days | O(1)
+AUTO_MIN = 2  # an auto group is listed from this many entries on | O(1)
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]  # O(1)
 SCRUB = [(re.compile(r"[A-Za-z]:(?:\\{1,2}|/)Users(?:\\{1,2}|/)[^\\/\s]+"), "~"),  # O(1)
          (re.compile(r"/(?:Users|home)/[^/\s]+|/root\b"), "~"),
@@ -140,18 +146,35 @@ def tokens(text: str) -> set:  # O(w)
     return {t for t in re.findall(r"[a-z0-9_]+", text.lower()) if len(t) >= 3 and t not in STOP}  # O(w)
 
 
+def auto_sig(e: dict):  # O(1)
+    """(tool, reason) of an auto entry, else None: the target is left out, so one stop on many files is one group."""
+    tool, reason = e.get("tool"), e.get("reason")  # O(1)
+    return (tool, reason) if e.get("kind") == "auto" and isinstance(tool, str) and tool and isinstance(reason, str) else None  # O(1)
+
+
 def group(entries: list) -> list:  # O(i*g*w)
-    """Greedy grouping by word overlap (Jaccard >= 0.5 with a group's first entry); largest, then latest, first."""
-    groups = []  # O(1)
+    """Greedy grouping by word overlap (Jaccard >= 0.5 with a group's first entry); largest, then latest, first.
+    Auto entries group by `auto_sig` instead, and a group of fewer than AUTO_MIN of them is left out (a one-off waits)."""
+    groups, by_sig = [], {}  # O(1)
     for e in sorted(entries, key=lambda e: e.get("date", "")):  # O(i log i) sort, then O(i) iterations
+        sig = auto_sig(e)  # O(1)
+        if sig:  # O(1)
+            if sig not in by_sig:  # O(1)
+                by_sig[sig] = {"tokens": set(), "entries": [], "auto": True}  # O(1)
+                groups.append(by_sig[sig])  # O(1)
+            by_sig[sig]["entries"].append(e)  # O(1)
+            continue  # O(1)
         tk = tokens(e["text"])  # O(w)
         for g in groups:  # O(g) iterations
+            if g.get("auto"):  # an auto group takes only its own signature | O(1)
+                continue  # O(1)
             union = tk | g["tokens"]  # O(w)
             if union and len(tk & g["tokens"]) / len(union) >= 0.5:  # O(w)
                 g["entries"].append(e)  # O(1)
                 break  # O(1)
         else:  # O(1)
             groups.append({"tokens": tk, "entries": [e]})  # O(1)
+    groups = [g for g in groups if not g.get("auto") or len(g["entries"]) >= AUTO_MIN]  # O(g)
     return sorted(groups, key=lambda g: (len(g["entries"]), g["entries"][-1].get("date", "")), reverse=True)  # O(g log g)
 
 
@@ -191,6 +214,13 @@ def origin_repo(folder):  # O(1) + one git process
     return m.group(1) if m else None  # O(1)
 
 
+def _repo(a):  # O(1) + up to two git processes, once per run
+    """OWNER/NAME for gh: --repo, else the origin of superlite's checkout, else of the working folder (kept on `a`)."""
+    if not a.repo:  # O(1)
+        a.repo = origin_repo(PLUGIN_ROOT) or origin_repo(Path.cwd())  # O(1) + spawns
+    return a.repo  # O(1)
+
+
 def open_issues(a):  # O(t) + up to two git processes and one gh process (network)
     """Open issues as [{number, title}], or None when they could not be read (matching is then unknown, not new)."""
     if a.issues:  # O(1)
@@ -200,7 +230,7 @@ def open_issues(a):  # O(t) + up to two git processes and one gh process (networ
             print(f"feedback: cannot read --issues {a.issues} ({e}), issues not matched", file=sys.stderr)  # O(1)
             return None  # O(1)
         return [i for i in data if isinstance(i, dict)] if isinstance(data, list) else None  # O(t)
-    repo = a.repo or origin_repo(PLUGIN_ROOT) or origin_repo(Path.cwd())  # O(1) + spawns
+    repo = _repo(a)  # O(1) + spawns
     if not repo:  # O(1)
         print("feedback: no GitHub repository (pass --repo), issues not matched", file=sys.stderr)  # O(1)
         return None  # O(1)
@@ -216,6 +246,56 @@ def open_issues(a):  # O(t) + up to two git processes and one gh process (networ
         err = str(e)  # O(1)
     print(f"feedback: gh issue list failed for {repo} ({err}), issues not matched", file=sys.stderr)  # O(1)
     return None  # O(1)
+
+
+def closed_issues(a) -> list:  # O(t) + one gh process (network)
+    """Issues closed within CLOSED_DAYS days as [{number, title, body, comments}], so an entry filed in a fixed issue is still
+    found (#182). A --issues file is the whole list already; a failing gh gives [] with one stderr line (open ones still match)."""
+    repo = None if a.issues else _repo(a)  # O(1)
+    if not repo:  # O(1)
+        return []  # O(1)
+    since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - CLOSED_DAYS * 86400))  # O(1)
+    cmd = ["gh", "issue", "list", "--repo", repo, "--state", "closed", "--search", f"closed:>={since}",  # O(1)
+           "--json", "number,title,body,comments", "--limit", "300"]
+    try:  # O(1)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",  # O(t) + spawn
+                           stdin=subprocess.DEVNULL, timeout=60)
+        if r.returncode == 0:  # O(1)
+            data = json.loads(r.stdout)  # O(t)
+            return [i for i in data if isinstance(i, dict)] if isinstance(data, list) else []  # O(t)
+        err = (r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[-1]  # O(len stderr)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as e:  # O(1)
+        err = str(e)  # O(1)
+    print(f"feedback: gh issue list (closed) failed for {repo} ({err}), closed issues not matched", file=sys.stderr)  # O(1)
+    return []  # O(1)
+
+
+def new_entry(kind: str, text: str, plan: str = "", ver: str = "", **extra) -> dict:  # O(w)
+    """One inbox entry for already scrubbed text: id, date, host and the run's context; `extra` adds fields."""
+    date = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())  # O(1)
+    host = socket.gethostname().split(".")[0]  # O(1)
+    eid = hashlib.sha1(f"{host}|{date}|{text}|{time.time_ns()}".encode("utf-8")).hexdigest()[:12]  # O(w)
+    return {"v": 1, "id": eid, "date": date, "host": host, "kind": kind, "text": text, "version": ver or version(),  # O(w)
+            "harness": harness(), "project": project(),
+            "session": os.environ.get("SUPERLITE_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+            or os.environ.get("CODEX_THREAD_ID") or "",
+            "plan": Path(plan).name if plan else "", **extra}
+
+
+def add_auto(tool: str, reason: str, target: str, version: str) -> bool:  # O(w) + locked append
+    """Log one machine-found stop as an entry of kind `auto`, scrubbed like `add` (home paths, e-mail addresses, tokens).
+    Called again with the same tool and reason it writes a second entry: triage groups them. False when the tool is empty
+    or the inbox cannot be written; never raises."""
+    tool, reason, target = scrub(str(tool)), scrub(str(reason)), scrub(str(target))  # O(w)
+    if not tool:  # O(1)
+        return False  # O(1)
+    text = scrub(f"{tool} {reason}" + (f": {target}" if target else ""))  # O(w)
+    entry = new_entry("auto", text, ver=scrub(str(version)), tool=tool, reason=reason, target=target)  # O(w)
+    try:  # O(1)
+        append(home() / "feedback.jsonl", [entry])  # O(w) + fsync
+    except OSError:  # O(1)
+        return False  # O(1)
+    return True  # O(1)
 
 
 def cmd_add(a) -> int:  # O(i*w) + locked append
@@ -234,14 +314,8 @@ def cmd_add(a) -> int:  # O(i*w) + locked append
     if not text:  # O(1)
         print("error: feedback text is empty", file=sys.stderr)  # O(1)
         return 2  # O(1)
-    date = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())  # O(1)
-    host = socket.gethostname().split(".")[0]  # O(1)
-    eid = hashlib.sha1(f"{host}|{date}|{text}|{time.time_ns()}".encode("utf-8")).hexdigest()[:12]  # O(w)
-    entry = {"v": 1, "id": eid, "date": date, "host": host, "kind": a.kind, "text": text, "version": version(),  # O(w)
-             "harness": harness(), "project": project(),
-             "session": os.environ.get("SUPERLITE_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
-             or os.environ.get("CODEX_THREAD_ID") or "",
-             "plan": Path(a.plan).name if a.plan else ""}
+    entry = new_entry(a.kind, text, a.plan or "")  # O(w)
+    eid = entry["id"]  # O(1)
     append(home() / "feedback.jsonl", [entry])  # O(w) + fsync
     done = triaged()  # O(x)
     left = sum(1 for e in local_entries() if e["id"] not in done)  # O(i*w)
@@ -266,7 +340,8 @@ def cmd_triage(a) -> int:  # O(i*g*w + g*t*w) + h ssh processes + one gh process
         print(f"feedback triage: 0 {'' if a.all else 'untriaged '}entries, 0 groups")  # O(1)
         return 0  # O(1)
     issues = open_issues(a)  # O(t) + spawn
-    by_id = filed(entries, issues) if issues else {}  # O(i*t*w)
+    known = (issues or []) + (closed_issues(a) if issues is not None else [])  # open and recently closed: an id in either is filed | O(t) + spawn
+    by_id = filed(entries, known) if known else {}  # O(i*t*w)
     entries = [e for e in entries if e["id"] not in by_id]  # O(i)
     groups = group(entries)  # O(i*g*w)
     print(f"feedback triage: {total} {'' if a.all else 'untriaged '}entries, {len(groups) + len({by_id[k] for k in by_id})} groups")  # O(1)
