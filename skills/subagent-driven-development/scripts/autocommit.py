@@ -138,14 +138,28 @@ def refs():
     return r.stdout.split()
 
 
-def dirty_outside(files):
+def plan_stem(plan):
+    """The stored plan relative to the repo without its suffix (`docs/plans/p` for docs/plans/p.md), or None."""
+    top = git("rev-parse", "--show-toplevel", check=False)
+    if not plan or top.returncode != 0:
+        return None
+    try:
+        rel = Path(plan).resolve().relative_to(Path(top.stdout.strip()).resolve())
+    except ValueError:
+        return None
+    return rel.with_suffix("").as_posix()
+
+
+def dirty_outside(files, plan=None):
     r = git("status", "--porcelain", "-z", "--untracked-files=all", "--no-renames")
+    stem = plan_stem(plan)
     bad = []
     for e in r.stdout.split("\0"):
         if len(e) > 3:
             p = e[3:].replace("\\", "/")
             if not p.startswith(".superlite/") and "__pycache__/" not in p \
-                    and not p.endswith(".pyc") and p not in files:
+                    and not p.endswith(".pyc") and p not in files \
+                    and not (stem and p.startswith(stem + ".")):
                 bad.append(p)
     return bad
 
@@ -223,7 +237,7 @@ def apply(squash=True):
     if git("symbolic-ref", "-q", "HEAD", check=False).stdout.strip() != st.get("branch", ""):
         sys.exit("apply: refused, the checked-out branch changed since the run started")
     files = {f for e in st["entries"] for f in e["files"]}
-    bad = dirty_outside(files)
+    bad = dirty_outside(files, st.get("plan"))
     if bad:
         sys.exit("apply: refused, the tree has changes unrelated to the run: "
                  + ", ".join(bad[:8]) + (" ..." if len(bad) > 8 else "")

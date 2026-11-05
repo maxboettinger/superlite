@@ -227,6 +227,35 @@ def test_apply_refuses_unrelated_changes(tmp_path):
     assert git(repo, "rev-list", "--count", "HEAD") == "1"
 
 
+def test_apply_allows_plan_folder_files(tmp_path):
+    repo = make_repo(tmp_path)
+    two_tasks(repo)
+    write(repo, "plan.review.md", "review\n")
+    write(repo, "plan.report.md", "report\n")
+    write(repo, "plan.report.json", "{}\n")
+    r = run("autocommit", "apply", cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_apply_allows_nested_plan_files(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / "docs" / "plans").mkdir(parents=True)
+    write(repo, "docs/plans/p.md", (PLAN_FIX / "plan.md").read_text(encoding="utf-8"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "plan")
+    write(repo, "src/a.py", "def parse(t):\n    return t.split()\n")
+    write(repo, "tests/test_a.py", "def test_p():\n    assert 1\n")
+    r = run("commit_task", "T1", "--plan", "docs/plans/p.md", cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    write(repo, "docs/plans/other.md", "x\n")
+    r = run("autocommit", "apply", cwd=repo)
+    assert r.returncode != 0 and "unrelated" in r.stderr and "docs/plans/other.md" in r.stderr
+    (repo / "docs" / "plans" / "other.md").unlink()
+    write(repo, "docs/plans/p.review.md", "review\n")
+    r = run("autocommit", "apply", cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_clean_removes_refs(tmp_path):
     repo = make_repo(tmp_path)
     two_tasks(repo)
