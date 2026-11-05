@@ -122,3 +122,31 @@ def test_main_checkout_config_fallback(tmp_path):
     plain.mkdir()
     setup(plain, cfg=None)
     assert run(plain, RAW, agent_id="a1").returncode == 0
+
+
+def test_quoted_command_denied(proj):
+    r = run(proj, 'Scripts/test.sh -only-testing:"AppTests/Foo Tests"', agent_id="a1")
+    assert r.returncode == 2 and "--task T3" in r.stderr
+
+
+def test_batch_current_names_first_task(proj):
+    (proj / ".superlite" / "pool.json").write_text(json.dumps({"agents": [{"id": "a1", "current": "T2,T4"}]}))
+    r = run(proj, RAW, agent_id="a1")
+    assert r.returncode == 2 and "--task T2" in r.stderr and "T4" not in r.stderr
+
+
+def test_agent_without_current_and_no_pool(proj):
+    (proj / ".superlite" / "pool.json").write_text(json.dumps({"agents": [{"id": "a1", "busy": False}]}))
+    r = run(proj, RAW, agent_id="a1")
+    assert r.returncode == 2 and "--task <Tn>" in r.stderr
+    (proj / ".superlite" / "pool.json").unlink()
+    (proj / ".superlite" / "prime.md").write_text("run\n")  # still an active run, but no pool
+    r = run(proj, RAW, agent_id="a1")
+    assert r.returncode == 2 and "--task <Tn>" in r.stderr
+
+
+@pytest.mark.parametrize("body", ["{not json", "", '{"language": swift', '{"test": "Scripts/test.sh x", "isolate": }'])
+def test_malformed_test_cmd_passes_without_crash(proj, body):
+    (proj / ".superlite" / "test-cmd.json").write_text(body)
+    r = run(proj, RAW, agent_id="a1")
+    assert r.returncode == 0 and "Traceback" not in r.stderr and "syntax error" not in r.stderr
