@@ -211,3 +211,13 @@ def test_brace_expansion_and_command_glob_are_dyn():  # O(1)
     assert split("{rm,x} y")[0].dyn == [True, False]
     assert split("x=1 /bin/r? y")[0].dyn == [False, True, False]
     assert split("ls *.py")[0].dyn == [False, False]
+
+
+def test_glob_and_brace_flags_per_word_and_redirect():  # O(1)
+    s = split("tee .superlite/{a,b} x 'q*' a{b}c > .superlite/o*")[0]
+    assert s.globs == ["", "b", "", "", "b"]
+    assert s.redirects[0].glob == "g"
+    assert split("[ -f x ] && [[ -d y ]]")[0].globs == ["", "", "", ""]
+    assert split("[ -f x ]")[0].dyn == [False, False, False, False]  # a lone `[` is the test command, no glob
+    assert split("echo 'a'{b,c} \"{a,b}\" x[ab]")[0].globs == ["", "u", "", "g"]
+    assert split("cat <(rm x) 2>/dev/null y*")[0].globs == ["", "", "g"]

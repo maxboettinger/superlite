@@ -5,6 +5,7 @@ finding against the judge modules (guard_lex, guard_files, guard_tools, guard_ju
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -111,3 +112,51 @@ def test_failing_python_fails_open(proj, tmp_path):  # noqa: F811
     r = hook(proj, tmp_path, "rm src/a.py", str(d))
     assert r.returncode == 0 and marker.exists()
     assert [x["kind"] for x in incidents(proj)] == ["guard-error"]
+
+
+@pytest.mark.parametrize("cmd", [
+    "printf '{\"mode\":\"human\",\"approved\":true}' > .superlite/orchestrator.jso?",
+    "tee .superlite/{orchestrator.json,x}",
+    "touch docs/plans/{x,../../src/a.py}",
+    "sed -i s/a/b/ docs/plans/{x,../../src/a.py}",
+])
+def test_glob_and_brace_targets_block(proj, cmd):  # noqa: F811
+    # final review 1: the literal text of a glob or brace word matched `.superlite/*` and `docs/plans/*`
+    (proj / "docs" / "plans").mkdir(parents=True)
+    r = bash(proj, cmd)
+    assert r.returncode == 2, (cmd, r.stderr)
+
+
+@pytest.mark.parametrize("cmd", [
+    "rm .superlite/orchestrator.js''on",
+    "rm .superlite/orchestrator.j\\son",
+    "rm .superlite/$'\\x6frchestrator.json'",
+    "rm .superlite/orch*",
+    "cd .superlite && rm orch*",
+])
+def test_idle_spelled_protected_names_reach_the_judge(tmp_path, cmd):
+    # final review 4: the idle pre-check looked only for the literal protected names
+    idle = tmp_path / "idle"
+    (idle / ".superlite").mkdir(parents=True)
+    r = bash(idle, cmd)
+    assert r.returncode == 2 and "never written directly" in r.stderr, (cmd, r.stderr)
+
+
+@pytest.mark.skipif(os.name == "nt" or not shutil.which("true"), reason="needs a POSIX true binary")
+def test_fake_cached_python_is_not_trusted(proj, tmp_path):  # noqa: F811
+    # final review 3: an exit 0 from a cached fake interpreter (/usr/bin/true) passed every command
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    path = os.environ["PATH"]
+    (cache / "python").write_text(f"{shutil.which('true')}\n{path}|{tmp_path}|\n", encoding="utf-8")
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(proj), "PATH": path, "SUPERLITE_CACHE_DIR": str(cache), "PWD": str(tmp_path)}
+    for k in ("SUPERLITE_PYTHON", "VIRTUAL_ENV"):
+        env.pop(k, None)
+    raw = json.dumps({"tool_name": "Bash", "tool_input": {"command": "rm src/a.py"}})
+    r = subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env, cwd=str(tmp_path))
+    assert r.returncode == 2, r.stderr
+    assert (cache / "python").read_text(encoding="utf-8").splitlines()[0] != shutil.which("true")  # the cache is rewritten
+    raw = json.dumps({"tool_name": "Bash", "tool_input": {"command": "rm docs/plans/a.md"}})
+    r = subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env, cwd=str(tmp_path))
+    assert r.returncode == 0 and r.stdout == ""
+    assert all(x["kind"] != "guard-error" for x in incidents(proj)), incidents(proj)
