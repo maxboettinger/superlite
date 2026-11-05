@@ -57,8 +57,8 @@ def _read(p):  # O(size of the lock file)
 
 def _stale(h, live, now_ms):  # O(1)
     agent = h.get("agent")  # O(1)
-    if agent not in (None, "?") and live is not None and agent not in live:  # O(1)
-        return True  # O(1)
+    if agent not in (None, "?") and live is not None:  # O(1) Herdr readable: only a gone agent makes it stale
+        return agent not in live  # O(1)
     return now_ms - h["time"] > STALE_MS  # O(1)
 
 
