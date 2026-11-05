@@ -1,4 +1,7 @@
 """F-T12-1 / F-T12-2: BLOCKED exits 3 (docstring), and release --park leaves a state the runner's round can see."""
+import sys
+from test_plan_tools import SCRIPTS
+sys.path.insert(0, str(SCRIPTS))
 from test_backlog_ship import sh, ship, b1, locked  # noqa: F401
 import backlog_state as bs
 

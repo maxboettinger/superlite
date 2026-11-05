@@ -34,6 +34,24 @@
 
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
 
+# Fleet session (any role, a lead too; the env is the session's, so a command's `env -u` cannot change it): `sl backlog
+# decide|answer|start|plan` is Max's main session only. Judged on the raw hook JSON in any spelling ($SL, an absolute path,
+# env -u ... sl, bash -c, python3 .../backlog.py): quotes and backslashes dropped, `backlog[.py]` then the subcommand.
+# Only a fleet session pays for it (builtin string work, no spawn); the idle coordinator path is untouched.
+if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then
+  re_bl_tool='"tool_name"[[:space:]]*:[[:space:]]*"(Bash|PowerShell)"'
+  if [[ $input =~ $re_bl_tool ]]; then
+    bl="${input//\\t/ }"; bl="${bl//\\/}"; bl="${bl//\"/}"; bl="${bl//\'/}"
+    re_bl='backlog(\.py)?[[:space:]]+(decide|answer|start|plan)([^[:alnum:]_-]|$)'
+    shopt -s nocasematch
+    if [[ $bl =~ $re_bl ]]; then
+      shopt -u nocasematch
+      printf '%s\n' "Blocked: sl backlog ${BASH_REMATCH[2]} runs only in the main session (Max's session), never in a fleet worker or lead. Use sl backlog status or wait, and report NEEDS_DECISION instead." >&2
+      exit 2
+    fi
+    shopt -u nocasematch
+  fi
+fi
 re_agent='"agent_id"[[:space:]]*:[[:space:]]*"'
 [[ $input =~ $re_agent ]] && exit 0   # subagent call
 [ -n "${SUPERLITE_FLEET_WORKER:-}" ] && [ "${SUPERLITE_FLEET_ROLE:-}" != lead ] && exit 0   # fleet worker session; a lead is guarded like a coordinator
