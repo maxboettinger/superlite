@@ -95,12 +95,13 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
     re_fon='"on"[[:space:]]*:[[:space:]]*true'
     if [[ $fj =~ $re_fon ]]; then
       frole=""
-      case "$REPLY" in
-        superlite:implementer) frole="implementer" ;;
-        superlite:implementer-haiku) frole="implementer --tier haiku" ;;
-        superlite:fixer-sonnet|superlite:fixer-sonnet-high|superlite:fixer-opus) frole="fixer --tier ${REPLY#superlite:fixer-}" ;;
-        superlite:package-reviewer|superlite:final-reviewer) frole="${REPLY#superlite:}" ;;
-        superlite:researcher) frole="research" ;;
+      lower "$REPLY"; fname="${LOWER#superlite:}"   # `fixer-opus` and `Superlite:Fixer-Opus` name the same role
+      case "$fname" in
+        implementer) frole="implementer" ;;
+        implementer-haiku) frole="implementer --tier haiku" ;;
+        fixer-sonnet|fixer-sonnet-high|fixer-opus) frole="fixer --tier ${fname#fixer-}" ;;
+        package-reviewer|final-reviewer) frole="$fname" ;;
+        researcher) frole="research" ;;
       esac
       if [ -n "$frole" ]; then
         printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)"}\n' "$tool" "$REPLY" \
