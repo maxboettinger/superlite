@@ -68,6 +68,9 @@ if [[ $bt =~ ^[0-9]+$ ]] && [ -f "$sd/metrics.jsonl" ]; then
   while IFS= read -r line || [ -n "$line" ]; do
     [[ $line == *'"type":"superlite:final-reviewer"'* || $line == *'"type": "superlite:final-reviewer"'* \
       || $line == *'"type":"fleet:superlite:final-reviewer"'* || $line == *'"type": "fleet:superlite:final-reviewer"'* ]] || continue
+    if [[ $line == *'"type":"fleet:'* || $line == *'"type": "fleet:'* ]]; then  # a fleet reviewer counts once it stopped with a verdict, not at launch
+      [[ $line == *'"ev":"stop"'* || $line == *'"ev": "stop"'* ]] && [[ $line == *'Verdict:'* ]] || continue
+    fi
     [[ $line =~ $tre ]] || continue
     [ "${BASH_REMATCH[1]}" -gt "$bms" ] && exit 0
   done < "$sd/metrics.jsonl" 2>/dev/null
