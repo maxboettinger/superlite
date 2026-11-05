@@ -49,6 +49,7 @@ IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
 
 re_agent='"agent_id"[[:space:]]*:[[:space:]]*"'
 [[ $input =~ $re_agent ]] && exit 0   # subagent call
+[ -n "${SUPERLITE_FLEET_WORKER:-}" ] && exit 0   # fleet worker session
 re_tool='"tool_name"[[:space:]]*:[[:space:]]*"([A-Za-z]+)"'
 [[ $input =~ $re_tool ]] || exit 0
 tool="${BASH_REMATCH[1]}"

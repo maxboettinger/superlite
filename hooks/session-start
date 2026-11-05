@@ -39,6 +39,13 @@ if [ -n "$sid" ] && [[ $input =~ $re_clear ]] && [[ ${CLAUDE_PID:-} =~ ^[0-9]+$ 
   fi  # O(1)
 fi  # O(1)
 
+# Fleet worker: a short worker note instead of the start menu. printf only (no heredoc).
+if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then  # O(1)
+  wnote="You are superlite fleet worker ${SUPERLITE_FLEET_WORKER} (${SUPERLITE_FLEET_AGENT:-superlite:implementer}). The coordinator sends your task as a message; build it, then finish with your report. Do not start a superlite run."  # O(1)
+  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$wnote"  # O(1)
+  exit 0  # O(1)
+fi  # O(1)
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"  # O(1) + subshell
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"  # O(1) + subshell
 
