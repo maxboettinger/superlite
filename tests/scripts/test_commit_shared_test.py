@@ -166,3 +166,18 @@ def test_shared_test_changed_again_is_retaken(tmp_path):
     assert f"shared-test {SHARED}" in r2.stderr
     state = json.loads((repo / ".superlite" / "checkpoints.json").read_text(encoding="utf-8"))
     assert SHARED in state["entries"][-1]["files"]
+
+
+def test_claimed_test_not_swept_as_shared(tmp_path):
+    repo = repo_with_shared(tmp_path)
+    r = run("commit_task", "T3", "--claim", SHARED, "--ruling", "T3 needs it", "--plan", "plan.md",
+            cwd=repo, env=SRC_ENV_OFF)
+    assert r.returncode == 0, r.stdout + r.stderr
+    write(repo, "src/b.py", "B = 1\n")
+    write(repo, SHARED, "def test_s():\n    assert 1 == 1\n")
+    r = run("commit_task", "T2", "--plan", "plan.md", cwd=repo, env=SRC_ENV_OFF)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "shared-test" not in r.stderr
+    assert f"left uncommitted (claimed by T3): {SHARED}" in r.stderr
+    state = json.loads((repo / ".superlite" / "checkpoints.json").read_text(encoding="utf-8"))
+    assert state["entries"][-1]["files"] == ["src/b.py"]

@@ -273,3 +273,35 @@ def test_unhashable_existing_path_counts_as_changed(tmp_path, monkeypatch):
 
     monkeypatch.setattr(commit_task, "git", lambda *a, **k: R())  # ls-tree and hash-object both empty
     assert commit_task.changed_vs_parent(["u.md"]) == ["u.md"]
+
+
+def test_also_counts_for_every_task_in_the_call(tmp_path):
+    repo = setup(tmp_path)
+    write(repo, "stray.txt", "s\n")  # blocks T1
+    write(repo, "x.md", "x\n")
+    write(repo, "src/b.py", "B = 1\n")
+    r = commit(repo, "T1", "T2", "--also", "x.md", "--ruling", RULING)
+    assert "out-of-scope x.md" not in r.stdout, r.stdout + r.stderr
+    assert "T1 FAILED" in r.stdout
+    assert "x.md" not in r.stdout.split("hint:")[-1]
+
+
+def test_claimed_file_left_uncommitted(tmp_path):
+    repo = setup(tmp_path)
+    r = commit(repo, "T5", "--claim", "x.md", "--ruling", RULING)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "T5 claimed x.md" in r.stdout
+    assert "Ruling: T5 also commits x.md - needed" in (repo / ".superlite" / "progress.md").read_text(encoding="utf-8")
+    write(repo, "x.md", "x\n")
+    write(repo, "src/main.py", "M = 1\n")
+    r = commit(repo, "T6")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "left uncommitted (claimed by T5): x.md" in r.stderr
+    assert entries(repo)[-1]["files"] == ["src/main.py"]
+
+
+def test_claim_without_ruling_exits_2(tmp_path):
+    repo = setup(tmp_path)
+    r = commit(repo, "T5", "--claim", "x.md")
+    assert r.returncode == 2
+    assert "--ruling" in r.stderr
