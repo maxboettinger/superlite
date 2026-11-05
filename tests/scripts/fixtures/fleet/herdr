@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Fake herdr CLI for tests: logs argv, prints canned JSON (or $FAKE_HERDR_REPLY)."""
+import json, os, sys
+
+a = sys.argv[1:]
+log = os.environ.get("FAKE_HERDR_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(json.dumps(a) + "\n")
+reply = os.environ.get("FAKE_HERDR_REPLY")
+if reply is not None:
+    if reply.startswith("EXIT "):
+        parts = reply.split(" ", 2)
+        rest = parts[2] if len(parts) > 2 else ""
+        try:
+            json.loads(rest)
+            print(rest)
+        except ValueError:
+            sys.stderr.write(rest)
+        sys.exit(int(parts[1]))
+    print(reply)
+    sys.exit(0)
+key = " ".join(a[:2])
+if key == "workspace create":
+    out = {"id": "x", "result": {"type": "workspace_created", "workspace": {"workspace_id": "w6"}, "root_pane": {"pane_id": "w6:p1"}}}
+elif key == "pane split":
+    out = {"result": {"pane": {"pane_id": "w6:p2"}}}
+elif key == "agent start":
+    out = {"result": {"agent": {"agent_status": "idle"}}}
+elif key == "agent get":
+    out = {"result": {"agent": {"agent_status": "idle", "name": a[2]}}}
+elif key == "agent list":
+    out = {"result": {"agents": [{"name": "W1", "agent_status": "done", "pane_id": "w6:p1"}, {"name": "W2", "agent_status": "working", "pane_id": "w6:p2"}]}}
+elif key == "agent read":
+    print("line one\nline two\nYes, I trust this folder\nREADY")
+    sys.exit(0)
+elif key in ("agent prompt", "agent wait"):
+    st = a[a.index("--until") + 1] if "--until" in a else "idle"
+    out = {"result": {"agent": {"agent_status": st}}}
+else:
+    out = {"result": {"type": "ok"}}
+print(json.dumps(out))
