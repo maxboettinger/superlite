@@ -2,11 +2,30 @@
 
 ## What it is
 
-With fleet mode on, a superlite run executes its implementer tasks in real Claude Code sessions that live in Herdr panes: one worker per pane (`W1`, `W2`, ...), each started under the subscription account with the most headroom. The coordinator keeps the same loop (dispatch, task message, report, `commit_task`, reviews). You can watch and steer every worker in Herdr: worker `W1` appears there as the agent `sl-<run folder>-<hash>-w1` (lowercase, at most 32 characters; `<hash>` is 4 hex digits of the run root's path, so equal folder names and worktrees with a long shared prefix stay apart). Herdr keeps agent names unique per server.
+With fleet mode on, a superlite run executes every role (implementers, fixers, package reviewers, the final reviewer, research, test layers) in real Claude Code sessions or shell panes that live in Herdr: one worker per pane (`W1`, `W2`, ...), each started under the subscription account with the most headroom. The coordinator keeps the same loop (dispatch, task message, report, `commit_task`, reviews, fixes); with fleet off nothing changes and every agent stays an in-process call. You can watch and steer every worker in Herdr: worker `W1` appears there as the agent `sl-<run folder>-<hash>-w1` (lowercase, at most 32 characters; `<hash>` is 4 hex digits of the run root's path, so equal folder names and worktrees with a long shared prefix stay apart). Herdr keeps agent names unique per server.
 
-Turn it on by asking the coordinator to "use fleet": it runs `sl fleet on` before the first dispatch. Without that every agent stays in-process and Herdr shows only the coordinator. Fleet covers the implementer tasks of a plan with a taskgraph. Reviewers, fixers and the final reviewer stay in-process and get no pane (an in-process subagent has no terminal for Herdr to show); an inline build without a taskgraph starts no worker.
+Turn it on by asking the coordinator to "use fleet": it runs `sl fleet on` before the first dispatch. Without that every agent stays in-process and Herdr shows only the coordinator. With fleet on, an in-process `Agent` call for a superlite role is blocked. Implementer workers cover the tasks of a plan with a taskgraph; an inline build without a taskgraph starts no implementer worker.
 
 Fleet covers the implementer tasks of one taskgraph plan in one checkout: several tickets go into one plan and one run, not one worktree each. Fleet asked for but `sl fleet` unknown (compare `sl version` with the session-start line) or `fleet spawn` exits 3: report BLOCKED with the exact error before any dispatch; never fall back to in-process agents. `sl feedback add` comes in addition, never instead.
+
+## Roles
+
+Start one with `"$SL" fleet spawn --role R [--tier T] --plan PLAN`, then give it a brief with `fleet send Wn --brief FILE`.
+
+| Role | Agent | Model and effort | Prime |
+|---|---|---|---|
+| `implementer` (default) | `superlite:implementer[-haiku]` | the tier's model (`--tier sonnet` or `haiku`), effort from the agent file | primed with `.superlite/prime.md`, then sent tasks; reused |
+| `fixer` | `superlite:fixer-{sonnet,sonnet-high,opus}` (`--tier 1\|2\|3`, or `sonnet\|sonnet-high\|opus`) | sonnet medium, sonnet high, opus high | none; one brief, a fresh worker per fix |
+| `package-reviewer` | `superlite:package-reviewer` | sonnet, medium | none; one brief |
+| `final-reviewer` | `superlite:final-reviewer` | opus, high; a fresh worker per round | none; `.superlite/review-packet.md` |
+| `research` | `superlite:researcher` (`agents/researcher.md`) | haiku, low; read-only (Read, Grep, Glob, Bash) | none; one brief |
+
+The reviewers take no `--tier`; an unknown role or tier exits 2 with `error: ...`. A test layer is not an agent: `fleet run --layer headless|tui|evals` runs `scripts/test_layers.py` in a shell pane and records the role `layer`.
+
+- Every worker gets `--effort` from its agent file (frontmatter effort is ignored in a main-thread session), `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0` and `SUPERLITE_FLEET_ROLE=<role>`.
+- Briefs live in `.superlite/briefs/` (inside the worker's cwd; spawn adds `--add-dir` when the state dir is outside it). A brief is a file the worker reads, never pasted text.
+- A one-turn worker (everything except the implementer) ends with a status line and one JSON block; `fleet wait` stops it once its status is final.
+- Fleet relies on accounts in auto mode. A non-auto account stops research Bash and reads outside the cwd at a permission dialog, which `wait` reports as `BLOCKED-UI`.
 
 ## Capacity
 
@@ -26,17 +45,21 @@ Fleet covers the implementer tasks of one taskgraph plan in one checkout: severa
 Run as `"$SL" fleet ...`. All take `--plan PLAN` to find the run.
 
 - `fleet on [--accounts claude1,claude3]` turns fleet mode on (default order: the `--accounts` flag, then `SUPERLITE_FLEET_ACCOUNTS`, then every account `claude-profile list --json` returns, then `current`).
-- `fleet spawn --tier sonnet` starts a worker and primes it; prints `W1 account=claude1 pane=w6:p1 agent=superlite:implementer`. Exit 3 with `BLOCKED: ...` when no account has headroom or startup fails.
+- `fleet spawn --tier sonnet` (role `implementer`) starts a worker and primes it; prints `W1 account=claude1 pane=w6:p1 agent=superlite:implementer`. Exit 3 with `BLOCKED: ...` when no account has headroom or startup fails.
 - `fleet send W1 T3 --plan PLAN` sends a task (`W1 T3 T4` for a batch); prints `W1 T3 sent`, or `W1 T3,T4 sent` for a batch. `fleet send W1 --text "use the v2 API"` sends free text, for example an answer to NEEDS_CONTEXT.
-- `fleet wait [--timeout 540000] [W1 ...]` waits for busy workers. Prints `W1 T3 DONE <report path>` (reports are in `.superlite/fleet/reports/`), `W1 T3 BLOCKED-UI <screen path>` plus the screen's last lines, and `TIMEOUT W1 W2` (space-separated) for the rest.
+- `fleet spawn --role fixer|package-reviewer|final-reviewer|research [--tier T]` starts a worker of that role (no prime); prints the same line plus ` role=<role>`.
+- `fleet send W1 --brief FILE [--label L]` sends a brief file; prints `W1 <label> sent`. The label defaults to the file's name without `.md`.
+- `fleet run --layer headless|tui|evals --plan PLAN` runs a test layer in a shell pane (the repo's `scripts/test_layers.py run <layer>`); prints `W5 layer-headless started account=claude3 pane=w6:p2`.
+- `"$SL" findings route --plan PLAN REPORT.json ...` turns report findings into fixer briefs; prints `fixer tier=<sonnet|sonnet-high|opus> brief=<path> files=<a,b> task=<Tn>` per brief, or `findings: none`.
+- `fleet wait [--timeout 540000] [W1 ...]` waits for busy workers. Prints `Wn <label> <STATUS> findings=<n> <json path>` (`W1 T3 DONE findings=0 <sd>/fleet/reports/T3.json`; the report text is the `.md` next to it) with `<STATUS>` one of `DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`, `APPROVED`, `CHANGES_REQUESTED` or `UNKNOWN` (no parsable block); a line read from the screen ends with ` (screen)`. A layer prints `Wn layer-headless GREEN|RED exit=<n> <log path>` plus its last line. `W1 T3 BLOCKED-UI <screen path>` plus the screen's last lines, and `TIMEOUT W1 W2` (space-separated) for the rest, stay as they were.
 - `fleet keys W1 Down Enter` sends keys to a worker's pane, for a dialog.
 - `fleet status` prints `fleet: on` and one line per worker.
 - `fleet stop W1` or `fleet stop --all` closes workers (`--all` also closes the workspace).
-- `fleet off` stops all workers and turns fleet mode off.
+- `fleet off` stops all workers and turns fleet mode off. It writes its state first and closes the workspace last, so it is safe to run from inside the fleet's own workspace.
 
 ## How a run looks
 
-dispatch prints `fresh tier=T agent=TYPE` or `agent=Wn` (never `poll`) -> `fleet spawn` (fresh only) -> `fleet send` -> `fleet wait` -> `commit_task`. State lives in `.superlite/fleet.json`; screens in `.superlite/fleet/screens/`. None of it is committed.
+dispatch prints `fresh tier=T agent=TYPE` or `agent=Wn` (never `poll`) -> `fleet spawn` (fresh only) -> `fleet send` -> `fleet wait` -> `commit_task`. A review or fix round: `fleet spawn --role package-reviewer|final-reviewer` -> `fleet send Wn --brief` -> `fleet wait` (`APPROVED` or `CHANGES_REQUESTED findings=n`) -> `findings route` -> one fresh fixer worker per printed line. State lives in `.superlite/fleet.json`; screens in `.superlite/fleet/screens/`. None of it is committed.
 
 ## Smoke test
 
@@ -45,11 +68,16 @@ From the 2026-11-05 spike. Run in a scratch project with Herdr running.
 | Step | Do | Expect |
 |---|---|---|
 | 1 Spawn under an account | `fleet on --accounts claude1`, then `fleet spawn --tier sonnet --plan PLAN` | `W1 account=claude1 pane=... agent=superlite:implementer`; `fleet status` shows `W1 ready` |
-| 2 Prompt and wait | `fleet send W1 T1 --plan PLAN`, then `fleet wait` | `W1 T1 DONE <path>` and a report file |
+| 2 Prompt and wait | `fleet send W1 T1 --plan PLAN`, then `fleet wait` | `W1 T1 DONE findings=0 <path>` and a report file |
 | 3 Blocked on a dialog | Send a task whose work triggers a permission dialog, then `fleet wait` | `W1 T1 BLOCKED-UI <screen>`; `fleet keys W1 Enter` (or another answer) lets it continue |
 | 4 Three workers | `fleet on` without `--accounts`, spawn three workers | Panes split in one workspace; accounts spread by headroom (two or three accounts) |
 | 5 Subagents read as working | Send a task that makes a worker start its own subagents | Observe whether Herdr keeps the worker in state `working` while its subagents run, so `wait` does not report early. If it reads `idle` or `done` early, note it as a finding; this is not guaranteed |
 | 6 8 workers | `fleet on`, spawn eight workers | Two tabs of 4, all ready |
+| 7 Final reviewer worker | `fleet spawn --role final-reviewer`, `fleet send Wn --brief .superlite/review-packet.md --label FR1`, `fleet wait` | `Wn FR1 APPROVED findings=0 <json>` or `CHANGES_REQUESTED findings=n`; the worker is stopped |
+| 8 Fix round | `findings route --plan PLAN <json>`, then per line `fleet spawn --role fixer --tier T` and `fleet send Wn --brief P` | `fixer tier=... brief=... files=... task=Tn` lines; fixer workers end `DONE` |
+| 9 Layer run | `fleet run --layer headless --plan PLAN`, then `fleet wait` | `Wn layer-headless GREEN\|RED exit=n <log>` plus the last log line |
+| 10 Guard | With fleet on, make an in-process `Agent` call for a superlite role | The call is blocked |
+| 11 Off from inside | Run `fleet off` from a pane of the fleet's own workspace | `fleet: off` is printed and `fleet.json` says off before the pane closes |
 
 ## Troubleshooting
 
@@ -62,4 +90,4 @@ From the 2026-11-05 spike. Run in a scratch project with Herdr running.
 
 - Workers share the checkout, so tasks must own disjoint files (the plan already guarantees this).
 - No account swap mid-run: a worker keeps its account until stopped.
-- Reviewers, fixers and the final reviewer stay in-process; only implementer tasks of a taskgraph plan run in panes.
+- Implementer tasks need a taskgraph plan; a fixer, reviewer or research worker needs only a brief file.

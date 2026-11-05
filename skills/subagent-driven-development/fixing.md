@@ -10,9 +10,11 @@ The coordinator never edits source or tests and never runs raw `pytest`. Every f
 
 Haiku never fixes: a fix keeps a decision. Haiku stays only as `implementer-haiku` on `Kind: mechanical` tasks.
 
+**Fleet on:** final-review and package-review findings go through `"$SL" findings route --plan PLAN <report json>...`, which writes one brief per owning task and prints `fixer tier=T brief=P files=F task=Tn`; each line is a fresh fixer worker: `"$SL" fleet spawn --role fixer --tier T --plan PLAN`, then `"$SL" fleet send Wn --brief P --plan PLAN`. Escalation sends the same brief to `--tier` one up.
+
 - **Escalation:** after 2 failed rounds at a tier, move up one. Log each failed round with `incident`.
 - **Outside Owns:** a fixer touching a file outside its task's Owns runs `commit_task Tn --claim F --ruling "..."` first.
-- **Owner reuse:** if the task's own implementer is idle, within reuse limits (<=3 tasks, <=40k context for fix work, <=50 min idle) and its model matches the tier, send it a fix-only brief instead of a fresh fixer. Over 40k context, start a fresh fixer instead.
+- **Owner reuse** (fleet off only): if the task's own implementer is idle, within reuse limits (<=3 tasks, <=40k context for fix work, <=50 min idle) and its model matches the tier, send it a fix-only brief instead of a fresh fixer. Over 40k context, start a fresh fixer instead.
 
 ## Fix notes: compaction in a file
 
