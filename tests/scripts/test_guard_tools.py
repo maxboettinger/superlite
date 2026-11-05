@@ -228,3 +228,108 @@ def test_other_archives():
 def test_every_command_runs_without_error(cmd):
     assert isinstance(guard_tools.targets([cmd]), list)
     assert isinstance(guard_tools.targets([cmd, "-x", "--", ""]), list)
+
+
+def test_review_tar_aliases():
+    assert targets(["bsdtar", "-xf", "a.tar", "-C", "src"]) == ["src/"]
+    assert targets(["gtar", "-xf", "a.tar"]) == ["./"]
+
+
+def test_review_rmtree_is_one_target():
+    assert targets(["python3", "-c", "import shutil; shutil.rmtree('/tmp/x')"]) == ["/tmp/x"]
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("import os; os.system('rm src/a')", ["src/a"]),
+    ("import os; os.system('echo x > src/a')", ["src/a"]),
+    ("import os; os.system('ls; cp /tmp/x src/a')", ["src/a"]),
+    ("import os; os.system('sudo -u x rm src/a')", ["src/a"]),
+    ("import os; os.system('echo hi')", []),
+    ("import os; os.system(cmd)", ["?"]),
+    ("import subprocess; subprocess.run(['rm','src/a'])", ["src/a"]),
+    ("import subprocess; subprocess.run(['bash','-c','rm src/a'], check=True)", ["src/a"]),
+    ("import subprocess; subprocess.run(['ls','-l'])", []),
+    ("import subprocess; subprocess.run(['rm', x])", ["?"]),
+    ("import os; os.system('find . -delete')", ["?"]),
+])
+def test_review_python_embedded_shell(code, expected):
+    assert targets(["python3", "-c", code]) == expected
+
+
+def test_review_other_interpreters_embedded_shell():
+    assert targets(["node", "-e", "require('child_process').execSync('rm src/a')"]) == ["src/a"]
+    assert targets(["node", "-e", "require('child_process').spawnSync('rm',['src/a'])"]) == ["src/a"]
+    assert targets(["node", "-e", "cp.execSync(`rm ${x}`)"]) == ["?"]
+    assert targets(["ruby", "-e", "system('rm','src/a')"]) == ["src/a"]
+    assert targets(["ruby", "-e", "`rm src/a`"]) == ["src/a"]
+    assert targets(["ruby", "-e", "x=%x(rm y)"]) == ["?"]
+    assert targets(["php", "-r", "system('rm src/a');"]) == ["src/a"]
+    assert targets(["php", "-r", "echo `rm src/a`;"]) == ["src/a"]
+
+
+def test_review_perl_inline_code():
+    assert targets(["perl", "-e", "unlink 'x'"]) == ["x"]
+    assert targets(["perl", "-e", "unlink('a','b'); rename 'c','d'"]) == ["a", "b", "d"]
+    assert targets(["perl", "-e", "open(F, '>>src/a')"]) == ["src/a"]
+    assert targets(["perl", "-e", "open(my $fh, '>', 'src/a')"]) == ["src/a"]
+    assert targets(["perl", "-e", "open(my $fh, '<', 'src/a')"]) == []
+    assert targets(["perl", "-e", 'open(F, "> $x")']) == ["?"]
+    assert targets(["perl", "-e", "system('rm src/a')"]) == ["src/a"]
+    assert targets(["perl", "-E", "say 1"]) == []
+
+
+def test_review_python_extract_and_download():
+    assert targets(["python3", "-c", "import zipfile; zipfile.ZipFile('a.zip').extractall('src')"]) == ["src"]
+    assert targets(["python3", "-c", "urllib.request.urlretrieve('http://x','src/a')"]) == ["src/a"]
+    assert targets(["python3", "-c", "fileinput.input('src/a', inplace=True)"]) == ["src/a"]
+
+
+def test_review_git_output_files():
+    assert targets(["git", "diff", "--output=src/x"]) == ["src/x"]
+    assert targets(["git", "log", "--output", "src/x"]) == ["src/x"]
+    assert targets(["git", "show", "HEAD:f", "--out=src/a"]) == ["src/a"]
+    assert targets(["git", "format-patch", "-o", "src/p", "HEAD~1"]) == ["src/p"]
+    assert targets(["git", "archive", "-o", "src/a.tar", "HEAD"]) == ["src/a.tar"]
+    assert targets(["git", "-C", "sub", "diff", "--output=x"]) == ["sub/x"]
+    assert targets(["git", "diff", "--stat"]) == []
+    assert targets(["git", "checkout-index", "--prefix=src/", "f"]) == ["src/"]
+    assert targets(["git", "checkout", "--theirs", "f"]) == ["f"]
+    assert targets(["git", "checkout", "main"]) == []
+
+
+def test_review_powershell_aliases_and_cmdexe():
+    assert targets(["del", "/q", "src\\a.py"]) == ["src\\a.py"]
+    assert targets(["rd", "/s", "/q", "src"]) == ["src"]
+    assert targets(["ri", "-Recurse", "src/a"]) == ["src/a"]
+    assert targets(["ri", "-LiteralPath", "src/a"]) == ["src/a"]
+    assert targets(["Remove-Item", "a", "b"]) == ["a", "b"]
+    assert targets(["Rename-Item", "-Path", "docs/a.md", "-NewName", "a.py"]) == ["docs/a.md", "docs/a.py"]
+    assert targets(["Expand-Archive", "a.zip", "-DestinationPath", "src"]) == ["src/"]
+    assert targets(["iwr", "http://x", "-OutFile", "src/a"]) == ["src/a"]
+    assert targets(["iwr", "http://x"]) == []
+    assert targets(["Tee-Object", "-FilePath", "src/a"]) == ["src/a"]
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("p='docs/plans/a.md'; open(p,'w').write('x')", ["docs/plans/a.md"]),
+    ("p='src/a.py'; open(p,'w')", ["src/a.py"]),
+    ("p='a'\np='b'\nopen(p,'w')", ["a", "b"]),
+    ("p='a'\np=input()\nopen(p,'w')", ["?"]),
+    ("p='a'\np+='x'\nopen(p,'w')", ["?"]),
+    ("p='a'+x\nopen(p,'w')", ["?"]),
+    ("p=Path('src/a'); p.write_text('x')", ["src/a"]),
+    ("p='src/a'; Path(p).write_text('x')", ["src/a"]),
+    ("p=Path('src')/'a'; p.write_text('x')", ["?"]),
+    ("m='r'; p='src/a'; open(p,m)", []),
+    ("import os; p='src/a'; os.remove(p)", ["src/a"]),
+])
+def test_review_name_assigned_literals_python(code, expected):
+    assert targets(["python3", "-c", code]) == expected
+
+
+def test_review_name_assigned_literals_other_languages():
+    assert targets(["node", "-e", "const p='x/y'; fs.writeFileSync(p,'z')"]) == ["x/y"]
+    assert targets(["node", "-e", "let p='x'; p=q; fs.writeFileSync(p,'z')"]) == ["?"]
+    assert targets(["node", "-e", "fs.writeFileSync(p,'z')"]) == ["?"]
+    assert targets(["ruby", "-e", "p='x'; File.write(p,'z')"]) == ["x"]
+    assert targets(["php", "-r", "$p='x'; file_put_contents($p,'z');"]) == ["x"]

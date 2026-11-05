@@ -9,16 +9,26 @@ module reads (a path and ".exe" are stripped from the command word first).
 import os
 import re
 
+import guard_files
+import guard_lex
+
 _PY = re.compile(r"^(python|pypy|py)[\d.]*$")  # O(1)
 _NODE = frozenset({"node", "nodejs", "bun"})
 _SEVENZ = frozenset({"7z", "7za", "7zr", "7zz"})
+_TARS = frozenset({"tar", "bsdtar", "gtar", "gnutar"})
+_PS_ALIAS = {"ri": "remove-item", "del": "remove-item", "erase": "remove-item", "rd": "remove-item",
+             "copy": "copy-item", "cpi": "copy-item", "move": "move-item", "mi": "move-item", "ren": "rename-item",
+             "rni": "rename-item", "sc": "set-content", "ac": "add-content", "ni": "new-item", "clc": "clear-content",
+             "tee-object": "tee-object", "export-csv": "export-csv", "export-clixml": "export-clixml",
+             "expand-archive": "expand-archive", "invoke-webrequest": "invoke-webrequest", "iwr": "invoke-webrequest",
+             "invoke-restmethod": "invoke-webrequest", "irm": "invoke-webrequest"}
 _PS_CMDLETS = frozenset({
     "set-content", "add-content", "clear-content", "out-file", "new-item", "remove-item", "copy-item", "move-item",
     "rename-item",
-})
+}) | frozenset(_PS_ALIAS)
 COMMANDS: frozenset[str] = frozenset(
-    {"git", "tar", "unzip", "cpio", "ruby", "php", "python", "python3", "python2", "py", "pypy", "pypy3"}
-    | _NODE | _SEVENZ | _PS_CMDLETS
+    {"git", "cpio", "ruby", "php", "perl", "unzip", "python", "python3", "python2", "py", "pypy", "pypy3"}
+    | _TARS | _NODE | _SEVENZ | _PS_CMDLETS
 )
 
 
@@ -83,6 +93,34 @@ def _git_flag(args: list[str], short: str, long: str, sub: str) -> bool:  # O(le
                 if ch in vals:  # O(1)
                     break  # O(1)
     return False  # O(1)
+
+
+_GIT_OUT = frozenset({"diff", "log", "show", "format-patch", "archive", "diff-tree", "diff-index", "diff-files",
+                      "range-diff", "whatchanged", "show-branch"})
+
+
+def _git_out(sub: str, args: list[str], base: str) -> list[str]:  # O(len(args))
+    """--output=FILE (also shortened), format-patch -o DIR, archive -o FILE: the file or folder written."""
+    out: list[str] = []  # O(1)
+    names = ("output", "output-directory") if sub == "format-patch" else ("output",)  # O(1)
+    i = 0  # O(1)
+    while i < len(args):  # O(len(args))
+        a = args[i]  # O(1)
+        i += 1  # O(1)
+        if a == "--":  # O(1)
+            break  # O(1)
+        v = None  # O(1)
+        if a.startswith("--"):  # O(1)
+            o, eq, val = a[2:].partition("=")  # O(len(a))
+            if o in names or (len(o) >= 3 and any(n.startswith(o) for n in names)):  # O(1)
+                v = val if eq else (args[i] if i < len(args) else "?")  # O(1)
+                i += 0 if eq else 1  # O(1)
+        elif a.startswith("-o") and sub in ("format-patch", "archive"):  # O(1)
+            v = a[2:] if len(a) > 2 else (args[i] if i < len(args) else "?")  # O(1)
+            i += 0 if len(a) > 2 else 1  # O(1)
+        if v is not None:  # O(1)
+            out.append(_join(base, v))  # O(len(v))
+    return _uniq(out)  # O(len(out))
 
 
 def _git(words: list[str]) -> list[str]:  # O(len(words))
@@ -151,6 +189,8 @@ def _git(words: list[str]) -> list[str]:  # O(len(words))
 
     if sub in ("apply", "am"):  # O(1)
         return ["?"]  # O(1)
+    if sub in _GIT_OUT:  # a command that writes its output to a named file or folder  # O(len(args))
+        return _git_out(sub, args, base)  # O(len(args))
     if sub == "stash":  # O(1)
         return whole() if ops and ops[0] in ("pop", "apply", "branch") else []  # O(1)
     if sub == "reset":  # O(1)
@@ -165,7 +205,10 @@ def _git(words: list[str]) -> list[str]:  # O(len(words))
     if sub == "switch":  # O(1)
         return whole() if _git_flag(args, "f", "force", sub) or _git_flag(args, "", "discard-changes", sub) else []  # O(len(args))
     if sub == "checkout-index":  # O(1)
-        return whole() if _git_flag(args, "f", "force", sub) or _git_flag(args, "a", "all", sub) else []  # O(len(args))
+        pre = [_join(base, a.split("=", 1)[1]) for a in args if a.startswith("--prefix=")]  # files land under the prefix  # O(len(args))
+        if _git_flag(args, "f", "force", sub) or _git_flag(args, "a", "all", sub):  # O(len(args))
+            return pre or whole()  # O(1)
+        return pre  # O(1)
     if sub == "read-tree":  # O(1)
         return whole() if _git_flag(args, "u", "", sub) else []  # O(len(args))
     if sub not in ("checkout", "restore", "rm", "mv", "clean"):  # O(1)
@@ -190,7 +233,9 @@ def _git(words: list[str]) -> list[str]:  # O(len(words))
         if not dd:  # O(1)
             if len(ops) >= 2:  # O(1)
                 paths = ops[1:]  # O(len(ops))
-            if ops and os.path.exists(_join(base, ops[0])):  # O(1)
+            if ops and (os.path.exists(_join(base, ops[0])) or any(  # --ours/--theirs/--conflict take only paths
+                    _git_flag([x], "", "ours", sub) or _git_flag([x], "", "theirs", sub)
+                    or _git_flag([x], "", "conflict", sub) for x in args)):  # O(len(args))
                 paths.append(ops[0])  # O(1)
         if _git_flag(args, "p", "patch", sub) and not paths:  # O(len(args))
             paths = ["."]  # O(1)
@@ -359,6 +404,37 @@ def _cpio(args: list[str]) -> list[str]:  # O(len(args))
 
 # ---------------------------------------------------------------- interpreter code
 
+class _Name(str):  # O(1) | a bare name used as an argument
+    pass  # O(1)
+
+
+_NAMES: list[dict[str, list[str]]] = [{}]  # O(1) | the names of the code in hand that are assigned only literals
+_ASSIGN = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*([-+*/%|&^@]|//|\*\*|<<|>>)?=(?![=>])\s*")  # O(1)
+
+
+def _assigned(code: str, lang: str) -> dict[str, list[str]]:  # O(len(code)) | name -> its literals; any other assignment drops it
+    lits: dict[str, list[str]] = {}  # O(1)
+    bad: set[str] = set()  # O(1)
+    for m in _ASSIGN.finditer(code):  # O(len(code))
+        name = m.group(1)  # O(1)
+        pp = re.compile(r"(?:pathlib\.)?(?:Path|PurePath)\(").match(code, m.end()) if lang == "py" else None  # O(1)
+        pm = _LIT.match(code, pp.end() if pp else m.end())  # O(1)
+        v, end = None, 0  # O(1)
+        if pm and not m.group(2):  # O(1)
+            end = pm.end()  # O(1)
+            if pp:  # Path('lit') then the closing parenthesis  # O(1)
+                cm = re.compile(r"[ \t]*\)").match(code, end)  # O(1)
+                end = cm.end() if cm else -1  # O(1)
+            tail = code[end:].lstrip(" \t") if end >= 0 else "x"  # O(len(code))
+            if not tail or tail[0] in ";\n,)":  # the statement ends here  # O(1)
+                v = _unq(pm, lang)  # O(1)
+        if v is None:  # O(1)
+            bad.add(name)  # O(1)
+        else:  # O(1)
+            lits.setdefault(name, []).append(v)  # O(1)
+    return {k: v for k, v in lits.items() if k not in bad}  # O(len(lits))
+
+
 # A call's arguments are parsed from the literal code: (keyword or None, literal text or None when not literal).
 Arg = tuple  # O(1)
 
@@ -390,6 +466,7 @@ def _parse_args(code: str, pos: int, lang: str, bare: bool) -> tuple[list[Arg], 
         if m and lang != "js":  # O(1)
             key, i = m.group(1), i + m.end()  # O(1)
         val: str | None = None  # O(1)
+        start = i  # O(1)
         j = i  # O(1)
         pm = re.match(r"[rRbBuU]{0,2}(?=['\"])", code[i:i + 3]) if lang == "py" else None  # O(1)
         if pm:  # O(1)
@@ -410,6 +487,7 @@ def _parse_args(code: str, pos: int, lang: str, bare: bool) -> tuple[list[Arg], 
             while e < n and code[e] in " \t":  # O(n)
                 e += 1  # O(1)
             dyn = (q == "`" and "${" in text) or (q == '"' and lang == "php" and "$" in text) or (
+                q == '"' and lang == "pl" and ("$" in text or "@" in text)) or (
                 q == '"' and lang == "rb" and "#{" in text)  # O(len(text))
             if (e >= n or code[e] == "," or at_end(e)) and not dyn:  # O(1)
                 val, i = text, k  # O(1)
@@ -433,6 +511,10 @@ def _parse_args(code: str, pos: int, lang: str, bare: bool) -> tuple[list[Arg], 
                 elif depth == 0 and (c == "," or (not paren and c in ";\n")):  # O(1)
                     break  # O(1)
                 i += 1  # O(1)
+        if val is None and _NAMES[0]:  # a bare name: the caller may resolve it to the literals it was assigned  # O(1)
+            bare = code[start:i].strip()  # O(n)
+            if bare in _NAMES[0]:  # O(1)
+                val = _Name(bare)  # O(1)
         args.append((key, val))  # O(1)
         while i < n and code[i] in " \t":  # O(n)
             i += 1  # O(1)
@@ -485,6 +567,187 @@ def _a_osopen(args: list[Arg], raw: str) -> list[str]:  # O(len(raw))
     return []  # O(1)
 
 
+# ---- a shell command inside interpreter code (os.system, subprocess, child_process, system, backticks)
+
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "fish"})
+_PSHELLS = frozenset({"powershell", "pwsh"})
+_WRAP = frozenset({"env", "sudo", "doas", "nohup", "time", "command", "exec", "nice", "ionice", "stdbuf", "setsid",
+                   "builtin", "timeout", "chroot", "unbuffer", "caffeinate"})
+_FIND_W = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
+_depth = [0]
+_LIT = re.compile(r"""[ \t\r\n]*(?:[rRbBuU]{0,2}'((?:[^'\\]|\\.)*)'|[rRbBuU]{0,2}"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`)""",
+                  re.S)  # O(1)
+
+
+def _unq(m: re.Match, lang: str) -> str | None:  # O(len(text)) | a literal's text, None when it interpolates
+    text = next(g for g in m.groups() if g is not None)  # O(1)
+    q = m.group(0).lstrip(" \t\r\n").rstrip()[-1]  # O(1)
+    if (q == "`" and "${" in text) or (q == '"' and lang in ("php", "pl") and ("$" in text or "@" in text)) or (
+            q == '"' and lang == "rb" and "#{" in text):  # O(len(text))
+        return None  # O(1)
+    return re.sub(r"\\(.)", r"\1", text, flags=re.S)  # O(len(text))
+
+
+def _cmd_words(raw: str, lang: str) -> list[str] | None:  # O(len(raw)) | the literal command words, None when unknown
+    s = raw.lstrip(" \t\r\n")  # O(len(raw))
+    if s.startswith("("):  # O(1)
+        s = s[1:]  # O(len(raw))
+    words: list[str] = []  # O(1)
+    while True:  # O(len(raw))
+        s = s.lstrip(" \t\r\n")  # O(len(s))
+        if not s or s[0] in ");":  # O(1)
+            break  # O(1)
+        if s[0] == "[":  # a list of literals: the argv  # O(1)
+            j = s.find("]")  # O(len(s))
+            if j < 0:  # O(1)
+                return None  # O(1)
+            inner, s = s[1:j], s[j + 1:]  # O(len(s))
+            while inner.strip():  # O(len(inner))
+                m = _LIT.match(inner)  # O(len(inner))
+                v = _unq(m, lang) if m else None  # O(len(inner))
+                if v is None:  # O(1)
+                    return None  # O(1)
+                words.append(v)  # O(1)
+                inner = inner[m.end():].lstrip(" \t\r\n")  # O(len(inner))
+                if inner.startswith(","):  # O(1)
+                    inner = inner[1:]  # O(len(inner))
+                elif inner:  # O(1)
+                    return None  # O(1)
+        else:  # O(1)
+            m = _LIT.match(s)  # O(len(s))
+            nxt = s[m.end():].lstrip(" \t") if m else ""  # O(len(s))
+            if m and (not nxt or nxt[0] in ",);\n"):  # O(1)
+                v = _unq(m, lang)  # O(len(s))
+                if v is None:  # O(1)
+                    return None  # O(1)
+                words.append(v)  # O(1)
+                s = s[m.end():]  # O(len(s))
+            elif words and re.match(r"\{|\w+\s*(?:=(?!=)|:(?!:))|function\b|async\b|\(|\w+\s*=>|\)", s):  # options  # O(1)
+                break  # O(1)
+            else:  # O(1)
+                return None  # O(1)
+        s = s.lstrip(" \t")  # O(len(s))
+        if s.startswith(","):  # O(1)
+            s = s[1:]  # O(len(s))
+        else:  # O(1)
+            break  # O(1)
+    return words or None  # O(1)
+
+
+def _known(w: str) -> bool:  # O(len(w))
+    c = _cmd(w)  # O(len(w))
+    return (c in guard_files.COMMANDS or c in COMMANDS or c in _SHELLS or c in _PSHELLS or c in ("find", "xargs", "eval")
+            or _PY.match(c) is not None)  # O(1)
+
+
+def _shell(text: str) -> list[str]:  # O(len(text) * |commands|) | the paths shell text writes
+    out: list[str] = []  # O(1)
+    for seg in guard_lex.split(text):  # O(len(text))
+        words = ["?" if d else w for w, d in zip(seg.words, seg.dyn)]  # O(w)
+        if words and seg.dyn[0]:  # a command that is not literal  # O(1)
+            out.append("?")  # O(1)
+        out.extend(_argv(words))  # O(w)
+        for r in seg.redirects:  # O(redirects)
+            if r.op.startswith(("<<", "<")) and r.op != "<>":  # O(1)
+                continue  # O(1)
+            if r.op == ">&" and (r.target.isdigit() or r.target == "-"):  # an fd duplicate  # O(1)
+                continue  # O(1)
+            t = r.target  # O(1)
+            if any(c in t for c in "$`") or t.startswith("~"):  # O(len(t))
+                out.append("?")  # O(1)
+            elif guard_files._real(t):  # O(len(t))
+                out.append(t)  # O(1)
+        for body in list(seg.bodies) + ([seg.subshell] if seg.subshell else []):  # O(bodies)
+            out.extend(_shell(body))  # O(len(body))
+    return _uniq(out)  # O(len(out))
+
+
+def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the paths one command (decoded words) writes
+    if not words:  # O(1)
+        return []  # O(1)
+    k = 0  # O(1)
+    if _cmd(words[0]) in _WRAP or re.match(r"[A-Za-z_]\w*=", words[0]):  # skip a wrapper and its options  # O(1)
+        k = next((i for i in range(1, len(words)) if _known(words[i]) and not words[i].startswith("-")), len(words))  # O(w)
+        if k == len(words):  # O(1)
+            return []  # O(1)
+    w = words[k:]  # O(w)
+    c = _cmd(w[0])  # O(1)
+    if c == "xargs" or (c == "find" and any(a in _FIND_W for a in w)):  # O(w)
+        return ["?"]  # O(1)
+    if c == "eval":  # O(1)
+        return _shell(" ".join(w[1:]))  # O(w)
+    if c in _SHELLS or c in _PSHELLS:  # O(1)
+        for i, a in enumerate(w[1:], 1):  # O(w)
+            if a.lower() in ("-c", "-command", "-lc", "-ec", "-ic", "-cl") and i + 1 < len(w):  # O(1)
+                return _shell(w[i + 1])  # O(len(w[i + 1]))
+        return []  # O(1)
+    out: list[str] = []  # O(1)
+    if c in guard_files.COMMANDS:  # O(1)
+        out.extend(guard_files.targets(w))  # O(w)
+    out.extend(_targets(w))  # O(w)
+    return _uniq(out)  # O(len(out))
+
+
+def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(raw)) | os.system, subprocess.run, ...
+    words = _cmd_words(raw, lang)  # O(len(raw))
+    if words is None or _depth[0] >= 4:  # O(1)
+        return ["?"]  # O(1)
+    _depth[0] += 1  # O(1)
+    try:  # O(1)
+        return _shell(words[0]) if len(words) == 1 else _argv(words)  # O(len(raw))
+    finally:  # O(1)
+        _depth[0] -= 1  # O(1)
+
+
+def _a_sh_rb(args: list[Arg], raw: str) -> list[str]:  # O(len(raw))
+    return _a_sh(args, raw, "rb")  # O(len(raw))
+
+
+def _a_sh_php(args: list[Arg], raw: str) -> list[str]:  # O(len(raw))
+    return _a_sh(args, raw, "php")  # O(len(raw))
+
+
+def _a_sh_pl(args: list[Arg], raw: str) -> list[str]:  # O(len(raw))
+    return _a_sh(args, raw, "pl")  # O(len(raw))
+
+
+def _a_sh_js(args: list[Arg], raw: str) -> list[str]:  # O(len(raw))
+    return _a_sh(args, raw, "js")  # O(len(raw))
+
+
+def _a_unknown(args: list[Arg], raw: str) -> list[str]:  # O(1) | a call that runs a program the code names indirectly
+    return ["?"]  # O(1)
+
+
+def _a_tick(lang: str):  # O(1) | a backtick or %x command: its text is shell
+    def f(args: list[Arg], raw: str) -> list[str]:  # O(len(raw))
+        text = raw[1:-1] if raw[:1] == "`" and raw[-1:] == "`" else raw  # O(1)
+        if "#{" in text or "${" in text or "$(" in text and lang != "rb":  # O(len(text))
+            return ["?"]  # O(1)
+        return _shell(text) if _depth[0] < 4 else ["?"]  # O(len(text))
+    return f  # O(1)
+
+
+def _a_perl_open(args: list[Arg], raw: str) -> list[str]:  # O(len(args)) | open(FH, '>f'), open(FH, '>', 'f')
+    p = _pos(args)  # O(len(args))
+    if len(p) >= 3:  # O(1)
+        mode, path = p[1], p[2]  # O(1)
+        if mode is None or any(c in mode for c in ">+|"):  # O(len(mode))
+            return [_t(path)] if mode is None or "|" not in mode else ["?"]  # O(1)
+        return []  # O(1)
+    if len(p) == 2:  # O(1)
+        spec = p[1]  # O(1)
+        if spec is None:  # O(1)
+            return ["?"]  # O(1)
+        spec = spec.strip()  # O(len(spec))
+        if "|" in spec:  # a pipe to or from a command  # O(len(spec))
+            return ["?"]  # O(1)
+        if spec[:1] in (">", "+"):  # O(1)
+            return [spec.lstrip(">+<& \t") or "?"]  # O(len(spec))
+        return []  # O(1)
+    return ["?"] if p and None in p else []  # O(1)
+
+
 _PYP = r"(?<![\w.])(?:(?:shutil|os|os\.path|pathlib)\.)?"
 _NODE_FS = (r"(?:(?<![\w$.])|\b(?:fs|fsp|promises|fse|fsExtra)\.|"
             r"require\(\s*['\"](?:node:)?(?:fs|fs/promises|fs-extra)['\"]\s*\)\.)")
@@ -497,8 +760,17 @@ _CALLS: dict[str, list[tuple[str, object]]] = {
         (r"(?<![\w$])(?:\w+\.)*(?:ZipFile|TarFile)\s*\(", _a_open(0, 1)),
         (r"\bos\.open\s*\(", _a_osopen),
         (_PYP + r"(?:copy|copy2|copyfile|copytree|move|rename|renames|replace|link|symlink)\s*\(", _a_arg(1)),
-        (r"(?<![\w])(?:\w+\.)*(?:copyfile|copy2|copytree|rmtree)\s*\(", _a_arg(1)),
+        (r"(?<![\w])(?:\w+\.)*(?:copyfile|copy2|copytree)\s*\(", _a_arg(1)),
         (_PYP + r"(?:remove|removedirs|unlink|rmdir|rmtree|truncate)\s*\(", _a_arg(0)),
+        (r"(?<![\w.])(?:os\.)?(?:system|popen)\s*\(", _a_sh),
+        (r"(?<![\w.])(?:subprocess\.)?(?:run|call|check_call|check_output|Popen|getoutput|getstatusoutput)\s*\(",
+         lambda a, r: _a_sh(a, r) if re.match(r"\s*\(?\s*(?:\[|[rRbBuU]{0,2}['\"])", r) else ["?"]),
+        (r"\bsubprocess\.\w+\s*\(", _a_sh),
+        (r"(?<![\w.])(?:os\.)?(?:exec[lv]p?e?|spawn[lv]p?e?)\s*\(|\bpty\.spawn\s*\(", _a_unknown),
+        (r"(?<![\w.])(?:fileinput\.)?(?:input|FileInput)\s*\((?=[^)]*inplace\s*=\s*(?:True|1))", _a_arg(0)),
+        (r"\.(?:extractall|extract)\s*\(", lambda a, r: [_t(_pos(a)[0])] if _pos(a) else ["./"]),
+        (r"(?<![\w.])(?:shutil\.)?unpack_archive\s*\(", lambda a, r: [_t(_pos(a)[1])] if len(_pos(a)) > 1 else ["./"]),
+        (r"(?<![\w])(?:\w+\.)*urlretrieve\s*\(", _a_arg(1)),
     ],
     "js": [
         (r"(?<![\w$])(?:writeFile|appendFile|createWriteStream)(?:Sync)?\s*\(", _a_arg(0)),
@@ -507,6 +779,9 @@ _CALLS: dict[str, list[tuple[str, object]]] = {
         (_NODE_FS + r"(?:rm|rmdir|unlink|truncate)(?:Sync)?\s*\(", _a_arg(0)),
         (_NODE_FS + r"open(?:Sync)?\s*\(", _a_open(0, 1, "path", "flags")),
         (r"\bBun\.write\s*\(", _a_arg(0)),
+        (r"(?<![\w$])(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|fork)\s*\(", _a_sh_js),
+        (r"\bBun\.(?:spawn|spawnSync)\s*\(", _a_sh_js),
+        (r"\bBun\.\$`", _a_unknown),
     ],
     "rb": [
         (r"\b(?:File|IO)\.(?:write|binwrite)\b", _a_arg(0)),
@@ -517,12 +792,27 @@ _CALLS: dict[str, list[tuple[str, object]]] = {
         (_RB_FU + r"(?:cp|cp_r|copy|copy_file|copy_entry|mv|move|install|ln|ln_s|ln_sf|link|symlink)\b", _a_last),
         (_RB_FU + r"(?:rm|rm_f|rm_r|rm_rf|remove|remove_file|remove_dir|remove_entry|remove_entry_secure|rmtree|"
                   r"rmdir|touch)\b", _a_all),
+        (r"(?<![\w.:])(?:system|exec|spawn)\b", _a_sh_rb),
+        (r"\b(?:IO\.popen|Open3\.\w+|Kernel\.(?:system|exec|spawn))\b", _a_sh_rb),
     ],
     "php": [
         (_PHP + r"(?:file_put_contents|unlink|rmdir|touch)\s*\(", _a_arg(0)),
         (_PHP + r"(?:fopen)\s*\(", _a_open(0, 1)),
         (_PHP + r"new\s+SplFileObject\s*\(", _a_open(0, 1)),
         (_PHP + r"(?:copy|rename|symlink|link|move_uploaded_file)\s*\(", _a_arg(1)),
+        (_PHP + r"(?:system|exec|shell_exec|passthru|popen|pcntl_exec)\s*\(", _a_sh_php),
+        (_PHP + r"proc_open\s*\(", _a_sh_php),
+    ],
+    "pl": [
+        (r"(?<![\w$@%>:])(?:unlink|rmdir)\b", _a_all),
+        (r"(?<![\w$@%>:])(?:rename|symlink|link)\b", _a_last),
+        (r"(?<![\w$@%>:])(?:copy|move|cp|mv)\b(?=\s*\()", _a_last),
+        (r"(?<![\w$@%>:])(?:remove_tree|rmtree)\b", _a_all),
+        (r"(?<![\w$@%>:])(?:write_file|write_text|append_file)\b", _a_arg(0)),
+        (r"(?<![\w$@%>:])truncate\b", _a_arg(0)),
+        (r"(?<![\w$@%>:])(?:sys)?open\b", _a_perl_open),
+        (r"(?<![\w$@%>:])(?:system|exec)\b", _a_sh_pl),
+        (r"\$\^I", _a_unknown),
     ],
 }
 _PY_PATH = r"(?:Path|PurePath|PosixPath|WindowsPath)\(\s*(['\"])((?:(?!\1).)*)\1\s*\)\s*$"
@@ -535,8 +825,24 @@ def _py_methods(code: str) -> list[str]:  # O(len(code))
         if re.search(r"\b(?:os|shutil)\s*$", code[max(0, m.start() - 12):m.start()]):  # a module function, matched by name  # O(1)
             continue  # O(1)
         pm = re.search(_PY_PATH, code[max(0, m.start() - 400):m.start()])  # O(1)
-        lit = pm.group(2) if pm else None  # O(1)
-        args, end = _parse_args(code, m.end() - 1, "py", False)  # O(len(code))
+        lits: list[str | None] = [pm.group(2) if pm else None]  # O(1)
+        rm = re.search(r"(?<![\w.])([A-Za-z_]\w*)\s*$", code[max(0, m.start() - 80):m.start()])  # a name used as the receiver  # O(1)
+        if not pm and rm and rm.group(1) in _NAMES[0]:  # O(1)
+            lits = list(_NAMES[0][rm.group(1)])  # O(1)
+        nm = re.search(r"(?:Path|PurePath|PosixPath|WindowsPath)\(\s*([A-Za-z_]\w*)\s*\)\s*$", code[max(0, m.start() - 120):m.start()])  # O(1)
+        if not pm and nm and nm.group(1) in _NAMES[0]:  # Path(name)  # O(1)
+            lits = list(_NAMES[0][nm.group(1)])  # O(1)
+        args0, end = _parse_args(code, m.end() - 1, "py", False)  # O(len(code))
+        is_os = code[max(0, m.start() - 2):m.start()].endswith("os")  # O(1)
+        for lit in lits:  # O(literals)
+            for args in _expand(args0):  # O(64)
+                out.extend(_py_method(name, lit, args, is_os))  # O(len(args))
+    return out  # O(len(out))
+
+
+def _py_method(name: str, lit: str | None, args: list[Arg], is_os: bool) -> list[str]:  # O(len(args))
+    out: list[str] = []  # O(1)
+    if True:  # O(1)
         if name in ("rename", "replace"):  # str.replace has no Path receiver: judged only on a literal Path  # O(1)
             if lit is not None:  # O(1)
                 out.extend(_a_arg(0)(args, ""))  # O(1)
@@ -547,7 +853,7 @@ def _py_methods(code: str) -> list[str]:  # O(len(code))
                 if mode is None or any(c in mode for c in "wax+"):  # O(len(mode))
                     out.append(lit)  # O(1)
             else:  # io.open('p', 'w'), codecs.open, gzip.open, tarfile.open, x.open('w')  # O(1)
-                if code[max(0, m.start() - 2):m.start()].endswith("os"):  # os.open  # O(1)
+                if is_os:  # os.open  # O(1)
                     pass  # handled by the os.open pattern  # O(1)
                 else:  # O(1)
                     p = _pos(args)  # O(len(args))
@@ -561,15 +867,39 @@ def _py_methods(code: str) -> list[str]:  # O(len(code))
     return out  # O(len(out))
 
 
+def _expand(args: list[Arg]) -> list[list[Arg]]:  # O(64 * len(args)) | a name assigned only literals stands for each
+    combos = [args]  # O(1)
+    for k, (key, v) in enumerate(args):  # O(len(args))
+        if isinstance(v, _Name):  # O(1)
+            combos = [c[:k] + [(key, lit)] + c[k + 1:] for c in combos for lit in _NAMES[0][v]][:64]  # O(64)
+    return combos  # O(1)
+
+
 def _code(code: str, lang: str) -> list[str]:  # O(len(code) * |patterns|)
+    prev = _NAMES[0]  # O(1)
+    _NAMES[0] = _assigned(code, lang)  # O(len(code))
+    try:  # O(1)
+        return _code1(code, lang)  # O(len(code) * |patterns|)
+    finally:  # O(1)
+        _NAMES[0] = prev  # O(1)
+
+
+def _code1(code: str, lang: str) -> list[str]:  # O(len(code) * |patterns|)
     out: list[str] = []  # O(1)
     for pat, action in _CALLS[lang]:  # O(|patterns|)
         for m in re.finditer(pat, code):  # O(len(code))
             at = m.end() - 1 if code[m.end() - 1] == "(" else m.end()  # the opening ( is part of the argument list  # O(1)
-            args, end = _parse_args(code, at, lang, lang == "rb")  # O(len(code))
-            out.extend(action(args, code[at:end]))  # type: ignore[operator]  # O(len(args))
+            args, end = _parse_args(code, at, lang, lang in ("rb", "pl"))  # O(len(code))
+            for c in _expand(args):  # O(64)
+                out.extend(action(c, code[at:end]))  # type: ignore[operator]  # O(len(args))
     if lang == "py":  # O(1)
         out.extend(_py_methods(code))  # O(len(code))
+    if lang in ("rb", "php", "pl"):  # backticks and qx/%x run shell text  # O(len(code))
+        for m in re.finditer(r"`((?:[^`\\]|\\.)*)`|(?:\bqx|%x)\s*([({\[/'\"])", code):  # O(len(code))
+            if m.group(1) is not None:  # O(1)
+                out.extend(_a_tick(lang)([], m.group(0)))  # O(len(m))
+            else:  # qx(...) and %x(...): the text is not read, the target unknown  # O(1)
+                out.append("?")  # O(1)
     return _uniq(out)  # O(len(out))
 
 
@@ -585,6 +915,8 @@ def _eval_code(cmd: str, args: list[str]) -> tuple[str, str] | None:  # O(len(ar
         lang, skipv, val = "rb", {"-r", "-I", "-C"}, lambda w: re.fullmatch(r"-[A-Za-z0-9]*e", w) is not None  # O(1)
     elif cmd == "php":  # O(1)
         lang, skipv, val = "php", {"-d", "-c", "-z"}, lambda w: w == "-r"  # O(1)
+    elif cmd == "perl":  # -e and -E, also in a cluster (-pe, -lne); -i and -I take the cluster's rest  # O(1)
+        lang, skipv, val = "pl", set(), lambda w: re.fullmatch(r"-[A-HJ-Za-hj-z0-9]*[eE]", w) is not None  # O(1)
     else:  # O(1)
         return None  # O(1)
     chunks: list[str] = []  # O(1)
@@ -611,12 +943,14 @@ def _eval_code(cmd: str, args: list[str]) -> tuple[str, str] | None:  # O(len(ar
 
 # ---------------------------------------------------------------- PowerShell cmdlets
 
-_PS_PATHS = ("path", "literalpath", "filepath", "pspath", "destination", "name")
+_PS_PATHS = ("path", "literalpath", "filepath", "pspath", "destination", "name", "newname", "outfile")
 _PS_SWITCH = frozenset({"force", "recurse", "append", "noclobber", "whatif", "confirm", "passthru", "nonewline",
                         "asbytestream", "container", "usetransaction", "verbose", "debug", "wildcard", "r", "f"})
 
 
 def _ps(cmd: str, args: list[str]) -> list[str]:  # O(len(args))
+    cmdexe = cmd in ("del", "erase", "rd", "copy", "move", "ren")  # cmd.exe style /q /s switches  # O(1)
+    cmd = _PS_ALIAS.get(cmd, cmd)  # O(1)
     named: dict[str, list[str]] = {}  # O(1)
     pos: list[str] = []  # O(1)
     i = 0  # O(1)
@@ -627,6 +961,8 @@ def _ps(cmd: str, args: list[str]) -> list[str]:  # O(len(args))
             low = name.lower()  # O(1)
             cands = [p for p in _PS_PATHS if p.startswith(low)] if len(low) >= 2 else []  # O(1)
             key = low if low in _PS_PATHS else (cands[0] if len(cands) == 1 else low)  # O(1)
+            if low == "destinationpath" or (len(low) >= 2 and "destination".startswith(low)):  # O(1)
+                key = "destination"  # O(1)
             if sep:  # -Path:a  # O(1)
                 named.setdefault(key, []).append(val)  # O(1)
             elif low in _PS_SWITCH:  # O(1)
@@ -634,24 +970,36 @@ def _ps(cmd: str, args: list[str]) -> list[str]:  # O(len(args))
             elif i + 1 < len(args):  # O(1)
                 named.setdefault(key, []).append(args[i + 1])  # O(1)
                 i += 1  # O(1)
-        else:  # O(1)
+        elif not (cmdexe and re.fullmatch(r"/[A-Za-z?](?::\S*)?", a)):  # O(1)
             pos.append(a)  # O(1)
         i += 1  # O(1)
 
     def split(vals: list[str]) -> list[str]:  # an array argument  # O(sum of len(vals))
         return [("?" if "$" in p else p) for v in vals for p in v.split(",") if p]  # O(sum of len(vals))
 
+    if cmd == "expand-archive":  # the folder the archive is extracted into (default: the current one)  # O(1)
+        return _uniq([_dirp(d) for d in split(named.get("destination", [])) or ["."]])  # O(1)
+    if cmd == "invoke-webrequest":  # only -OutFile writes  # O(1)
+        return _uniq(split(named.get("outfile", [])))  # O(1)
     xfer = cmd in ("copy-item", "move-item")  # O(1)
     srcs = named.get("path", []) + named.get("literalpath", []) + named.get("pspath", [])  # O(1)
     if cmd == "out-file":  # O(1)
         srcs = named.get("filepath", []) + srcs  # O(1)
-    if not srcs and pos:  # O(1)
+    if cmd in ("tee-object", "export-csv", "export-clixml"):  # O(1)
+        srcs = named.get("filepath", []) + srcs  # O(1)
+    if cmd == "remove-item":  # every positional word is a path (cmd.exe's del a b too)  # O(1)
+        srcs = srcs + pos  # O(1)
+    elif not srcs and pos:  # O(1)
         srcs = [pos[0]]  # O(1)
     if xfer:  # O(1)
         dest = named.get("destination", []) or (pos[1:2] if len(pos) >= 2 and not named.get("path") else
                                                   pos[0:1] if named.get("path") and pos else [])  # O(1)
         return _uniq(split(dest) or ["."])  # O(1)
     paths = split(srcs)  # O(len(srcs))
+    if cmd == "rename-item":  # the new name lands in the same folder  # O(1)
+        nn = split(named.get("newname", []) or pos[1:2])  # O(1)
+        paths = paths + [_join(os.path.dirname(p.replace("\\", "/")), n) if n != "?" and p != "?" else "?"
+                         for p in paths for n in nn]  # O(len(paths) * len(nn))
     if cmd == "new-item" and named.get("name"):  # -Path dir -Name f  # O(1)
         nm = split(named["name"])  # O(1)
         paths = [_join(p, n) for p in (paths or ["."]) for n in nm]  # O(len(paths) * len(nm))
@@ -662,13 +1010,17 @@ def _ps(cmd: str, args: list[str]) -> list[str]:  # O(len(args))
 
 
 def targets(words: list[str]) -> list[str]:  # O(len(words) * |options|)
+    return _targets(words)  # O(len(words) * |options|)
+
+
+def _targets(words: list[str]) -> list[str]:  # O(len(words) * |options|)
     if not words:  # O(1)
         return []  # O(1)
     cmd = _cmd(words[0])  # O(len(words[0]))
     args = words[1:]  # O(len(words))
     if cmd == "git":  # O(1)
         return _git(words)  # O(len(words))
-    if cmd == "tar":  # O(1)
+    if cmd in _TARS:  # O(1)
         return _tar(args)  # O(len(args))
     if cmd == "unzip":  # O(1)
         return _unzip(args)  # O(len(args))
