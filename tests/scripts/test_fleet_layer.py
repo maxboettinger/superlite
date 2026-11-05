@@ -9,7 +9,8 @@ import fleet_layer as fl  # noqa: E402
 import herdr_client as hc  # noqa: E402
 
 class Pane:
-    def __init__(self): self.calls = []
+    def __init__(self): self.calls = []; self.closed = []
+    def close_pane(self, pane_id): self.closed.append(pane_id)
     def run_in_pane(self, pane_id, command): self.calls.append((pane_id, command)); return ""
 
 @pytest.fixture
