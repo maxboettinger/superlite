@@ -56,7 +56,7 @@ if [ -n "$sid" ] && [[ $input =~ $re_new ]] && . "${0%/*}/superlite-state.sh" 2>
 fi  # O(1)
 
 # Fleet worker: a short worker note instead of the start menu. printf only (no heredoc).
-if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then  # O(1)
+if [ -n "${SUPERLITE_FLEET_WORKER:-}" ] && [ "${SUPERLITE_FLEET_ROLE:-}" != lead ]; then  # O(1)
   case "${SUPERLITE_FLEET_ROLE:-implementer}" in  # a known brief role gets the brief note; any other value keeps the implementer note | O(1)
     fixer|package-reviewer|final-reviewer|research)  # O(1)
       wnote="You are superlite fleet worker ${SUPERLITE_FLEET_WORKER} (${SUPERLITE_FLEET_ROLE}, ${SUPERLITE_FLEET_AGENT:-superlite:implementer}). The coordinator sends one brief file: do what it says, then end with the status line and the JSON block it asks for. Do not start a superlite run."  # O(1)
@@ -111,7 +111,13 @@ content="${content}"$'
 '"superlite ${version} at ${root}: run its tools as ${root}/skills/subagent-driven-development/scripts/sl <tool>; never search for another copy."  # O(s)
 
 escaped=$(escape_for_json "$content")  # O(s) + subshell
-session_context="You have superlite. Its 'superlite:using-superlite' skill follows; load other skills with the Skill tool.\n\n${escaped}"  # O(s)
+lead_note=""  # O(1)
+if [ "${SUPERLITE_FLEET_ROLE:-}" = lead ]; then  # a batch lead runs as an AI orchestrator with the full context | O(1)
+  lid="${SUPERLITE_FLEET_WORKER:-}"  # O(1)
+  [[ $lid =~ ^W[0-9]{1,4}$ ]] || lid="W?"  # O(1)
+  lead_note="You are superlite batch lead ${lid}. Your brief arrives as your first message; follow it as an AI orchestrator. AskUserQuestion is off: write a new major decision to .superlite/question.json and end your turn with Status: NEEDS_DECISION. Never end your turn while your fleet workers run.\n\n"  # O(1)
+fi  # O(1)
+session_context="${lead_note}You have superlite. Its 'superlite:using-superlite' skill follows; load other skills with the Skill tool.\n\n${escaped}"  # O(s)
 
 # Emit only the field the current platform consumes:
 # - Cursor sets CURSOR_PLUGIN_ROOT (and may also set CLAUDE_PLUGIN_ROOT) and expects additional_context (snake_case).

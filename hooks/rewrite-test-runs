@@ -18,6 +18,8 @@
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
 shopt -u patsub_replacement 2>/dev/null   # bash 5.2+: `&` in a ${x//a/&} replacement must stay literal
 
+fleet_worker=""
+[ "${SUPERLITE_FLEET_ROLE:-}" = lead ] || fleet_worker="${SUPERLITE_FLEET_WORKER:-}"  # a lead is a coordinator
 re_agent='"agent_id"[[:space:]]*:[[:space:]]*"'
 has_agent=0
 [[ $input =~ $re_agent ]] && has_agent=1
@@ -201,12 +203,12 @@ deny_isolate() {
 
 # Subagents and fleet workers (top-level sessions with SUPERLITE_FLEET_WORKER): on an isolate stack deny the project's
 # test command; deny a bare full-suite runner; leave everything else untouched.
-if [ "$has_agent" = 1 ] || [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then
+if [ "$has_agent" = 1 ] || [ -n "$fleet_worker" ]; then
   iso=0
   load_project_runner
   if [ "${#pp[@]}" -gt 0 ] && isolate_stack; then
     iso=1
-    if [ "$has_agent" = 1 ]; then jstr agent_id; else REPLY="$SUPERLITE_FLEET_WORKER"; fi
+    if [ "$has_agent" = 1 ]; then jstr agent_id; else REPLY="$fleet_worker"; fi
     current_task "$REPLY"; iso_task="$REPLY"
   fi
   _dq='"'; _sq="'"
