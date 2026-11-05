@@ -97,6 +97,16 @@ def plan_key(plan):
     return str(Path(plan).resolve()) if plan else plan
 
 
+def stage(files, env):
+    """Stage the working-tree state of `files` into the temporary index `env` names; return its tree."""
+    indexed = set(git("ls-files", "-z", "--", *files, env=env).stdout.split("\0")) if files else set()  # O(f + i)
+    staged = [f for f in files if os.path.lexists(f) or f in indexed
+              or any(i.startswith(f.rstrip("/") + "/") for i in indexed)]  # a removed directory stays staged; O(f * i)
+    if staged:  # O(1)
+        git("add", "-A", "--", *staged, env=env)  # O(f)
+    return git("write-tree", env=env).stdout.strip()  # O(1)
+
+
 def checkpoint(tid, title, files, plan):
     """Shadow-commit `files` on top of the previous checkpoint (HEAD for the first); return the sha.
 
@@ -116,12 +126,7 @@ def checkpoint(tid, title, files, plan):
     env = {"GIT_INDEX_FILE": idx}
     try:
         git("read-tree", parent, env=env) if parent else git("read-tree", "--empty", env=env)
-        indexed = set(git("ls-files", "-z", "--", *files, env=env).stdout.split("\0")) if files else set()
-        staged = [f for f in files if os.path.lexists(f) or f in indexed
-                  or any(i.startswith(f.rstrip("/") + "/") for i in indexed)]  # a removed directory stays staged
-        if staged:
-            git("add", "-A", "--", *staged, env=env)
-        tree = git("write-tree", env=env).stdout.strip()
+        tree = stage(files, env)
     finally:
         Path(idx).unlink(missing_ok=True)
     msg = message(tid, title, plan)
@@ -162,6 +167,22 @@ def dirty_outside(files, plan=None):
                     and not (stem and p.startswith(stem + ".")):
                 bad.append(p)
     return bad
+
+
+def edited_since(tree, files):
+    """Sorted `files` whose working-tree state differs from `tree`: staging them again would change it."""
+    idx = str(Path(TEMP_INDEX).resolve())  # O(1)
+    Path(idx).parent.mkdir(parents=True, exist_ok=True)  # O(1)
+    Path(idx).unlink(missing_ok=True)  # O(1)
+    env = {"GIT_INDEX_FILE": idx}
+    try:
+        git("read-tree", tree, env=env)  # O(t)
+        now = stage(files, env)  # O(f * i)
+    finally:
+        Path(idx).unlink(missing_ok=True)  # O(1)
+    if now == tree:  # O(1)
+        return []
+    return sorted(p for p in git("diff", "--name-only", "-z", tree, now).stdout.split("\0") if p)  # O(d)
 
 
 def moved_overlap(base, head, files):
@@ -237,11 +258,7 @@ def apply(squash=True):
     if git("symbolic-ref", "-q", "HEAD", check=False).stdout.strip() != st.get("branch", ""):
         sys.exit("apply: refused, the checked-out branch changed since the run started")
     files = {f for e in st["entries"] for f in e["files"]}
-    bad = dirty_outside(files, st.get("plan"))
-    if bad:
-        sys.exit("apply: refused, the tree has changes unrelated to the run: "
-                 + ", ".join(bad[:8]) + (" ..." if len(bad) > 8 else "")
-                 + "; commit or stash them first")
+    left = dirty_outside(files, st.get("plan"))  # unrelated changes stay in the tree, uncommitted
     moved = head_sha() != st["head"]
     hit = moved_overlap(st["head"], head_sha(), files)
     if hit:
@@ -267,16 +284,24 @@ def apply(squash=True):
             d = git("diff", "--name-only", final, ref_final).stdout.split()
             note = f"squash skipped: tasks interleave on {d[0] if d else '?'}"
     parent = start
-    for e, tree in build_chain(start, plan, moved or plan is not st["entries"])[0]:
+    chain, final = build_chain(start, plan, moved or plan is not st["entries"])
+    edited = edited_since(final, sorted(files))
+    if edited:
+        sys.exit("apply: refused, files edited after their checkpoint: "
+                 + ", ".join(edited[:8]) + (" ..." if len(edited) > 8 else "")
+                 + "; checkpoint them again with `sl commit_task`, or commit the files yourself with `git add -A && git commit`")
+    for e, tree in chain:
         parent = git("commit-tree", tree, "-m", e["title"],
                      *(["-p", parent] if parent else [])).stdout.strip()
     git("update-ref", "-m", "superlite: apply checkpoints", "HEAD", parent, *([start] if start else []))
-    git("reset", "-q")  # index to the new HEAD; the working tree keeps the agents' files
+    git("reset", "-q", "--", *sorted(files), env={"GIT_LITERAL_PATHSPECS": "1"})  # the run's files to the new HEAD; unrelated staged changes stay staged, the tree is untouched
     if note:
         print(note)
     print(f"applied {len(plan)} commit(s) on {st.get('branch') or 'HEAD'}:")
     for e in plan:
         print(f"- {e['title']}")
+    if left:
+        print("apply: left uncommitted: " + ", ".join(left[:8]) + (" ..." if len(left) > 8 else ""))
     clean()
     return 0
 
