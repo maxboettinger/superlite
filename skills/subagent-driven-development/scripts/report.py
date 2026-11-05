@@ -28,6 +28,7 @@ if str(HERE) not in sys.path:  # O(1)
 import metrics  # noqa: E402  | O(1)
 import plan_tools as pt  # noqa: E402  | O(1)
 import predict  # noqa: E402  | O(1)
+from budget import COORDINATOR_TARGET_USD  # noqa: E402  | O(1)
 
 PROJECTION = "projection.json"  # O(1)
 TOP_MISSES = 5  # O(1)
@@ -193,8 +194,10 @@ def render(c) -> str:  # O(n)
     co, sess = cs.get("coordinator"), cs.get("coordinator_session_usd")  # absent in reports written before the run split (#112) | O(1)
     co_txt = (f" ({co['turns']} turns, context median {co['context_median'] / 1000:.1f}k, peak {co['context_peak'] / 1000:.1f}k"
               + (f"; session ${sess:.2f})" if sess is not None else ")")) if co else ""  # O(1)
+    per_task = (f", coordinator per task ${cs['coordinator_usd'] / len(c['tasks']):.2f} (target ${COORDINATOR_TARGET_USD:.2f})"
+                if cs["coordinator_usd"] is not None and c["tasks"] else "")  # #112: omitted without tasks or a coordinator | O(1)
     out.append(f"cost split: agents ${cs['agents_usd']:.2f}, rework ${cs['rework_usd']:.2f}, coordinator "
-               f"{'n/a' if cs['coordinator_usd'] is None else '$%.2f' % cs['coordinator_usd']}{co_txt}, total ${cs['total_usd']:.2f}")  # O(1)
+               f"{'n/a' if cs['coordinator_usd'] is None else '$%.2f' % cs['coordinator_usd']}{co_txt}{per_task}, total ${cs['total_usd']:.2f}")  # O(1)
     cp = c["critical_path"]  # O(1)
     out.append(f"concurrency: peak {c['concurrency']['peak']} at once (projected {_num(c['concurrency']['projected_peak'], 'd')}); "
                f"critical path actual {' '.join(cp['actual']) or 'n/a'}; projected {' > '.join(cp['projected'] or []) or 'n/a'}"
