@@ -64,3 +64,37 @@ def test_removed_owned_directory_is_staged_as_deletion(tmp_path, monkeypatch):
     import autocommit
     sha = autocommit.checkpoint("T1", "rm", ["pkg"], "plan.md")
     assert "pkg/d.py" not in files_in(repo, sha)
+
+
+def test_deleted_owned_file_leaves_checkpoint(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "src/a.py", "A = 1\n")
+    write(repo, "tests/test_a.py", "def test_a():\n    pass\n")
+    commit(repo, "T1")
+    (repo / "tests" / "test_a.py").unlink()
+    s2 = commit(repo, "T1")
+    assert "tests/test_a.py" not in files_in(repo, s2)
+    assert "src/a.py" in files_in(repo, s2)
+
+
+def test_other_tasks_deleted_file_kept(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "src/a.py", "A = 1\n")
+    write(repo, "src/b.py", "B = 1\n")
+    commit(repo, "T1")
+    commit(repo, "T2")
+    (repo / "src" / "b.py").unlink()
+    write(repo, "src/a.py", "A = 2\n")
+    s3 = commit(repo, "T1")
+    assert "src/b.py" in files_in(repo, s3)
+
+
+def test_deletion_only_commit_succeeds(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "src/a.py", "A = 1\n")
+    write(repo, "tests/test_a.py", "def test_a():\n    pass\n")
+    commit(repo, "T1")
+    (repo / "tests" / "test_a.py").unlink()
+    s2 = commit(repo, "T1")
+    assert "tests/test_a.py" not in files_in(repo, s2)
+    assert "src/a.py" in files_in(repo, s2)

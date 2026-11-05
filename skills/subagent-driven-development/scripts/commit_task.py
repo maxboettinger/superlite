@@ -395,6 +395,18 @@ def changed_vs_parent(files):  # O(m) + 2 git spawns, batched
     return [f for f in files if (f in have if f in gone else f not in now or have.get(f) != now[f])]  # O(m) unreadable hash = changed
 
 
+def deleted_owned(owns, live, plan):  # O(e*f + m) + 2 git spawns; checkpoint mode only
+    """Files this plan's checkpoints hold that this task owns and that are gone from disk and from git status."""
+    if autocommit.is_on():  # O(1)
+        return []  # O(1)
+    st = autocommit.load_state()  # O(1) file read
+    if not st or autocommit.plan_key(st.get("plan")) != autocommit.plan_key(plan):  # same plan only | O(len)
+        return []  # O(1)
+    seen = {f for e in st.get("entries", []) for f in e.get("files", [])}  # O(e*f)
+    gone = [f for f in sorted(seen) if f not in live and not os.path.lexists(f) and nt.owns_match(f, owns)]  # O(f) stat
+    return changed_vs_parent(gone) if gone else []  # O(m) + process spawns
+
+
 def resolve_blocked(log, tid, files):  # O(log size) read + one append
     """Files this commit takes in that an earlier run blocked get a resolved entry at the same location."""
     newest = {}  # file -> newest entry | O(1)
@@ -505,6 +517,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     if out_of_scope and not autocommit.is_on():  # a file already in the parent checkpoint (an earlier --also) is no new change | O(1)
         keep = set(changed_vs_parent(out_of_scope))  # O(m) + process spawns
         out_of_scope = [f for f in out_of_scope if f in keep]  # O(m)
+    mine += deleted_owned(owns, live, a.plan)  # an owned file only the checkpoints hold, deleted since | O(e*f) + process spawns
     if cand:  # a shared test already in the parent checkpoint is not this task's change | O(1)
         shared = changed_vs_parent(cand)  # O(m) + process spawns
         mine += shared  # O(m)
