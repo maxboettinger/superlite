@@ -49,7 +49,8 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
     ids = ", ".join(tasks)  # O(k)
     others = [o for t in pl.tasks if t.id not in tasks for o in t.owns]  # O(n*o)
     owns = [o for t in mine for o in t.owns]  # O(k*o)
-    tests = [o for o in owns if testcmd.is_test_path(o)] or owns  # O(o)
+    in_tests = [o for o in owns if any(d in ("tests", "test") for d in o.replace("\\", "/").lower().split("/")[:-1])]  # a `tests/` or `test/` folder | O(o*depth)
+    tests = in_tests or [o for o in owns if testcmd.is_test_path(o)] or owns  # O(o)
     out = [f"# Task{'s' if len(tasks) > 1 else ''} {ids}", "", f"SUPERLITE={superlite_root}", f"PLAN={plan}", f"sl (type it literally in every command): {sl_path}"]  # O(1)
     if tier == "haiku":  # O(1)
         out += ["", "Your task text:", ""] + [taskmod.render(pl, t) for t in tasks]  # O(k*n*q*s)
@@ -81,6 +82,50 @@ def last_assistant_text(transcript):  # O(T)
         if text.strip():  # O(len)
             return text  # O(1)
     return ""  # O(1)
+
+
+def _records(transcript):  # O(T)
+    try:  # O(1)
+        lines = Path(transcript).read_text(encoding="utf-8", errors="replace").splitlines()  # O(T)
+    except OSError:  # O(1)
+        return []  # O(1)
+    out = []  # O(1)
+    for line in lines:  # O(T) iterations
+        try:  # O(1)
+            e = json.loads(line)  # O(len line)
+        except ValueError:  # O(1)
+            continue  # O(1)
+        if isinstance(e, dict):  # O(1)
+            out.append(e)  # O(1)
+    return out  # O(1)
+
+
+def _blocks_text(e):  # the text blocks of a message joined; None for a message with a tool_result | O(len)
+    content = (e.get("message") or {}).get("content")  # O(1)
+    if isinstance(content, str):  # O(1)
+        return content  # O(1)
+    blocks = [b for b in content or [] if isinstance(b, dict)]  # O(len)
+    if any(b.get("type") == "tool_result" for b in blocks):  # O(len)
+        return None  # O(1)
+    return "\n".join(b.get("text", "") for b in blocks if b.get("type") == "text")  # O(len)
+
+
+def _starts_turn(e):  # a user message from the task sender, not a tool result, hook feedback or other meta message | O(len)
+    if e.get("type") != "user" or e.get("isMeta"):  # O(1)
+        return False  # O(1)
+    text = _blocks_text(e)  # O(len)
+    return bool(text and text.strip()) and not text.lstrip().startswith("Stop hook feedback")  # O(len)
+
+
+def _has_status(text):  # O(len)
+    return bool(mx.STATUS.search(text) or mx.LEAD.search(text.lstrip().split("\n", 1)[0]))  # O(len)
+
+
+def report_text(transcript):  # the last assistant text of the latest turn that holds a status line, else the turn's last text | O(T)
+    recs = _records(transcript)  # O(T)
+    start = max((i for i, e in enumerate(recs) if _starts_turn(e)), default=0)  # O(T)
+    texts = [t for e in recs[start:] if e.get("type") == "assistant" for t in [_blocks_text(e)] if t and t.strip()]  # O(T)
+    return next((t for t in reversed(texts) if _has_status(t)), texts[-1] if texts else "")  # O(T)
 
 
 def latest_stop(sd, wid, after_ms):  # O(m)
@@ -187,7 +232,7 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None):  # O(timeout/poll * (w + 
                 changed.setdefault(wid, now)  # O(1)
                 rec = latest_stop(sd, wid, int(w.get("sent") or 0))  # O(m)
                 if rec is not None:  # O(1)
-                    text = last_assistant_text(rec["transcript"]) if rec.get("transcript") else ""  # O(T)
+                    text = report_text(rec["transcript"]) if rec.get("transcript") else ""  # O(T)
                     results.append(_finish(sd, wid, w, text or rec.get("last", ""), "transcript"))  # O(len)
                     pending.remove(wid)  # O(w)
                 elif now - changed[wid] >= SETTLE_MS:  # O(1)
