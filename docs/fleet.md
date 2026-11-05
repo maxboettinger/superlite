@@ -79,6 +79,22 @@ From the 2026-11-05 spike. Run in a scratch project with Herdr running.
 | 10 Guard | With fleet on, make an in-process `Agent` call for a superlite role | The call is blocked |
 | 11 Off from inside | Run `fleet off` from a pane of the fleet's own workspace | `fleet: off` is printed and `fleet.json` says off before the pane closes |
 
+## Batch leads (backlog mode)
+
+`/superlite:backlog` works a whole issue backlog from the main session. Main loop: `sl backlog plan` (a read-only triage worker proposes file-disjoint batches), `decide` (Max's answers and one ship approval), `start` (per batch a worktree and a lead worker, at most `--cap` at once), `wait` (one line per lead that ends), `answer` (resumes a lead that escalated). State lives in `<main root>/.superlite/backlog.json`; each shipped batch leaves a short summary in `.superlite/backlog/<B>.md`.
+
+A lead is a fleet worker of main's run with role `lead`, started in its batch worktree with its own `.superlite` and its own fleet. Env: `SUPERLITE_FLEET_ROLE=lead`, `SUPERLITE_FLEET_AGENT=lead`, `SUPERLITE_FLEET_WORKER=Wn`, `SUPERLITE_STATE_DIR=<worktree>/.superlite`, `SUPERLITE_FLEET_PARENT_DIR=<main .superlite>`. It runs with `--permission-mode auto` and may only run `Bash(maxapp ship *)` and `sl backlog ship *`; `AskUserQuestion` is disallowed. Hooks treat it as a coordinator, and fleet panes answer permission dialogs with no.
+
+Ship lock: leads ship one at a time. `sl backlog ship B lock` takes the machine-wide ship lock `~/.superlite/locks/ship-<repo>.lock` (`{batch, lead, agent, repo, time}`); `merge` or `release` frees it. A lock is stale when its lead's agent is no longer live; the next `lock` takes it over. After `merge` the lead's PR is merged and `sl backlog ship` fast-forwards the main checkout, so the next lead builds on it.
+
+Escalation: a lead that needs a major decision lets its workers finish, writes `.superlite/question.json` (`{"questions": [...]}`, the AskUserQuestion shape) and ends with `Status: NEEDS_DECISION`. `backlog wait` prints the batch, main asks Max and runs `backlog answer B --file F`, which writes `answer-<n>.json` and resumes the lead.
+
+| Step | Do | Expect |
+|---|---|---|
+| Lead ships a batch | `backlog plan`, `decide`, `start B1`, `wait` | a lead builds in its worktree; `wait` prints the batch as shipped after `lock`, `bump`, `merge` |
+| Escalation | A lead writes `question.json` and ends `NEEDS_DECISION` | `wait` names the batch as needs_decision; `answer B1 --file F` resumes it |
+| Two leads ship in turn | Start two batches; both reach `ship lock` | the second `lock` waits until the first `merge` or `release` |
+
 ## Troubleshooting
 
 - Trust dialog (`Yes, I trust this folder`): accepted automatically at spawn.

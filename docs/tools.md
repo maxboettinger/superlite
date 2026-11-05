@@ -42,6 +42,14 @@ Mechanical steps are scripts, not agents. Every tool runs as `<skill-dir>/script
 | `fleet_state` | The run's `.superlite/fleet.json`: on/off, worker ids and states (library, no CLI) |
 | `accounts` | Account choice for fleet workers from `claude-profile usage --json` and `list --json` (library) |
 | `herdr_client` | One subprocess wrapper over the `herdr` CLI, JSON in and out (library) |
+| `backlog` | Backlog mode CLI: `status`, `plan [--tier sonnet] [--timeout-min 60] [--reset]`, `decide --print [--batch B] \| --file F`; `start`, `wait`, `answer` and `ship` go to `backlog_run` and `backlog_ship` (see `docs/fleet.md`) |
+| `backlog_run` | `backlog start [B] [--cap 2] [--model opus]`, `wait [--timeout 21600] [--poll 10]`, `answer B --file F`: per batch a worktree and a lead worker |
+| `backlog_ship` | `backlog ship B lock [--wait 500] \| bump [--version X] \| merge [--title T] [--body-file F] \| release [--park R]` under the machine-wide ship lock |
+| `backlog_state` | `<main root>/.superlite/backlog.json`: load, locked update, startable batches, open questions, answers, status lines (library) |
+| `backlog_checks` | Checks a triage proposal and a lead's question, separates batches that share a file (library) |
+| `backlog_brief` | The lead brief, the triage brief and the shipped-batch summary (library) |
+| `ship_lock` | The ship lock `~/.superlite/locks/ship-<repo>.lock`: acquire, release, holder (library) |
+| `fleet_lead` | Argv, env and spawn of a lead worker (library) |
 | `state` | `where`: which `.superlite` this session uses (`SUPERLITE_STATE_DIR`, the session's binding, else `./.superlite`; a plan resolves at its git toplevel) |
 
 `_pyrun.py` is a shared helper, not a tool. Probes live in `probes/` with the probe pack in `probes/pack/`.
