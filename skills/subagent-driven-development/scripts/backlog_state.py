@@ -173,7 +173,7 @@ def status_lines(data: dict) -> list:
             nxt = (b.get("reason") or "-")[:40]
         else:
             nxt = b.get("version") or "-"
-        issues = ", ".join(f"#{i}" for i in b.get("issues", []))
+        issues = " ".join(f"#{i}" for i in b.get("issues", []))
         lines.append(f"{b['id']} | {issues} | {s} | {b.get('lead') or '-'} | {'#%s' % b['pr'] if b.get('pr') else '-'} | {nxt}")
     n = len(open_questions(data))
     if n:
