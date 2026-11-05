@@ -364,6 +364,19 @@ def test_keyword_lines_only(repo):
     assert tl.layer_hash("tui", repo) != before
 
 
+def test_keyword_hash_edge_cases(repo):
+    (repo / "notes").mkdir()
+    page = repo / "notes" / "y.bin"
+    page.write_bytes(b"\xff\xfe\x00 agent_summary")
+    before = tl.layer_hash("tui", repo)
+    assert "notes/y.bin" in tl.layer_digests("tui", repo)
+    page.write_bytes(b"\xff\xfe\x00 agent_summary!")
+    assert tl.layer_hash("tui", repo) != before
+    page.write_bytes(b"\xff\xfe\x00 nothing")
+    assert "notes/y.bin" not in tl.layer_digests("tui", repo)
+    assert tl.layer_hash("tui", repo) != before
+
+
 def test_keyword_scan_skips_tests_scripts(repo):
     (repo / "tests" / "scripts").mkdir(parents=True)
     (repo / "tests" / "scripts" / "conftest.py").write_text('os.environ["CLAUDE_CODE_FORK_SUBAGENT"]\n')
