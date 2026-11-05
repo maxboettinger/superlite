@@ -61,3 +61,21 @@ def test_record_negative_passed_exits_2(tmp_path):
     r = rt(tmp_path, "--record", "--passed", "-1", "--command", "x.sh")
     assert r.returncode == 2 and "--passed" in r.stderr
     assert not (tmp_path / ".superlite" / "test-summary.json").exists()
+
+
+def test_record_with_failures_and_seconds(tmp_path):
+    r = rt(tmp_path, "--record", "--passed", "10", "--failed", "2", "--skipped", "1", "--seconds", "4.5", "--command", "x.sh")
+    assert r.returncode == 0, r.stdout + r.stderr
+    s = summary(tmp_path)
+    assert (s["passed"], s["failed"], s["skipped"], s["seconds"]) == (10, 2, 1, 4.5)
+    assert "- tests full passed=10 failed=2 skipped=1 seconds=4.5 recorded" in (tmp_path / ".superlite" / "progress.md").read_text(encoding="utf-8")
+    sl = tmp_path / ".superlite"
+    cp = subprocess.run([sys.executable, str(SCRIPTS / "finish.py"), "--ledger", str(sl / "progress.md"), "--log", str(sl / "incidents.jsonl")],
+                        cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert "2 failed" in cp.stdout, cp.stdout + cp.stderr
+
+
+def test_record_negative_failed_exits_2(tmp_path):
+    for flag in ("--failed", "--skipped", "--seconds"):
+        r = rt(tmp_path, "--record", "--passed", "3", flag, "-1", "--command", "x.sh")
+        assert r.returncode == 2 and flag in r.stderr, flag

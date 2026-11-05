@@ -3,7 +3,7 @@
 
     run_tests.py [--fast PATHS... | --full] [--log PATH] [--ledger PATH]
                  [--summary PATH] [--background]
-    run_tests.py --record --passed N --command CMD   (a full result run outside run_tests; report only, closes no incidents)
+    run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] --command CMD   (a full result run outside run_tests; report only, closes no incidents)
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
 Prints `passed failed skipped seconds` (errors count as failed). Each failing
@@ -316,6 +316,9 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--plan", default=None, help=f"plan for --task Owns (default: the plan in .superlite/stable.json, else {nt.DEFAULT_PLAN})")  # O(1)
     ap.add_argument("--record", action="store_true", help="record a result run outside run_tests (needs --passed and --command), no test run")  # O(1)
     ap.add_argument("--passed", type=int, default=None, help="--record: tests that passed")  # O(1)
+    ap.add_argument("--failed", type=int, default=0, help="--record: tests that failed (default 0)")  # O(1)
+    ap.add_argument("--skipped", type=int, default=0, help="--record: tests that were skipped (default 0)")  # O(1)
+    ap.add_argument("--seconds", type=float, default=0.0, help="--record: run time in seconds (default 0)")  # O(1)
     ap.add_argument("--command", default=None, help="--record: the command that ran them")  # O(1)
     ap.add_argument("--run-id", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
@@ -350,16 +353,17 @@ def record_run(a):  # a full result the agent ran outside run_tests: reports onl
         if val is None or val == "":  # O(1)
             print(f"run_tests: --record needs {flag}", file=sys.stderr)  # O(1)
             return 2  # O(1)
-    if a.passed < 0:  # O(1)
-        print("run_tests: --passed must be >= 0", file=sys.stderr)  # O(1)
-        return 2  # O(1)
-    write_summary(a.summary, "full", {"passed": a.passed, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, started=a.started)  # O(1)
+    for flag, val in (("--passed", a.passed), ("--failed", a.failed), ("--skipped", a.skipped), ("--seconds", a.seconds)):  # O(1)
+        if val < 0:  # O(1)
+            print(f"run_tests: {flag} must be >= 0", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+    write_summary(a.summary, "full", {"passed": a.passed, "failed": a.failed, "skipped": a.skipped, "skipped_tests": []}, [], a.seconds, started=a.started)  # O(1)
     data = json.loads(Path(a.summary).read_text(encoding="utf-8"))  # O(1)
     data["recorded"] = a.command[:200]  # O(1)
     atomic_write(a.summary, json.dumps(data, ensure_ascii=False, indent=1) + "\n")  # O(1)
     pointer_path(a.summary).unlink(missing_ok=True)  # an older background run must not shadow the recorded result | O(1)
-    ct.append_ledger(a.ledger, f"- tests full passed={a.passed} failed=0 skipped=0 seconds=0 recorded")  # O(1)
-    print(f"{a.passed} 0 0 0.0")  # O(1)
+    ct.append_ledger(a.ledger, f"- tests full passed={a.passed} failed={a.failed} skipped={a.skipped} seconds={round(a.seconds, 1):g} recorded")  # O(1)
+    print(f"{a.passed} {a.failed} {a.skipped} {a.seconds:.1f}")  # O(1)
     return 0  # O(1)
 
 
