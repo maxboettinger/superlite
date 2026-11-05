@@ -22,6 +22,7 @@ FIXER_AGENTS = {"1": "superlite:fixer-sonnet", "sonnet": "superlite:fixer-sonnet
                 "3": "superlite:fixer-opus", "opus": "superlite:fixer-opus"}
 REVIEWERS = {"package-reviewer": "superlite:package-reviewer", "final-reviewer": "superlite:final-reviewer"}  # O(1)
 TAIL = ["--disallowedTools", "AskUserQuestion"]  # O(1) a worker never asks the user
+RESEARCH_TAIL = TAIL + ["Edit", "Write", "NotebookEdit", "Bash"]  # O(1) research is read-only by its tools, not by prose
 
 
 def frontmatter(agent: str, agents_dir: Path) -> dict:  # O(f)
@@ -62,7 +63,7 @@ def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS) ->
         agent = REVIEWERS[role]  # O(1)
     fm = frontmatter(agent, agents_dir)  # O(f)
     effort = fm.get("effort") or None  # O(1)
-    argv = ["--agent", agent] + (["--model", pin] if pin else []) + (["--effort", effort] if effort else []) + TAIL  # O(1)
+    argv = ["--agent", agent] + (["--model", pin] if pin else []) + (["--effort", effort] if effort else []) + (RESEARCH_TAIL if role == "research" else TAIL)  # O(1)
     one_turn = role != "implementer"  # O(1)
     return {"role": role, "agent": agent, "model": pin or fm.get("model") or None, "effort": effort, "argv": argv,  # O(1)
             "prime": role == "implementer", "pool": role == "implementer", "one_turn": one_turn}
