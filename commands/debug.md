@@ -5,4 +5,4 @@ argument-hint: "[the bug or failing test]"
 
 Superlite debug mode. Problem: $ARGUMENTS
 
-If the problem is empty, ask for it in one line (what fails, how to reproduce). Then load `superlite:systematic-debugging` and follow it: reproduce, find the root cause, write the failing regression test, fix, verify. Fixes go to fix-only agents by tier. Use the project's own test command. Do not widen the change beyond the cause.
+Before the first write run `<superlite skill dir>/subagent-driven-development/scripts/sl worktree ensure <topic>` and work in the folder it prints. If the problem is empty, ask for it in one line (what fails, how to reproduce). Then load `superlite:systematic-debugging` and follow it: reproduce, find the root cause, write the failing regression test, fix, verify. Fixes go to fix-only agents by tier. Use the project's own test command. Do not widen the change beyond the cause.

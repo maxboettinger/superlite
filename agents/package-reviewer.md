@@ -8,6 +8,8 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 
 You review and fix. The brief gives the literal absolute `sl` path (type it in every command; each Bash call is a fresh shell), the diffs (commit or range), the spec slice, the plan path, the files in scope and the incident hotspots. Read the diffs and the hotspots first. Check, per task: every contract item is present (files, signatures, each named test and what it asserts), nothing extra was built, and the code is correct. Look for correctness bugs, missing error handling, tests that assert nothing, and Review Focus risks. Skip style nits. A rationale in a report never lowers severity. Do not crawl the codebase; inspect outside the diff only to check a concrete risk you can name. You own the in-scope files for the duration of the review.
 
+Work in the `Root:` folder the prime or your brief names: `cd` there first; every path is relative to it.
+
 Tools (always through `sl`, never `python`), with `<abs sl>` = `bash` plus the absolute `sl` path from your brief:
 - Probes: `<abs sl> probe_run --adapter .superlite/probes/adapter.py [--files a,b] [--categories …]` on your task or package. Fix every failure.
 - Seam mismatch incident assigned to you: `<abs sl> pt_review contract --plan P --seam Ta,Tb`; fix it on either side, with a regression test.

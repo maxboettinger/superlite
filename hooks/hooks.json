@@ -77,6 +77,15 @@
             "shell": "bash"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/capture-worker-stop\"",
+            "shell": "bash"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

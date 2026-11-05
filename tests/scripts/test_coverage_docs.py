@@ -12,7 +12,7 @@ REVIEW = (ROOT / "skills/writing-plans/review-plan.md").read_text()
 def test_brainstorming_points_at_the_pass():
     for phrase in ("coverage.md", "**Coverage:** off", "## Coverage", "spike"):
         assert phrase in BRAINSTORM, phrase
-    assert len(BRAINSTORM) <= 9000
+    assert len(BRAINSTORM) <= 9500  # 9,000 before #151 added the worktree step
 
 
 def test_writing_plans_names_coverage():

@@ -69,7 +69,7 @@ Brainstorming step 2 names the pass and points at `coverage.md`; the batch rule 
 - Ruling: packet section 0c in plan mode only (because the inline packet's section 0 already shows the spec).
 - Ruling: bounded and trivial work skip the pass (because the issue scopes it to architectural size).
 - Ruling: `**Detail:** contracts` (because the core is string parsing with its messages fixed below).
-- Ruling: brainstorming SKILL.md cap 9,000 chars, tested (because it had no cap and the issue asks growth to stay inside one).
+- Ruling: brainstorming SKILL.md cap 9,000 chars (9,500 after merging #151), tested (because it had no cap and the issue asks growth to stay inside one).
 - Ruling: shipped in a release by `scripts/bump-version.sh` later, not in this change.
 
 ## Global constraints

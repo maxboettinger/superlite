@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Fake claude-profile: usage --json / list --json print env-provided JSON."""
+import os
+import sys
+
+a = sys.argv[1:]
+if a == ["usage", "--json"]:
+    print(os.environ.get("FAKE_PROFILE_USAGE", "{}"))
+elif a == ["list", "--json"]:
+    print(os.environ.get("FAKE_PROFILE_LIST", '{"accounts": []}'))
+else:
+    sys.exit(2)

@@ -40,6 +40,10 @@ import routing  # noqa: E402 | O(1)
 import next_tasks as nt  # noqa: E402 | O(1)
 import pool as poolmod  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
+try:  # fleet mode is off when the module is absent | O(1)
+    import fleet_state  # noqa: E402 | O(1)
+except ImportError:  # O(1)
+    fleet_state = None  # O(1)
 
 
 def load_pool(path):  # O(pool bytes)
@@ -135,6 +139,16 @@ def is_idle(ag):  # O(1)
     return not (ag.get("busy") or ag.get("status") == "busy" or ag.get("current"))  # O(1)
 
 
+def resolve_poll(decision, pool):  # O(a)
+    """Fleet mode: 'poll A,B' becomes 'agent=<lowest context_k>' (ties: first listed); other decisions pass through."""
+    if not decision.startswith("poll "):  # O(1)
+        return decision  # O(1)
+    ids = decision[5:].split(",")  # O(a)
+    ctx = {ag["id"]: float(ag.get("context_k", 0)) for ag in pool.get("agents", [])}  # O(a)
+    best = min(range(len(ids)), key=lambda i: (ctx.get(ids[i], 0), i))  # O(a)
+    return "agent=" + ids[best]  # O(1)
+
+
 def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lane_virtual=0, sl_dir=None, batch=None):  # O(L + n + e + packing + R*a*(F + o))
     """[(tasks, decision)] and {agent id: evict reason}; tasks is "Tn" or a batch "Tn,Tm"; `batch=1` forces one
     task per agent, else split.choose packs them. Decision is 'agent=ID tier=T', 'poll IDS tier=T' or
@@ -192,6 +206,7 @@ def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lan
 
     order = {t: i for i, t in enumerate(ready)}  # O(R)
     taken = set()  # agents on an earlier resolved line (agent= or poll) | O(1)
+    fleet = bool(fleet_state and sl_dir is not None and fleet_state.is_on(Path(sl_dir)))  # fleet mode never polls | O(1)
     decided = {}  # O(1)
     in_lane = [t for t in ready if lane_tier and tier(t) == lane_tier]  # O(R)
     ctx = {ag["id"]: float(ag.get("context_k", 0)) for ag in agents}  # lowest context first | O(a)
@@ -202,8 +217,12 @@ def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lan
         if decision.startswith("agent="):  # O(1)
             taken.add(decision.split("=", 1)[1])  # O(1)
         elif decision == "poll":  # polled agents are reserved too: a poll winner has one task | O(1)
-            taken.update(scores)  # O(a)
             decision = "poll " + ",".join(scores)  # O(a)
+            if fleet:  # the lowest-context polled agent wins, the others stay free | O(a)
+                decision = resolve_poll(decision, pool)  # O(a)
+                taken.add(decision.split("=", 1)[1])  # O(1)
+            else:  # O(1)
+                taken.update(scores)  # O(a)
         decided[t] = decision  # O(1)
     for t in in_lane:  # the lane: reuse an idle eligible member, no poll; fresh only when none is left | O(R*a)
         free = sorted((k for k in eligible[t] if k not in taken), key=lambda k: (ctx.get(k, 0), ntasks.get(k, 0), k))  # O(a log a)

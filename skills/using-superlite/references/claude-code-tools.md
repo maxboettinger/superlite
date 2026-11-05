@@ -24,3 +24,5 @@ The coordinator reads every dispatch result and report, and usually runs on the 
 When the user asks for it, or says the session model is too expensive for coordination, dispatch ONE orchestrator subagent on a mid-tier model with the plan path and the instruction to use `superlite:subagent-driven-development` end to end. It dispatches its own implementers, reviewers and fixers; the progress file lives on disk, so nothing is lost. Its final message must carry the `Ruling:` lines verbatim, and you relay them, not summarize them.
 
 Do this only for a whole plan. Nesting a single task's dispatch buys nothing and adds a seat.
+
+Optional harness help, not a superlite tool: after `sl worktree ensure`, `EnterWorktree` with `path` set to the printed folder moves the session there (it accepts a repository nested in the launch folder); the `lint --stable` warning names the folder.
