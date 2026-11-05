@@ -36,7 +36,7 @@ IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
 
 re_agent='"agent_id"[[:space:]]*:[[:space:]]*"'
 [[ $input =~ $re_agent ]] && exit 0   # subagent call
-[ -n "${SUPERLITE_FLEET_WORKER:-}" ] && exit 0   # fleet worker session
+[ -n "${SUPERLITE_FLEET_WORKER:-}" ] && [ "${SUPERLITE_FLEET_ROLE:-}" != lead ] && exit 0   # fleet worker session; a lead is guarded like a coordinator
 re_tool='"tool_name"[[:space:]]*:[[:space:]]*"([A-Za-z]+)"'
 [[ $input =~ $re_tool ]] || exit 0
 tool="${BASH_REMATCH[1]}"
@@ -149,11 +149,11 @@ cache_hit() {
 # in the project); sets prot=1 when REL is a protected file.
 rel_ok() {
   lower "$1"
-  case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 1 ;; esac
+  case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json|.superlite/backlog.json) prot=1; return 1 ;; esac
   allowed_rel "$1" && return 0
   if wt_rel "$1"; then
     lower "$WREL"
-    case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 1 ;; esac
+    case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json|.superlite/backlog.json) prot=1; return 1 ;; esac
     allowed_rel "$WREL" && return 0
   fi
   return 1
@@ -188,6 +188,59 @@ link_deny() {
   return 1
 }
 
+# prot_abs PATH: succeeds when absolute PATH names a protected file (orchestrator.json, human-replies.jsonl, backlog.json)
+# in this session's state folder or in $SUPERLITE_FLEET_PARENT_DIR, wherever the folders lie (#190): compared as written
+# (normalized, lower case), then, only when that does not match, both sides resolved with `cd -P` in a subshell.
+prot_abs() {
+  local p="$1" b d dl t tl rd rt
+  case "$p" in /*) ;; *) return 1 ;; esac
+  case "$p/" in */../*|*/./*) dotres "$p"; p="$RES" ;; esac
+  b="${p##*/}"; d="${p%/*}"; lower "$b"
+  case "$LOWER" in orchestrator.json|human-replies.jsonl|backlog.json) ;; *) return 1 ;; esac
+  norm "$d"; lower "$NORM"; dl="$LOWER"
+  for t in "$sd" "${SUPERLITE_FLEET_PARENT_DIR:-}"; do
+    [ -n "$t" ] || continue
+    norm "$t"; lower "$NORM"; [ "$LOWER" = "$dl" ] && return 0
+  done
+  rd="$(cd -P "$d" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$rd" ] || return 1
+  lower "$rd"; rd="$LOWER"
+  for t in "$sd" "${SUPERLITE_FLEET_PARENT_DIR:-}"; do
+    [ -n "$t" ] || continue
+    rt="$(cd -P "$t" 2>/dev/null && pwd -P)" || continue
+    lower "$rt"; [ "$LOWER" = "$rd" ] && return 0
+  done
+  return 1
+}
+
+# link_prot REL: for a project-relative REL with a symlinked component, succeeds when the write lands on a protected
+# file: the resolved target is a protected name project-relative (also below a linked worktree), or prot_abs says so.
+link_prot() {
+  local r="$1" pre="" found=0 real rp rpl rel2
+  while :; do
+    pre="${pre:+$pre/}${r%%/*}"
+    [ -L "$projn/$pre" ] && { found=1; break; }
+    [[ $r == */* ]] || break
+    r="${r#*/}"
+  done
+  [ "$found" = 1 ] || return 1
+  real="$(readlink -f "$projn/$1" 2>/dev/null || realpath "$projn/$1" 2>/dev/null)"
+  [ -n "$real" ] || return 1
+  real="${real//\\//}"
+  prot_abs "$real" && return 0
+  rp="$(cd -P "$projn" 2>/dev/null && pwd -P)"
+  [ -n "$rp" ] || return 1
+  lower "$rp"; rpl="$LOWER"; lower "$real"
+  case "$LOWER" in "$rpl"/*) rel2="${real:$((${#rp}+1))}" ;; *) return 1 ;; esac
+  lower "$rel2"
+  case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json|.superlite/backlog.json) return 0 ;; esac
+  if wt_rel "$rel2"; then
+    lower "$WREL"
+    case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json|.superlite/backlog.json) return 0 ;; esac
+  fi
+  return 1
+}
+
 # project_code PATH: succeeds when writing PATH (the file_path or notebook_path of an Edit, Write or NotebookEdit call)
 # is denied; sets prot=1 for the protected files. A relative path is the project's own.
 project_code() {
@@ -195,6 +248,7 @@ project_code() {
   norm "$1"; p="$NORM"; p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
   p="${p//"$v2"/$projn}"; p="${p//"$v1"/$projn}"
   cache_hit "$p" && { prot=2; return 0; }
+  prot_abs "$p" && { prot=1; return 0; }
   case "$p" in ''|*'$'*|'~'*|/dev/*|-*) return 1 ;; esac
   case "$p" in /*|[A-Za-z]:[/\\]*) ;; *) case "/$p/" in */../*|*/./*) p="$projn/${p#./}" ;; esac ;; esac
   case "$p" in   # any absolute path with . or .. segments is judged resolved
@@ -207,13 +261,20 @@ project_code() {
   esac
   case "$rel" in ''|.|..|../*) return 1 ;; esac
   lower "$rel"; pl="$LOWER"
-  case "$pl" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
-  { [ "$human" = 1 ] || [ "$active" = 1 ]; } || return 1
+  case "$pl" in .superlite/human-replies.jsonl|.superlite/orchestrator.json|.superlite/backlog.json) prot=1; return 0 ;; esac
+  if [ "$human" != 1 ] && [ "$active" != 1 ]; then   # idle: only the protected files, also in a worktree or through a link
+    if wt_rel "$rel"; then
+      lower "$WREL"
+      case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json|.superlite/backlog.json) prot=1; return 0 ;; esac
+    fi
+    link_prot "$rel" && { prot=1; return 0; }
+    return 1
+  fi
   case "/$rel/" in */../*|*/./*) return 0 ;; esac   # docs/../src/a.py is not under docs/
   if allowed_rel "$rel"; then link_deny "$rel"; return; fi   # allowed by its text: still through a link?
   if wt_rel "$rel"; then   # a linked worktree inside the project: judged from its root
     lower "$WREL"
-    case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
+    case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json|.superlite/backlog.json) prot=1; return 0 ;; esac
     if allowed_rel "$WREL"; then link_deny "$rel"; return; fi
   fi
   return 0
@@ -331,7 +392,7 @@ elif [ -z "$hit" ]; then
   lower "$cmd"; lc="$LOWER"
   bare=${lc//\'/}; bare=${bare//\"/}; bare=${bare//\\/}   # orchestrator.js''on and orchestrator.j\son name it too
   mentions=0
-  [[ $bare == *human-replies.jsonl* || $bare == *orchestrator.json* || $bare == *.superlite* ]] && mentions=1
+  [[ $bare == *human-replies.jsonl* || $bare == *orchestrator.json* || $bare == *backlog.json* || $bare == *.superlite* ]] && mentions=1
   [[ $bare == *superlite* && $bare == *python* ]] && mentions=1   # the Python cache folder: ~/.cache/superlite/python
   if [ "$enforce" = 0 ] && [ "$mentions" = 0 ]; then
     # $'\x6f...' may spell a protected name, and a glob or brace near .superlite may reach one (.superlite/orch*)
@@ -367,7 +428,7 @@ if [ "$prot" = 2 ]; then
   printf '%s\n' 'Blocked: the Python interpreter cache of superlite (~/.cache/superlite) is never written by the coordinator.' >&2
 elif [ "$prot" = 1 ]; then
   printf '%s\n' \
-    'Blocked: .superlite/orchestrator.json and .superlite/human-replies.jsonl are never written directly. Change the orchestrator state only with `sl orchestrator ...` (for example `sl orchestrator approve --review <path>`); human-replies.jsonl is written only by the hook that records the human'"'"'s replies.' >&2
+    'Blocked: .superlite/orchestrator.json and .superlite/human-replies.jsonl are never written directly. Change the orchestrator state only with `sl orchestrator ...` (for example `sl orchestrator approve --review <path>`); human-replies.jsonl is written only by the hook that records the human'"'"'s replies. .superlite/backlog.json is changed only by `sl backlog ...`.' >&2
 elif [ "$human" = 1 ]; then
   printf '%s\n' \
     'Human orchestrator: no build starts until the human approves the plan. Write the review plan docs/plans/<date>-<topic>.review.md (see skills/writing-plans/review-plan.md), show its path with a five-line summary, ask the human to reply approve, end your turn, then run sl orchestrator approve --review <path>.' >&2
