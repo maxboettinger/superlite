@@ -91,3 +91,24 @@ def test_compile_error_leads_failures_and_log(tmp_path):
     assert "build error: Foo.swift:3:5: error:" in summary(tmp_path)["failures"][0]
     log = (sl / "test-output.log").read_text(encoding="utf-8")
     assert "Foo.swift:3:5: error: cannot find 'Date' in scope" in log and "** TEST FAILED **" in log
+
+
+def test_indented_error_in_tail_not_duplicated(tmp_path):
+    (tmp_path / "runner.py").write_text('print("  Foo.swift:3:5: error: bad")\nprint("** TEST FAILED **")\nimport sys; sys.exit(65)\n', encoding="utf-8")
+    sl = tmp_path / ".superlite"
+    sl.mkdir()
+    cmd = f"{sys.executable} runner.py"
+    (sl / "test-cmd.json").write_text(json.dumps({"language": "swift", "test": cmd, "test_file": cmd, "junit": "", "setup": ""}), encoding="utf-8")
+    run(RUN_TESTS, "--full", cwd=tmp_path)
+    assert (sl / "test-output.log").read_text(encoding="utf-8").count("Foo.swift:3:5: error: bad") == 1
+
+
+def test_green_log_has_no_prepended_error(tmp_path):
+    (tmp_path / "runner.py").write_text('print("x.swift:1:1: error: old")\nfor i in range(60):\n    print(f"filler {i}")\nprint("** TEST SUCCEEDED **")\n', encoding="utf-8")
+    sl = tmp_path / ".superlite"
+    sl.mkdir()
+    cmd = f"{sys.executable} runner.py"
+    (sl / "test-cmd.json").write_text(json.dumps({"language": "swift", "test": cmd, "test_file": cmd, "junit": "", "setup": ""}), encoding="utf-8")
+    run(RUN_TESTS, "--full", cwd=tmp_path)
+    log = (sl / "test-output.log").read_text(encoding="utf-8")
+    assert "error: old" not in log.splitlines()[0] and "error: old" not in log
