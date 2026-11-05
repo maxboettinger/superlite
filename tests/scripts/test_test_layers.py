@@ -238,3 +238,10 @@ def test_layer_hash_ignores_results_and_superlite_state(repo):
     assert {l: tl.layer_hash(l, repo) for l in before} == before
     (repo / "evals" / "results" / "run.json").write_text('{"changed": 1}')
     assert {l: tl.layer_hash(l, repo) for l in before} == before
+
+
+def test_agents_md_runs_layers_through_test_layers():
+    text = (Path(__file__).resolve().parents[2] / "AGENTS.md").read_text(encoding="utf-8")
+    assert "-m pytest" not in text
+    assert "test_layers.py run headless" in text and "test_layers.py run tui" in text
+    assert "coordinator's step" in text
