@@ -9,6 +9,8 @@ words[0] is the command (a path or `.exe` suffix is dropped). Rules:
 - rm, rmdir, unlink, shred, tee, touch, truncate: every operand; dd: each of= value; install -d: every operand;
 - sed and perl write only with -i (--in-place); the operands after the script are the files; sed also writes the file of
   a `w`/`W` command or an `s///w` flag, and "?" for an `e` command or `s///e` flag (a shell command), with or without -i;
+- link_sources(words) names the sources of a link-making command (ln, cp -l/-s/--link/--symbolic-link): a link to a
+  protected file is a way to write it, so the judge checks them too (`link` is read as `ln` by the judge);
 - `-`, an empty word and a /dev/ path are not targets; --help, --version and a missing operand write nothing.
 Options follow getopt: clusters (-rfv), a value attached or in the next word (-t d, -td, --size 0, --size=0), `--` ends
 options; GNU permutes options after operands, perl stops its switches at the first operand.
@@ -153,6 +155,25 @@ def _copy(words, name):  # O(n*m) | cp, mv, install, ln
     if name != "mv":  # only mv removes its sources | O(1)
         srcs = []  # O(1)
     return [p for p in srcs + out if _real(p)]  # O(n*m)
+
+
+def _is_link_opt(k):  # O(m) | -l, -s or a (GNU-abbreviated) --link / --symbolic-link of cp
+    return k in ("l", "s") or (k.startswith("--") and (len(k) >= 3 and "--link".startswith(k)
+                                                        or len(k) >= 4 and "--symbolic-link".startswith(k)))  # O(m)
+
+
+def link_sources(words):  # O(n*m) | the sources a link-making ln or cp -l/-s names, as written (the link's content)
+    if not words:  # O(1)
+        return []  # O(1)
+    name = words[0].replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".exe")  # O(m)
+    if name not in ("ln", "cp"):  # O(1)
+        return []  # O(1)
+    opts, ops = _parse(words, name)  # O(n*m)
+    if _has(opts, *_HELP) or (name == "cp" and not any(_is_link_opt(k) for k, _ in opts)):  # O(n*m)
+        return []  # O(1)
+    if _val(opts, "t", "--target-directory") is None and len(ops) >= 2:  # the last operand is the link, else all are sources | O(1)
+        ops = ops[:-1]  # O(n)
+    return [p for p in ops if _real(p)]  # O(n*m)
 
 
 def _every(words, name):  # O(n*m) | rm, rmdir, unlink, shred, tee, touch, truncate: every operand
