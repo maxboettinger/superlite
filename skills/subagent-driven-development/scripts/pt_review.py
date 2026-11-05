@@ -1828,7 +1828,6 @@ def git_diff_stat(root: Path, base: str | None, ranges: RunRanges | None = None,
 
 
 EXCERPT_FILE_LINES = 120  # O(1) cap on diff lines per hot-spot file
-EXCERPT_HOOK_LINES = 400  # O(1) cap on diff lines per changed hook file
 EXCERPT_FLOOR_LINES = 40  # O(1) diff lines every changed code file gets before any file gets more (#80)
 DEFAULT_TOKENS = 20000  # O(1) packet size without --max-tokens before the excerpts scale (plan section 5)
 AUTO_MAX_TOKENS = 60000  # O(1) ceiling of the scaled default (#80)
@@ -1886,19 +1885,19 @@ def changed_diffs(root: Path, base: str | None, files: list[str], ranges: RunRan
     return changed, diffs  # O(1)
 
 
-def _file_cap(f: str, per_file: int) -> int:  # O(m) total
-    return EXCERPT_HOOK_LINES if _is_hook(f) else per_file  # O(m)
+def _file_cap(f: str, per_file: int, n_lines: int) -> int:  # O(m) total
+    return n_lines if _is_hook(f) else per_file  # hooks are uncapped, the token budget limits them | O(m)
 
 
 def _overhead(f: str, n_lines: int, per_file: int) -> int:  # O(m) total
     """Chars a shown file costs besides its diff lines: heading, fences, joins and the longest truncation note."""
-    note = f"(truncated: {_file_cap(f, per_file)} of {n_lines} diff lines shown, per-file cap)"  # O(m)
+    note = f"(truncated: {_file_cap(f, per_file, n_lines)} of {n_lines} diff lines shown, per-file cap)"  # O(m)
     return len(f"### {f}\n```diff\n") + len("\n```") + len(note) + 2  # O(m)
 
 
 def excerpt_need(diffs: list[tuple[str, list[str]]], per_file: int = EXCERPT_FILE_LINES) -> int:  # O(X) total
     """Chars the excerpt section takes when every changed file shows its hunks up to its per-file cap."""
-    return sum(_overhead(f, len(lines), per_file) + sum(len(ln) + 1 for ln in lines[:_file_cap(f, per_file)])  # O(X)
+    return sum(_overhead(f, len(lines), per_file) + sum(len(ln) + 1 for ln in lines[:_file_cap(f, per_file, len(lines))])  # O(X)
                for f, lines in diffs)  # O(F)
 
 
@@ -1919,9 +1918,9 @@ def _allocate(diffs: list[tuple[str, list[str]]], per_file: int, budget: int | N
 
     for f, lines in diffs:  # pass 1: the floor | O(F) iterations
         if f in first:  # O(1)
-            grow(f, lines, min(floor, _file_cap(f, per_file), len(lines)))  # O(floor)
+            grow(f, lines, min(floor, _file_cap(f, per_file, len(lines)), len(lines)))  # O(floor)
     for f, lines in diffs:  # pass 2: fill up to the per-file cap, in excerpt order | O(F) iterations
-        grow(f, lines, min(_file_cap(f, per_file), len(lines)))  # O(per_file)
+        grow(f, lines, min(_file_cap(f, per_file, len(lines)), len(lines)))  # O(per_file)
     return take  # O(1)
 
 
@@ -1942,7 +1941,7 @@ def render_excerpts(changed: list[str], diffs: list[tuple[str, list[str]]], per_
                 continue  # O(1)
             out.append(f"### {f}\n```diff\n" + "\n".join(lines[:n]) + "\n```")  # O(n)
             if n < len(lines):  # O(1)
-                why = "per-file" if n == _file_cap(f, per_file) else "size"  # O(1)
+                why = "per-file" if n == _file_cap(f, per_file, len(lines)) else "size"  # O(1)
                 out.append(f"(truncated: {n} of {len(lines)} diff lines shown, {why} cap)")  # O(1)
         skipped = [f for f in changed if not take.get(f)]  # O(F)
         if skipped:  # O(1)
@@ -2075,6 +2074,7 @@ def _full_ran(summary: dict) -> bool:  # O(F) total
     """A full run that ran tests: a crash (an `error` key; older summaries: a bare error line without `::`) decides nothing."""
     fails = summary.get("failures") or []  # O(1)
     return (summary.get("mode") == "full" and not summary.get("error") and isinstance(fails, list)  # O(1)
+            and not summary.get("recorded")  # a recorded run (run_tests --record) never closes incidents | O(1)
             and all("::" in str(f) for f in fails)  # O(F)
             and any(isinstance(summary.get(k), int) and summary[k] > 0 for k in ("passed", "failed", "skipped")))  # O(1)
 
@@ -2131,7 +2131,7 @@ def render_item(root: Path, it: Item, shown: set[tuple[str, int]], idx: str) -> 
     out = [f"### {idx} {it.title}"] + ([f"checker: {it.checker}"] if it.checker else [])  # O(1)
     if it.body:  # O(1)
         out.append(it.body)  # O(1)
-    if it.file:  # O(1)
+    if it.file and it.file != "-":  # "-" means no file | O(1)
         key = (it.file, it.line)  # O(1)
         if key in shown:  # O(1)
             out.append("(excerpt shown with the item for the same location)")  # O(1)

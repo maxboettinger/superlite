@@ -81,16 +81,18 @@ def test_order_hot_hooks_code_rest(proj):
     assert heads == list(order)
 
 
-def test_hook_cap_400(proj):
-    commit_base(proj, {"hooks/h300": 1, "hooks/h500": 1, "src/big.py": 1})
-    change(proj, "hooks/h300", 300)
-    s = sec8(packet(proj))
-    assert "(truncated" not in s and "+new 299" in s
-    change(proj, "hooks/h300", 1)
+def test_hook_uncapped_at_default_budget(proj):
+    commit_base(proj, {"hooks/h500": 1})
     change(proj, "hooks/h500", 500)
-    change(proj, "src/big.py", 500)
-    s = sec8(packet(proj, "--max-tokens", "40000"))
-    assert "(truncated: 400 of" in s and "(truncated: 120 of" in s
+    s = sec8(packet(proj))
+    assert "+new 499" in s and "(truncated:" not in s
+
+
+def test_hook_cut_by_size_cap(proj):
+    commit_base(proj, {"hooks/h500": 1})
+    change(proj, "hooks/h500", 500)
+    s = sec8(packet(proj, "--max-tokens", "2000"))
+    assert "size cap" in s and "of 506" in s and "+new 499" not in s
 
 
 def fill_total(proj: Path) -> None:
