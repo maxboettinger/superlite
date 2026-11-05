@@ -1,0 +1,230 @@
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "scripts"))
+
+import guard_tools  # noqa: E402
+from guard_tools import COMMANDS, targets  # noqa: E402
+
+
+def test_examples():
+    assert targets(["git", "checkout", "--", "src/a.py"]) == ["src/a.py"]
+    assert targets(["git", "reset", "--hard"]) == ["."]
+    assert targets(["git", "status"]) == []
+    assert targets(["git", "-C", "sub", "restore", "x"]) == ["sub/x"]
+    assert targets(["python3", "-c", "open('src/a.py','w').write('x')"]) == ["src/a.py"]
+    assert targets(["python3", "-c", "p=input(); open(p,'w')"]) == ["?"]
+    assert targets(["node", "-e", "require('fs').renameSync('/tmp/s','.superlite/orchestrator.json')"]) == [
+        ".superlite/orchestrator.json"
+    ]
+    assert targets(["tar", "-xf", "/tmp/x.tar", "-C", "src"]) == ["src/"]
+    assert targets(["unzip", "a.zip", "-d", "out"]) == ["out/"]
+
+
+def test_commands_and_names():
+    assert {"git", "tar", "unzip", "node", "python3", "ruby", "php", "set-content"} <= COMMANDS
+    assert targets(["/usr/bin/git", "reset", "--hard"]) == ["."]
+    assert targets(["GIT.exe", "reset", "--hard"]) == ["."]
+    assert targets([]) == []
+    assert targets(["ls", "a"]) == []
+
+
+def test_review_149_items():
+    # 1: node renameSync
+    assert targets(["node", "-e", "require('fs').renameSync('/tmp/s','.superlite/orchestrator.json')"]) == [
+        ".superlite/orchestrator.json"
+    ]
+    # 2: move APIs imported by name
+    dst = [".superlite/orchestrator.json"]
+    assert targets(["python3", "-c", "from shutil import move; move('/tmp/s', '.superlite/orchestrator.json')"]) == dst
+    assert targets(["python3", "-c", "from os import replace; replace('/tmp/s', '.superlite/orchestrator.json')"]) == dst
+    assert targets(["python3", "-c", "from shutil import copyfile; copyfile('/tmp/s', '.superlite/orchestrator.json')"]) == dst
+    assert targets(["python3", "-c", "x.replace('a', 'b')"]) == []
+    # 6-8: a no-value option that is a prefix of a value option takes no value, the member lands in the shell's directory
+    for opt in ("--xattrs", "--checkpoint", "--inc"):
+        assert targets(["tar", "-xf", "/tmp/x.tar", opt, "a.py", "-C", "/tmp"]) == ["a.py", "/tmp/"]
+    # 9: value options missing from the table
+    for opt in ("--older-than", "--older", "--older-mtime", "--older-mtime-than", "--newer-mtime-than",
+                "--sparse-version", "--exclude-ignore", "--exclude-ignore-recursive", "--set-mtime-format"):
+        assert targets(["tar", "-x", opt, "2020-01-01", "-C", "/tmp"]) == ["/tmp/"], opt
+
+
+def test_tar_reading():
+    assert targets(["tar", "xf", "a.tar"]) == ["./"]
+    assert targets(["tar", "xCf", "src", "a.tar"]) == ["src/"]
+    assert targets(["tar", "-xzf", "a.tgz", "--directory=out"]) == ["out/"]
+    assert targets(["tar", "-xf", "a.tar", "-C", "a", "-C", "b"]) == ["a/b/"]
+    assert targets(["tar", "-xf", "a.tar", "--strip-components", "1", "-C", "src"]) == ["src/"]
+    assert targets(["tar", "-xf", "a.tar", "--strip-components=1"]) == ["./"]
+    assert targets(["tar", "-tf", "a.tar"]) == []
+    assert targets(["tar", "-cf", "a.tar", "src"]) == []
+    assert targets(["tar", "-xOf", "a.tar"]) == []
+    assert targets(["tar", "-xPf", "a.tar"]) == ["?"]
+    assert targets(["tar", "-xf", "a.tar", "-I", "zstd", "-C", "x"]) == ["x/"]
+
+
+def test_unzip():
+    assert targets(["unzip", "a.zip"]) == ["./"]
+    assert targets(["unzip", "-odout", "a.zip"]) == ["out/"]
+    assert targets(["unzip", "-d", "out", "a.zip"]) == ["out/"]
+    assert targets(["unzip", "-l", "a.zip"]) == []
+    assert targets(["unzip", "-p", "a.zip"]) == []
+    assert targets(["unzip", "-:", "a.zip"]) == ["?"]
+
+
+def test_git_writers():
+    assert targets(["git", "checkout", "HEAD", "--", "a", "b"]) == ["a", "b"]
+    assert targets(["git", "restore", "a", "b"]) == ["a", "b"]
+    assert targets(["git", "restore", "--staged", "a"]) == []
+    assert targets(["git", "restore", "-S", "-W", "a"]) == ["a"]
+    assert targets(["git", "restore", "--source", "HEAD~1", "a"]) == ["a"]
+    assert targets(["git", "rm", "-r", "a"]) == ["a"]
+    assert targets(["git", "rm", "--cached", "a"]) == []
+    assert targets(["git", "mv", "a", "b"]) == ["a", "b"]
+    assert targets(["git", "clean", "-n"]) == []
+    assert targets(["git", "clean", "-f", "x"]) == ["x"]
+    for words in (
+        ["git", "checkout", "-f"],
+        ["git", "switch", "--discard-changes", "main"],
+        ["git", "switch", "-f", "main"],
+        ["git", "reset", "--hard"],
+        ["git", "reset", "--har", "HEAD~1"],
+        ["git", "reset", "--merge"],
+        ["git", "stash", "pop"],
+        ["git", "stash", "apply"],
+        ["git", "stash", "branch", "b"],
+        ["git", "clean", "-fd"],
+        ["git", "clean", "-f"],
+    ):
+        assert targets(words) == ["."], words
+    assert targets(["git", "-C", "sub", "reset", "--hard"]) == ["sub"]
+    assert targets(["git", "apply", "p.diff"]) == ["?"]
+    assert targets(["git", "am", "p.mbox"]) == ["?"]
+    assert targets(["git", "restore", "--pathspec-from-file=l"]) == ["?"]
+    assert targets(["git", "restore", ":(glob)*.py"]) == ["?"]
+    assert targets(["git", "-c", "alias.zz=!rm a", "zz"]) == ["?"]
+    for sub in ("log", "diff", "show", "status", "branch", "fetch"):
+        assert targets(["git", sub]) == [], sub
+    assert targets(["git", "stash"]) == []
+    assert targets(["git", "reset", "--soft", "HEAD~1"]) == []
+    assert targets(["git", "checkout", "-b", "new"]) == []
+    assert targets(["git", "checkout", "main"]) == [] or Path("main").exists()
+
+
+def test_interpreter_writers():
+    py = lambda code: targets(["python3", "-c", code])  # noqa: E731
+    for mode in ("w", "a", "x", "r+", "wb"):
+        assert py(f"open('p', '{mode}')") == ["p"], mode
+    assert py("open('p', mode='w')") == ["p"]
+    assert py("open('p')") == []
+    assert py("open('p', 'r')") == []
+    assert py("open(p, 'w')") == ["?"]
+    assert py("open('p', m)") == ["p"]
+    assert py("from pathlib import Path; Path('p').write_text('x')") == ["p"]
+    assert py("Path('p').write_bytes(b'x')") == ["p"]
+    assert py("Path('p').open('w')") == ["p"]
+    assert py("Path('p').open()") == []
+    assert py("Path(d).write_text('x')") == ["?"]
+    assert py("(Path('a')/'b').write_text('x')") == ["?"]
+    assert py("import shutil; shutil.copy('a', 'b')") == ["b"]
+    assert py("shutil.copy2('a', 'b')") == ["b"]
+    assert py("shutil.copyfile('a', 'b')") == ["b"]
+    assert py("shutil.move('a', 'b')") == ["b"]
+    assert py("shutil.copytree('a', 'b')") == ["b"]
+    assert py("import os; os.rename('a', 'b')") == ["b"]
+    assert py("os.replace('a', 'b')") == ["b"]
+    assert py("os.remove('a')") == ["a"]
+    assert py("os.unlink('a')") == ["a"]
+    assert py("Path('a').unlink()") == ["a"]
+    assert py("Path('a').rename('b')") == ["b"]
+    assert py("shutil.move(a, 'b')") == ["b"]
+    assert py("shutil.move('a', b)") == ["?"]
+    assert py("print(open('f').read()); x = s.replace('a','b')") == []
+    assert py("print(1)") == []
+    assert targets(["python3", "-Bc", "open('p','w')"]) == ["p"]
+    assert targets(["python3", "-copen('p','w')"]) == ["p"]
+    assert targets(["python3", "x.py"]) == []
+    assert targets(["python3.11", "-c", "os.remove('a')"]) == ["a"]
+
+    node = lambda code: targets(["node", "-e", code])  # noqa: E731
+    assert node("fs.writeFileSync('p', 'x')") == ["p"]
+    assert node("fs.appendFileSync('p', 'x')") == ["p"]
+    assert node("fs.copyFileSync('a', 'p')") == ["p"]
+    assert node("fs.rmSync('p', {recursive: true})") == ["p"]
+    assert node("fs.unlinkSync('p')") == ["p"]
+    assert node("require('fs').promises.writeFile('p', 'x')") == ["p"]
+    assert node("fs.writeFileSync(p, 'x')") == ["?"]
+    assert node("fs.writeFileSync(`${d}/x`, 'x')") == ["?"]
+    assert node("console.log(fs.readFileSync('p'))") == []
+    assert node("x.rename('a')") == []
+    assert targets(["node", "--eval=fs.rmSync('p')"]) == ["p"]
+    assert targets(["node", "-p", "fs.rmSync('p')"]) == ["p"]
+
+    rb = lambda code: targets(["ruby", "-e", code])  # noqa: E731
+    assert rb("File.write('p', 'x')") == ["p"]
+    assert rb("File.write 'p', 'x'") == ["p"]
+    assert rb("File.open('p', 'w') { |f| f << 1 }") == ["p"]
+    assert rb("File.open('p') { |f| f.read }") == []
+    assert rb("FileUtils.cp('a', 'b')") == ["b"]
+    assert rb("FileUtils.mv 'a', 'b'") == ["b"]
+    assert rb("FileUtils.rm('p')") == ["p"]
+    assert rb("FileUtils.rm_rf(d)") == ["?"]
+    assert rb("File.write(\"#{d}/p\", 1)") == ["?"]
+    assert rb("puts File.read('p')") == []
+
+    php = lambda code: targets(["php", "-r", code])  # noqa: E731
+    assert php("file_put_contents('p', 'x');") == ["p"]
+    assert php("file_put_contents($p, 'x');") == ["?"]
+    assert php("file_put_contents(\"a$b\", 'x');") == ["?"]
+    assert php("copy('a', 'b');") == ["b"]
+    assert php("unlink('p');") == ["p"]
+    assert php("$f = fopen('p', 'w');") == ["p"]
+    assert php("$f = fopen('p', 'r');") == []
+    assert php("echo file_get_contents('p');") == []
+
+
+def test_powershell_cmdlets():
+    cases = [
+        ["Set-Content", "-Path", "a", "-Value", "x"],
+        ["Set-Content", "a", "x"],
+        ["Add-Content", "a", "x"],
+        ["Out-File", "-FilePath", "a"],
+        ["Out-File", "a"],
+        ["New-Item", "a"],
+        ["New-Item", "-ItemType", "File", "-Path", "a"],
+        ["Remove-Item", "a"],
+        ["Remove-Item", "-Recurse", "-Force", "a"],
+        ["Remove-Item", "-LiteralPath:a"],
+        ["Copy-Item", "x", "-Destination", "a"],
+        ["Copy-Item", "-Path", "x", "-Destination", "a"],
+        ["Copy-Item", "x", "a"],
+        ["Move-Item", "x", "a"],
+        ["Move-Item", "-Path", "x", "-Dest", "a"],
+        ["sEt-cOnTeNt", "-Path", "a"],
+    ]
+    for words in cases:
+        assert targets(words) == ["a"], words
+    assert targets(["New-Item", "-Path", "d", "-Name", "f"]) == ["d/f"]
+    assert targets(["Remove-Item", "a,b"]) == ["a", "b"]
+    assert targets(["Set-Content", "$p", "x"]) == ["?"]
+    assert targets(["Get-Content", "a"]) == []
+
+
+def test_other_archives():
+    assert targets(["7z", "x", "a.7z", "-oout"]) == ["out/"]
+    assert targets(["7z", "x", "a.7z"]) == ["./"]
+    assert targets(["7za", "e", "a.7z", "-aoa"]) == ["./"]
+    assert targets(["7z", "l", "a.7z"]) == []
+    assert targets(["cpio", "-i"]) == ["?"]
+    assert targets(["cpio", "-idv"]) == ["?"]
+    assert targets(["cpio", "--extract"]) == ["?"]
+    assert targets(["cpio", "-o"]) == []
+    assert targets(["cpio", "-t"]) == []
+
+
+@pytest.mark.parametrize("cmd", sorted(COMMANDS))
+def test_every_command_runs_without_error(cmd):
+    assert isinstance(guard_tools.targets([cmd]), list)
+    assert isinstance(guard_tools.targets([cmd, "-x", "--", ""]), list)
