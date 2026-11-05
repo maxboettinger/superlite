@@ -11,7 +11,9 @@ Results file (--out, default <root>/.superlite/probes/probe-results.json):
       "files", ...}}, "failures": [group, ...], "stats": {...}, "probes": [probe, ...]}
   probe: id, category, entry (call|run|request|raw), status, file, line, group_id, input_size,
          message (plus detail, size, elapsed, timeout). status is pass | crash | hang | leak |
-         wrong-status; also inconsistent (state check failed), skip, error (probe bug).
+         wrong-status; also inconsistent (state check failed), skip, error (probe bug), setup-error
+         (the plan's `call=` target cannot take the probe's one argument: fix the Probe entry; no
+         regression test).
          file and line are the innermost in-repo frame of the failure (null on a pass or when
          none is known); group_id points into "failures"; input_size is the size step reached.
   group (one incident each): group_id, key, category, kind, exc, count, probes, size,
@@ -47,6 +49,7 @@ How it works
 from __future__ import annotations  # O(1)
 
 import argparse  # O(1)
+import ast  # O(1)
 import concurrent.futures as cf  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
@@ -302,6 +305,8 @@ def _exec_one(st: _WorkerState, entry: str, item, expect, timeout: float):  # O(
             if bad:  # O(1)
                 return res, {"status": "wrong-status", "detail": bad, "http": status}  # O(1)
     except BaseException as e:  # O(1) | noqa: BLE001 - any unexpected exception is a crash
+        if getattr(e, "probe_setup_error", False):  # the adapter's own verdict: the plan's entry is wrong, the code under test is not | O(1)
+            return None, {"status": "setup-error", "exc": type(e).__name__, "detail": str(e)[:200], "frames": []}  # O(1)
         frames = [(f.filename, f.lineno) for f in traceback.extract_tb(e.__traceback__)][::-1]  # O(stack depth)
         return None, {"status": "crash", "exc": type(e).__name__, "detail": str(e)[:200],  # O(1)
                       "frames": frames}  # O(1)
@@ -693,6 +698,8 @@ def group_key(res: dict, cfg: Cfg) -> tuple[str, tuple[str, int] | None]:  # O(f
         return f"leak|{res.get('leak')}|{where}", top  # O(1)
     if st == "wrong-status":  # O(1)
         return f"wrong-status|{res.get('http')}|{where}", top  # O(1)
+    if st == "setup-error":  # one group per cause: every probe fails the same way | O(1)
+        return f"setup-error|{res.get('detail')}", top  # O(1)
     return f"{st}|{res['id']}", top  # O(1)
 
 
@@ -815,7 +822,7 @@ def _write_regression(cfg: Cfg, group: dict, rep: dict) -> str | None:  # O(t lo
     meta = rep.get("probe_meta") or {}  # O(1)
     if not meta.get("regress", True) or meta.get("has_check") or not rep.get("input"):  # O(1)
         return None  # O(1)
-    if rep["status"] == "leak" or rep["status"] == "inconsistent":  # O(1)
+    if rep["status"] in ("leak", "inconsistent", "setup-error"):  # O(1)
         return None  # O(1)
     expect = None  # O(1)
     try:  # O(1)
@@ -1060,11 +1067,41 @@ def remove_checkout(tree: Path, repo: Path | None) -> None:  # O(tree files) + 2
     shutil.rmtree(tree.parent, ignore_errors=True)  # O(tree files) rmtree
 
 
+def stale_adapter(adapter: Path) -> bool:  # O(adapter bytes + plan bytes)
+    """True when a generated adapter's recorded Probe entries differ from the plan it was built from now (#177).
+    A hand-written adapter (no ENTRIES and PLAN constants), a missing plan or a copy of this file without the
+    scripts folder is never stale: the check only ever stops a run it is sure about."""
+    try:  # O(1)
+        consts = {}  # O(1)
+        for node in ast.parse(adapter.read_text(encoding="utf-8", errors="replace")).body:  # O(adapter bytes)
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
+                    and node.targets[0].id in ("ENTRIES", "PLAN"):  # O(1)
+                consts[node.targets[0].id] = ast.literal_eval(node.value)  # O(len literal)
+        plan = Path(consts["PLAN"])  # O(1)
+        if not plan.is_file():  # O(1)
+            return False  # O(1)
+        saved = list(sys.path)  # pt_review puts the scripts folder first on sys.path | O(len sys.path)
+        try:  # O(1)
+            spec = importlib.util.spec_from_file_location("_superlite_pt_review", HERE.parent / "scripts" / "pt_review.py")  # O(1)
+            mod = importlib.util.module_from_spec(spec)  # O(1)
+            sys.modules[spec.name] = mod  # its dataclasses look their module up here | O(1)
+            spec.loader.exec_module(mod)  # O(module size)
+            return mod.plan_entries(mod.parse_plan(plan)) != consts["ENTRIES"]  # O(plan bytes)
+        finally:  # O(1)
+            sys.path[:] = saved  # O(len sys.path)
+            sys.modules.pop("_superlite_pt_review", None)  # O(1)
+    except Exception:  # noqa: BLE001 | no verdict: probe as before | O(1)
+        return False  # O(1)
+
+
 def run_main(a) -> int:  # O(checkout + _run_main) total; one git checkout per --commit run
     root = Path(a.root or os.getcwd()).resolve()  # O(1)
     adapter = Path(a.adapter).resolve() if a.adapter else root / ".superlite" / "probes" / "adapter.py"  # O(1)
     if not adapter.is_file():  # O(1)
         print(f"probe_run: adapter not found: {adapter}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    if stale_adapter(adapter):  # the plan's Probe entry changed after the adapter was built: probing it tests the wrong target | O(adapter + plan bytes)
+        print("probe_run: adapter is stale (plan entry changed); rebuild with plan_tools adapter", file=sys.stderr)  # O(1)
         return 2  # O(1)
     if not a.commit:  # O(1)
         return _run_main(a, root, root, adapter)  # O(_run_main)
@@ -1270,7 +1307,7 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
         ctx = ctx if len(ctx) <= 200 else ctx[:199] + "…"  # O(1)
         f = g["file"] or cfg.rel(str(adapter))  # O(1)
         g["incident"] = (f, g["line"], ctx)  # O(1)
-        kind = {"crash": "exception", "leak": "exception", "hang": "perf"}.get(g["kind"], "test-failure")  # O(1)
+        kind = {"crash": "exception", "leak": "exception", "hang": "perf", "setup-error": "spec-ambiguity"}.get(g["kind"], "test-failure")  # O(1)
         if (f, g["line"], ctx) not in seen:  # O(1)
             jobs.append((f, g["line"], ctx, kind, "open"))  # O(1)
     for f, ctx in verified_jobs:  # O(v) iterations
