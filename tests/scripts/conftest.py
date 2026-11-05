@@ -1,19 +1,8 @@
 """Keep the user's real ~/.superlite history out of the script tests: lint, schedule and predict read it.
 The host's session id and state override stay out too: a test that wants a session sets one."""
-import os
-
 import pytest
 
-import _fixtures  # noqa: F401 (the fixture copy is made before collection)
-
-HOST_VARS = ("CLAUDE_CODE_SESSION_ID", "SUPERLITE_SESSION_ID", "SUPERLITE_STATE_DIR", "CLAUDE_PROJECT_DIR", "CLAUDE_ENV_FILE",
-             "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_FORK_SUBAGENT",  # the budget's agent-summary note reads these
-             "SUPERLITE_FLEET_WORKER", "SUPERLITE_FLEET_AGENT")  # the SessionStart hook injects the worker note on these
-
-# Before collection: test modules snapshot os.environ into ENV at import, and a host session id there would send a
-# subprocess's default state (pool.json, gate) to the host session's bound .superlite.
-for _var in HOST_VARS:
-    os.environ.pop(_var, None)
+from _fixtures import HOST_VARS  # importing it drops the host vars and makes the fixture copy before collection
 
 
 @pytest.fixture(autouse=True)
