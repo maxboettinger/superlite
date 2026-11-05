@@ -81,15 +81,15 @@ def test_hotspots_filters_files_and_sorts(tmp_path):
     for f, n in (("a.py", 10), ("b.py", 5), ("a.py", 10), ("a.py", 3)):
         add(log, f, n)
     got = [(e["file"], e["line"]) for e in hot(log, "--files", "a.py")]
-    assert got == [("a.py", 10), ("a.py", 10), ("a.py", 3)]
+    assert got == [("a.py", 10), ("a.py", 3)]  # the newest entry per location; the repeat still sorts it first
 
 
-def test_hotspots_puts_open_before_fixed(tmp_path):
+def test_hotspots_lists_open_and_drops_fixed(tmp_path):
     log = tmp_path / "i.jsonl"
     add(log, "a.py", 1, "fixed one", "--resolution", "fixed")
     add(log, "a.py", 2, "open one", "--resolution", "open")
     got = hot(log, "--files", "a.py")
-    assert [e["resolution"] for e in got] == ["open", "fixed"]
+    assert [e["resolution"] for e in got] == ["open"]  # resolved locations are not hotspots
 
 
 def test_summary_runs(tmp_path):

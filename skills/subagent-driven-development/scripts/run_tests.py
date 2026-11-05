@@ -296,10 +296,9 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
 
 def add_incidents(log, items, task=None):  # O(total c) + one locked append (no spawn in process)
     """items: (file, line, context, kind, resolution). A --task run stamps `task` on each entry; a kind outside
-    incident.KINDS (`no-result`) is set after make_entry, as the hooks write theirs."""
-    if not nt.in_process():  # SUPERLITE_SL swaps the launcher: the spawned `incident add` takes no task | O(1)
-        nt.add_incidents(log, [(f, line, ctx, kind, "run_tests", res) for f, line, ctx, kind, res in items])  # O(k)
-        return  # O(1)
+    incident.KINDS (`no-result`) is set after make_entry, as the hooks write theirs. Never spawns `incident add`,
+    which takes neither `task` nor `no-result` (SUPERLITE_SL swaps only the launcher)."""
+    # always in process, also with SUPERLITE_SL: the spawned `incident add` takes neither task nor `no-result` | O(1)
     inc = nt.sibling("incident")  # O(1)
     entries = []  # O(1)
     for f, line, ctx, kind, res in items:  # O(k); a bad item is skipped, not the batch

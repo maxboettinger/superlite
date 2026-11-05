@@ -162,6 +162,15 @@ def cmd_hotspots(a):  # O(B + i log i)
         entries = [e for e in entries if _norm(e["file"]) in wanted]  # O(i)
     counts = Counter((_norm(e["file"]), e["line"]) for e in entries  # O(i) Counter
                      if e.get("kind") != "verified")  # O(1)
+    import pt_review  # the resolutions the packet counts as closed; lazy | O(module)
+    newest = {}  # location -> its newest non-verified entry, as the packet and `finish` count open | O(1)
+    for e in entries:  # O(i)
+        if e.get("kind") != "verified":  # O(1)
+            newest[(_norm(e["file"]), e["line"])] = e  # O(1)
+    entries = [e for e in entries  # one entry per location, none of the resolved | O(i)
+               if e.get("kind") == "verified"
+               or (newest[(_norm(e["file"]), e["line"])] is e
+                   and str(e.get("resolution", "")).lower() not in pt_review.RESOLVED)]
 
     def key(e):  # O(1) per call
         loc = (_norm(e["file"]), e["line"])  # O(1)
