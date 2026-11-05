@@ -17,7 +17,7 @@ import sys  # O(1)
 from pathlib import Path  # O(1)
 
 PARENT = ".claude/worktrees"  # O(1)
-INTERNAL = {".git", ".superlite", ".claude", "__pycache__"}  # never listed as missing (#141) | O(1)
+INTERNAL = {".git", ".superlite", ".claude", "__pycache__", ".DS_Store"}  # (.DS_Store: OS noise a global gitignore lists) never listed as missing (#141) | O(1)
 SHOWN = 10  # names in the "missing here" line | O(1)
 
 

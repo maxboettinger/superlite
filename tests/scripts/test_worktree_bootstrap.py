@@ -133,3 +133,16 @@ def test_wave0_brief_has_bootstrap_step(repo):
 def test_wave0_brief_without_lockfile_has_no_bootstrap_step(repo):
     wt, _ = worktree.ensure("x", repo)
     assert "Bootstrap:" not in brief_of(wt)
+
+
+def test_missing_ignored_skips_ds_store_and_nested_paths(repo):
+    ignore(repo, ".DS_Store", "build/out.log", ".env")
+    (repo / ".DS_Store").write_text("x")
+    (repo / "build").mkdir()
+    (repo / "build" / "keep.txt").write_text("x")
+    git(repo, "add", "-f", "build/keep.txt")
+    git(repo, "commit", "-q", "-m", "tracked")
+    (repo / "build" / "out.log").write_text("x")
+    (repo / ".env").write_text("K=1\n")
+    wt, _ = worktree.ensure("x", repo)
+    assert worktree.missing_ignored(repo, wt) == [".env"]
