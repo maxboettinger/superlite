@@ -84,6 +84,11 @@ def test_verify_line_lists_test_folder_files(tmp_path):
     assert "run_tests --fast src/a_test.go --task T5 --background" in io.task_message(plan, ["T5"], "/sl/sl", "/sl")
     assert "run_tests --fast src/x.py docs/x.md --task T6 --background" in io.task_message(plan, ["T6"], "/sl/sl", "/sl")
 
+def test_verify_line_skips_fixture_data_in_test_folder(tmp_path):
+    plan = make_plan(tmp_path, [{"id": "T2", "owns": "src/h.py, tests/scripts/test_h.py, tests/scripts/fixtures/fleet/herdr"}, {"id": "T3", "owns": "src/h.py, tests/scripts/fixtures/fleet/herdr"}])
+    assert "run_tests --fast tests/scripts/test_h.py --task T2 --background" in io.task_message(plan, ["T2"], "/sl/sl", "/sl")
+    assert "run_tests --fast src/h.py tests/scripts/fixtures/fleet/herdr --task T3" in io.task_message(plan, ["T3"], "/sl/sl", "/sl")
+
 def test_send_marks_busy_and_prompts_until_working(world, capsys):
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl")
     c = world.fh.calls[0]; assert c[:2] == ("prompt", "sl-proj-w1") and c[3] == ["working"] and "# Task T3" in c[2]

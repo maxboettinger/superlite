@@ -7,7 +7,8 @@ import pytest
 import _fixtures  # noqa: F401 (the fixture copy is made before collection)
 
 HOST_VARS = ("CLAUDE_CODE_SESSION_ID", "SUPERLITE_SESSION_ID", "SUPERLITE_STATE_DIR", "CLAUDE_PROJECT_DIR", "CLAUDE_ENV_FILE",
-             "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_FORK_SUBAGENT")  # the budget's agent-summary note reads these
+             "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_FORK_SUBAGENT",  # the budget's agent-summary note reads these
+             "SUPERLITE_FLEET_WORKER", "SUPERLITE_FLEET_AGENT")  # the SessionStart hook injects the worker note on these
 
 # Before collection: test modules snapshot os.environ into ENV at import, and a host session id there would send a
 # subprocess's default state (pool.json, gate) to the host session's bound .superlite.
