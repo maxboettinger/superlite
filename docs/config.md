@@ -6,6 +6,10 @@ In `skills/subagent-driven-development/config/`:
 - `predictor.json`: the time and context coefficients and the size band `predict` uses. Refit with `sl predict --refit`.
 - `routing.json`: task features to tier (`haiku` or `sonnet`), tier agents and limits, and the stats gate. A critical-path task never gets haiku.
 
+## Permissions (Claude Code)
+
+- `Bash(*/skills/subagent-driven-development/scripts/sl commit_task *)` in `permissions.allow` of the user settings (`~/.claude/settings.json`): lets fixer agents run `sl commit_task` in auto mode, whose classifier otherwise denies the call from a subagent. Allow rules are checked before the classifier and apply to subagents; a plugin cannot ship permission rules, so `/superlite:setup` offers it. Without it a fixer reports `commit: denied` and the coordinator commits.
+
 ## Environment
 
 - `CLAUDE_CODE_FORK_SUBAGENT=0` (settings `env`): turns off Claude Code's per-agent status summaries, which ask each background agent's model every 30 s for a status line, sending the agent's transcript, or a few hundred characters of notes when the server serves the short mode, and are invisible to `metrics.jsonl`. `/superlite:setup` offers it; `budget:` prints `SUMMARIES ON` without it. See the README's Configuration section.
