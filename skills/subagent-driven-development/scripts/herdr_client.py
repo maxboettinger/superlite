@@ -90,7 +90,10 @@ def pane_layout(pane_id):  # O(p)
     panes = _pick(call(["pane", "layout", "--pane", pane_id]), "layout", "panes")  # O(1)
     if not isinstance(panes, list):  # O(1)
         raise HerdrError("parse", "expected result.layout.panes to be a list")  # O(1)
-    return [{"pane_id": _pick(x, "pane_id"), "rows": _pick(x, "rect", "height"), "cols": _pick(x, "rect", "width")} for x in panes]  # O(p)
+    out = [{"pane_id": _pick(x, "pane_id"), "rows": _pick(x, "rect", "height"), "cols": _pick(x, "rect", "width")} for x in panes]  # O(p)
+    if not all(isinstance(x["rows"], int) and isinstance(x["cols"], int) for x in out):  # a null size would crash the placement with a TypeError | O(p)
+        raise HerdrError("parse", "expected integer pane sizes in result.layout.panes")  # O(1)
+    return out  # O(p)
 
 
 def split_pane(pane_id, direction, cwd, env_vars):  # O(e)

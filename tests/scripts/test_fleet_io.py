@@ -7,6 +7,7 @@ from _fixtures import FIXTURES
 from test_plan_tools import SCRIPTS, make_plan
 sys.path.insert(0, str(SCRIPTS))
 import fleet_io as io  # noqa: E402
+import fleet_state as fs  # noqa: E402
 REAL = os.environ.get("SUPERLITE_REAL") == "1"
 
 class FakeHerdr:
@@ -184,7 +185,7 @@ def test_keys_for_an_unknown_worker_is_exit_2(world, capsys):
 def test_send_reaches_a_worker_record_without_a_stored_name(world):
     data = json.loads((world.sd / "fleet.json").read_text()); del data["workers"]["W1"]["name"]; (world.sd / "fleet.json").write_text(json.dumps(data))
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl")
-    assert world.fh.calls[0][:2] == ("prompt", "sl-proj-w1")
+    assert world.fh.calls[0][:2] == ("prompt", fs.agent_name(world.sd, "W1"))
 
 def test_keys_takes_plan_to_find_the_run(world, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
