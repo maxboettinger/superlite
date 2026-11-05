@@ -442,6 +442,15 @@ def others_running(pool_path, tids):  # O(pool bytes)
         return []  # O(1)
 
 
+def baseline_dirty(plan):  # O(b) paths dirty before the run from stable.json; None when unknown (missing, broken, no key)
+    try:  # O(1)
+        data = json.loads((state.plan_dir(plan).parent / ".superlite" / "stable.json").read_text(encoding="utf-8"))  # O(size)
+        got = data.get("baseline_dirty") if isinstance(data, dict) else None  # O(1)
+        return {x for x in got if isinstance(x, str)} if isinstance(got, list) else None  # O(b)
+    except Exception:  # missing, unreadable, not JSON, no plan folder | O(1)
+        return None  # O(1)
+
+
 def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (status, add, commit, rev-parse)
     """Commit one task; (exit code, sha or None). Files other tasks own are left alone."""
     if tid not in info:  # O(1)
@@ -506,10 +515,13 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
             print(f"left uncommitted (another task is running: {', '.join(running)}): {f}", file=sys.stderr)  # O(1)
         out_of_scope = []  # O(1)
     if out_of_scope:  # O(1)
+        base = baseline_dirty(a.plan)  # O(b)
+        why = {f: (" (dirty before the run)" if base and f in base else " (changed during the run, not by a task)" if base is not None else "")  # O(1)
+               for f in out_of_scope}  # O(m)
         for f in out_of_scope:  # O(m) iterations
-            print(f"out-of-scope {f}")  # O(1)
+            print(f"out-of-scope {f}{why[f]}")  # O(1)
             a.blocked.add(f)  # O(1)
-        log_incidents(a.log, tid, [(f, 0, "change outside Owns blocked by commit_task; "  # O(m) one append
+        log_incidents(a.log, tid, [(f, 0, f"change outside Owns{why[f]} blocked by commit_task; "  # O(m) one append
                                     "nothing committed") for f in out_of_scope])
         return 1, None  # O(1)
     if not mine:  # O(1)

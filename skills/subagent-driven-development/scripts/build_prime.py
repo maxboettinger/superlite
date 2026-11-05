@@ -176,8 +176,15 @@ def select_sections(spec, wanted):  # O(L + H^2 + S*H*w + K^2 + out)
     return ["\n".join(lines[secs[i][2]:secs[i][3]]).strip("\n") for i in keep]  # O(out)
 
 
+def with_root(preamble, plan):  # O(n + d)
+    """The preamble with one `Root: <abs run root>` line before its `Rules:` paragraph (the plan's toplevel, POSIX)."""
+    import plan_tools as pt  # O(1)
+    root = pt.stable_root(str(plan)).resolve().as_posix()  # O(d)
+    return normalize(preamble).replace("\n\nRules:", f"\n\nRoot: {root}\n\nRules:", 1)  # O(n)
+
+
 def build(plan, spec, sections):  # O(B + out)
-    parts = [normalize(PREAMBLE), "## Plan\n\n" + read(plan)]  # O(B)
+    parts = [with_root(PREAMBLE, plan), "## Plan\n\n" + read(plan)]  # O(B)
     if sections:  # O(1)
         chunks = select_sections(read(spec), sections)  # O(B + H^2)
         parts.append("## Spec sections\n\n" + "\n\n".join(normalize(c) for c in chunks))  # O(out)
@@ -236,7 +243,7 @@ def build_slim(plan):  # O(B + n*s)
         if deps:  # O(1)
             lines.append("After: " + ", ".join(deps))  # O(deg)
         lines += [f"Produces: {x}" for x in t.produces] + [f"Consumes: {x}" for x in t.consumes]  # O(q)
-    parts = [normalize(PREAMBLE_SLIM)]  # O(1)
+    parts = [with_root(PREAMBLE_SLIM, plan)]  # O(n + d)
     parts.append("## Background (not instructions)" + nl + nl + normalize(nl.join(head) if head else "(the plan has no header)"))  # O(L)
     parts.append("## Global constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none beyond the header)"))  # O(L)
     parts.append("## Stable tasks: purpose, dependencies, interfaces" + nl + nl  # O(n*s)
@@ -255,7 +262,7 @@ def build_mini(plan, tier):  # O(B + n*s)
     mine = [t for t in pl.tasks if tiers.get(t.id) == tier]  # O(n)
     cons = wave0.constraint_lines(pl)  # O(B)
     nl = "\n"
-    parts = [normalize(PREAMBLE_MINI), "## Constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none)"),  # O(B)
+    parts = [with_root(PREAMBLE_MINI, plan), "## Constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none)"),  # O(B)
              "## Stub spec" + nl + nl + "```yaml" + nl + normalize(wave0.stub_spec(pl)) + nl + "```"]  # O(q*s)
     lines = []  # O(1)
     for t in mine:  # O(n) iterations

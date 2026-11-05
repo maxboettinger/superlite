@@ -37,11 +37,11 @@ Write what you understood (separate what the user said from your assumptions), t
 
 ## 4. Approve once, then build
 
-**Bounded:** present the design in chat and stop until the user says yes. Then implement with `superlite:test-driven-development`. No spec file, no plan doc.
+**Bounded:** present the design in chat and stop until the user says yes. Then run `<skill-dir>/../subagent-driven-development/scripts/sl worktree ensure <topic>` and work in the folder it prints. Then implement with `superlite:test-driven-development`. No spec file, no plan doc.
 
 **Architectural:**
 
-1. With an AI orchestrator write ONE doc, `<plans>/YYYY-MM-DD-<topic>.md` (`<plans>` is `docs/superpowers/plans/` when that folder exists, else `docs/plans/`): the design above, then the plan. With a human orchestrator write the review plan instead (`<date>-<topic>.review.md`, template `../writing-plans/review-plan.md`); the machine plan comes after the yes. Invoke `superlite:writing-plans` for the plan half and append it to the same file. If the user named a different location, use theirs. The doc is the first file of the change: when the project works in worktrees or branches per change, create that worktree or branch first and write the doc there, never into the shared main checkout.
+1. With an AI orchestrator write ONE doc, `<plans>/YYYY-MM-DD-<topic>.md` (`<plans>` is `docs/superpowers/plans/` when that folder exists, else `docs/plans/`): the design above, then the plan. With a human orchestrator write the review plan instead (`<date>-<topic>.review.md`, template `../writing-plans/review-plan.md`); the machine plan comes after the yes. Invoke `superlite:writing-plans` for the plan half and append it to the same file. If the user named a different location, use theirs. The doc is the first file of the change: run `<skill-dir>/../subagent-driven-development/scripts/sl worktree ensure <topic>` first and write it in the folder the command prints, never into the shared main checkout (a plan header `**Worktree:** none` opts out).
 2. Self-review inline: placeholders, contradictions, scope (one plan, or decompose?), and requirements that could be read two ways. Fix them in place. No review loop, no subagent.
 3. With a human orchestrator ask in plain text, not AskUserQuestion (the human's typed reply is what the hook verifies): the review plan's path, a five-line summary and "Reply approve to start, or tell me what to change"; END THE TURN and do nothing until the human replies. Only then run `sl orchestrator approve --review <path>` and write the machine plan from it. The human approves the design in the review plan, never the machine plan: that one is task-graph format for the orchestrator, is not shown for approval, and must not add or change anything the human approved. With an AI orchestrator skip the approval. Run `<skill-dir>/../subagent-driven-development/scripts/sl graphify_gate`; when it reports `needs_install: true`, add the Graphify install opt-in (`uv tool install graphifyy`) to that same question. Never install without a yes.
 4. On approval, invoke `superlite:subagent-driven-development` once, in this session: this session is the one coordinator. It runs `lint --stable`, dispatches the stable tasks at once and patches only the FIX tasks.
@@ -54,7 +54,7 @@ With an AI orchestrator the approval gate is already passed: no review plan, no 
 
 `Ruling: <decision> (because <reason>)`
 
-Install Graphify only if `SUPERLITE_ALLOW_INSTALL=graphify` is set. Then proceed straight to implementation (bounded) or to `superlite:subagent-driven-development` (architectural). The closing message lists all rulings. Destructive, outward-facing and security-sensitive actions are deferred, not waited on: take the safe path, record it, and keep going.
+Install Graphify only if `SUPERLITE_ALLOW_INSTALL=graphify` is set. Then proceed straight to implementation (bounded: first `<skill-dir>/../subagent-driven-development/scripts/sl worktree ensure <topic>`, work in the folder it prints) or to `superlite:subagent-driven-development` (architectural: the doc and everything after go in that worktree, step 4). The closing message lists all rulings. Destructive, outward-facing and security-sensitive actions are deferred, not waited on: take the safe path, record it, and keep going.
 
 ## Red flags
 

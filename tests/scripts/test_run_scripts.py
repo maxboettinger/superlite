@@ -56,8 +56,12 @@ def prime(tmp_path, plan=None, spec=None, sections="1,3,5", out="prime.md", *ext
 
 
 def test_prime_is_byte_identical_across_runs(tmp_path):
-    a = prime(tmp_path, out="a.md")
-    b = prime(tmp_path, out="b.md")
+    work = tmp_path / "work"  # all plan variants live in one folder: the prime's Root: line is the same
+    work.mkdir()
+    (work / "plan.md").write_bytes((PLAN_FIX / "plan.md").read_bytes())
+    (work / "spec.md").write_bytes((PLAN_FIX / "spec.md").read_bytes())
+    a = prime(tmp_path, work / "plan.md", work / "spec.md", out="a.md")
+    b = prime(tmp_path, work / "plan.md", work / "spec.md", out="b.md")
     assert a.returncode == 0, a.stderr
     assert a.stdout == b.stdout
     assert (tmp_path / "a.md").read_bytes() == (tmp_path / "b.md").read_bytes()
@@ -66,9 +70,9 @@ def test_prime_is_byte_identical_across_runs(tmp_path):
     assert digest == hashlib.sha256(data).hexdigest()
     assert int(size) == len(data)
     # CRLF input and trailing spaces change nothing
-    crlf_plan = tmp_path / "plan_crlf.md"
+    crlf_plan = work / "plan_crlf.md"
     crlf_plan.write_bytes((PLAN_FIX / "plan.md").read_bytes().replace(b"\n", b"  \r\n"))
-    crlf_spec = tmp_path / "spec_crlf.md"
+    crlf_spec = work / "spec_crlf.md"
     crlf_spec.write_bytes((PLAN_FIX / "spec.md").read_bytes().replace(b"\n", b"\r\n"))
     c = prime(tmp_path, plan=crlf_plan, spec=crlf_spec, out="c.md")
     assert c.stdout == a.stdout

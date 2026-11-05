@@ -110,6 +110,7 @@ fi
 norm "$proj"; projn="$NORM"; lower "$projn"; projl="$LOWER"
 
 prot=0
+tgt=""   # the path that made the guard block, as written; empty when a command was judged
 eff_out=0; effn=""; basen=""; basea=""; base_void=0
 # dotres PATH: absolute PATH with . and .. segments resolved lexically, into RES.
 dotres() {
@@ -181,10 +182,10 @@ project_code1() {
 # allowed_rel REL: succeeds when the coordinator may write the project-relative REL in the guard's state.
 allowed_rel() {
   if [ "$human" = 1 ]; then
-    case "$1" in docs/plans/*.review.md|docs/*/plans/*.review.md|.superlite/*) return 0 ;; esac
+    case "$1" in docs/plans/*.review.md|docs/*/plans/*.review.md|.superlite/*|.git/info/exclude) return 0 ;; esac
     return 1
   fi
-  case "$1" in docs/plans/*|docs/*/plans/*|docs/*.md|SPEC*.md|*/SPEC*.md|docs.md|*/docs.md|.superlite/*) return 0 ;; esac
+  case "$1" in docs/plans/*|docs/*/plans/*|docs/*.md|SPEC*.md|*/SPEC*.md|docs.md|*/docs.md|.superlite/*|.git/info/exclude) return 0 ;; esac
   return 1
 }
 
@@ -1006,7 +1007,7 @@ judge_segs() {
     rest="$seg"
     while [[ $rest =~ $re_redir ]]; do
       t="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
-      project_code "$t" && { hit="> $t"; break; }
+      project_code "$t" && { hit="> $t"; tgt="$t"; break; }
     done
     [ -n "$hit" ] && break
     set -f; set -- $seg; set +f
@@ -1080,14 +1081,14 @@ judge_segs() {
           [ "$hasscr" = 1 ] || skip=1
           [ "$c" = sed ] && [ "$inpl" = 1 ] && sed_empty_suffix "$seg0" && skip=$((skip + 1))   # BSD: -i '' is not an operand
           if [ "$inpl" = 1 ]; then
-            for ((i = skip; i < n; i++)); do project_code "${args[i]}" && { hit="$c -i ${args[i]}"; break; }; done
+            for ((i = skip; i < n; i++)); do project_code "${args[i]}" && { hit="$c -i ${args[i]}"; tgt="${args[i]}"; break; }; done
           fi ;;
-      tee) for a in "${args[@]}"; do dir_target "$a" "$a"; project_code "$DT" && { hit="tee $a"; break; }; done ;;
-      rm) for a in "${args[@]}"; do project_code "$a" && { hit="$c $a"; break; }; done ;;
+      tee) for a in "${args[@]}"; do dir_target "$a" "$a"; project_code "$DT" && { hit="tee $a"; tgt="$a"; break; }; done ;;
+      rm) for a in "${args[@]}"; do project_code "$a" && { hit="$c $a"; tgt="$a"; break; }; done ;;
       mv) dir_target "$last" "${args[0]}"
-          for a in "${args[@]:0:n-1}"; do project_code "$a" && { hit="$c $a"; break; }; done
-          [ -z "$hit" ] && project_code "$DT" && hit="mv $last" ;;
-      cp) if [ "$n" -gt 1 ]; then dir_target "$last" "${args[0]}"; project_code "$DT" && hit="cp $last"; fi ;;
+          for a in "${args[@]:0:n-1}"; do project_code "$a" && { hit="$c $a"; tgt="$a"; break; }; done
+          [ -z "$hit" ] && project_code "$DT" && { hit="mv $last"; tgt="$last"; } ;;
+      cp) if [ "$n" -gt 1 ]; then dir_target "$last" "${args[0]}"; project_code "$DT" && { hit="cp $last"; tgt="$last"; }; fi ;;
       cd) if [ "$jdepth" = 0 ] && [ "$chain" = 1 ]; then   # case B: the shell moves here
             basea="${chain_dirs[chain_k]}"; basen=""; eff_out=0; chain_k=$((chain_k + 1))
           fi ;;
@@ -1266,7 +1267,7 @@ if [ -z "$hit" ] && [ "$tool" != Bash ] && [ "$tool" != PowerShell ]; then
   jstr file_path; f="$REPLY"
   if [ -z "$f" ]; then jstr notebook_path; f="$REPLY"; fi
   [ -n "$f" ] || exit 0
-  project_code "$f" && hit="$f"
+  project_code "$f" && { hit="$f"; tgt="$f"; }
 elif [ -z "$hit" ]; then
   jstr command; cmd="$REPLY"
   [ -n "$cmd" ] || exit 0
@@ -1500,7 +1501,7 @@ elif [ -z "$hit" ]; then
         if [[ $rest =~ $re_mw ]]; then want=$((want + 1)); elif [[ $rest =~ $re_mr ]]; then :; else unknown=1; fi   # 'r+' writes
       elif [[ $rest =~ $re_ow ]]; then
         resolve_target "${BASH_REMATCH[1]}"
-        if [ -z "$TGT" ]; then [ "$RT_OUT" = 1 ] || unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
+        if [ -z "$TGT" ]; then [ "$RT_OUT" = 1 ] || unknown=1; elif project_code "$TGT"; then hit="$TGT"; tgt="$TGT"; fi
       elif ! [[ $rest =~ $re_or ]]; then unknown=1
       fi
     done
@@ -1513,7 +1514,7 @@ elif [ -z "$hit" ]; then
         if [ "$re_w" = "$re_w4" ]; then e="${BASH_REMATCH[2]}"; else e="${BASH_REMATCH[1]}"; fi
         rest="${rest#*"$m"}"; got=$((got + 1))
         resolve_target "$e"
-        if [ -z "$TGT" ]; then [ "$RT_OUT" = 1 ] || unknown=1; elif project_code "$TGT"; then hit="$TGT"; fi
+        if [ -z "$TGT" ]; then [ "$RT_OUT" = 1 ] || unknown=1; elif project_code "$TGT"; then hit="$TGT"; tgt="$TGT"; fi
       done
     done
     # A writer whose target is unknown (a variable, an f-string, a method chain, fs.write on a descriptor) blocks.
@@ -1555,5 +1556,16 @@ else
     '- Wave 0 skeleton/stub/config files belong to an implementer-haiku task.' \
     '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, any docs.md and .superlite/**.' \
     '- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete .superlite by hand.' >&2
+fi
+if [ "$prot" != 1 ]; then   # name what was judged: a path as "target", a command as "command"
+  tgt="${tgt//$'\x03'/ }"; tgt="${tgt//$'\x05'/}"; tgt="${tgt//[[:cntrl:]]/}"
+  tgt="${tgt%\"}"; tgt="${tgt#\"}"; tgt="${tgt%\'}"; tgt="${tgt#\'}"
+  lower "$tgt"
+  case "$LOWER" in "$projl"/*) tgt="${tgt:$((${#projn}+1))}" ;; esac   # project-relative
+  case "$tgt" in ./*) tgt="${tgt#./}" ;; esac
+  hit="${hit//$'\x03'/ }"; hit="${hit//[[:cntrl:]]/}"
+  if [ -n "$tgt" ]; then printf 'Blocked target: %s\n' "$tgt" >&2
+  else printf 'Blocked command: %s\n' "$hit" >&2
+  fi
 fi
 exit 2
