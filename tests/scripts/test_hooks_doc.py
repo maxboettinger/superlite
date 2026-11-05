@@ -34,3 +34,12 @@ def test_guard_line_names_cd_voiding():
     line = next(x for x in HOOKS.splitlines() if x.startswith("- `block-coordinator-edits`"))
     for needle in ("`pushd`", "`chdir`", "turns the outside base off"):
         assert needle in line, needle
+
+
+def test_guard_line_names_the_124_rules():
+    line = next(x for x in HOOKS.splitlines() if x.startswith("- `block-coordinator-edits`"))
+    for needle in ("with or without a writer call", "allowed only by its prefix", "`c''d`", "`CDPATH` set or named",
+                   "`rm>/dev/null`", "`GIT_WORK_TREE`", "every `-C` that member names follow", "it may enter",
+                   "reads stdin as its program"):
+        assert needle in line, needle
+    assert "File APIs without a writer call" not in line

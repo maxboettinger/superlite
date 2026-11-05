@@ -4,8 +4,8 @@
 #  1. Protected files, in every state: .superlite/orchestrator.json (changed only by `sl orchestrator`)
 #     and .superlite/human-replies.jsonl (written only by hooks/record-human-reply) are never written
 #     by the model. An interpreter writer in a command that names one is judged by its targets in every state: a
-#     protected or unknown target blocks, and so does a move, copy or link API next to the name when the command also
-#     holds a writer call (#122).
+#     protected or unknown target blocks, and so does a move, copy or link API next to the name in a command that runs
+#     an interpreter, with or without a writer call (#122, #124).
 #  2. HUMAN-UNAPPROVED (.superlite/orchestrator.json has mode human and approved false): nothing
 #     builds until the human approves the plan. Allowed writes: docs/plans/*.review.md, docs/*/plans/*.review.md and
 #     .superlite/** (minus the protected files), also inside a linked worktree in the project (judged from its root, whose
@@ -22,24 +22,32 @@
 # The interpreter scan runs only when the command, with quoted strings and heredoc bodies removed, still runs an
 # interpreter, a shell -c or eval wrapper, or a $(interpreter ...) substitution: text that only quotes code is not a call.
 # Relative targets are judged from the shell's directory: the JSON cwd when the text holds no cd at all; at each cd when
-# every cd is a plain command into the project and the command is one && chain or one leading cd (interpreter writer
-# targets then from every directory it visits); for lines of && chains with plain cds into the project, at each command's
-# place (case D, d_walk: a sure cd, or `mkdir -p X && cd X`, moves the later lines too; the JSON cwd is the shell's own
-# directory, as Claude Code's hooks reference states); else the JSON cwd plus each target when every cd is a readable absolute
-# one into the project, or a leading `cd <absolute>` that is the only cd outside quotes, or the project root when that is
-# void, plus the cwd and each cd target. Outside the project relative targets are
-# not project code (absolute paths into it still are). A body that changes directory is judged from the project root;
-# env -C and sudo -D count as a directory change; while the directory is unknown a relative path with .. blocks.
+# every cd is a plain command into the project and the command is one && chain or one leading cd into a folder it may
+# enter, with no source, ., eval, alias, enable or trap (moves_unseen; interpreter writer targets then from every
+# directory it visits); for lines of && chains with plain cds into the project, at each command's place (case D, d_walk:
+# a sure cd, or `mkdir -p X && cd X`, moves the later lines too; the JSON cwd is the shell's own directory, as Claude
+# Code's hooks reference states); else the JSON cwd plus each target when every cd is a readable absolute one into the
+# project, or a leading `cd <absolute>` that is the only cd outside quotes (judged from its target too), or the project
+# root when that is void, plus the cwd, each cd target and each folder relative cd steps visit. Outside the project
+# relative targets are not project code (absolute paths into it still are). A body that changes directory is judged from
+# the project root; env -C and sudo -D count as a directory change; a cd the cd block cannot read (c''d, c\d) leaves the
+# directory unknown from there on, as does a relative cd other than ./DIR while CDPATH is set or named; while the
+# directory is unknown a relative path with .. blocks, and so does one allowed only by its prefix (docs/plans/a.md),
+# and one ending in a protected file's name counts as that file (#124).
+# The command word is read past redirects (>/dev/null rm, rm>/dev/null) and with quotes and escapes removed (\rm).
 # A writer whose target is unknown but whose root is an absolute path outside the project passes.
 # Accepted limits (#64): run time grows quadratically with the number of quoted words (about 1000 of them reach the hook
 # timeout, which fails open), and nested quotes inside a $(...) within double quotes are not judged.
 # A stdin shell's program (the heredoc body or here-string of a shell with no -c and no script operand, or -s, or
 # /dev/stdin; also source /dev/stdin and sudo -s/-i with no command; every heredoc on a line, in order) is judged like a
 # -c body, one level deep, and so is env -S STRING; a program piped into a shell (cat <<EOF | sh) or given by process
-# substitution (bash <(...)) is out of reach. While the guard enforces, git rewrites of project files block (git_hit:
-# apply, am, stash pop|apply|branch, reset --hard|--merge|--keep and forced discards in the project; checkout, restore, rm,
-# mv, clean on a project path), and so do tar -x and unzip into project code (archive_hit); branch moves and other
-# archivers pass. nohup, timeout, nice and exec are skipped like sudo and env, with their own options.
+# substitution (bash <(...)) is out of reach; a -c or eval body that reads stdin takes the line's heredocs (stdin_docs).
+# While the guard enforces, git rewrites of project files block (git_hit: apply, am, stash pop|apply|branch, reset
+# --hard|--merge|--keep and forced discards in the project; checkout, restore, rm, mv, clean on a project path; long
+# options by prefix; GIT_WORK_TREE, core.worktree and -c aliases read by git_cfg; a git config written, GIT_DIR or
+# --git-dir in the command is one it cannot read), and so do tar -x and unzip into project code (archive_hit: each -C
+# that members follow); branch moves and other archivers pass. nohup, timeout, nice and exec are skipped like sudo and
+# env, with their own options.
 # Bash/PowerShell write detection is best-effort; when unsure, allow. Sessions without a .superlite
 # directory are never touched. Bash builtins only (no external process is spawned: each spawn costs
 # ~250 ms on Windows), cheap exits first. Exit 2 blocks (message on stderr); anything else,
@@ -138,7 +146,7 @@ project_code() {
   return $r
 }
 project_code1() {
-  local p rel pl v1='$CLAUDE_PROJECT_DIR' v2='${CLAUDE_PROJECT_DIR}'
+  local p rel pl v1='$CLAUDE_PROJECT_DIR' v2='${CLAUDE_PROJECT_DIR}' unk=0
   norm "${1//$'\x05'/Q}"; p="$NORM"; p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
   p="${p//$'\x03'/ }"
   case "$p" in *$'\x06'*) [ "$enforce" = 1 ] && return 0; return 1 ;; esac   # an unreadable quoted word: unknown
@@ -152,8 +160,13 @@ project_code1() {
     case "$p" in /*|[A-Za-z]:[/\\]*) ;; *) case "/$p/" in */../*|*/./*) p="$basen/${p#./}" ;; esac ;; esac
   else
     case "$p" in /*|[A-Za-z]:[/\\]*) ;; *)
-      # the shell's directory is unknown: a relative path with .. may climb from anywhere into the project
-      case "/$p/" in */../*) [ "$base_void" = 1 ] && [ "$enforce" = 1 ] && return 0 ;; esac
+      # the shell's directory is unknown: a relative path with .. may climb from anywhere into the project, and one
+      # allowed only by its prefix (docs/plans/...) may lie below any folder (#124)
+      [ "$base_void" = 1 ] && unk=1
+      if [ "$unk" = 1 ]; then   # the folder may be .superlite: a protected name is protected (#124)
+        lower "${p##*/}"; case "$LOWER" in orchestrator.json|human-replies.jsonl) prot=1; return 0 ;; esac
+      fi
+      case "/$p/" in */../*) [ "$unk" = 1 ] && [ "$enforce" = 1 ] && return 0 ;; esac
       case "/$p/" in */../*|*/./*) p="$projn/${p#./}" ;; esac ;;
     esac
   fi
@@ -170,11 +183,11 @@ project_code1() {
   case "$pl" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
   { [ "$human" = 1 ] || [ "$active" = 1 ]; } || return 1
   case "/$rel/" in */../*|*/./*) return 0 ;; esac   # docs/../src/a.py is not under docs/
-  allowed_rel "$rel" && return 1
+  if allowed_rel "$rel"; then [ "$unk" = 1 ] && ! allowed_rel "x/$rel" && return 0; return 1; fi
   if wt_rel "$rel"; then   # a linked worktree inside the project: judged from its root
     lower "$WREL"
     case "$LOWER" in .superlite/human-replies.jsonl|.superlite/orchestrator.json) prot=1; return 0 ;; esac
-    allowed_rel "$WREL" && return 1
+    allowed_rel "$WREL" && [ "$unk" = 0 ] && return 1
   fi
   return 0
 }
@@ -410,15 +423,16 @@ emit_line() {
 strip_cmd() {
   local sq="'" dq='"' line t skip=0 tag="" open="" hq=0 cut=0 re_here re_here2 re_quote atoms text="$cmd" pass=0 hbody="" nl=$'\n'
   local hd_i=0 hm=$'\x0f' hd_k=0 m0 pre after tg fd rest re_fd='(^|[[:space:]])([0-9]+)$'
-  local -a hd_tags=() hd_ids=()
+  local -a hd_tags=() hd_ids=() hd_dash=()
   stripped_done=1; stripped=""; flat=""   # judge_body strips its body alone, not appended to the outer command
   hdocs=()   # each heredoc body, by the index its << carries in `stripped` (<<\x0fN\x0f), for stdin_prog
   # a heredoc starts at a << outside quotes that is not part of <<<; a double quote opened before it counts only inside a
   # "$(cat <<'EOF' substitution. re_here's prefix cannot hold a heredoc << (a << inside (( )) or $(( )) is a shift), so
   # it matches the first one on the line; its delimiter is the whole word after it, quotes and backslashes removed.
-  atoms="(\\\\.|[^$dq$sq\\\\]|$dq([^$dq\\\\]|\\\\.)*$dq|$sq[^$sq]*$sq)*"
+  # A # that starts a word starts a comment, so neither prefix holds one: a # only follows a word's text (#124).
   t="($dq([^$dq\\\\]|\\\\.)*$dq|$sq[^$sq]*$sq)"
-  re_here="^((\\\\.|[^$dq$sq\\\\<(]|<<<|<([^<$dq$sq]|$t)|\\(([^($dq$sq<]|$t)|\\(\\(([^()]|\\([^()]*\\))*\\)\\)|$t)*)<<-?[[:space:]]*"
+  atoms="(\\\\.#*|[^$dq$sq\\\\#]|[^$dq$sq\\\\#[:space:];&|()]#+|$t#*)*"
+  re_here="^((\\\\.#*|[^$dq$sq\\\\<(#]|[^$dq$sq\\\\<(#[:space:];&|)]#+|<<<|<([^<$dq$sq#]|$t)|\\(([^($dq$sq<#]|$t)|\\(\\(([^()]|\\([^()]*\\))*\\)\\)|$t#*)*)<<-?[[:space:]]*"
   re_here="$re_here($sq[^$sq]*$sq|$dq[^$dq]*$dq|\\\\.|[^[:space:]$sq$dq\\\\;&|<>()])+"
   re_here2="^($atoms)$dq[^$dq]*\\\$\\([^$dq]*[^<$dq]<<-?[[:space:]]*[$sq$dq]?([A-Za-z_][A-Za-z_0-9]*)"
   re_quote="^((\\\\.|[^$dq$sq\\\\])*)($dq([^$dq\\\\]|\\\\.)*$dq|$sq[^$sq]*$sq)(.*)\$"
@@ -432,8 +446,8 @@ strip_cmd() {
     # the Q marks of the earlier lines are real; only this line's own Q is a literal (\x0e carries them past the escape)
     [ -n "$open" ] && { line="${open//Q/$'\x0e'} $line"; open=""; }
     if [ "$skip" = 1 ]; then
-      t="${line#"${line%%[![:space:]]*}"}"; t="${t%"${t##*[![:space:]]}"}"
-      if [ "$t" = "$tag" ]; then   # this body ends; the line's next heredoc, if any, starts
+      t="$line"; [ "${hd_dash[hd_k]}" = 1 ] && t="${t#"${t%%[!$'\t']*}"}"   # <<- strips leading tabs only (#124)
+      if [ "$t" = "$tag" ]; then   # the exact delimiter line ends this body; the line's next heredoc, if any, starts
         [ -n "${hd_ids[hd_k]}" ] && hdocs[${hd_ids[hd_k]}]="$hbody"
         hbody=""; hd_k=$((hd_k + 1))
         if [ "$hd_k" -lt "${#hd_tags[@]}" ]; then tag="${hd_tags[hd_k]}"; else skip=0; fi
@@ -448,16 +462,20 @@ strip_cmd() {
     if [[ $line =~ $re_here ]]; then
       # mark each << on the line, in order, with the index its body gets (bash reads the bodies in that order); the
       # space splits `bash<<EOF` into its words, an fd prefix (0<<) stays on the operator
-      skip=1; here=1; rest="$line"; t=""; hd_tags=(); hd_ids=(); hd_k=0
+      skip=1; here=1; rest="$line"; t=""; hd_tags=(); hd_ids=(); hd_dash=(); hd_k=0
       while [[ $rest =~ $re_here ]]; do
         m0="${BASH_REMATCH[0]}"; pre="${m0%<<*}"; after="${m0:${#pre}+2}"
         tg="${after#-}"; tg="${tg#"${tg%%[![:space:]]*}"}"; tg="${tg//[$sq$dq\\]/}"
         fd=""; [[ $pre =~ $re_fd ]] && { fd="${BASH_REMATCH[2]}"; pre="${pre%"$fd"}"; }
         hd_i=${#hdocs[@]}; hdocs[hd_i]=""; hd_tags[${#hd_tags[@]}]="$tg"; hd_ids[${#hd_ids[@]}]="$hd_i"
+        case "$after" in -*) hd_dash[${#hd_dash[@]}]=1 ;; *) hd_dash[${#hd_dash[@]}]=0 ;; esac
         t="$t$pre $fd<<$hm$hd_i$hm$after"; rest="${rest:${#m0}}"
       done
       line="$t$rest"; tag="${hd_tags[0]}"
-    elif [[ $line =~ $re_here2 ]]; then tag="${BASH_REMATCH[4]}"; skip=1; here=1; hd_tags=("$tag"); hd_ids=(""); hd_k=0
+    elif [[ $line =~ $re_here2 ]]; then
+      tag="${BASH_REMATCH[${#BASH_REMATCH[@]}-1]}"; skip=1; here=1; hd_tags=("$tag"); hd_ids=(""); hd_k=0   # the last group
+      t="${BASH_REMATCH[0]##*<<}"
+      case "$t" in -*) hd_dash=(1) ;; *) hd_dash=(0) ;; esac
     fi
     line="${line//Q/$'\x05'}"; line="${line//$'\x0e'/Q}"   # a literal Q must not read as a quoted-word mark
     if [ "$here" = 1 ]; then
@@ -567,7 +585,7 @@ and_chain() {
 # calls (no -m) that can succeed, and the folder exists and can be entered or one of them makes it; else the directory
 # before the chain stays possible too. d_sets[i] holds the directories (@: the input cwd) the i-th
 # simple command (one line of `stripped`) may run in; D_ALL every directory any command may run in.
-d_sets=(); D_ALL=""; dmode=0; d_k=0; d0_out=0; d0_a=""
+d_sets=(); D_ALL=""; dmode=0; d_k=0; d0_out=0; d0_a=""; cd_hid=0
 # d_res SET WORD [any]: WORD resolved from each directory of SET (a relative one from @ starts at the input cwd), into
 # RS; fails when one lands outside the project, unless `any` is given.
 d_res() {
@@ -627,6 +645,32 @@ d_mkdir() {
   done
   [ "$p" = 1 ] && [ "${#D_OPS[@]}" -gt 0 ]
 }
+# moves_unseen: succeeds when a simple command of `stripped` runs a builtin that may move the shell or change what cd does
+# unseen: source, ., eval, alias, enable or trap (its word decoded; also after redirects, VAR=value, builtin, command and
+# its options, time -p, exec, !, { and the control words before a command), or a command word that cannot be read, or
+# the command holds case, function or coproc (their commands follow patterns or names) (#124).
+moves_unseen() {
+  local line t n qn=0 i r=1
+  local -a sw sv_raw=("${QRAW[@]}")
+  while IFS= read -r line; do
+    t="${line//[!Q]/}"; n=${#t}
+    QRAW=(); [ "$qs_ok" = 1 ] && QRAW=("${qs[@]:qn:n}")
+    qn=$((qn + n))
+    set -f; sw=($line); set +f
+    for ((i = 0; i < ${#sw[@]}; i++)); do
+      if redir_word "${sw[i]}"; then [ "$RW_NEXT" = 1 ] && i=$((i + 1)); continue; fi
+      cmd_word "$i"
+      case "$CW" in
+        '') r=0; break 2 ;;
+        [A-Za-z_]*=*|builtin|command|time|exec|'!'|-*|'{'|if|then|else|elif|while|until|do) ;;
+        source|.|eval|alias|enable|trap|case|function|copro[c]) r=0; break 2 ;;   # copro[c]: the bash 3.2 lint bans the word
+        *) break ;;
+      esac
+    done
+  done <<< "$stripped"
+  QRAW=("${sv_raw[@]}")
+  return $r
+}
 d_walk() {
   local f="${flat%$'\n'}" t line piece w i n ck=0 ok sure made S A C nl=$'\n' am=$'\x11' all="" prior=1 rd op mk
   local re_op='^[0-9]*(>>?|<<?<?|<>|>&|<&|&>(>)?)$'
@@ -636,6 +680,7 @@ d_walk() {
   case "$t" in *'&'*|*'|'*|*'!'*) return 1 ;; esac
   case "$stripped" in *[\(\)\`]*) return 1 ;; esac
   case "$lc" in *cdpath*) return 1 ;; esac   # CDPATH sends a relative cd elsewhere
+  moves_unseen && return 1
   if [ -n "${CDPATH:-}" ]; then
     for w in "${cd_words[@]}"; do case "$w" in /*|[A-Za-z]:[/\\]*|./*) ;; *) return 1 ;; esac; done
   fi
@@ -734,6 +779,97 @@ d_apply() {
   basen=""; base_void=0; alt_list="$rest"
 }
 
+# git_cfg SEG0 CI: what a git command (its word at CI in SEG0, before qdecode) takes from elsewhere (#124). The work
+# tree: GIT_WORK_TREE=DIR before it (also after env), else -c core.worktree=DIR, sets GC_WT (GC_WTSET=1), which git_hit
+# judges like --work-tree when that is not given; a GIT_WORK_TREE elsewhere in the command (export) or a config the
+# guard cannot read (GIT_CONFIG* in the command, --config-env, -c include.*) leaves it unknown. An alias of a subcommand
+# that is no git command, set by -c, is judged as what it runs: a ! alias as a shell command, another as git, each with
+# the words after it; an alias from a config the guard cannot read blocks while enforcing. QRAW holds SEG0's quoted texts.
+GIT_CMDS=" add am annotate apply archive bisect blame branch bundle cat-file check-ignore checkout checkout-index cherry
+ cherry-pick clean clone commit config count-objects describe diff diff-files diff-index diff-tree difftool fetch
+ format-patch fsck gc grep help init log ls-files ls-remote ls-tree merge merge-base mergetool mv notes prune pull push
+ range-diff read-tree rebase reflog remote repack replace reset restore rev-list rev-parse revert rm shortlog show
+ show-ref sparse-checkout stash status submodule switch symbolic-ref tag update-index update-ref version worktree
+ write-tree "
+git_cfg() {
+  local -a w an av; local i j t a k v qn=0 sub="" lk unk=0 ew="" ewset=0 cw="" cwset=0 al="" alset=0 rest="" sq="'" cflag=0
+  local re_gconf='(^|[^[:alnum:]_./-])git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+config([[:space:]]|$)'
+  GC_WT=""; GC_WTSET=0
+  set -f; w=($1); set +f
+  for ((i = 0; i < ${#w[@]}; i++)); do
+    WM=$qn; t="${w[i]//[!Q]/}"; qn=$((qn + ${#t}))
+    if [ "$i" -lt "$2" ]; then   # the words before git: assignments, env and its own
+      if wdecode "${w[i]}"; then a="$WD"; else a="${w[i]}"; fi
+      case "$a" in GIT_WORK_TREE=*) ew="${a#GIT_WORK_TREE=}"; ewset=1; [ "$a" = "$WD" ] || ew=Q ;; esac
+      continue
+    fi
+    [ "$i" = "$2" ] && continue
+    if [ -n "$k" ]; then   # the value word of the option in k
+      wdecode "${w[i]}" || { [ "$enforce" = 1 ] && hit="git $k (unreadable)"; return 0; }
+      a="$k"; k=""
+      case "$a" in
+        -c) lower "${WD%%=*}"; lk="$LOWER"; v="${WD#*=}"
+            case "$lk" in
+              core.worktree) cw="$v"; cwset=1 ;;
+              alias.*) an[${#an[@]}]="${lk#alias.}"; av[${#av[@]}]="$v" ;;
+              include.*|includeif.*) unk=1 ;;
+            esac ;;
+        --config-env) unk=1 ;;
+      esac
+      continue
+    fi
+    if [ -n "$sub" ]; then
+      wdecode "${w[i]}" || { [ "$enforce" = 1 ] && hit="git $sub (unreadable alias argument)"; return 0; }
+      rest="$rest $sq${WD//$sq/$sq\\$sq$sq}$sq"; continue
+    fi
+    wdecode "${w[i]}" || { [ "$enforce" = 1 ] && hit="git (unreadable option)"; return 0; }
+    case "$WD" in
+      -C|--git-dir|--work-tree) k="$WD"; cflag=1 ;;
+      -c|--config-env|--namespace|--super-prefix|--exec-path) k="$WD" ;;
+      --config-env=*) unk=1 ;;
+      -C?*|--git-dir=*|--work-tree=*) cflag=1 ;;
+      -*) ;;
+      *) sub="$WD" ;;
+    esac
+  done
+  case "$cmd" in *GIT_CONFIG*|*GIT_DIR*) unk=1 ;; esac   # a git dir the guard cannot read the config of (#124)
+  case "$lc" in *--git-dir*) unk=1 ;; esac
+  [[ $lc =~ $re_gconf ]] && unk=1   # a git config written in the same command
+  [ "$ewset" = 0 ] && case "$cmd" in *GIT_WORK_TREE*) ew=Q; ewset=1 ;; esac
+  if [ -n "$sub" ]; then
+    case "$GIT_CMDS" in *[[:space:]]"$sub"[[:space:]]*) ;; *)
+      lower "$sub"
+      for ((j = 0; j < ${#an[@]}; j++)); do [ "${an[j]}" = "$LOWER" ] && { al="${av[j]}"; alset=1; }; done
+      if [ "$alset" = 1 ]; then
+        [ "$jdepth" = 0 ] || { [ "$enforce" = 1 ] && hit="git alias $sub"; return 0; }   # one level deep
+        case "$al" in
+          '!'*) # git runs a shell alias at the work tree's top: the project root, unless the shell sits outside it with
+                # no git directory option (#124)
+            if [ "$eff_out" = 0 ] || [ "$cflag" = 1 ]; then
+              local sv_a="$basea" sv_n="$basen" sv_o="$eff_out" sv_v="$base_void" sv_l="$alt_list"
+              eff_out=0; basea="$projn"; basen=""; base_void=0; alt_list=""
+              judge_body "${al#!}$rest"
+              basea="$sv_a"; basen="$sv_n"; eff_out="$sv_o"; base_void="$sv_v"; alt_list="$sv_l"
+            else judge_body "${al#!}$rest"
+            fi ;;
+          *) lower "${al%%[[:space:]]*}"   # an alias of another -c alias: two levels deep
+             for ((j = 0; j < ${#an[@]}; j++)); do
+               [ "${an[j]}" = "$LOWER" ] && { [ "$enforce" = 1 ] && hit="git alias $sub -> $LOWER"; return 0; }
+             done
+             judge_body "git $al$rest" ;;
+        esac
+        return 0
+      fi
+      [ "$unk" = 1 ] && [ "$enforce" = 1 ] && { hit="git $sub (an alias from a config it cannot read)"; return 0; } ;;
+    esac
+  fi
+  if [ "$ewset" = 1 ]; then GC_WT="$ew"; GC_WTSET=1
+  elif [ "$cwset" = 1 ]; then GC_WT="$cw"; GC_WTSET=1
+  elif [ "$unk" = 1 ]; then GC_WT=Q; GC_WTSET=1
+  fi
+  return 0
+}
+
 # git_hit ARGS...: ARGS follow the git command word; sets `hit` when they write project files. The subcommand is the
 # first word that is not a global option, and the last -C / --work-tree names the directory git runs in (a relative one
 # is taken from the outside directory or the shell's known one, else stays in the project). In the project (or when
@@ -742,16 +878,16 @@ d_apply() {
 # target from that directory (`.`, and clean with no path, stand for the directory itself); index-only and dry-run
 # forms (restore --staged, rm --cached, -n) pass. Branch moves (switch, checkout <branch>, merge, rebase, pull) pass.
 git_hit() {
-  local a gd="" sub="" gd_unknown=0 gd_set=0 inproj=1 dd=0 skipn=0 i n p h wt="" isw
+  local a gd="" sub="" gd_unknown=0 gd_set=0 inproj=1 dd=0 skipn=0 i n p h wt="" isw o cliwt=0 rt re_cut='^((\\.|[^\\<>])*)'
   local -a ops=() paths=()
   [ "$eff_out" = 1 ] && [ -z "$alt_list" ] && gd="$effn"   # a candidate directory in the project: judged as inside
   while [ $# -gt 0 ]; do
     a="$1"; shift; isw=0
     case "$a" in
       -C) [ $# -gt 0 ] || return 1; a="$1"; shift ;;
-      --work-tree) [ $# -gt 0 ] || return 1; a="$1"; shift; isw=1 ;;
+      --work-tree) [ $# -gt 0 ] || return 1; a="$1"; shift; isw=1; cliwt=1 ;;
       -C?*) a="${a#-C}" ;;
-      --work-tree=*) a="${a#--work-tree=}"; isw=1 ;;
+      --work-tree=*) a="${a#--work-tree=}"; isw=1; cliwt=1 ;;
       -c|--git-dir|--namespace|--super-prefix|--config-env|--exec-path) shift; continue ;;
       -*) continue ;;
       *) sub="$a"; break ;;
@@ -766,6 +902,16 @@ git_hit() {
     esac
   done
   [ -n "$sub" ] || return 1
+  if [ "$cliwt" = 0 ] && [ "$GC_WTSET" = 1 ]; then   # GIT_WORK_TREE or core.worktree (git_cfg), from the -C directory
+    a="$GC_WT"; gd_set=1
+    case "$a" in
+      /*|[A-Za-z]:[/\\]*) wt="$a" ;;
+      Q|*$'\x06'*|*'$'*|'~'*|'') gd=""; gd_unknown=1 ;;
+      *) if [ -n "$gd" ]; then gd="$gd/${a#./}"
+         elif [ -z "$alt_list" ] && [ -n "$basea" ]; then gd="$basea/${a#./}"
+         fi ;;
+    esac
+  fi
   [ -n "$wt" ] && { gd="$wt"; gd_set=1; gd_unknown=0; }   # an absolute --work-tree wins over any -C
   GW=("$@")
   case "$sub" in clean) GV=e ;; restore) GV=s ;; checkout) GV=bB ;; switch) GV=cC ;; *) GV="" ;; esac
@@ -780,11 +926,17 @@ git_hit() {
   [ "$gd_unknown" = 1 ] && inproj=1
   for a in "$@"; do   # the operands after the subcommand; -- ends the options
     if [ "$skipn" -gt 0 ]; then skipn=$((skipn - 1)); continue; fi
+    if redir_word "$a"; then [ "$RW_NEXT" = 1 ] && skipn=1; continue; fi   # a redirect (and its word), also after --
+    case "$a" in *'<'*|*'>'*)   # a word glued to a redirect (a.py>/dev/null): the text before it is the operand (#124)
+      [[ $a =~ $re_cut ]] && { rt="${a:${#BASH_REMATCH[1]}}"; a="${BASH_REMATCH[1]}"; }
+      case "$rt" in *'<'|*'>'|*'>&'|*'<&') skipn=1 ;; esac
+      a="${a%&}"; [ -n "$a" ] || continue ;;
+    esac
     if [ "$dd" = 1 ]; then paths[${#paths[@]}]="$a"; continue; fi
     case "$a" in
       --) dd=1 ;;
-      -s|--source|-b|-B|--orphan|-e|--exclude|*'<'|*'>'|*'>&'|*'<&') skipn=1 ;;   # an option or redirect and its word
-      -*|*'<'*|*'>'*) ;;
+      -s|--source|-b|-B|--orphan|-e|--exclude) skipn=1 ;;   # an option and its word
+      -*) ;;
       *) ops[${#ops[@]}]="$a" ;;
     esac
   done
@@ -800,7 +952,10 @@ git_hit() {
       [ "$enforce" = 1 ] && [ "$inproj" = 1 ] || return 1
       case "$sub" in
         stash) case "${ops[0]}" in pop|apply|branch) hit="git stash ${ops[0]}" ;; esac ;;
-        reset) for a in "$@"; do case "$a" in --hard|--merge|--keep) hit="git reset $a"; break ;; esac; done ;;
+        reset) for a in "$@"; do   # also shortened (--har); an unclear --m counts as --merge
+                 case "$a" in --) break ;; --?*) o="${a#--}"; o="${o%%=*}" ;; *) continue ;; esac
+                 case hard:merge:keep in "$o"*|*:"$o"*) hit="git reset $a"; break ;; esac
+               done ;;
         switch) { git_flag f force || git_flag '' discard-changes; } && hit="git switch --discard-changes" ;;
         checkout-index) { git_flag f force || git_flag a all; } && hit="git checkout-index" ;;
         read-tree) git_flag u '' && hit="git read-tree -u" ;;
@@ -826,7 +981,8 @@ git_hit() {
       git_flag p patch && [ "${#paths[@]}" = 0 ] && paths=(.) ;;
   esac
   for a in "$@"; do
-    case "$a" in --pathspec-from-file*) [ "$enforce" = 1 ] && hit="git $sub $a"; return 0 ;; esac
+    case "$a" in --) break ;; --?*) o="${a#--}"; o="${o%%=*}" ;; *) continue ;; esac
+    case pathspec-from-file in "$o"*) [ "$enforce" = 1 ] && hit="git $sub $a"; return 0 ;; esac
   done
   for p in "${paths[@]}"; do
     case "$p" in :*) [ "$enforce" = 1 ] && { hit="git $sub $p"; return 0; }; continue ;; esac   # pathspec magic
@@ -841,12 +997,12 @@ git_hit() {
 # a cluster of single-letter options, read up to the subcommand's first value letter (GV: clean e, restore s, checkout b
 # B, switch c C), whose value is the cluster's rest.
 git_flag() {
-  local a i ch
+  local a i ch o
   for a in "${GW[@]}"; do
     case "$a" in
       --) return 1 ;;
-      "--$2") return 0 ;;
-      --*) ;;
+      --*) o="${a#--}"; o="${o%%=*}"   # git takes a long option shortened to a unique prefix (#124)
+           [ -n "$2" ] && [ -n "$o" ] && case "$2" in "$o"*) return 0 ;; esac ;;
       -*) [ -n "$1" ] || continue
           for ((i = 1; i < ${#a}; i++)); do
             ch="${a:i:1}"
@@ -871,14 +1027,18 @@ git_exists() {
   return 1
 }
 
-# git_path P: project_code P, judged from git's directory when -C / --work-tree named a readable one.
+# git_path P: project_code P, judged from git's directory when -C / --work-tree named a readable one, and from the
+# project root when they named an unreadable one (#124).
 git_path() {
-  local r sa="$basea" sb="$basen" so="$eff_out" se="$effn" sl="$alt_list"
-  { [ "$gd_set" = 1 ] && [ "$gd_unknown" = 0 ] && [ -n "$gd" ]; } || { project_code "$1"; return; }
-  if [ "$inproj" = 0 ]; then eff_out=1; effn="$gd"; else eff_out=0; basea="$gd"; fi
+  local r sa="$basea" sb="$basen" so="$eff_out" se="$effn" sl="$alt_list" sv="$base_void"
+  if [ "$gd_unknown" = 1 ]; then eff_out=0; basea=""; base_void=1   # the root, with the directory unknown (#124)
+  else
+    { [ "$gd_set" = 1 ] && [ -n "$gd" ]; } || { project_code "$1"; return; }
+    if [ "$inproj" = 0 ]; then eff_out=1; effn="$gd"; else eff_out=0; basea="$gd"; fi
+  fi
   basen=""; alt_list=""
   project_code "$1"; r=$?
-  basea="$sa"; basen="$sb"; eff_out="$so"; effn="$se"; alt_list="$sl"
+  basea="$sa"; basen="$sb"; eff_out="$so"; effn="$se"; alt_list="$sl"; base_void="$sv"
   return $r
 }
 
@@ -886,23 +1046,47 @@ git_path() {
 # --to-stdout) or unzip (not listing, testing or piping: -l -t -v -Z -z -p -c) extracts into project code: the last -C /
 # --directory / -d, else the shell's directory, is judged as a write target. Option letters are read like getopt: in a
 # dash cluster the first letter that takes a value takes the cluster's rest or the next word; in old-style tar (xCf) each
-# takes the next word in turn. Absolute member names (tar -P, unzip -:) block while enforcing.
+# takes the next word in turn. Absolute member names (tar -P, unzip -:) block while enforcing. tar joins a relative -C
+# onto the one before it, and a -C that member names follow is judged too (#124).
+ar_dir() {
+  if [ "$k" != tar ]; then dir="$1"; return; fi
+  [ "$mem" = 1 ] && dirs[${#dirs[@]}]="$dir"; mem=0
+  case "$1" in
+    /*|[A-Za-z]:[/\\]*) dir="$1" ;;
+    *) if [ "$dir" = . ]; then dir="$1"; else dir="${dir%/}/$1"; fi ;;
+  esac
+}
+# TAR_VALOPTS: tar long options (GNU tar and bsdtar) whose value may be the next word.
+TAR_VALOPTS=" file files-from exclude exclude-from exclude-tag exclude-tag-under exclude-tag-all strip-components
+ use-compress-program transform xform owner group mode mtime newer newer-mtime after-date format label suffix
+ blocking-factor record-size tape-length info-script new-volume-script volno-file rsh-command rmt-command index-file
+ checkpoint-action hole-detection level listed-incremental quoting-style quote-chars no-quote-chars sort starting-file
+ to-command warning xattrs-include xattrs-exclude owner-map group-map pax-option options include newer-than uid gid
+ uname gname passphrase "
 archive_hit() {
-  local k="$1" a x=0 dir="." abs=0 first=1 oq="" ch r i
+  local k="$1" a x=0 dir="." abs=0 first=1 oq="" ch r i mem=0 d o v
+  local -a dirs=()
   shift
   for a in "$@"; do
-    if [ -n "$oq" ]; then ch="${oq:0:1}"; oq="${oq:1}"; [ "$ch" = C ] && dir="$a"; first=0; continue; fi   # a value
+    if [ -n "$oq" ]; then ch="${oq:0:1}"; oq="${oq:1}"; [ "$ch" = C ] && ar_dir "$a"; first=0; continue; fi   # a value
     r=""
     if [ "$k" = tar ]; then
       case "$a" in
-        --extract|--get) x=1 ;;
-        --to-stdout) return 1 ;;
-        --directory=*|--cd=*) dir="${a#*=}" ;;
-        --directory|--cd) oq=C ;;   # --cd: bsdtar's name for -C
-        --absolute-names) abs=1 ;;
-        --*) ;;
+        --) ;;
+        --*)   # a long option, also shortened to a prefix (#124); an unclear prefix counts as the riskier option
+          o="${a#--}"; o="${o%%=*}"
+          case extract in "$o"*) x=1 ;; esac
+          case get in "$o"*) x=1 ;; esac
+          case absolute-names in "$o"*) abs=1 ;; esac
+          case to-stdout in "$o"*) [ "${#o}" -ge 4 ] && return 1 ;; esac   # --to and --to- may be --to-command
+          case directory in "$o"*) o=C ;; esac
+          case cd in "$o"*) o=C ;; esac   # --cd: bsdtar's name for -C
+          if [ "$o" = C ]; then case "$a" in *=*) ar_dir "${a#*=}" ;; *) oq=C ;; esac
+          else   # --file X, --strip-components N: the next word is the option's value, no member name (#124)
+            case "$a" in *=*) ;; *) for v in $TAR_VALOPTS; do case "$v" in "$o"*) oq=V; break ;; esac; done ;; esac
+          fi ;;
         -?*) r="${a:1}" ;;
-        *) [ "$first" = 1 ] && [[ $a != *[!A-Za-z]* ]] && r="$a" ;;   # old style: tar xf
+        *) if [ "$first" = 1 ] && [[ $a != *[!A-Za-z]* ]]; then r="$a"; else mem=1; fi ;;   # old style: tar xf
       esac
       for ((i = 0; i < ${#r}; i++)); do
         ch="${r:i:1}"
@@ -910,9 +1094,9 @@ archive_hit() {
           x) x=1 ;;
           P) abs=1 ;;
           O) return 1 ;;   # members go to stdout
-          [CfTXbKNgVHLF])
+          [CfTXbKNgVHLFI])
             if [ "${a:0:1}" = - ]; then
-              if [ $((i + 1)) -lt ${#r} ]; then [ "$ch" = C ] && dir="${r:i+1}"; else oq="$ch"; fi
+              if [ $((i + 1)) -lt ${#r} ]; then [ "$ch" = C ] && ar_dir "${r:i+1}"; else oq="$ch"; fi
               break
             fi
             oq="$oq$ch" ;;
@@ -926,7 +1110,7 @@ archive_hit() {
         case "$ch" in
           [ltvZzpc]) return 1 ;;
           :) abs=1 ;;
-          d) if [ $((i + 1)) -lt ${#r} ]; then dir="${r:i+1}"; else oq=C; fi; break ;;
+          d) if [ $((i + 1)) -lt ${#r} ]; then ar_dir "${r:i+1}"; else oq=C; fi; break ;;
           P) [ $((i + 1)) -ge ${#r} ] && oq=P; break ;;   # -P PASSWORD
           x) break ;;   # -x: the member names to leave out follow
         esac
@@ -936,8 +1120,11 @@ archive_hit() {
   done
   [ "$x" = 1 ] || return 1
   [ "$abs" = 1 ] && [ "$enforce" = 1 ] && { hit="$k (absolute member names)"; return 0; }
-  case "$dir" in */) dir="${dir%/}" ;; esac
-  project_code "$dir/x" && hit="$k into $dir"
+  dirs[${#dirs[@]}]="$dir"
+  for d in "${dirs[@]}"; do
+    case "$d" in */) d="${d%/}" ;; esac
+    project_code "$d/x" && { hit="$k into $d"; return 0; }
+  done
   return 0
 }
 
@@ -969,20 +1156,40 @@ wrap_opt() {
   return 0
 }
 
+# redir_word WORD: succeeds when WORD starts with a redirect (fd digits or {name}, then < or >, or &>); RW_NEXT=1 when
+# the operator stands alone, so the next word is its target.
+redir_word() {
+  local re='^([0-9]+|\{[A-Za-z_][A-Za-z_0-9]*\})?&?[<>]' hm=$'\x0f'
+  [[ $1 =~ $re ]] || return 1
+  RW_NEXT=0
+  case "$1" in *'<'|*'>'|*'>&'|*'<&'|*"$hm"|*"$hm-") RW_NEXT=1 ;; esac
+  return 0
+}
+# cmd_word I: word I of the segment (sw, before qdecode; its Q marks read off QRAW) as the command word bash reads (#124):
+# cut at its first unescaped < or > (a redirect glued to it, with the & of &>), quotes removed and escapes undone, into
+# CW (empty when a quoted text in it is unreadable).
+cmd_word() {
+  local re='^((\\.|[^\\<>])*)' w="${sw[$1]}" h x t
+  h="$w"; [[ $w =~ $re ]] && h="${BASH_REMATCH[1]}"
+  [ "$h" != "$w" ] && h="${h%&}"
+  WM=0; for ((x = 0; x < $1; x++)); do t="${sw[x]//[!Q]/}"; WM=$((WM + ${#t})); done
+  if wdecode "$h"; then CW="$WD"; else CW=""; fi
+}
+
 # judge_segs: judges each simple command of `stripped` (set by strip_cmd) for writes into project code, setting `hit`.
 # `&` ends a command (not in && or a redirect), ( ) and backticks split commands, and a leading keyword is dropped. The
 # body of a shell -c and of a $( ) or backtick substitution in double quotes is judged by judge_body, one level deep.
 jdepth=0
 judge_segs() {
-  local seg seg0 rest t c args a n last segs raw b1 b2 inpl skip i nw0 ci w0 tdur envs envatt sush rdr re_redir='[0-9]?>>?[[:space:]]*([^[:space:]<>&|;()]+)(.*)$'
-  local -a qr
+  local seg seg0 rest t c args a n last segs raw b1 b2 inpl skip i nw0 ci w0 tdur envs envatt sush re_redir='[0-9]?>>?[[:space:]]*([^[:space:]<>&|;()]+)(.*)$'
+  local -a qr sw
   local amp=$'\x07' nl=$'\n' and='&'
   segs="${stripped//>&/>$amp}"; segs="${segs//&>/$amp>}"; segs="${segs//<&/<$amp}"
   segs="${segs//&/$nl}"; segs="${segs//$amp/"$and"}"; segs="${segs//[()]/$nl}"; segs="${segs//\`/$nl}"
   while IFS= read -r seg; do
     if [ "$dmode" = 1 ] && [ "$jdepth" = 0 ]; then   # case D: this command's own directories
-      if [ "$d_k" -lt "${#d_sets[@]}" ]; then d_apply "${d_sets[d_k]}"
-      else eff_out=0; basea=""; basen=""; base_void=1; alt_list="$D_ALL"   # past the walk: unknown, fail closed
+      if [ "$d_k" -lt "${#d_sets[@]}" ] && [ "$cd_hid" = 0 ]; then d_apply "${d_sets[d_k]}"
+      else eff_out=0; basea=""; basen=""; base_void=1; alt_list="$D_ALL"   # past the walk or a hidden cd: unknown
       fi
       d_k=$((d_k + 1))
     fi
@@ -1015,8 +1222,11 @@ judge_segs() {
     # a wrapper's own options (env -i, env -C DIR, sudo -u USER, --user=X, nice -n N) are not the command it runs; env -S
     # STRING is the command line it runs, and sudo -s / -i with no command run a shell reading stdin
     w0=""; tdur=0; envs=-1; sush=0
+    set -f; sw=($seg0); set +f
     while [ $# -gt 0 ]; do
-      case "$1" in
+      if redir_word "$1"; then shift; [ "$RW_NEXT" = 1 ] && [ $# -gt 0 ] && shift; continue; fi   # a redirect, not a word
+      cmd_word $((nw0 - $#))
+      case "$CW" in
         -*) case "$w0" in
               env|sudo)
                 wrap_opt "$w0" "$1"
@@ -1031,22 +1241,21 @@ judge_segs() {
               command|time|nohup) shift ;;
               *) break ;;
             esac ;;
-        *=*|sudo|command|env|time|nohup|nice|exec|then|do|else|elif|if|while|until|'!'|'{') w0="$1"; shift ;;
-        timeout) w0="$1"; shift; tdur=1 ;;
+        *=*|sudo|command|env|time|nohup|nice|exec|then|do|else|elif|if|while|until|'!'|'{') w0="$CW"; shift ;;
+        timeout) w0="$CW"; shift; tdur=1 ;;
         *) [ "$tdur" = 1 ] || break
            tdur=0; shift ;;   # timeout's DURATION
       esac
       [ "$envs" -ge 0 ] && break
     done
     if [ "$envs" -ge 0 ]; then split_body "$seg0" "$envs" "$envatt"; [ -n "$hit" ] && break; continue; fi
-    rdr=0; case "$1" in '<'*|'>'*|[0-9]'<'*|[0-9]'>'*) rdr=1 ;; esac   # sudo -s <<EOF: a redirect, no command
-    if [ $# = 0 ] || { [ "$sush" = 1 ] && [ "$rdr" = 1 ]; }; then
+    if [ $# = 0 ]; then   # redirects only (sudo -s <<EOF: a shell reading stdin)
       [ "$sush" = 1 ] && stdin_prog "$seg0" 0 src
       [ -n "$hit" ] && break
       continue
     fi
     ci=$((nw0 - $#))   # the command word's index among the segment's words
-    c="${1##*/}"; c="${c%.exe}"; shift
+    cmd_word "$ci"; c="${CW##*/}"; c="${c%.exe}"; shift   # rm>/dev/null, \rm, r\m and r''m run rm (#124)
     args=(); for a in "$@"; do case "$a" in -*|*'>'*|*'<'*) ;; *) args+=("$a") ;; esac; done   # redirects are not operands
     n=${#args[@]}; last=""; [ "$n" -gt 0 ] && last="${args[n-1]}"
     case "$c" in
@@ -1058,7 +1267,7 @@ judge_segs() {
             [ -z "$hit" ] && eval_body "$seg0" ;;
       patch) aip_base="$effn"; [ "$enforce" = 1 ] && { [ "$eff_out" = 0 ] || [ -n "$alt_list" ] || args_in_proj "$@"; } \
                && hit="patch" ;;
-      git) git_hit "$@" ;;
+      git) GC_WTSET=0; git_cfg "$seg0" "$ci"; [ -z "$hit" ] && git_hit "$@" ;;
       tar|bsdtar|gtar) archive_hit tar "$@" ;;
       unzip) archive_hit unzip "$@" ;;
       sed|perl) inpl=0; skip=0; hasscr=0   # -i anywhere in a flag cluster; every operand after the script is a file
@@ -1089,7 +1298,11 @@ judge_segs() {
           for a in "${args[@]:0:n-1}"; do project_code "$a" && { hit="$c $a"; break; }; done
           [ -z "$hit" ] && project_code "$DT" && hit="mv $last" ;;
       cp) if [ "$n" -gt 1 ]; then dir_target "$last" "${args[0]}"; project_code "$DT" && hit="cp $last"; fi ;;
-      cd) if [ "$jdepth" = 0 ] && [ "$chain" = 1 ]; then   # case B: the shell moves here
+      cd|pushd|popd)   # a cd the cd block could not read (c''d, c\d, a hidden pushd): unknown from here on (#124)
+          if [ "$c" != cd ] || [ "${sw[ci]}" != cd ] || [ "$cd_hid" = 1 ]; then
+            [ "$jdepth" = 0 ] && cd_hid=1
+            eff_out=0; basea=""; basen=""; base_void=1
+          elif [ "$jdepth" = 0 ] && [ "$chain" = 1 ]; then   # case B: the shell moves here
             basea="${chain_dirs[chain_k]}"; basen=""; eff_out=0; chain_k=$((chain_k + 1))
           fi ;;
     esac
@@ -1171,6 +1384,35 @@ stdin_prog() {
   done
 }
 
+# stdin_docs: a line of `stripped` that runs eval or a shell -c, and whose text reads stdin as program text (a
+# substitution, /dev/stdin, or a shell, source or eval inside a quoted text), takes its heredocs and here-strings as that
+# program: each is judged like a -c body (#124); from the project root when the command changes directory anywhere.
+stdin_docs() {
+  local line t n qn=0 i txt q re_run re_in sv_a="$basea" sv_n="$basen" sv_o="$eff_out" sv_v="$base_void" hm=$'\x0f'
+  local -a sv_raw=("${QRAW[@]}")
+  re_run='(^|[^[:alnum:]_])((bash|sh|zsh|ksh|dash)[[:space:]]+(-[-[:alnum:]]+[[:space:]]+([[:alnum:]_]+[[:space:]]+)?)*-[[:alnum:]]*c|eval([[:space:]]|$))'
+  re_in='(^|[^[:alnum:]_./-])(bash|sh|zsh|ksh|dash|source|eval)([[:space:]'"'"'"]|$)|(^|[;&|[:space:]'"'"'"])\.[[:space:]]'
+  lower "$cmd"
+  [[ $LOWER =~ (^|[^[:alnum:]_./-])(cd|pushd|popd)([[:space:]]|$)|chdir ]] && { basea=""; basen=""; eff_out=0; base_void=1; }
+  while IFS= read -r line; do
+    t="${line//[!Q]/}"; n=${#t}
+    if [[ $line == *"<<$hm"* || $line == *'<<<'* ]] && [[ $line =~ $re_run ]]; then
+      txt=""; [ "$qs_ok" = 1 ] && for ((i = qn; i < qn + n && i < ${#qs[@]}; i++)); do txt="$txt ${qs[i]}"; done
+      q=0
+      case "$line$txt" in *'$('*|*'`'*|*/dev/stdin*|*/dev/fd/0*) q=1 ;; esac
+      [[ $txt =~ $re_in ]] && q=1
+      [ "$qs_ok" = 1 ] || q=1   # the quoted texts do not line up: they may read stdin
+      if [ "$q" = 1 ]; then
+        QRAW=(); [ "$qs_ok" = 1 ] && QRAW=("${qs[@]:qn:n}")
+        stdin_prog "$line" -1 src
+        [ -n "$hit" ] && break
+      fi
+    fi
+    qn=$((qn + n))
+  done <<< "$stripped"
+  basea="$sv_a"; basen="$sv_n"; eff_out="$sv_o"; base_void="$sv_v"; QRAW=("${sv_raw[@]}")
+}
+
 # sed_empty_suffix SEG0: succeeds when a sed flag cluster ending in i is followed by an empty quoted word (-i ''), the
 # macOS spelling of "no backup suffix". QRAW holds SEG0's quoted texts.
 sed_empty_suffix() {
@@ -1244,15 +1486,25 @@ eval_body() {
   [ -n "$body" ] && judge_body "$body"
 }
 
-# shell_body SEG0: SEG0 (before qdecode) runs a shell with -c: the quoted word after the flag is judged. QRAW holds
-# SEG0's quoted texts.
+# shell_body SEG0: SEG0 (before qdecode) runs a shell with -c: the word after the flag is judged, a quoted one as its
+# text, an unquoted one as the shell reads it (escaped spaces join words, escapes undone; #124). QRAW holds SEG0's quoted
+# texts.
 shell_body() {
-  local -a w; local i m=0 x raw t
+  local -a w; local i j m=0 x raw t a
   set -f; w=($1); set +f
   for ((i = 0; i < ${#w[@]} - 1; i++)); do
     case "${w[i]}" in
-      -[a-z]*c*|-c) [ "${w[i+1]}" = Q ] || [ "${w[i+1]}" = '$Q' ] || return 0
+      -[a-z]*c*|-c)
         for ((x = 0; x <= i; x++)); do t="${w[x]//[!Q]/}"; m=$((m + ${#t})); done
+        if [ "${w[i+1]}" != Q ] && [ "${w[i+1]}" != '$Q' ]; then
+          a="${w[i+1]}"; j=$((i + 1))
+          while [[ $a == *\\ ]] && [ $((j + 1)) -lt ${#w[@]} ]; do j=$((j + 1)); a="$a ${w[j]}"; done
+          WM=$m
+          if wdecode "$a"; then judge_body "$WD"
+          else [ "$enforce" = 1 ] && [ "$jdepth" = 0 ] && hit="${w[i]} (unreadable body)"
+          fi
+          return 0
+        fi
         raw="${QRAW[m]}"
         case "$raw" in
           \"*|\'*) raw="${raw:1:${#raw}-2}"; judge_body "$raw" ;;
@@ -1297,6 +1549,7 @@ elif [ -z "$hit" ]; then
   sq="'"; dq='"'
   re_cd="^[[:space:]]*cd[[:space:]]+($dq([^$dq]+)$dq|$sq([^$sq]+)$sq|([^[:space:];&|<>()$dq$sq]+))"
   cd_n=0; cd_abs=0; cd_bad=0; cd_rels=(); cd_pos=1; cd_words=()
+  cdp=0; { [ -n "${CDPATH:-}" ] || [[ $lc == *cdpath* ]]; } && cdp=1   # CDPATH may send a relative cd elsewhere (#124)
   if [[ $lc == *cd* || $lc == *pushd* || $lc == *popd* || $lc == *chdir* ]]; then
     [ "$stripped_done" = 1 ] || strip_cmd
     [[ $lc == *chdir* ]] && cd_bad=1
@@ -1327,6 +1580,7 @@ elif [ -z "$hit" ]; then
           esac
         fi
         cd_words[${#cd_words[@]}]="$w"
+        [ "$cdp" = 1 ] && case "$w" in /*|[A-Za-z]:[/\\]*|.|./*) ;; *) cd_bad=1 ;; esac
         case "${BASH_REMATCH[4]}" in *Q*) t="${BASH_REMATCH[4]//[!Q]/}"; qn=$((qn + ${#t})) ;; esac
       done
       t="${seg//[!Q]/}"; qn=$((qn + ${#t}))
@@ -1359,9 +1613,9 @@ elif [ -z "$hit" ]; then
           lower "$t"; case "$LOWER" in "$projl"|"$projl"/*) ;; *) ok=0; break ;; esac
           dirs[${#dirs[@]}]="$t"; cur="$t"
         done
-        if [ "$ok" = 1 ]; then
+        if [ "$ok" = 1 ] && ! moves_unseen; then   # source, eval, ... may move the shell unseen (#124)
           if and_chain; then chain=1
-          elif [ "$lead" = 1 ] && [ "$cd_n" = 1 ] && [ -d "${dirs[0]}" ]; then chain=1   # a leading cd that succeeds
+          elif [ "$lead" = 1 ] && [ "$cd_n" = 1 ] && [ -d "${dirs[0]}" ] && [ -x "${dirs[0]}" ]; then chain=1   # it succeeds
           fi
         fi
         if [ "$chain" = 1 ]; then
@@ -1389,8 +1643,13 @@ elif [ -z "$hit" ]; then
       case "$cdt" in
         *'$'*|*'`'*|'') ;;
         /*|[A-Za-z]:[/\\]*)
-          if [ "$cd_n" = 1 ] && [ "$cd_bad" = 0 ] && [ -d "$cdt" ]; then   # a cd to a missing folder moves nowhere
-            if abs_outside "$cdt"; then eff_out=1; effn="$NORM"; else eff_out=0; fi
+          # a cd to a missing folder, or one without search permission, moves nowhere
+          if [ "$cd_n" = 1 ] && [ "$cd_bad" = 0 ] && [ -d "$cdt" ] && [ -x "$cdt" ]; then
+            if abs_outside "$cdt"; then eff_out=1; effn="$NORM"
+            else   # inside: relative paths are judged from the target too (#124)
+              eff_out=0; norm "$cdt"; t="$NORM"; case "/$t/" in */./*) dotres "$t"; t="$RES" ;; esac
+              segs_alt="$t$nl"; scan_alt="$t$nl"
+            fi
             cd_abs=0; lead_done=1
           fi ;;
       esac
@@ -1435,6 +1694,8 @@ elif [ -z "$hit" ]; then
     # Inside the project: the directory the relative cd steps reached from the cwd, for judging paths with . and ..
     # segments. A step into a missing folder (one the command may create first), or a walk that came in from outside,
     # leaves the directory unknown.
+    # Every directory the steps visit is judged too (#124).
+    bn_dirs=""
     if [ "$eff_out" = 0 ] && [ "$cd_bad" = 0 ] && [ "$cd_abs" = 0 ] && [ "${#cd_rels[@]}" -gt 0 ]; then
       basen="${cwd_in:-$projn}"
       [ "$walked_in" = 1 ] && { basen=""; base_void=1; }
@@ -1442,12 +1703,13 @@ elif [ -z "$hit" ]; then
         [ -n "$basen" ] || break
         t="${t#./}"
         if [ -z "$t" ] || [ "$t" = . ]; then continue; fi
-        if [ -d "$basen/$t" ]; then basen="$basen/$t"; else basen=""; base_void=1; break; fi
+        if [ -d "$basen/$t" ]; then basen="$basen/$t"; bn_dirs="$bn_dirs$basen$nl"; else basen=""; base_void=1; break; fi
       done
     fi
     # Inside the project with no known base: the cwd and each absolute cd target are judged as well.
     if [ "$known" = 0 ] && [ "$eff_out" = 0 ] && [ -z "$basea" ] && [ "$lead_done" = 0 ]; then
       [ -n "$cwd_in" ] && segs_alt="$cwd_in$nl"
+      segs_alt="$segs_alt$bn_dirs"
       for w in "${cd_words[@]}"; do
         case "$w" in /*|[A-Za-z]:[/\\]*) norm "$w"; lower "$NORM"
           case "/$NORM/" in */../*|*/./*) ;; *) case "$LOWER" in "$projl"|"$projl"/*) segs_alt="$segs_alt$NORM$nl" ;; esac ;; esac ;;
@@ -1518,22 +1780,32 @@ elif [ -z "$hit" ]; then
       done
     done
     # A writer whose target is unknown (a variable, an f-string, a method chain, fs.write on a descriptor) blocks.
-    # Out of reach: file APIs without a writer call (os.replace, shutil.copy, ...).
     if [ -z "$hit" ] && { [ "$unknown" = 1 ] || [ "$got" -lt "$want" ]; }; then
       hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; [ "$mentions" = 1 ] && prot=1
     fi
-    # Next to a protected file's name, a move, copy or link API may put a scratch file in its place.
-    re_mv='os\.(replace|renames?|link|symlink)\(|shutil\.|\.(rename|symlink_to|hardlink_to|link_to)\(|\.replace\(([^,()]|\([^()]*\))*\)'
+  fi
+  # Next to a protected file's name, a move, copy or link API may put a scratch file in its place, with or without a
+  # writer call in the command (#124). Every .replace( counts unless it reads as str.replace: a quoted first argument, a
+  # comma and a second.
+  if [ -z "$hit" ] && [ "$mentions" = 1 ] && [[ $lc =~ $re_interp ]] && scan_gate; then
+    q="['\"]"
+    re_mv='os\.(replace|renames?|link|symlink)\(|shutil\.|\.(rename|symlink_to|hardlink_to|link_to)\(|\.(copyFile|cp|symlink|link)(Sync)?\('
     re_mv="$re_mv"'|fs\.(rename|copyFile|cp|symlink|link)(Sync)?\(|FileUtils|File\.(rename|symlink|link)\(|(^|[^A-Za-z0-9_.])(rename|copy|symlink|link)\('
-    if [ -z "$hit" ] && [ "$mentions" = 1 ] && [[ $cmd =~ $re_mv ]]; then
-      hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; prot=1
-    fi
+    re_sr="^[[:space:]]*\\\\?$q[^'\"]*\\\\?$q[[:space:]]*,[[:space:]]*[^)[:space:]]"
+    mv=0
+    if [[ $cmd =~ $re_mv ]]; then mv=1; fi
+    rest="$cmd"
+    while [ "$mv" = 0 ] && [[ $rest == *.replace\(* ]]; do
+      rest="${rest#*.replace\(}"; [[ $rest =~ $re_sr ]] || mv=1
+    done
+    if [ "$mv" = 1 ]; then hit="${cmd:0:120}"; hit="${hit//$'\n'/ }"; prot=1; fi
   fi
   alt_list="$segs_alt"
   if [ -z "$hit" ]; then
     [ "$stripped_done" = 1 ] || strip_cmd
     qi=0; d0_out="$eff_out"; d0_a="$basea"
-    judge_segs
+    stdin_docs
+    [ -z "$hit" ] && judge_segs
   fi
 fi
 
