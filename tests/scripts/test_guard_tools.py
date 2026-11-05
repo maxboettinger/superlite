@@ -128,7 +128,7 @@ def test_interpreter_writers():
     assert py("Path('p').open('w')") == ["p"]
     assert py("Path('p').open()") == []
     assert py("Path(d).write_text('x')") == ["?"]
-    assert py("(Path('a')/'b').write_text('x')") == ["?"]
+    assert py("(Path('a')/'b').write_text('x')") == ["a/b"]
     assert py("import shutil; shutil.copy('a', 'b')") == ["b"]
     assert py("shutil.copy2('a', 'b')") == ["b"]
     assert py("shutil.copyfile('a', 'b')") == ["b"]
@@ -320,7 +320,7 @@ def test_review_powershell_aliases_and_cmdexe():
     ("p='a'+x\nopen(p,'w')", ["?"]),
     ("p=Path('src/a'); p.write_text('x')", ["src/a"]),
     ("p='src/a'; Path(p).write_text('x')", ["src/a"]),
-    ("p=Path('src')/'a'; p.write_text('x')", ["?"]),
+    ("p=Path('src')/'a'; p.write_text('x')", ["src/a"]),
     ("m='r'; p='src/a'; open(p,m)", []),
     ("import os; p='src/a'; os.remove(p)", ["src/a"]),
 ])
@@ -383,3 +383,43 @@ def test_git_checkout_operand_is_a_path_when_it_exists_below_cwd(tmp_path):
     assert targets(["git", "checkout", "main"], cwd=str(tmp_path)) == []
     assert targets(["git", "-C", "src", "checkout", "a.py"], cwd=str(tmp_path)) == ["src/a.py"]
     assert targets(["git", "-C", "$X", "checkout", "a.py"], cwd=str(tmp_path)) == []
+
+
+def test_literal_path_compositions_name_the_path():
+    py = lambda code: targets(["python3", "-c", code])  # noqa: E731
+    assert py("import os; open(os.path.join('/tmp/s','x'),'w')") == ["/tmp/s/x"]
+    assert py("import os; open(os.path.join('/tmp/s','/p/src/a.py'),'w')") == ["/p/src/a.py"]  # an absolute part starts over
+    assert py("(Path('/tmp/s') / 'x.json').write_text('x')") == ["/tmp/s/x.json"]
+    assert py("(Path('/tmp/s') / 'a' / 'x').write_text('x')") == ["/tmp/s/a/x"]
+    assert py("(Path('/tmp/s') / '/p/src/a.py').write_text('x')") == ["/p/src/a.py"]
+    assert py("d = Path('/tmp/s')\n(d / 'x.json').write_text('x')") == ["/tmp/s/x.json"]
+    assert py("d = Path('/tmp/s')\ne = d / 'a'\nopen(e / 'x', 'w')") == ["/tmp/s/a/x"]  # a name joined from literal names
+    assert py("d = '/tmp/s'\nopen(f'{d}/a.py', 'w')") == ["/tmp/s/a.py"]
+    assert py("Path(os.path.join('/tmp/s', 'x')).write_text('x')") == ["/tmp/s/x"]
+    assert py("open(str(Path('/tmp/s') / 'x'), 'w')") == ["/tmp/s/x"]
+
+
+def test_an_unknown_piece_is_a_question_mark_component_below_an_absolute_prefix():
+    py = lambda code: targets(["python3", "-c", code])  # noqa: E731
+    assert py("open(f'/tmp/s/{x}.json','w')") == ["/tmp/s/?"]
+    assert py("open(f\"/tmp/s/{1}.json\",'w')") == ["/tmp/s/?"]
+    assert py("import os; open(os.path.join('/tmp/s', x),'w')") == ["/tmp/s/?"]
+    assert py("(Path('/tmp/s') / x).write_text('x')") == ["/tmp/s/?"]
+    assert py("open(f'/tmp/s/ab{x}','w')") == ["/tmp/s/?"]
+    # a relative prefix, or an unknown first piece, may be anything: all unknown
+    assert py("open(f'src/{n}.py','w')") == ["?"]
+    assert py("open(f'{d}/a.py','w')") == ["?"]
+    assert py("open(os.path.join(x, 'a'),'w')") == ["?"]
+    assert py("p = Path('.') / sys.argv[1]\np.write_text('x')") == ["?"]
+    assert py("p = 'docs/plans/' + sys.argv[1]\nopen(p, 'w')") == ["?"]  # a string `+` is not followed
+    assert py("open('p', m)") == ["p"]  # an unknown mode still counts as a write
+
+
+def test_a_for_loop_rebinding_a_name_yields_every_value():
+    py = lambda code: targets(["python3", "-c", code])  # noqa: E731
+    assert py("for p in ('a','b'): open(p,'w')") == ["a", "b"]
+    assert py("f = '.superlite/n.md'\nfor f in ['src/a.py']:\n    open(f,'w')") == [".superlite/n.md", "src/a.py"]
+    assert py("[open(x, 'w') for x in ['a', 'b']]") == ["a", "b"]
+    assert py("for p in files: open(p,'w')") == ["?"]
+    assert py("for p in ('a', q): open(p,'w')") == ["?"]
+    assert py("for a, b in (('x', 'y'),): open(a,'w')") == ["?"]
