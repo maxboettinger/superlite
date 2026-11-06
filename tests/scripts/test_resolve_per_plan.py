@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from test_run_scripts import SCRIPTS  # noqa: E402
@@ -78,13 +80,17 @@ def test_two_plans_one_session(tmp_path, monkeypatch):
 def test_marker_needed_and_any_marker_counts(tmp_path, monkeypatch):
     a, b, launch, plan_b = two_runs(tmp_path, monkeypatch)
     monkeypatch.chdir(b)
-    assert state._abs(state.resolve()) == state._abs(a / ".superlite")  # B holds no run yet: the binding stays
+    with pytest.raises(state.Foreign):  # B holds no run yet: the binding points at A, a foreign worktree (#224)
+        state.resolve()
+    assert state._abs(state.resolve(strict=False)) == state._abs(a / ".superlite")
     for marker in ("stable.json", "prime.md", "pool.json"):
         f = b / ".superlite" / marker
         f.write_text("{}\n", encoding="utf-8")
         assert state._abs(state.resolve()) == state._abs(b / ".superlite"), marker
         f.unlink()
-    assert state._abs(state.resolve()) == state._abs(a / ".superlite")
+    with pytest.raises(state.Foreign):
+        state.resolve()
+    assert state._abs(state.resolve(strict=False)) == state._abs(a / ".superlite")
 
 
 def test_order_unchanged_elsewhere(tmp_path, monkeypatch):

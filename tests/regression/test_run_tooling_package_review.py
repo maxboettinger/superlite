@@ -54,7 +54,7 @@ def test_two_plans_keep_their_own_run(tmp_path, monkeypatch):
     for n in ("a", "b"):
         wt = tmp_path / n
         wt.mkdir()
-        (wt / ".git").write_text("gitdir: x\n", encoding="utf-8")
+        (wt / ".git").write_text(f"gitdir: {tmp_path}/.git/worktrees/{n}\n", encoding="utf-8")
         (wt / ".superlite").mkdir()
         (wt / ".superlite" / "pool.json").write_text("{}", encoding="utf-8")
         (wt / "plan.md").write_text("# p\n", encoding="utf-8")
