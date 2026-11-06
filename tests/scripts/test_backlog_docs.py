@@ -18,3 +18,9 @@ def test_reference_holds_the_main_and_lead_rules():
         assert s in REF, s
     fleet = (ROOT / "skills" / "subagent-driven-development" / "fleet.md").read_text(encoding="utf-8")
     assert "`backlog.md`" in fleet and "/superlite:backlog" in fleet
+
+def test_reference_spells_skip_park_closing_and_bare_ship_steps():
+    for s in ('"$SL" backlog skip <issue>', '"$SL" backlog park B --reason R', "only `start B` starts it", "umbrella and tracking issues",
+              "one `Closes #N` line per issue", "`OPEN #N`", "B OPEN #N", "self-contained line", "one bare command", "no `cd`", "no pipe",
+              "no `&&` chain", "`--plan .superlite` is accepted"):
+        assert s in REF, s
