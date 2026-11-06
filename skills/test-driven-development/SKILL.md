@@ -11,8 +11,8 @@ If you wrote code before the test, delete it and restart from the test. Do not k
 
 ## Cycle
 
-1. **Red.** Write one small test for one behavior: a clear name, real code (mocks only when unavoidable), exact expected values. Run only that test. Confirm it fails for the right reason (the feature is missing, not a typo or import error). A test that passes immediately proves nothing: fix the test.
-2. **Green.** Write the simplest code that passes. No extra features, no refactoring of other code. Run the focused tests (the new test plus the tests in the same file or module). Confirm green and no new failures there.
+1. **Red.** Write one small test for one behavior: a clear name, real code (mocks only when unavoidable), exact expected values. Run only that test. Confirm it fails for the right reason (the feature is missing, not a typo or import error). A test that passes immediately proves nothing: fix the test. Exception: a regression guard for behavior that already works passes at once by design; prove it once by breaking the code on purpose (or running it against the parent commit), see it fail, then restore the code.
+2. **Green.** Write the simplest code that passes. No extra features, no refactoring of other code. Run the focused tests (the new test plus the tests in the same file or module). Confirm green and no new failures there. Confirm it passes for the intended reason: for a layout, size or numeric assertion, print the measured values once.
 3. **Refactor.** Remove duplication, improve names, keep tests green. Skip if nothing needs it.
 4. Repeat for the next behavior.
 
@@ -30,6 +30,7 @@ Reproduce the bug as a failing test first, see it fail, then fix. The test is th
 - One behavior per test; "and" in the name means split it.
 - Assert observable behavior, not implementation details.
 - Cover the contract's edge cases: empty input, errors, boundaries.
+- UI work: besides the component in isolation, one check of it in its real container with the real data state (loaded, not the loading placeholder), named as the evidence.
 
 ## Exceptions
 
@@ -38,7 +39,7 @@ Throwaway prototypes, generated code and pure configuration need no test-first. 
 ## Red flags: stop and restart from the test
 
 - Code written before the test.
-- The test passed on its first run.
+- The test passed on its first run, and it is not a regression guard you saw fail on purpose.
 - "I'll add tests after", "too simple to test", "just this once".
 - Several behaviors implemented before any test ran.
 
@@ -48,5 +49,7 @@ Throwaway prototypes, generated code and pure configuration need no test-first. 
 - Each failed for the expected reason, and the minimal code made it pass.
 - Focused tests are green, output clean.
 - Edge cases and errors covered.
+- Regression guards were seen failing once against deliberately broken code.
+- UI work: one check ran in the real container with the real data state.
 
 Cannot check every box: say which and why. Then see `superlite:verification-before-completion`.

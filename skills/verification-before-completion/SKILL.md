@@ -13,6 +13,7 @@ Evidence before claims. Never say "done", "fixed" or "passing" without fresh pro
 - Or a focused run you executed yourself after the last change, covering exactly what you claim.
 - For a build, a lint or a type check: that command's exit status and summary line.
 - For a bug fix: the original reproduction now passing, plus its regression test.
+- For UI work: one check of the screen in its real container and real data state (not the component alone, not the loading state), named as the evidence.
 
 ## Rules
 
