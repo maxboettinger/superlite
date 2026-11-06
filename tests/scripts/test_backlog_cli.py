@@ -66,6 +66,18 @@ def test_rejected_proposal_prints_the_worker_summary(bk, capsys):
     assert rc == 3 and "BLOCKED: proposal rejected" in out and "batches: 1 to 20 entries" in out
     assert "triage worker NEEDS_CONTEXT: 0 batches: no shell to read issue bodies" in out
 
+def test_rejected_proposal_is_kept_on_disk(bk, capsys):
+    bk.batches = [{**BATCH, "decisions": [{"questions": []}]}]
+    rc, out = cli(capsys, "plan")
+    kept = bk.sd / "backlog-proposal.json"
+    assert rc == 3 and f"proposal kept: {kept}" in out
+    assert json.loads(kept.read_text())["batches"] == bk.batches
+
+def test_bare_question_decision_is_stored_wrapped(bk, capsys):
+    q = Q["questions"][0]
+    bk.batches = [{**BATCH, "decisions": [q]}]
+    assert cli(capsys, "plan")[0] == 0 and load(bk)["batches"][0]["decisions"] == [{"questions": [q]}]
+
 def test_outside_issues_cannot_be_smuggled_and_private_repos_trust_all(bk, capsys):
     bk.batches = [{**BATCH, "issues": [3]}]
     rc, out = cli(capsys, "plan")

@@ -128,7 +128,13 @@ def cmd_plan(a) -> int:
     batches, errs = bc.check_proposal(prop, {t["number"] for t in trusted})
     if errs:
         why = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(prop.get("summary", ""))).split())[:300]
-        print("BLOCKED: proposal rejected\n" + "\n".join(errs[:5]) + f"\ntriage worker {prop.get('status', '?')}: {why or 'no summary'}")
+        kept = sd / "backlog-proposal.json"
+        try:
+            kept.write_text(json.dumps(prop, indent=2), encoding="utf-8")
+            where = f"\nproposal kept: {kept}"
+        except (OSError, TypeError, ValueError):
+            where = ""
+        print("BLOCKED: proposal rejected\n" + "\n".join(errs[:5]) + where + f"\ntriage worker {prop.get('status', '?')}: {why or 'no summary'}")
         return 3
     batches = bc.separate(batches)
     shown = {}

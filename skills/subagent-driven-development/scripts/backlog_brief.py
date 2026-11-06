@@ -72,11 +72,14 @@ def triage_brief(issues, ctx):  # O(i)
         out.append(f"## #{int(i['number'])} {clean(i.get('title', ''))}".rstrip())  # O(1)
         out += ["    " + CTRL.sub("", ln.rstrip("\r")) for ln in str(i.get("body") or "").splitlines()]  # O(body)
     out.append("Rules: no two batches share a file unless one depends on the other; list every repo-relative file a batch "
-               "touches; depends names batches that must ship first; decisions lists each batch's major decisions in the "
-               "AskUserQuestion shape (header at most 12 characters), recommended option first.")  # O(1)
+               "touches; depends names batches that must ship first; decisions lists each batch's major decisions, one "
+               "AskUserQuestion call object {\"questions\": [...]} per decision (2 to 4 options, header at most 12 characters), "
+               "recommended option first.")  # O(1)
     out.append('End with Status: DONE, then one fenced json block: {"status": "DONE", "files": [], "tests": "", "findings": [], '
                '"summary": "<n> batches", "batches": [{"id": "B1", "topic": "<kebab words>", "issues": [<n>], '
-               '"files": ["<path>"], "depends": [], "decisions": []}]}')  # O(1)
+               '"files": ["<path>"], "depends": [], "decisions": [{"questions": [{"question": "<1-300 chars>", '
+               '"header": "<1-12 chars>", "options": [{"label": "<recommended first> (Recommended)", "description": "<trade-off>"}, '
+               '{"label": "...", "description": "..."}]}]}]}]}')  # O(1)
     return "\n".join(out) + "\n"  # O(n)
 
 

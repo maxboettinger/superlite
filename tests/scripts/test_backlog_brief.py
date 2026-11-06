@@ -29,6 +29,12 @@ def test_triage_brief_lists_issues_and_the_schema():
         assert s in t, s
     assert "\x1b" not in t and "gh issue view" not in t and "never --comments" in t
 
+def test_triage_brief_spells_one_complete_decision():
+    t = bb.triage_brief([{"number": 1, "title": "t"}], {"repo": "r", "max_batches": 2})
+    assert ('"decisions": [{"questions": [{"question": "<1-300 chars>", "header": "<1-12 chars>", "options": '
+            '[{"label": "<recommended first> (Recommended)", "description": "<trade-off>"}') in t
+    assert '{"questions": [...]}' in t
+
 def test_triage_brief_without_a_body_key_still_renders():
     assert "## #1 t" in bb.triage_brief([{"number": 1, "title": "t"}], {"repo": "r", "max_batches": 2})
 

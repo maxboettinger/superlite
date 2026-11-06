@@ -25,7 +25,15 @@ def _text(errs: list, where: str, v, lo: int, hi: int, msg: str) -> bool:
     return True
 
 
+def as_batch(q):
+    """A bare question object {"question", "header", "options"} becomes {"questions": [q]}; anything else passes through."""
+    if isinstance(q, dict) and "questions" not in q and "question" in q:  # O(1)
+        return {"questions": [q]}
+    return q
+
+
 def check_question(q: dict) -> list[str]:
+    q = as_batch(q)
     if not isinstance(q, dict) or not isinstance(q.get("questions"), list):  # O(1)
         return ["not an object with questions"]
     qs = q["questions"]
@@ -65,7 +73,7 @@ def check_question(q: dict) -> list[str]:
 def clean_question(q: dict) -> dict:
     """Rebuild a question that check_question accepted from its validated fields only: unknown keys never pass."""
     out = []
-    for e in q["questions"]:  # O(4 * options)
+    for e in as_batch(q)["questions"]:  # O(4 * options)
         c = {"question": e["question"], "header": e["header"],
              "options": [{k: o[k] for k in ("label", "description") if k in o} for o in e["options"]]}
         if "multiSelect" in e:

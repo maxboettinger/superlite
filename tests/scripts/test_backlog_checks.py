@@ -26,6 +26,12 @@ def test_questions():
                    ({"questions": [{**Q0, "multiSelect": "yes"}]}, "q1 multiSelect: true or false"), ([], "not an object with questions")]:
         assert err in bc.check_question(q), err
 
+def test_bare_question_is_accepted_and_stored_normalised():
+    bare = {"question": "Keep the v1 API?", "header": "API", "options": OPT}
+    assert bc.check_question(bare) == [] and bc.clean_question(bare) == {"questions": [bare]}
+    assert "q1 header: 1 to 12 characters" in bc.check_question({**bare, "header": "a much too long header"})
+    assert norm(bt("B1", [1], ["a.py"], decisions=[bare]))[0]["decisions"] == [{"questions": [bare]}]
+
 def test_proposal_is_normalised():
     assert norm(bt("B1", [2, 1], ["./b.py", "a.py", "a.py"])) == [{**bt("B1", [1, 2], ["a.py", "b.py"]), **DEFAULTS}]
 
