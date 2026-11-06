@@ -265,6 +265,28 @@ def owns_match(path, owns):  # O(f * len)
     return False  # O(1)
 
 
+def wave0_waiting(sl_dir):  # O(ledger + brief) | stub owners held until T0 commits
+    """Task ids in briefs/wave0.json `wait` while its `id` (default T0) has no commit line and no skip ruling."""
+    sl_dir = Path(sl_dir)  # O(1)
+    try:  # O(1)
+        data = json.loads((sl_dir / "briefs" / "wave0.json").read_text(encoding="utf-8"))  # O(brief)
+    except (OSError, ValueError):  # O(1)
+        return set()  # O(1)
+    wait = data.get("wait") if isinstance(data, dict) else None  # O(1)
+    if not isinstance(wait, list):  # O(1)
+        return set()  # O(1)
+    tid = data.get("id") if isinstance(data.get("id"), str) else "T0"  # O(1)
+    try:  # O(1)
+        lines = (sl_dir / "progress.md").read_text(encoding="utf-8", errors="replace").splitlines()  # O(ledger)
+    except OSError:  # O(1)
+        lines = []  # O(1)
+    commit = re.compile(rf"^\s*[-*+]?\s*commit\s+{re.escape(tid)}\s+[0-9a-f]{{7,40}}")  # O(1)
+    skip = re.compile(rf"^\s*[-*+]?\s*(?:\*\*)?Ruling:(?:\*\*)?\s*skip\s+{re.escape(tid)}(?![A-Za-z0-9])")  # O(1)
+    if any(commit.match(ln) or skip.match(ln) for ln in lines):  # O(ledger)
+        return set()  # O(1)
+    return {w for w in wait if isinstance(w, str)}  # O(wait)
+
+
 def stable_filter(plan):  # O(S) read, or None when the plan has no stable.json
     """Stable task ids from .superlite/stable.json for this plan, or None if the file is absent
     or unreadable (then every non-draft task is offered, as before)."""
@@ -274,7 +296,7 @@ def stable_filter(plan):  # O(S) read, or None when the plan has no stable.json
     if not f.is_file():  # O(1)
         return None  # O(1)
     try:  # O(1)
-        return set(json.loads(f.read_text(encoding="utf-8")).get("stable") or [])  # O(S)
+        return set(json.loads(f.read_text(encoding="utf-8")).get("stable") or []) - wave0_waiting(f.parent)  # O(S)
     except (ValueError, AttributeError):  # O(1)
         return None  # O(1)
 
