@@ -8,7 +8,8 @@ with {files}; `{junit}` in a command is replaced by the path run_tests wants the
 after the run; `related` is a template with `{src}` for source->test mapping); (b) detection from the project's own marker files: package.json scripts.test (npm test; the JUnit flag when
 vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo.toml, Package.swift, *.sln / *.csproj, then Python
 (pyproject.toml, pytest.ini, setup.cfg, tox.ini, conftest.py, or test_*.py files); (c) otherwise None.
-Library: resolve, resolve_related, is_test_path, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
+`{only_testing}` expands to one -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing).
+Library: resolve, resolve_related, swift_suites, only_testing, is_test_path, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
 """
 # Complexity notation:
 #   m = marker files checked, f = files walked for the Python test-file scan (bounded), o = output lines
@@ -60,14 +61,59 @@ def names_filter(paths) -> str:  # basenames without suffix joined by | | O(p)
     return "|".join(Path(p).stem for p in paths)  # O(p)
 
 
-def only_testing(paths) -> str:  # one -only-testing:<Target>/<stem> per path | O(p)
+SUITE_DECL = re.compile(r"^(?:(?:public|internal|private|fileprivate|open|final|indirect)\s+)*(class|struct|enum|actor|extension)\s+(\w+)([^{]*)")  # O(1)
+
+
+def swift_suites(text: str) -> list[str]:  # test suites declared at column 0, free @Test funcs as name() | O(n)
+    lines = text.splitlines()  # O(n)
+    out: list[str] = []  # O(1)
+    attrs: list[str] = []  # attribute lines seen right before a declaration | O(1)
+    i = 0  # O(1)
+    while i < len(lines):  # O(n)
+        ln = lines[i]  # O(1)
+        if ln.startswith("@") and not re.match(r"@\w+(?:\(.*\))?\s+\S", ln):  # attribute on its own line | O(1)
+            attrs.append(ln)  # O(1)
+            i += 1  # O(1)
+            continue  # O(1)
+        head = re.sub(r"^(?:@\w+(?:\([^)]*\))?\s+)+", "", ln)  # attributes inline before the keyword | O(w)
+        inline = ln[:len(ln) - len(head)]  # O(1)
+        fn = re.match(r"^(?:\w+\s+)*func\s+(\w+)\s*\(", head)  # O(1)
+        if fn and any(a.startswith("@Test") for a in attrs + [inline]):  # O(a)
+            name = fn.group(1) + "()"  # O(1)
+            if name not in out:  # O(s)
+                out.append(name)  # O(1)
+        m = SUITE_DECL.match(head)  # O(1)
+        if m:  # O(1)
+            j = i + 1  # O(1)
+            while j < len(lines) and not ln.rstrip().endswith("}") and not lines[j].startswith("}"):  # block runs to the next line starting with }, none for a one-line type | O(n)
+                j += 1  # O(1)
+            body = "\n".join(lines[i + 1:j])  # O(n)
+            marked = any(a.startswith("@Suite") for a in attrs) or inline.startswith("@Suite")  # O(a)
+            if marked or "XCTestCase" in m.group(3) or re.search(r"@Test\b|\bfunc test", body):  # O(n)
+                if m.group(2) not in out:  # O(s)
+                    out.append(m.group(2))  # O(1)
+        if ln.strip():  # any other non-blank line ends the attribute run | O(1)
+            attrs = []  # O(1)
+        i += 1  # O(1)
+    return out  # O(1)
+
+
+def only_testing(paths, root=".") -> str:  # one -only-testing:<Target>/<Suite> per declared suite, else per file stem | O(p*n)
     out: list[str] = []  # O(1)
     for p in paths:  # O(p)
         parts = Path(p).parts  # O(1)
         tgt = parts[parts.index("Tests") + 1] if "Tests" in parts[:-2] else ""  # directory right under Tests/ | O(d)
-        arg = f"-only-testing:{tgt}/{Path(p).stem}" if tgt else f"-only-testing:{Path(p).stem}"  # O(1)
-        if arg not in out:  # O(p)
-            out.append(arg)  # O(1)
+        pre = f"-only-testing:{tgt}/" if tgt else "-only-testing:"  # O(1)
+        try:  # O(1)
+            suites = swift_suites((Path(root) / p).read_text(encoding="utf-8", errors="replace"))  # O(n)
+        except OSError:  # O(1)
+            suites = []  # O(1)
+        if not suites:  # O(1)
+            print(f"testcmd: {p} declares no test suite; using {pre}{Path(p).stem}", file=sys.stderr)  # O(1)
+            suites = [Path(p).stem]  # O(1)
+        for s in suites:  # O(s)
+            if pre + s not in out:  # O(p)
+                out.append(pre + s)  # O(1)
     return " ".join(out)  # O(p)
 
 
@@ -236,7 +282,7 @@ def resolve(root=".", paths=()):  # O(m + f)
     command = template.replace("{files}", files) if paths else cfg["test"]  # O(1)
     if paths and "{files}" not in template:  # a test_file without {files} runs everything | O(1)
         command = template  # O(1)
-    command = command.replace("{names}", names_filter(paths)).replace("{only_testing}", only_testing(paths))  # O(p)
+    command = command.replace("{names}", names_filter(paths)).replace("{only_testing}", only_testing(paths, root))  # O(p)
     return {"language": lang, "isolate": iso, "python": False, "command": command, "junit": cfg.get("junit") or "",  # O(1)
             "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src}
 
