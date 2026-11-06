@@ -44,6 +44,7 @@ MAX_BRACE = 64  # words one brace expansion may give before it counts as unknown
 PROTECTED = (".superlite/orchestrator.json", ".superlite/human-replies.jsonl", ".superlite/backlog.json")  # O(1)
 NAMES = ("orchestrator.json", "human-replies.jsonl", "backlog.json")  # O(1)
 ACTIVE_OK = ("docs/plans/*", "docs/*/plans/*", "docs/*.md", "SPEC*.md", "*/SPEC*.md", "docs.md", "*/docs.md",  # O(1)
+             "docs/*.png", "docs/*.jpg", "docs/*.jpeg", "docs/*.gif", "docs/*.svg", "docs/*.webp",  # O(1)
              ".superlite/*", ".git/info/exclude")  # O(1)
 HUMAN_OK = ("docs/plans/*.review.md", "docs/*/plans/*.review.md", ".superlite/*", ".git/info/exclude")  # O(1)
 SHELLS = frozenset({"sh", "bash", "zsh", "ksh", "dash"})  # O(1)
@@ -87,6 +88,7 @@ class Verdict:  # O(1)
 class _Ctx:  # O(p)
     def __init__(self, command, project, mode, sds=()):  # O(n + p)
         self.mode = mode  # O(1)
+        self.sd = next((d for d in sds if isinstance(d, str) and d), None)  # first state folder | O(s)
         self.enforce = mode in ("active", "human")  # O(1)
         self.projn = _clean(_winpath(project))  # O(p)
         self.projreal = os.path.realpath(self.projn)  # O(p)
@@ -826,6 +828,29 @@ def _link_hit(src, dests, inn, st, ctx):  # O(d * p) | protected verdict when a 
     return None  # O(1)
 
 
+def _stray(v, ctx):  # O(p) + git | an untracked, unowned regular file in active mode; any doubt is False
+    try:  # O(1)
+        if ctx.mode != "active" or v.rel in ("?", ".") or not ctx.sd or "?" in v.abs:  # O(1)
+            return False  # O(1)
+        st = os.lstat(v.abs)  # O(p)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:  # a link, folder or hard link | O(1)
+            return False  # O(1)
+        import subprocess  # lazy | O(1)
+        env = {k: x for k, x in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}  # O(env)
+        r = subprocess.run(["git", "-C", os.path.dirname(v.abs), "ls-files", "--error-unmatch", "--", os.path.basename(v.abs)],  # O(git)
+                           env=env, capture_output=True, timeout=1)  # O(git)
+        if r.returncode != 1:  # tracked (0) or any other outcome | O(1)
+            return False  # O(1)
+        import plan_tools, next_tasks  # lazy | O(1)
+        with open(os.path.join(ctx.sd, "stable.json"), encoding="utf-8") as f:  # O(1)
+            plan = json.load(f)["plan"]  # O(1)
+        root = plan_tools.stable_root(plan)  # O(d)
+        rel = os.path.relpath(os.path.realpath(v.abs), os.path.realpath(root)).replace(os.sep, "/")  # O(p)
+        return not any(next_tasks.owns_match(rel, t.owns) for t in plan_tools.Plan.load(plan).tasks)  # O(tasks)
+    except Exception:  # noqa: BLE001  any doubt blocks | O(1)
+        return False  # O(1)
+
+
 def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judge the paths guard_files and guard_tools name
     base = "ln" if base == "link" else base  # `link A B` is `ln A B` | O(1)
     w = [base] + list(words[1:]) + (["?"] if xargs else [])  # xargs adds operands read from stdin | O(w)
@@ -880,7 +905,10 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
         inn = (None,)  # O(1)
     fl = _flags(c.seg)  # O(w)
     for t, name in pairs:  # O(t)
-        v = _check(t, inn, st, ctx, name, _flag_of(t, fl))  # O(d * p)
+        flag = _flag_of(t, fl)  # O(w * p)
+        v = _check(t, inn, st, ctx, name, flag)  # O(d * p)
+        if v is not None and base in ("rm", "unlink") and v.kind == "code" and not flag and _stray(v, ctx):  # O(1)
+            continue  # a file git does not track and no task owns: housekeeping | O(1)
         if v is not None:  # O(1)
             return v  # O(1)
     return None  # O(1)
@@ -1077,7 +1105,8 @@ MESSAGES = {  # O(1)
              "fixer-sonnet-high; unknown cause -> fixer-opus.",
              "- Wave 0 skeleton/stub/config files belong to an implementer-haiku task.",
              "- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
-             "docs/**/*.md, any docs.md and .superlite/**.",
+             "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file git "
+             "does not track and no task Owns.",
              "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
              ".superlite by hand."],
 }  # O(1)
@@ -1088,9 +1117,11 @@ def _flat(s, limit=120):  # O(len) | one line, no control characters
     return re.sub(r"[\x00-\x1f\x7f]", "", s)[:limit].strip()  # O(len)
 
 
-def _incident(sd, kind, tool, target):  # O(1) | append one incident line; never raises
+def _incident(sd, kind, tool, target, rule=None, cwd=None):  # O(1) | append one incident line; never raises
     try:  # O(1)
-        row = {"kind": kind, "agent": "coordinator", "tool": tool, "target": _flat(target)}  # O(len)
+        row = {"kind": kind, "agent": "coordinator", "tool": tool, "target": _flat(target, 400 if rule else 120)}  # O(len)
+        if rule:  # a rule-block row names the rule and the directory | O(1)
+            row.update(rule=rule, cwd=cwd)  # O(1)
         with open(os.path.join(sd, "incidents.jsonl"), "a", encoding="utf-8") as f:  # O(1)
             f.write(json.dumps(row) + "\n")  # O(len)
     except (OSError, TypeError, ValueError):  # O(1)
@@ -1148,7 +1179,7 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
         _ack()  # O(1)
         return 0  # O(1)
     named = v.rel not in ("?", ".")  # O(1)
-    _incident(sd, "rule-block", tool, v.rel if named else cmd)  # O(len)
+    _incident(sd, "rule-block", tool, v.rel if named else cmd, rule=v.kind, cwd=cwd or project)  # O(len)
     for line in MESSAGES[v.kind]:  # O(1)
         _err(line)  # O(len)
     if v.kind != "protected":  # the protected message names no target | O(1)
