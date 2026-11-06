@@ -44,7 +44,7 @@ def both(monkeypatch, tmp_path, cwd, bound_to):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.delenv("SUPERLITE_STATE_DIR", raising=False)
     monkeypatch.chdir(cwd)
-    py = state._abs(state.resolve())
+    py = state._abs(state.resolve(strict=False))
     env = dict(os.environ, CLAUDE_PROJECT_DIR=str(cwd))
     r = subprocess.run([BASH, "-c", SNIPPET, "_", json.dumps({"session_id": SID, "cwd": str(cwd)}), str(HOOK)],
                        capture_output=True, text=True, env=env, cwd=cwd)
@@ -68,6 +68,8 @@ def test_worktree_without_a_marker_keeps_the_binding(tmp_path, monkeypatch):
     sh, py = both(monkeypatch, tmp_path, wa, other / ".superlite")
     assert py == other / ".superlite"
     assert sh == py
+    with pytest.raises(state.Foreign):
+        state.resolve()
 
 
 def test_main_checkout_marker_does_not_beat_the_binding(tmp_path, monkeypatch):
