@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 EVALS = ROOT / "evals"
 CASES = {"brainstorm-first", "setup-report", "debug-flow", "brainstorm-coverage",
-         "ai-asks-once", "ai-bounded-quiet"}
+         "ai-asks-once", "ai-bounded-quiet", "feature-routing"}
 PROMPT_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs", "expected_outcome", "model",
                "max_turns", "timeout_seconds", "allowed_tools", "append_system_prompt", "env"}
 GRADER_TYPES = {"regex", "tool_used", "tool_order", "file_exists", "llm", "baseline"}
@@ -56,7 +56,7 @@ def test_frontmatter_keys_are_known():
 def test_scaffold_scripts_are_executable_bash(tmp_path):
     scripts = sorted(EVALS.glob("*/scaffold.sh"))
     assert {s.parent.name for s in scripts} == {"setup-report", "debug-flow", "brainstorm-coverage", "ai-asks-once",
-                                                     "ai-bounded-quiet"}
+                                                     "ai-bounded-quiet", "feature-routing"}
     for s in scripts:
         assert s.read_text().startswith("#!/usr/bin/env bash")
         assert os.access(s, os.X_OK), s
@@ -71,7 +71,7 @@ def test_scaffold_scripts_are_executable_bash(tmp_path):
     assert "2024" in (debug / "tests/test_core.py").read_text()
     assert "pythonpath" in (debug / "pyproject.toml").read_text()
     assert (tmp_path / "setup-report/src/app/__init__.py").exists()
-    for name in ("ai-asks-once", "ai-bounded-quiet"):
+    for name in ("ai-asks-once", "ai-bounded-quiet", "feature-routing"):
         assert (tmp_path / name / "src/notes/cli.py").exists(), name
         assert 'version = "1.2.3"' in (tmp_path / name / "pyproject.toml").read_text(), name
 

@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: feature-routing
+description: A plain /superlite:feature request loads brainstorming before anything else.
+runs: 2
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: sonnet
+  max_turns: 12
+  timeout_seconds: 600
+  allowed_tools: [Read, Glob, Grep, Skill, Edit, Write]
