@@ -88,3 +88,8 @@ def test_parse_real_swift_testing():
 def test_parse_real_mixed_selection():
     r = _real("mixed_only_testing.txt", 65)
     assert (r["passed"], r["failed"]) == (7, 1)
+
+
+def test_free_test_with_nested_paren_attribute_and_one_line_suite():
+    t = "@Test(.tags(.fast)) func free() {}\nstruct One { @Test func a() {} }\nstruct Plain { let x = 1 }\n"
+    assert testcmd.swift_suites(t) == ["free()", "One"]

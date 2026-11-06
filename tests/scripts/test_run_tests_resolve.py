@@ -84,7 +84,7 @@ def test_other_file_is_left_open(tmp_path):
 
 def test_no_result_logs_incident(tmp_path):
     write(tmp_path, GREEN)
-    r = rt(tmp_path, "--fast", "tests/test_missing.py")
+    r = rt(tmp_path, "--fast", "tests/test_a.py::test_nope")
     assert r.returncode == 2 and "produced no results" in r.stderr, r.stdout + r.stderr
     hits = [e for e in log(tmp_path) if e["kind"] == "no-result"]
     assert len(hits) == 1 and hits[0]["agent"] == "run_tests" and hits[0]["resolution"] == "open"
