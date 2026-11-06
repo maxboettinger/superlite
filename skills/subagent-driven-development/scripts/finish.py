@@ -11,6 +11,7 @@ Ledger and log default to the run folder of `--plan` once it holds a run (else t
 superlite-side stops of the run (guard blocks and rewrites, guard errors, test runs with no result, commit scope
 blocks) print as one line, `superlite stops this run: N kind (tool), ...`, and each is also logged as an `auto`
 feedback entry (`feedback.add_auto`; a failure to write feedback never fails finish, #140).
+A task held by `sl hold` (and not committed) is listed with its reason.
 Deterministic: the same files give the same text. Stdlib only.
 """
 # Complexity notation:
@@ -311,6 +312,13 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     out.append(f"rulings: {len(rulings)}")  # O(1)
     out += [f"- {r}" for r in rulings]  # O(G)
     out.append("")  # O(1)
+    import next_tasks  # lazy | O(1)
+    held = {t: r for t, r in next_tasks.held_tasks(ledger).items() if t not in {c[0] for c in commits}}  # O(R + C)
+    if held:  # O(1)
+        out.append(f"held: {len(held)} (still waiting for a human step)")  # O(1)
+        out += [f"- {t}: {r}" for t, r in held.items()]  # O(h)
+        out.append("- release one: sl hold --release Tn")  # O(1)
+        out.append("")  # O(1)
     if tests:  # O(1)
         mode, p, f, s, sec, rec = tests  # O(1)
         mode = f"{mode}, recorded" if rec else mode  # O(1)
