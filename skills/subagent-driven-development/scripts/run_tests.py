@@ -185,7 +185,7 @@ def case_file(case):  # O(d) stats, O(d^2) path work (stats are uncached)
     cn = case.get("classname") or ""  # O(1)
     if re.search(r"[\\/]|\.(?:[jt]sx?|go|rs|cs)$", cn):  # a path-like classname (vitest, jest, go, cargo): use it as the file | O(1)
         return cn.replace("\\", "/")  # O(1)
-    parts = cn.split(".")  # O(d)
+    parts = [p for p in (cn or case.get("name") or "").split(".") if p]  # an empty classname is a collection error: pytest names the module (#196) | O(d)
     while parts and not Path(*parts).with_suffix(".py").exists():  # O(d) iterations; Path join + stat O(d) each
         parts.pop()  # O(1)
     if parts:  # O(d)
@@ -197,6 +197,27 @@ def failure_line(case, text, fallback):  # O(len(text) + d)
     base = re.escape(Path(case_file(case)).name)  # O(d) stats + O(len)
     hits = re.findall(rf"{base}:(\d+)", text or "")  # O(len(text))
     return int(hits[-1]) if hits else fallback  # O(1)
+
+
+COLLECTION_FAILURE = "collection failure"  # pytest's junit <error> message for a test module that fails to import | O(1)
+
+
+def raised(text):  # O(len text)
+    """The error in a pytest traceback: its last `E ` line, else its last non-blank line."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]  # O(len text)
+    errs = [ln[1:].strip() for ln in lines if ln.startswith("E ")]  # O(len text)
+    return (errs or lines or ["no error text"])[-1]  # O(1)
+
+
+def collection_report(xml_path):  # O(X + T*(d + len(failure text)))
+    """pytest exit 2 from collection errors: the report's parse (the errors are its failures); None for any other interrupt."""
+    try:  # O(1)
+        root = ET.parse(xml_path).getroot()  # O(X)
+    except ET.ParseError:  # O(1)
+        return None  # O(1)
+    if not any(e.get("message") == COLLECTION_FAILURE for e in root.iter("error")):  # O(T)
+        return None  # O(1)
+    return parse_junit(xml_path)  # O(X + T*d)
 
 
 def parse_junit(xml_path):  # O(X + T*(d + len(failure text)))
@@ -215,6 +236,8 @@ def parse_junit(xml_path):  # O(X + T*(d + len(failure text)))
             counts["failed"] += 1  # O(1)
             ok_bad[1] += 1  # O(1)
             msg = (bad.get("message") or (bad.text or "").strip()).split("\n")[0]  # O(len(failure text))
+            if msg == COLLECTION_FAILURE:  # pytest's generic message: add the error it raised (#196) | O(len(failure text))
+                msg = f"{msg}: {raised(bad.text)}"  # O(1)
             line = failure_line(case, bad.text, int(case.get("line") or 0) + 1)  # O(len(failure text) + d)
             failures.append((f, line, f"{case.get('name')}: {msg}"))  # O(1)
         elif case.find("skipped") is not None:  # O(1)
@@ -334,7 +357,7 @@ def resolve_passed(log, task, failures, files):  # O(B + I + k) read the log onc
         if isinstance(e, dict) and "file" in e and "line" in e and e.get("kind") != "verified":  # O(1)
             newest[(e["file"], e["line"])] = e  # O(1)
     norm = lambda x: str(x).replace("\\", "/")  # noqa: E731 | O(len)
-    ran = {norm(f) for f in files}  # O(F)
+    ran = {norm(f) for f, (ok, _bad) in files.items() if ok}  # a file with no passing test (a collection error) closes nothing (#196) | O(F)
     failing = {(norm(f), ctx.split(": ", 1)[0]) for f, _line, ctx in failures}  # (file, test name) still red | O(k)
     items = [(f, line, "fixed: passed on a later run", "test-failure", "fixed")  # O(1) each
              for (f, line), e in newest.items()  # O(I) iterations
@@ -551,8 +574,9 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         r = pyrun.run_tree(cmd, capture_output=True, text=True, encoding="utf-8",  # O(O) + process spawn (pytest run time dominates)
                            errors="replace")  # O(1)
         seconds = time.monotonic() - t0  # O(1)
-        if (r.returncode not in (0, 1) or not xml_path.exists()  # O(1)
-                or xml_path.stat().st_size == 0):  # O(1)
+        has_xml = xml_path.exists() and xml_path.stat().st_size > 0  # O(1)
+        parsed = collection_report(xml_path) if r.returncode == 2 and has_xml else None  # a collection error stops pytest with exit 2 (#196) | O(X + T*d)
+        if parsed is None and (r.returncode not in (0, 1) or not has_xml):  # O(1)
             tail = (r.stdout + r.stderr).strip().splitlines()[-5:]  # O(O)
             reason = "pytest produced no results: " + " | ".join(tail)  # O(1)
             print(reason, file=sys.stderr)  # O(1)
@@ -563,7 +587,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
             print(f"0 0 0 {seconds:.1f}")  # O(1)
             return 1 if r.returncode == 5 else 2  # O(1)
-        counts, failures, files = parse_junit(xml_path)  # O(X + T*d)
+        counts, failures, files = parsed or parse_junit(xml_path)  # O(X + T*d)
     return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
 
 
