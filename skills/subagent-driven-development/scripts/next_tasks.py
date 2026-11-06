@@ -143,14 +143,27 @@ def read_text(path):  # O(L)
     return p.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")  # O(L)
 
 
-def parse_plan(plan):  # O(L)
+def _unfenced(text):  # O(len text)
+    """`text` with the lines inside code fences dropped (same fence flags
+    plan_tools lints with): a verbatim block's headings and fields are content."""
+    lines = text.split("\n")  # O(len text)
+    flags, _ = sibling("plan_tools").scan_fences(lines)  # O(len text)
+    return "\n".join(ln for ln, f in zip(lines, flags) if not f)  # O(len text)
+
+
+def parse_plan(plan):  # O(L + C)
     """{task id: info}, in plan order.
 
     info: title, est_time (min), est_context (k tokens), owns (list), body.
     """
     lines = read_text(plan).split("\n")  # O(L)
+    flags, _ = sibling("plan_tools").scan_fences(lines)  # O(L + C)
     tasks, cur = {}, None  # O(1)
-    for line in lines:  # O(L lines) iterations
+    for line, fenced in zip(lines, flags):  # O(L lines) iterations
+        if fenced:  # verbatim block: its headings and fields are text, not structure
+            if cur is not None:  # O(1)
+                cur["body"].append(line)  # O(1)
+            continue  # O(1)
         m = _TASK_HEADING.match(line)  # O(len line)
         if m:  # O(1)
             cur = {"id": m.group(1), "head": m.group(2), "body": []}  # O(1)
@@ -164,7 +177,8 @@ def parse_plan(plan):  # O(L)
     out = {}  # O(1)
     for tid, t in tasks.items():  # O(n) iterations
         body = "\n".join(t["body"])  # O(len body)
-        if not (re.match(r"T\d", tid) or "**Owns:**" in body):  # `### S3 storage` is prose, not a task | O(len body)
+        fbody = _unfenced(body)  # O(len body) fields read outside fences only
+        if not (re.match(r"T\d", tid) or "**Owns:**" in fbody):  # `### S3 storage` is prose, not a task | O(len body)
             continue  # O(1)
         head = t["head"]  # O(1)
         parts = [p.strip() for p in head.split("·")]  # O(len head)
@@ -174,8 +188,8 @@ def parse_plan(plan):  # O(L)
         out[tid] = {  # O(1)
             "id": tid,  # O(1)
             "title": title or tid,  # O(1)
-            "est_time": _num(r"Est\.?\s*time:?\*{0,2}\s*([\d.]+)\s*min", head, body),  # O(len body) regex
-            "est_context": _num(r"Est\.?\s*context:?\*{0,2}\s*([\d.]+)\s*k", head, body),  # O(len body) regex
+            "est_time": _num(r"Est\.?\s*time:?\*{0,2}\s*([\d.]+)\s*min", head, fbody),  # O(len body) regex
+            "est_context": _num(r"Est\.?\s*context:?\*{0,2}\s*([\d.]+)\s*k", head, fbody),  # O(len body) regex
             "owns": parse_owns(_field(body, "Owns")),  # O(len body + owns text)
             "body": body,  # O(1)
         }  # O(1)
@@ -191,7 +205,7 @@ def _num(pattern, head, body):  # O(len text)
 
 
 def _field(body, name):  # O(len body)
-    m = re.search(rf"^\*\*{name}:\*\*[ \t]*(.*)$", body, re.M)  # O(len body)
+    m = re.search(rf"^\*\*{name}:\*\*[ \t]*(.*)$", _unfenced(body), re.M)  # O(len body)
     return m.group(1) if m else ""  # O(1)
 
 
