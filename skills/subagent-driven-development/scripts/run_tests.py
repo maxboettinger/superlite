@@ -11,7 +11,7 @@ test becomes a `test-failure` incident; on a --full run each test file whose
 tests all pass becomes a `verified` incident (once per distinct entry). With `--task Tn` each
 `test-failure` incident carries `task`, and a later run closes that task's open ones whose test
 now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a pytest run that produces
-no results logs one `no-result` incident. Appends
+no results logs one `no-result` incident (so does a non-Python run that prints no test count: `no tests ran:`). A `--fast` path that does not exist (node suffix `::` ignored) is a usage error: exit 2, `test path not found`, no incident. Appends
 a `tests` line to the progress ledger. On every run it also writes
 `.superlite/test-summary.json` (--summary), the file `pt_review packet` reads:
 `{"passed": N, "failed": N, "skipped": N, "seconds": S, "mode": "fast|full",
@@ -367,6 +367,17 @@ def resolve_passed(log, task, failures, files):  # O(B + I + k) read the log onc
     add_incidents(log, items, task)  # O(total c) one append
 
 
+def missing_fast_paths(paths):  # O(p) the --fast paths that do not exist (a `::node` suffix is dropped)
+    return [p for p in paths if not Path(p.split("::", 1)[0]).exists()]  # O(p)
+
+
+def missing_line(paths, cwd, root):  # O(p) the usage-error text for missing --fast paths, else None
+    gone = missing_fast_paths(paths)  # O(p)
+    if not gone:  # O(1)
+        return None  # O(1)
+    return f"test path not found: {', '.join(gone)} (cwd {cwd}, root {root})"  # O(p)
+
+
 def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident append
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     mode = ap.add_mutually_exclusive_group()  # O(1)
@@ -396,6 +407,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     a = ap.parse_args(argv)  # O(1)
     a.started = time.time()  # before the runner reads any code: the summary's `started` (#101) | O(1)
     cwd = Path.cwd().resolve()  # O(1)
+    a.cwd = cwd  # for the missing-path message, before to_root moves us | O(1)
     root = project_root(cwd) if a.wait_path is None else None  # --wait paths are absolute | O(d)
     if root is not None and root != cwd:  # O(1)
         to_root(a, argv, cwd, root)  # O(len argv + p)
@@ -404,6 +416,16 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     if a.wait_path is not None:  # O(1)
         return wait_background(a)  # O(timeout / POLL_SECONDS)
     if a.background:  # O(1)
+        if a.fast:  # a missing path is refused here, not in the detached child | O(1)
+            try:  # O(1)
+                fast = expand_fast_paths([p for chunk in a.fast for p in nt.csv(chunk)])  # O(p)
+                spec = testcmd.resolve(".", fast)  # O(m + f)
+            except FileNotFoundError:  # left to the child | O(1)
+                fast, spec = [], None  # O(1)
+            gone = missing_line(fast, a.cwd, Path.cwd()) if spec and spec["python"] and fast else None  # O(p)
+            if gone:  # O(1)
+                print(f"run_tests: {gone}", file=sys.stderr)  # O(1)
+                return 2  # O(1)
         return start_background(a, argv)  # O(len argv) + spawn
     if a.run_id:  # O(1) detached child: a crash still leaves a (red) summary for --wait
         try:  # O(1)
@@ -493,6 +515,14 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
             tail_set = {x.strip() for x in p["tail"]}  # O(40)
             kept = [x for x in (p["error"] if r.returncode else "", p["marker"]) if x and x not in tail_set]  # the error and marker may sit above the last 40 lines | O(40)
             atomic_write(Path(a.summary).with_name("test-output.log"), "\n".join([*kept, *p["tail"]]) + "\n")  # O(40)
+            if not r.returncode and not (p["passed"] or p["failed"] or p["skipped"] or p["names"]):  # the runner counted zero tests: a stop, not a pass (#240) | O(1)
+                reason = f"no tests ran: exit {r.returncode} from `{spec['command']}` with no test count; its filter may select nothing"[:300]  # O(1)
+                print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+                write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
+                publish_summary(a)  # O(summary size)
+                add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task)  # O(c)
+                print(f"0 0 0 {seconds:.1f}")  # O(1)
+                return 1  # O(1)
     return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
 
 
@@ -541,6 +571,14 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         publish_summary(a)  # O(summary size)
         print("0 0 0 0.0")  # O(1)
         return 2  # O(1)
+    if spec["python"] and paths:  # a missing path is a usage error, not a no-result stop (#235) | O(p)
+        gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd())  # O(p)
+        if gone:  # O(1)
+            print(f"run_tests: {gone}", file=sys.stderr)  # O(1)
+            write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=gone)  # O(1)
+            publish_summary(a)  # O(summary size)
+            print("0 0 0 0.0")  # O(1)
+            return 2  # O(1)
     if not spec["python"]:  # O(1)
         tree = None  # O(1)
         if a.task and spec.get("isolate", False):  # compiled stack: test own files only, in an isolated tree | O(1)
@@ -557,6 +595,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             info = nt.parse_plan(plan)  # O(L)
             if a.task not in info:  # O(1)
                 nt.die(f"unknown task {a.task}")  # O(1)
+            ct.add_also_owns(info, a.ledger)  # --also and --claim rulings own their files too (#239) | O(c + o)
             tree = trees.prepare(".", a.task, info[a.task]["owns"])  # O(f * o) + git checkout
         return run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
 
