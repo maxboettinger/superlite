@@ -10,6 +10,8 @@ stdout, one line per batch of ready tasks (one agent, one message), longest pred
     Tn fresh             no eligible idle agent: start a primed implementer
     T0 wave0             synthesized Wave 0 skeleton still pending (`sl wave0`): its own agent, first line;
                          a ledger line `- Ruling: skip T0` silences it
+A task with a ledger `- Hold Tn: reason` (and no later `- Release Tn`) is never offered; stderr `held=Tn reason`.
+`--committed T0` also opens the stable-split stub owners, as a `- commit T0` ledger line does.
 stderr: `evict=<id> <reason>` for each idle agent eligible for none of the ready tasks; each is also removed
 from pool.json (`pool.remove`), so no later round offers it and the next run does not evict it again.
 
@@ -151,7 +153,7 @@ def resolve_poll(decision, pool):  # O(a)
     return "agent=" + ids[best]  # O(1)
 
 
-def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lane_virtual=0, sl_dir=None, batch=None):  # O(L + n + e + packing + R*a*(F + o))
+def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lane_virtual=0, sl_dir=None, batch=None, held=None):  # O(L + n + e + packing + R*a*(F + o))
     """[(tasks, decision)] and {agent id: evict reason}; tasks is "Tn" or a batch "Tn,Tm"; `batch=1` forces one
     task per agent, else split.choose packs them. Decision is 'agent=ID tier=T', 'poll IDS tier=T' or
     'fresh tier=T agent=TYPE'. A task only goes to an idle agent of its own tier; the lane tier (haiku) reuses
@@ -169,7 +171,8 @@ def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lan
     times = predicted_minutes(plan, graph, info)  # O(n * predict)
     ready_ids = nt.ready_tasks(graph, times, committed, running, cap,  # O(n*(n + e) + R log R) draft closure
                            nt.taskgraph_full(plan).get("status", {}),  # O(1) memoized
-                           nt.stable_filter(plan))  # only stable tasks when .superlite/stable.json exists
+                           nt.stable_filter(plan, committed),  # only stable tasks when .superlite/stable.json exists; T0 committed opens the stub owners
+                           held=held)  # held tasks are never offered
     cp = stable_cp(plan, graph, times) if (cfg.get("batch") or {}).get("critical_path_solo", True) else set()  # O(file)
     groups = make_batches(ready_ids, tier, info, times,  # O(packing)
                           lambda tr: float(routing.tier_limits(cfg, tr)["max_context_k"]),
@@ -262,8 +265,11 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=Non
     done = nt.csv(committed) if committed is not None else sorted(ct.committed_tasks(ledger))  # O(c)
     busy = nt.csv(running) if running is not None else running_from_pool(pool, done)  # O(a)
     import wave0  # noqa: E402 | O(1) lazy
-    w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy and not skip_t0(ledger, plan)  # synthesized Wave 0 still pending | O(1)
-    lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0, sl_dir=Path(pool_path).parent, batch=batch)  # see plan_dispatch
+    held = {t: r for t, r in nt.held_tasks(ledger).items() if t not in done}  # a committed task is no longer held | O(c)
+    w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy and "T0" not in held and not skip_t0(ledger, plan)  # synthesized Wave 0 still pending | O(1)
+    lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0, sl_dir=Path(pool_path).parent, batch=batch, held=held)  # see plan_dispatch
+    for t, r in held.items():  # O(h)
+        print(f"held={t} {r}", file=sys.stderr)  # O(1)
     drop_evicted(pool_path, evict)  # an evicted agent is never offered by a later round | O(pool bytes)
     if w0:  # first line, a haiku lane agent | O(R)
         cfg = routing.load_cfg()  # O(file)
