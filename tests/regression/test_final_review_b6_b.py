@@ -34,7 +34,7 @@ def test_sl_mode_keeps_task_resolves_and_logs_no_result(tmp_path):
     assert rt(tmp_path, "--fast", "tests/test_a.py", "--task", "T3").returncode == 0
     entries = log(tmp_path)
     assert len(entries) == 2 and entries[-1]["resolution"] == "fixed"
-    r = rt(tmp_path, "--fast", "tests/test_missing.py", "--task", "T3")
+    r = rt(tmp_path, "--fast", "tests/test_a.py::test_nope", "--task", "T3")
     assert r.returncode == 2, r.stdout + r.stderr
     stops = [e for e in log(tmp_path) if e.get("kind") == "no-result"]
     assert len(stops) == 1 and stops[0]["task"] == "T3" and stops[0]["resolution"] == "open"

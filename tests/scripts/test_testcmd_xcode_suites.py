@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 
+from _fixtures import FIXTURES
 from test_plan_tools import SCRIPTS
 
 sys.path.insert(0, str(SCRIPTS))
 import testcmd  # noqa: E402
 
-FIX = Path(__file__).parent / "fixtures" / "xcode"
+FIX = FIXTURES / "xcode"
 MIXED = "final class AlphaTests: XCTestCase {\n  func testA() {}\n}\nclass BetaTests: XCTestCase {\n  func testB() {}\n}\n"
 MODERN = "@Suite struct Parser {\n  @Test func a() {}\n}\nstruct Fixture { let x = 1 }\n@Test func free() {}\n"
 
