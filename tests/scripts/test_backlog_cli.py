@@ -6,19 +6,23 @@ sys.path.insert(0, str(SCRIPTS))
 import backlog as bl  # noqa: E402
 import backlog_state as bs  # noqa: E402
 
-ISSUES = [{"number": n, "title": t, "author": {"login": a}, "authorAssociation": r}
+ISSUES = [{"number": n, "title": t, "author": {"login": a}, "authorAssociation": r, "body": f"body {n}"}
           for n, t, a, r in ((1, "One", "max", "OWNER"), (2, "Two", "co", "COLLABORATOR"), (3, "Three", "eve", "NONE"))]
 BATCH = {"id": "B1", "topic": "first", "issues": [1, 2], "files": ["a.py"], "depends": [], "decisions": []}
 
 @pytest.fixture
 def bk(tmp_path, monkeypatch):
     root = tmp_path / "main"; (root / ".superlite").mkdir(parents=True)
-    ns = types.SimpleNamespace(root=root, sd=root / ".superlite", calls=[], vis="PUBLIC", batches=[BATCH])
+    ns = types.SimpleNamespace(root=root, sd=root / ".superlite", calls=[], vis="PUBLIC", batches=[BATCH],
+                               status="DONE", summary="x", gh=[], issues=[])
     monkeypatch.setattr(bl, "_root", lambda: root)
-    monkeypatch.setattr(bl, "_gh", lambda args: {"nameWithOwner": "o/r", "visibility": ns.vis} if args[:2] == ["repo", "view"] else ISSUES)
+    def gh(args):
+        ns.gh.append(args)
+        return {"nameWithOwner": "o/r", "visibility": ns.vis} if args[:2] == ["repo", "view"] else ISSUES
+    monkeypatch.setattr(bl, "_gh", gh)
     def wait(sd, ids, timeout_ms):
         (sd / "fleet" / "reports").mkdir(parents=True, exist_ok=True)
-        block = {"status": "DONE", "files": [], "tests": "", "findings": [], "summary": "x", "batches": ns.batches}
+        block = {"status": ns.status, "files": [], "tests": "", "findings": [], "summary": ns.summary, "batches": ns.batches}
         (sd / "fleet" / "reports" / "triage.md").write_text("Status: DONE\n```json\n" + json.dumps(block) + "\n```")
         return [{"id": ids[0], "status": "DONE"}]
     log = lambda *a: ns.calls.append(a)
@@ -27,7 +31,7 @@ def bk(tmp_path, monkeypatch):
              "fleet_state": types.SimpleNamespace(is_on=lambda sd: False),
              "fleet_io": types.SimpleNamespace(send_brief=lambda sd, wid, brief, label="": log("send", wid, brief, label) or label, wait=wait)}
     if os.environ.get("SUPERLITE_REAL") != "1":
-        fakes["backlog_brief"] = types.SimpleNamespace(triage_brief=lambda issues, ctx: "\n".join(f"- #{i['number']} {i['title']}" for i in issues))
+        fakes["backlog_brief"] = types.SimpleNamespace(triage_brief=lambda issues, ctx: ns.issues.extend(issues) or "\n".join(f"- #{i['number']} {i['title']}" for i in issues))
     for k, v in fakes.items():
         monkeypatch.setitem(sys.modules, k, v)
     return ns
@@ -46,6 +50,21 @@ def test_plan_records_trusted_batches_and_lists_outside_issues(bk, capsys):
     assert "- #1 One" in brief and "#3" not in brief
     assert all(c in bk.calls for c in (("fleet", ["on", "--plan", str(bk.sd)]), ("spawn", "sonnet", "research"),
                                        ("send", "W1", str(bk.sd / "briefs" / "triage.md"), "triage")))
+
+def test_plan_fetches_bodies_and_caps_them(bk, capsys, monkeypatch):
+    long = "x" * 5000
+    monkeypatch.setitem(globals(), "ISSUES", [{**ISSUES[0], "body": long}, ISSUES[1], {**ISSUES[2], "body": None}])
+    assert cli(capsys, "plan")[0] == 0
+    api = next(a for a in bk.gh if a[0] == "api")
+    assert "body" in api[-1]
+    one, two = bk.issues
+    assert two["body"] == "body 2" and one["body"].endswith("\n[truncated]") and len(one["body"]) < 4100 and one["body"].startswith("x" * 4000)
+
+def test_rejected_proposal_prints_the_worker_summary(bk, capsys):
+    bk.batches, bk.status, bk.summary = [], "NEEDS_CONTEXT", "0 batches: no shell to read issue bodies"
+    rc, out = cli(capsys, "plan")
+    assert rc == 3 and "BLOCKED: proposal rejected" in out and "batches: 1 to 20 entries" in out
+    assert "triage worker NEEDS_CONTEXT: 0 batches: no shell to read issue bodies" in out
 
 def test_outside_issues_cannot_be_smuggled_and_private_repos_trust_all(bk, capsys):
     bk.batches = [{**BATCH, "issues": [3]}]

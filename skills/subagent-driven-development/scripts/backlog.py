@@ -22,8 +22,14 @@ def _root() -> Path:
     return bs.main_root(Path.cwd())  # O(1)
 
 
-ISSUES_JQ = (".[] | select(has(\"pull_request\") | not) | {number, title, author: {login: .user.login}, "
+ISSUES_JQ = (".[] | select(has(\"pull_request\") | not) | {number, title, body, author: {login: .user.login}, "
              "authorAssociation: .author_association}")
+BODY_LIMIT = 4000  # characters of one issue body kept in the triage brief
+
+
+def _body(s) -> str:
+    s = str(s or "")
+    return s if len(s) <= BODY_LIMIT else s[:BODY_LIMIT] + "\n[truncated]"
 
 
 def _gh(args: list):
@@ -112,7 +118,7 @@ def cmd_plan(a) -> int:
         if n in skipped:
             continue
         if not public or i.get("authorAssociation") in TRUSTED or n in admitted:
-            trusted.append({"number": n, "title": i.get("title", "")})
+            trusted.append({"number": n, "title": i.get("title", ""), "body": _body(i.get("body"))})
         else:
             outside.append({"number": n, "title": i.get("title", ""), "author": _author(i)})
     prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min)
@@ -121,7 +127,8 @@ def cmd_plan(a) -> int:
         return 3
     batches, errs = bc.check_proposal(prop, {t["number"] for t in trusted})
     if errs:
-        print("BLOCKED: proposal rejected\n" + "\n".join(errs[:5]))
+        why = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(prop.get("summary", ""))).split())[:300]
+        print("BLOCKED: proposal rejected\n" + "\n".join(errs[:5]) + f"\ntriage worker {prop.get('status', '?')}: {why or 'no summary'}")
         return 3
     batches = bc.separate(batches)
     shown = {}
