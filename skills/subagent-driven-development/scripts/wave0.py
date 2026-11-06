@@ -142,13 +142,33 @@ def seam_names(plan) -> set[str]:  # O(q*s)
     return names  # O(1)
 
 
+def stub_items(task, seams: set[str]) -> list[str]:  # O(k*s)
+    """The task's Produces items another task consumes."""
+    return [it for it in task.produces  # O(k*s)
+            if pt.strip_ticks(it) in seams or ((pt.parse_signature(it) or {}).get("name") in seams)]
+
+
+def stub_files(plan) -> list[str]:  # O(n*q*s)
+    """Non-test files of every task that produces a consumed item, in plan order, deduped."""
+    seams, out = seam_names(plan), []  # O(q*s)
+    for t in plan.tasks:  # O(n)
+        if stub_items(t, seams):  # O(k*s)
+            out += [o for o in t.owns if not TEST_PATH.search(o) and o not in out]  # O(o^2)
+    return out  # O(1)
+
+
+def wait_tasks(plan, stubs: list[str], wid: str) -> list[str]:  # O(n*o*f)
+    """Ids of the tasks (not `wid`) that own a stub file: they wait until T0 commits."""
+    import next_tasks  # O(1)
+    return [t.id for t in plan.tasks if t.id != wid and any(next_tasks.owns_match(f, t.owns) for f in stubs)]  # O(n*o*f)
+
+
 def stub_spec(plan) -> str:  # O(q*s)
     """Language-neutral YAML: per producing task, its files and the signatures another task consumes."""
     out = ["tasks:"]  # O(1)
     seams = seam_names(plan)  # O(q*s)
     for t in plan.tasks:  # O(n)
-        items = [it for it in t.produces  # O(k*s)
-                 if pt.strip_ticks(it) in seams or ((pt.parse_signature(it) or {}).get("name") in seams)]
+        items = stub_items(t, seams)  # O(k*s)
         if not items:  # O(1)
             continue  # O(1)
         out.append(f"  - id: {t.id}")  # O(1)
@@ -208,8 +228,8 @@ Write one stub per `produces` item below (only the signatures another task consu
 ## Done when
 
 1. The project installs (the manifest is valid and dependencies resolve with the project's own tool).
-2. The project's own test command, or its compile/type-check, runs on the stub tree: the tree builds, and any test fails as "not implemented", never as an import, syntax or configuration error.
-3. You write and verify `.superlite/test-cmd.json` on the stub tree: `{{"language","test","test_file","junit","setup"}}` (JSON; `test` runs everything, `test_file` takes `{{files}}`, `junit` is the report path or `{{junit}}` for the one run_tests supplies, `setup` installs dependencies). When the package root is neither the repository root nor `src/`, add `"pythonpath": ["<repo-relative dir>", ...]` so every check can import it. Verify it by running `"$SL" run_tests --full`: it must report the stubs as failing, never "no test command found".
+2. Check the stubs, not the suite: run the fastest import or compile check the language has on the files you wrote (Python: `python -m py_compile` plus an import of each module; TypeScript: `tsc --noEmit`; Go: `go build ./...`; Rust: `cargo check`). It takes seconds; never run the test suite or `run_tests`.
+3. Run `"$SL" testcmd` (it resolves the test command and runs nothing). It prints a command: run_tests already detects the stack, so never create, change or narrow `.superlite/test-cmd.json`. It prints null: write `.superlite/test-cmd.json`: `{{"language","test","test_file","junit","setup"}}` (JSON; `test` runs everything, `test_file` takes `{{files}}`, `junit` is the report path or `{{junit}}` for the one run_tests supplies, `setup` installs dependencies). When the package root is neither the repository root nor `src/`, add `"pythonpath": ["<repo-relative dir>", ...]` so every check can import it. Run `"$SL" testcmd` again: it must print your command.
 4. Never run `git add`, `commit`, `switch` or `checkout`; the coordinator runs `"$SL" commit_task {tid} --plan PLAN`.
 
 Reply in at most 200 words: Status (DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED), files changed (paths only), test or build command and its result line, concerns.
@@ -241,7 +261,9 @@ def write_brief(plan_path: str, out_path: str | None = None):  # O(L + q*s)
     out = Path(out_path) if out_path else sl_dir(plan_path) / "briefs" / "wave0.md"  # O(1)
     out.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     out.write_text(build_brief(plan, plan_path, task, tid), encoding="utf-8", newline="\n")  # O(size)
-    meta = {"id": tid, "synthetic": task is None, "title": "Wave 0 skeleton", "owns": SYNTH_OWNS if task is None else task.owns}  # O(1)
+    stubs = stub_files(plan)  # O(n*q*s)
+    meta = {"id": tid, "synthetic": task is None, "title": "Wave 0 skeleton", "owns": SYNTH_OWNS if task is None else task.owns,  # O(1)
+            "stubs": stubs, "wait": wait_tasks(plan, stubs, tid)}
     out.with_suffix(".json").write_text(json.dumps(meta, indent=1), encoding="utf-8")  # O(1)
     return agent_line(out.resolve(), tid), tid, task, out  # O(1)
 
