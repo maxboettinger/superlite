@@ -580,7 +580,7 @@ def test_run_tests_summary_on_fast_green_and_on_pytest_failure(tmp_path):
     assert run("run_tests", "--fast", "test_pass.py", cwd=proj).returncode == 0
     d = json.loads(summary.read_text(encoding="utf-8"))
     assert (d["passed"], d["failed"], d["mode"], d["failures"]) == (2, 0, "fast", [])
-    assert run("run_tests", "--fast", "missing_dir", cwd=proj).returncode == 2
+    assert run("run_tests", "--fast", "test_pass.py::test_nope", cwd=proj).returncode == 2
     d = json.loads(summary.read_text(encoding="utf-8"))
     assert d["failed"] == 1 and "pytest produced no results" in d["failures"][0]
     custom = tmp_path / "elsewhere.json"
