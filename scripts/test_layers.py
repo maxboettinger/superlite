@@ -140,8 +140,8 @@ def stale_layers(root: Path, state: Path) -> list[str]:  # O(1)
     return [layer for layer, status, _ in layer_states(root, state) if status == "stale"]  # O(L * n)
 
 
-def write_stamp(root: Path, state: Path, layer: str) -> None:  # O(1)
-    digests = layer_digests(layer, Path(root))  # O(n * size)
+def write_stamp(root: Path, state: Path, layer: str, digests: dict | None = None) -> None:  # digests taken before a run keep a file changed during it unstamped | O(1)
+    digests = layer_digests(layer, Path(root)) if digests is None else digests  # O(n * size)
     layer_store.record_green(state, layer, hash_digests(digests), digests)  # O(n)
 
 
