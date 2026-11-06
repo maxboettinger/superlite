@@ -4,7 +4,8 @@
 Library: import_roots(root, plan=None) -> sorted repository-relative POSIX directories.
 Order: `.superlite/test-cmd.json` key "pythonpath" (a list of strings) wins; else derived from the plan's
 `**Produces:**` dotted names (`a.b.c(`): D is a root for `a.b.c` when D/a/b.py or D/a/b/__init__.py exists
-(two parts: D/a.py or D/a/__init__.py). The root itself and `src/` are never returned. Stdlib only.
+(two parts: D/a.py or D/a/__init__.py). The root itself and `src/` are never returned; a directory
+holding `__init__.py` is a package, never a root, and nothing is searched below it or below a found root. Stdlib only.
 """
 # Complexity notation:
 #   d = directories walked (depth <= 8), p = Produces names in the plan
@@ -60,8 +61,12 @@ def derive(root, names):  # O(d * p) | set of relative dirs
         dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP and len(rel.parts) < MAX_DEPTH]  # O(dirs)
         if rel.parts in ((), ("src",)):  # O(1)
             continue  # O(1)
+        if (Path(dirpath) / "__init__.py").is_file():  # a package is never a root, nor holds one | O(1)
+            dirs[:] = []  # O(1)
+            continue  # O(1)
         if any((Path(dirpath) / c).is_file() for c in cands):  # O(cands)
             found.add(rel.as_posix())  # O(depth)
+            dirs[:] = []  # O(1)
     return found  # O(d)
 
 
