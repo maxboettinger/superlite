@@ -16,6 +16,8 @@ class FakeHerdr:
     def agent_states(self): self.calls.append(("agent_states",)); return self.states.pop(0) if len(self.states) > 1 else self.states[0]
     def read_screen(self, name, lines=40, source="visible"): self.calls.append(("read_screen", name)); return self.screen
     def send_keys(self, name, keys): self.calls.append(("send_keys", name, keys))
+    def call(self, args, timeout_ms=30000, env=None): self.calls.append(("call", args)); return {}  # pane rename
+    HerdrError = type("HerdrError", (Exception,), {})
 
 def transcript(path, text):
     path.write_text(json.dumps({"type": "user", "message": {"content": "task"}}) + "\n" + json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}) + "\n")
@@ -162,7 +164,7 @@ def test_status_parsed_from_lead_line(world, tmp_path):
 
 def test_send_text_and_keys_cli(world):
     assert io.main(["send", "W1", "--text", "use the fake", "--plan", str(world.plan)]) == 0
-    assert world.fh.calls[-1][:3] == ("prompt", "sl-proj-w1", "use the fake") and json.loads((world.sd / "pool.json").read_text())["agents"][0]["busy"] is False
+    assert [c for c in world.fh.calls if c[0] != "call"][-1][:3] == ("prompt", "sl-proj-w1", "use the fake") and json.loads((world.sd / "pool.json").read_text())["agents"][0]["busy"] is False
     assert io.main(["keys", "W1", "Down", "Enter"]) == 0 and world.fh.calls[-1] == ("send_keys", "sl-proj-w1", ["Down", "Enter"])
 
 def test_real_herdr_binary_argv(world, tmp_path, monkeypatch):
@@ -172,7 +174,9 @@ def test_real_herdr_binary_argv(world, tmp_path, monkeypatch):
     log = tmp_path / "log"; monkeypatch.setenv("SUPERLITE_HERDR_BIN", str(FIXTURES / "fleet" / "herdr")); monkeypatch.setenv("FAKE_HERDR_LOG", str(log))
     monkeypatch.setattr(io, "hc", herdr_client)
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl")
-    argv = json.loads(log.read_text().splitlines()[0]); assert argv[:3] == ["agent", "prompt", "sl-proj-w1"] and "--until" in argv and "working" in argv
+    logged = [json.loads(l) for l in log.read_text().splitlines()]; argv = logged[0]; assert argv[:3] == ["agent", "prompt", "sl-proj-w1"] and "--until" in argv and "working" in argv
+    assert ["pane", "rename", "w6:p1", "W1 T3"] in logged  # the real verb reaches the binary
+    assert io.pane_label(world.sd, "W1", "W1 T3") is True
 
 def test_wait_blocked_reads_the_screen_by_agent_name(world):
     io.send(world.sd, world.plan, "W2", ["T4"], "/sl/sl", "/sl"); world.fh.states = [{"sl-proj-w2": "blocked"}]

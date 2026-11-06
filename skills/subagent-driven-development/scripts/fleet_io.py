@@ -182,12 +182,12 @@ def baseline_k(sd, wid):  # context after READY, cached in fleet.json; None is n
     return k  # O(1)
 
 
-def pane_label(sd, wid, text):  # rename the worker's Herdr pane; a failure (or a fake without `call`) never matters | O(w)
+def pane_label(sd, wid, text):  # rename the worker's Herdr pane; a Herdr failure or an unknown worker never matters, a wrong verb or a missing hc.call does | O(w)
     try:  # O(1)
         pane = fs.load(Path(sd))["workers"][wid]["pane_id"]  # O(w)
         hc.call(["pane", "rename", pane, text])  # O(len text)
         return True  # O(1)
-    except Exception:  # O(1)
+    except (hc.HerdrError, KeyError):  # O(1)
         return False  # O(1)
 
 

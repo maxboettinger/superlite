@@ -47,9 +47,16 @@ def test_label_failure_never_breaks_send(world, capsys):
     assert io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl") == "T3"
     assert "W1 T3 sent" in capsys.readouterr().out
     assert io.pane_label(world.sd, "W1", "x") is False
-    del world.fh.call  # a fake with no call attribute
-    assert io.send(world.sd, world.plan, "W2", ["T4"], "/sl/sl", "/sl") == "T4"
-    assert io.pane_label(world.sd, "W2", "x") is False
+    assert io.pane_label(world.sd, "W9", "x") is False  # an unknown worker
+
+
+def test_label_programming_errors_are_not_hidden(world):
+    del type(world.fh).call  # hc without `call` (a wrong verb or a missing function) must surface
+    try:
+        with pytest.raises(AttributeError):
+            io.pane_label(world.sd, "W1", "x")
+    finally:
+        type(world.fh).call = lambda self, args, timeout_ms=30000, env=None: (self.calls.append(("call", args)), {})[1]
 
 
 def test_wait_any_returns_first(cw, tmp_path, capsys):

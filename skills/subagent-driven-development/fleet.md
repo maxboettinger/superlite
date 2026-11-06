@@ -6,7 +6,7 @@ Fleet covers one taskgraph plan in one checkout: several tickets go into one pla
 
 ## Implementers
 
-`"$SL" fleet spawn --for-dispatch --plan $PLAN` is the one call per dispatch round, Wave 0 included (it sends `.superlite/briefs/wave0.md` as T0), instead of `dispatch` plus a spawn and a send per line. It runs `dispatch`, starts a worker for each `fresh tier=T agent=TYPE` line, sends each line's tasks (an `agent=Wn` line goes to that idle worker) and prints one `Wn Tn[,Tm] sent` line per worker; `evict=` lines go to stderr. `BLOCKED: Tn[,Tm] not sent (<reason>)` (the call then exits 3) means no worker got those tasks: treat them as BLOCKED; the other lines still went out. `poll` never appears in fleet mode.
+`"$SL" fleet spawn --for-dispatch --plan $PLAN` is the one call per dispatch round, Wave 0 included (it sends `.superlite/briefs/wave0.md` as T0), instead of `dispatch` plus a spawn and a send per line. It runs `dispatch`, starts a worker for each `fresh tier=T agent=TYPE` line, sends each line's tasks (an `agent=Wn` line goes to that idle worker) and prints one `Wn Tn[,Tm] sent` line per worker; `evict=` lines go to stderr. It sends every ready task (no cap) and stops each evicted idle worker (`stopped Wn` on stdout). It refuses with `BLOCKED: no ...prime.md; run build_prime --plan PLAN first` when the prime is missing. `BLOCKED: Tn[,Tm] not sent (<reason>)` (the call then exits 3) means no worker got those tasks: treat them as BLOCKED; the other lines still went out. `poll` never appears in fleet mode.
 
 By hand, one line: `fresh tier=T agent=TYPE`: `"$SL" fleet spawn --tier T --plan $PLAN` prints `Wn account=A pane=P agent=TYPE`; then `"$SL" fleet send Wn Tn [Tm ...] --plan $PLAN`. `agent=Wn`: `"$SL" fleet send Wn Tn --plan $PLAN`.
 
@@ -22,7 +22,7 @@ Every other role takes a brief file under `.superlite/briefs/` (never pasted int
 
 ## Waiting and acting
 
-Run `"$SL" fleet wait --timeout 540000 --plan $PLAN` in the foreground instead of waiting for SendMessage replies. Act on its lines, not on report text. One-turn workers are stopped by `fleet wait`.
+Run `"$SL" fleet wait --any --timeout 540000 --plan $PLAN` as a background command (the harness wakes you when a worker finishes) instead of waiting for SendMessage replies. Act on its lines, not on report text. Run it again while workers are busy. `BUSY Wn Wm` lists the workers still running. A lead that must not end its turn may run it in the foreground. One-turn workers are stopped by `fleet wait`.
 
 - `Wn <label> <STATUS> findings=<n> <sd>/fleet/reports/<id>.json`: `<id>` is the label's first comma part; ` (screen)` marks the screen fallback.
   - Task labels (`DONE`, `DONE_WITH_CONCERNS`): `commit_task` as usual.

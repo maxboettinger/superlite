@@ -52,8 +52,10 @@ Run as `"$SL" fleet ...`. All take `--plan PLAN` to find the run.
 - `fleet run --layer headless|tui|evals --plan PLAN` runs a test layer in a shell pane (the repo's `scripts/test_layers.py run <layer>`); prints `W5 layer-headless started account=claude3 pane=w6:p2`.
 - `"$SL" findings route --plan PLAN REPORT.json ...` turns report findings into fixer briefs; prints `fixer tier=<sonnet|sonnet-high|opus> brief=<path> files=<a,b> task=<Tn>` per brief, or `findings: none`.
 - `fleet wait [--timeout 540000] [W1 ...]` waits for busy workers. Prints `Wn <label> <STATUS> findings=<n> <json path>` (`W1 T3 DONE findings=0 <sd>/fleet/reports/T3.json`; the report text is the `.md` next to it) with `<STATUS>` one of `DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`, `APPROVED`, `CHANGES_REQUESTED` or `UNKNOWN` (no parsable block); a line read from the screen ends with ` (screen)`. A layer prints `Wn layer-headless GREEN|RED exit=<n> <log path>` plus its last line. `W1 T3 BLOCKED-UI <screen path>` plus the screen's last lines, and `TIMEOUT W1 W2` (space-separated) for the rest, stay as they were.
+- `fleet wait --any` returns as soon as one worker finishes and prints `BUSY W2 W3` for the workers still running; run it as a background command so the harness wakes the coordinator. A worker's Herdr pane label reads `Wn <label>` after a send, `Wn <label> reported, waiting for coordinator` once its report is collected and `Wn <label> BLOCKED-UI` on a blocked screen.
+- `fleet spawn --for-dispatch` sends every ready task and stops each evicted idle worker (`stopped W2` on stdout). It exits 3 with `BLOCKED: no ...prime.md; run build_prime --plan PLAN first` when the prime file is missing.
 - `fleet keys W1 Down Enter` sends keys to a worker's pane, for a dialog.
-- `fleet status` prints `fleet: on` and one line per worker.
+- `fleet status` prints `fleet: on` and one line per worker, with the columns `context_k=` and `baseline_k=` on implementer lines only (the workers in `pool.json`). Eviction subtracts `baseline_k` (the READY reply's context) from `context_k`.
 - `fleet stop W1` or `fleet stop --all` closes workers (`--all` also closes the workspace).
 - `fleet off` stops all workers and turns fleet mode off. It writes its state first and closes the workspace last, so it is safe to run from inside the fleet's own workspace.
 

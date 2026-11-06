@@ -37,6 +37,8 @@ elif key == "pane layout":
     out = {"result": {"type": "pane_layout", "layout": {"area": {"height": 64, "width": 147, "x": 0, "y": 0}, "panes": [
         {"pane_id": "w6:p1", "focused": False, "rect": {"height": 64, "width": 73, "x": 0, "y": 0}},
         {"pane_id": "w6:p2", "focused": False, "rect": {"height": 64, "width": 73, "x": 74, "y": 0}}], "splits": [], "tab_id": "w6:t1", "workspace_id": "w6", "zoomed": False}}}
+elif key == "pane rename":
+    out = {"id": "cli:pane:rename", "result": {"pane": {"pane_id": a[2], "label": a[3]}}}
 elif key == "pane split":
     out = {"result": {"pane": {"pane_id": "w6:p2"}}}
 elif key == "agent start" and not NAME.fullmatch(a[2]):

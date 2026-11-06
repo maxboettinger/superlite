@@ -48,6 +48,7 @@ class FakeHerdr:
         self.calls.append(("close_pane", pane_id))
         if pane_id in self.tab_panes: self.tab_panes.remove(pane_id)
     def close_workspace(self, ws): self.calls.append(("close_workspace", ws))
+    def call(self, args, timeout_ms=30000, env=None): self.calls.append(("call", args)); return {}  # pane rename
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
