@@ -3,6 +3,7 @@
 #   n = size in bytes of the file a probe creates, t = length of a probe string (constant), e = entries in a table (at most 12)
 import os  # O(1)
 import sys  # O(1)
+import tempfile  # O(1)
 
 from pack._common import P, Skip  # O(1)
 
@@ -100,10 +101,11 @@ def _symlink_loop(n, ctx):  # O(1)
 def _unreadable(n, ctx):  # O(1)
     if sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0):  # O(1)
         raise Skip("permission bits not enforced here")  # O(1)
-    p = ctx.tmp / "unreadable.txt"  # O(1)
-    p.write_text("secret")  # O(1)
-    p.chmod(0)  # O(1)
-    return str(p)  # O(1)
+    fd, name = tempfile.mkstemp(dir=ctx.tmp, prefix="unreadable-", suffix=".txt")  # O(1)
+    os.write(fd, b"secret")  # O(1)
+    os.close(fd)  # O(1)
+    os.chmod(name, 0)  # O(1)
+    return name  # O(1)
 
 
 for k, f, sizes in (("missing", _missing, (None,)), ("directory", _directory, (None,)),  # O(e) iterations (8)
