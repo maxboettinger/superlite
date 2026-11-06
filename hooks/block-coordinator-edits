@@ -11,8 +11,8 @@
 #     (judged from its root, whose .git file points into .../worktrees/); Agent calls of superlite:* and
 #     general-purpose and sl dispatch/assign/wave0/commit_task/finish/build_prime/run_tests are denied.
 #  3. Active run (.superlite/stable.json, prime.md or pool.json exists): project code is not written
-#     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, any docs.md,
-#     .superlite/** and .git/info/exclude, in the project or a linked worktree in it. `sl orchestrator end` closes the run.
+#     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg,
+#     jpeg, gif, svg, webp), any docs.md, .superlite/** and .git/info/exclude (a stray untracked file may also be removed with rm), in the project or a linked worktree in it. `sl orchestrator end` closes the run.
 #  4. Fleet on (.superlite/fleet.json says "on": true): an Agent call of a superlite role (implementer, implementer-haiku,
 #     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher) is denied with the
 #     `sl fleet spawn --role` hint, as the role is a fleet worker then. Other agents (Explore, general-purpose) fall through.
@@ -66,6 +66,10 @@ jstr() {
   REPLY=""
   [[ $input =~ $re ]] && REPLY="${BASH_REMATCH[1]}"
 }
+
+# Working directory of the call (the payload's cwd), once, for the incident rows: no quote, backslash or control character, 300 characters at most.
+jstr cwd
+cwdv="${REPLY//[[:cntrl:]]/}"; cwdv="${cwdv//[\"\\]/}"; cwdv="${cwdv:0:300}"
 
 # norm PATH: forward slashes, no duplicate or trailing slashes, C:/x -> /c/x, into NORM.
 norm() {
@@ -122,7 +126,7 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         researcher) frole="research" ;;
       esac
       if [ -n "$frole" ]; then
-        printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)"}\n' "$tool" "$REPLY" \
+        printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)","rule":"fleet","cwd":"%s"}\n' "$tool" "$REPLY" "$cwdv" \
           >> "$sd/incidents.jsonl" 2>/dev/null
         printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). sl fleet off goes back to in-process agents." >&2
         exit 2
@@ -309,7 +313,7 @@ allowed_rel() {
     case "$1" in docs/plans/*.review.md|docs/*/plans/*.review.md|.superlite/*|.git/info/exclude) return 0 ;; esac
     return 1
   fi
-  case "$1" in docs/plans/*|docs/*/plans/*|docs/*.md|SPEC*.md|*/SPEC*.md|docs.md|*/docs.md|.superlite/*|.git/info/exclude) return 0 ;; esac
+  case "$1" in docs/plans/*|docs/*/plans/*|docs/*.md|docs/*.png|docs/*.jpg|docs/*.jpeg|docs/*.gif|docs/*.svg|docs/*.webp|SPEC*.md|*/SPEC*.md|docs.md|*/docs.md|.superlite/*|.git/info/exclude) return 0 ;; esac
   return 1
 }
 
@@ -444,7 +448,11 @@ fi
 [ -n "$hit" ] || exit 0
 
 hit="${hit:0:120}"; hit="${hit//[\"\\$'\n\r\t']/}"
-printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s"}\n' "$tool" "$hit" \
+rule=code
+[ "$human" = 1 ] && rule=human
+[ "$prot" = 1 ] && rule=protected
+[ "$prot" = 2 ] && rule=cache
+printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s","rule":"%s","cwd":"%s"}\n' "$tool" "$hit" "$rule" "$cwdv" \
   >> "$sd/incidents.jsonl" 2>/dev/null
 
 if [ "$prot" = 2 ]; then
@@ -460,7 +468,7 @@ else
     'Blocked: the superlite coordinator must not write project code. Dispatch it instead:' \
     '- Fix: give a fixer a finding id F-<Tn>-<n> and the note path .superlite/fixes/<id>.md, tiered per skills/subagent-driven-development/fixing.md: known cause, one module -> fixer-sonnet; cross-module -> fixer-sonnet-high; unknown cause -> fixer-opus.' \
     '- Wave 0 skeleton/stub/config files belong to an implementer-haiku task.' \
-    '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, any docs.md and .superlite/**.' \
+    '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file git does not track and no task Owns.' \
     '- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete .superlite by hand.' >&2
 fi
 if [ "$prot" != 1 ]; then   # (prot 2, the cache, names its target too)   name what was judged: a path as "target", a command as "command"
