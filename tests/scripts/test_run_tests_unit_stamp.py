@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -129,3 +130,28 @@ def test_write_stamp_takes_digests(tmp_path):
     store = tmp_path / "store.json"
     mod.write_stamp(tmp_path, store, "unit", {"a.py": "1"})
     assert mod.layer_store.is_green(store, "unit", mod.hash_digests({"a.py": "1"}))
+
+
+def test_configured_test_command_does_not_stamp(tmp_path):
+    _, proj = make_repo(tmp_path)
+    cmd = f'{sys.executable} -c "print(\'1 passed\')"'
+    (proj / ".superlite" / "test-cmd.json").write_text(json.dumps({"language": "python", "test": cmd}), encoding="utf-8")
+    cp = rt(proj, "--full")
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert "unit layer stamped" not in cp.stderr
+    assert unit_line(proj).startswith("unit stale")
+
+
+def test_snapshot_leaves_sys_path_alone(tmp_path, monkeypatch):
+    import argparse
+    sys.path.insert(0, str(SCRIPTS))
+    import run_tests as mod
+    monkeypatch.chdir(tmp_path)
+    git(tmp_path, "init", "-q")
+    (tmp_path / "scripts").mkdir()
+    for name in ("test_layers.py", "layer_store.py"):
+        shutil.copy(REPO / "scripts" / name, tmp_path / "scripts" / name)
+    before = list(sys.path)
+    snap = mod.unit_snapshot(argparse.Namespace(task=None), "full")
+    assert snap is not None
+    assert sys.path == before
