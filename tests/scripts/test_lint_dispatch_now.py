@@ -103,5 +103,6 @@ def test_start_first_when_all_stable_wait(tmp_path):
 def test_hard_edge_waits_despite_consumes(tmp_path):
     p = make_plan(tmp_path, [{"id": "T1", "time": 2, "produces": PROD}, {"id": "T2", "time": 2, "consumes": PROD}], ())
     p.write_text(p.read_text(encoding="utf-8").replace("flowchart LR\n", "flowchart LR\n  T1 -->|hard| T2\n"), encoding="utf-8")
+    ledger(tmp_path, "- commit T0 abc1234567 skeleton\n")
     cp = lint(p)
     assert "DISPATCH NOW: T1" in cp.out and "DISPATCH NOW: T1 T2" not in cp.out, cp.out

@@ -76,6 +76,11 @@ def test_critical_path_tasks_run_alone(tmp_path):
                         cx_task("T3", 2, mins=2), cx_task("T4", 2, mins=2)], [("T1", "T2")])
     cp = pt("lint", "--stable", "--plan", p, cwd=tmp_path)
     assert cp.returncode == 0, cp.both  # stable.json has no critical_path here: dispatch simulates it
+    # lift the #198 wave0 gate (T1 produces for T2): T0 is committed
+    led = tmp_path / ".superlite" / "progress.md"
+    led.parent.mkdir(parents=True, exist_ok=True)
+    with led.open("a", encoding="utf-8") as fh:
+        fh.write("- commit T0 abc1234567 skeleton\n")
     d, _ = dispatch(tmp_path, p, [], batch=None)
     assert "T1" in d  # alone on the critical path
     assert all("T1," not in k and not k.startswith("T1,") for k in d if k != "T1")

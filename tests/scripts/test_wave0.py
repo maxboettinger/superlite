@@ -130,11 +130,13 @@ def test_commit_task_t0_takes_its_files_not_other_tasks(tmp_path):
     run(WAVE0, "--plan", p, cwd=tmp_path)
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "slug.ts").write_text("// T1 in progress\n", encoding="utf-8")  # another task's file: left alone
+    (tmp_path / "src" / "slug.ts").write_text("// stub\n", encoding="utf-8")
+    (tmp_path / "src" / "feed.ts").write_text("// T2 in progress\n", encoding="utf-8")  # another task's file: left alone
     cp = run(COMMIT, "T0", "--plan", p, cwd=tmp_path)
     assert cp.returncode == 0, cp.both
     files = subprocess.run(["git", "show", "--name-only", "--format=", "HEAD"], cwd=tmp_path, capture_output=True, text=True).stdout.split()
-    assert files == ["package.json"]
+    assert sorted(files) == ["package.json", "src/slug.ts"]
+    assert "src/feed.ts" not in files
 
 
 def test_lint_stable_prints_t0_agent_line_and_send_before_edit(tmp_path):
@@ -143,8 +145,8 @@ def test_lint_stable_prints_t0_agent_line_and_send_before_edit(tmp_path):
     cp = run(SCRIPTS / "plan_tools.py", "lint", "--stable", "--plan", p, cwd=tmp_path)
     lines = cp.out.rstrip().splitlines()
     assert any(ln.startswith('START FIRST (Wave 0 skeleton, T0): Agent(subagent_type="superlite:implementer-haiku"') for ln in lines)
-    assert any(ln.startswith("SEND BEFORE ANY PLAN EDIT: T0 T1 T2") and "only then patch T3" in ln for ln in lines)
-    assert lines[-1] == "DISPATCH NOW: T1 T2"
+    assert any(ln.startswith("SEND BEFORE ANY PLAN EDIT: T0 T2") and "only then patch T3" in ln for ln in lines)
+    assert lines[-1] == "DISPATCH NOW: T2"
     again = run(SCRIPTS / "plan_tools.py", "lint", "--stable", "--plan", p, cwd=tmp_path).out
     assert "START FIRST" not in again  # printed once
 
@@ -153,10 +155,10 @@ def test_lint_prints_log_line_and_unblocked_line_counts_as_dispatched(tmp_path):
     p = plan(tmp_path, "**Tech stack:** Python", "x", PY)
     out = run(SCRIPTS / "plan_tools.py", "lint", "--stable", "--plan", p, cwd=tmp_path).out
     log = [ln for ln in out.splitlines() if ln.startswith("THEN LOG")]
-    assert log and 'unblocked: dispatched T0 T1 T2 at $(date +%H:%M:%S); waiting on fixes: none' in log[0]
-    (tmp_path / ".superlite" / "progress.md").write_text("- unblocked: dispatched T0 T1 at 10:00:00; waiting on fixes: none\n", encoding="utf-8")
+    assert log and 'unblocked: dispatched T0 T2 at $(date +%H:%M:%S); waiting on fixes: none' in log[0]
+    (tmp_path / ".superlite" / "progress.md").write_text("- unblocked: dispatched T0 T2 at 10:00:00; waiting on fixes: none\n", encoding="utf-8")
     again = run(SCRIPTS / "plan_tools.py", "lint", "--stable", "--plan", p, cwd=tmp_path).out
-    assert again.rstrip().splitlines()[-1] == "DISPATCH NOW: T2"
+    assert again.rstrip().splitlines()[-1] == "DISPATCH NOW: none"
 
 
 def test_wave0_brief_names_pythonpath(tmp_path):
@@ -164,3 +166,27 @@ def test_wave0_brief_names_pythonpath(tmp_path):
     assert run(WAVE0, "--plan", p, cwd=tmp_path).returncode == 0
     b = brief(tmp_path)
     assert '"pythonpath"' in b and "neither the repository root nor `src/`" in b
+
+
+def test_lint_stable_holds_stub_owner_until_t0(tmp_path):
+    p = plan(tmp_path, "**Tech stack:** Python", "x", PY)
+    out = run(SCRIPTS / "plan_tools.py", "lint", "--stable", "--plan", p, cwd=tmp_path).out
+    lines = out.rstrip().splitlines()
+    assert any(ln.startswith("SEND BEFORE ANY PLAN EDIT: T0 T2") or ln.startswith("THEN LOG") for ln in lines)
+    assert any(ln.startswith("WAIT FOR T0: T1 (they hold T0's stub files; dispatch offers them once commit_task T0 succeeds or the ledger has - Ruling: skip T0)") for ln in lines)
+    assert lines[-1] == "DISPATCH NOW: T2"
+    (tmp_path / ".superlite" / "progress.md").write_text("- commit T0 abcdef1234 skeleton\n", encoding="utf-8")
+    again = run(SCRIPTS / "plan_tools.py", "lint", "--stable", "--plan", p, cwd=tmp_path).out
+    assert "WAIT FOR" not in again
+    assert "T1" in again.rstrip().splitlines()[-1]
+
+
+def test_dispatch_holds_stub_owner_until_t0(tmp_path):
+    p = plan(tmp_path, "**Tech stack:** Python", "x", PY)
+    run(SCRIPTS / "plan_tools.py", "lint", "--stable", "--plan", p, cwd=tmp_path)
+    args = ("--plan", p, "--pool", tmp_path / "pool.json", "--ledger", tmp_path / ".superlite" / "progress.md")
+    out = run(DISPATCH, *args, cwd=tmp_path).out
+    assert any(ln.startswith("T0 ") for ln in out.splitlines())
+    assert not any(ln.startswith("T1 ") for ln in out.splitlines())
+    (tmp_path / ".superlite" / "progress.md").write_text("- commit T0 abcdef1234 skeleton\n", encoding="utf-8")
+    assert any(ln.startswith("T1 ") for ln in run(DISPATCH, *args, cwd=tmp_path).out.splitlines())
