@@ -5,7 +5,8 @@
 # Subagents (agent_id) and fleet workers (SUPERLITE_FLEET_WORKER): bare full-suite runners are DENIED (exit 2), and so is a
 # run of the project's own test command (.superlite/test-cmd.json) on an isolate stack (language swift, go, rust or
 # csharp: a sibling's half-edit breaks a shared build); the message gives `sl run_tests --fast <files> --task <Tn>`,
-# the task read from pool.json. Other subagent calls are untouched.
+# the task read from pool.json. A collect-only run (--collect-only, --co) lists tests without running them and passes for
+# everyone, unrewritten. Other subagent calls are untouched.
 # Commands that already contain run_tests, and sessions without a run marker (stable.json,
 # prime.md or pool.json in the state folder) are untouched. Chained commands keep their other work: only the test segment
 # is replaced, separators stay, and the whole command then runs in the background. Anything ambiguous
@@ -35,6 +36,10 @@ jstr() {
   s="${s//\\\\/$'\x01'}"; s="${s//\\\"/\"}"; s="${s//\\n/$'\n'}"; s="${s//\\r/}"; s="${s//\\t/	}"; s="${s//\\\//\/}"
   REPLY="${s//$'\x01'/\\}"
 }
+# Working directory of the call (the payload's cwd), once, for the incident rows: no quote, backslash or control character, 300 characters at most.
+jstr cwd
+cwdv="${REPLY//[[:cntrl:]]/}"; cwdv="${cwdv//[\"\\]/}"; cwdv="${cwdv:0:300}"
+re_co='(^|[[:space:]])--(collect-only|co)([[:space:]]|$)'
 # esc VAR: JSON-escape the string in VAR.
 esc() {
   local s="${!1}"
@@ -171,9 +176,9 @@ project_hit() {
   return 1
 }
 deny() {
-  local t="${cmd:0:100}"; t="${t//[\"\\$'\n\r\t']/ }"
+  local t="${cmd:0:400}"; t="${t//[\"\\$'\n\r\t']/ }"
   t="${t//$ph1/>&}"; t="${t//$ph2/&>}"
-  printf '{"kind":"rule-block","agent":"coordinator","tool":"Bash","target":"hidden test wait: %s"}\n' "$t" \
+  printf '{"kind":"rule-block","agent":"coordinator","tool":"Bash","target":"hidden test wait: %s","rule":"hidden-test-wait","cwd":"%s"}\n' "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
     'Blocked: never wait on tests through a loop, and never hide a test run'"'"'s output (an until/while around a test runner, or a test run sent to /dev/null): a hung run then looks like a slow one, and the loop bypasses the test wrapper.' \
@@ -181,19 +186,19 @@ deny() {
   exit 2
 }
 deny_subagent_full() {
-  local t="${cmd:0:100}"; t="${t//[\"\\$'\n\r\t']/ }"
-  printf '{"kind":"rule-block","agent":"subagent","tool":"Bash","target":"full suite: %s"}\n' "$t" \
+  local t="${cmd:0:400}"; t="${t//[\"\\$'\n\r\t']/ }"
+  printf '{"kind":"rule-block","agent":"subagent","tool":"Bash","target":"full suite: %s","rule":"subagent-full-suite","cwd":"%s"}\n' "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
     'Blocked: subagents must not run the full test suite during a superlite run.' \
-    'Use `sl run_tests --fast <files>` for focused tests only.' >&2
+    'Use `sl run_tests --fast <files>` for focused tests; the whole suite runs only as `sl run_tests --full`.' >&2
   exit 2
 }
 
 deny_isolate() {
-  local t="${cmd:0:100}" task="$1"; t="${t//[\"\\$'\n\r\t']/ }"
+  local t="${cmd:0:400}" task="$1"; t="${t//[\"\\$'\n\r\t']/ }"
   t="${t//$ph1/>&}"; t="${t//$ph2/&>}"
-  printf '{"kind":"rule-block","agent":"subagent","tool":"Bash","target":"isolated test run: %s"}\n' "$t" \
+  printf '{"kind":"rule-block","agent":"subagent","tool":"Bash","target":"isolated test run: %s","rule":"isolated-test-run","cwd":"%s"}\n' "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
     'Blocked: this project'"'"'s tests build one shared tree, where another agent'"'"'s half-edit breaks the run, so a raw run of its test command is not allowed here.' \
@@ -225,7 +230,7 @@ if [ "$has_agent" = 1 ] || [ -n "$fleet_worker" ]; then
         _nq=${_seg//[$_dq$_sq]/}
         files_from_seg "$_nq"
       fi
-      [ -z "$REPLY" ] && deny_subagent_full
+      [ -z "$REPLY" ] && ! [[ $_seg =~ $re_co ]] && deny_subagent_full
     fi
     [ "$_last" = 1 ] && break
   done
@@ -255,7 +260,7 @@ while :; do
   fi
   q="${seg//[^\"]/}"; q2="${seg//[^\']/}"
   if [ $(( ${#q} % 2 )) = 1 ] || [ $(( ${#q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
-  if [[ $seg =~ $re_test ]]; then
+  if [[ $seg =~ $re_test ]] && ! [[ $seg =~ $re_co ]]; then
     case "$seg" in *'"'*|*"'"*) exit 0 ;; esac   # quoted test arguments: leave the command unchanged
     files_from_seg "$seg"
     if [ -n "$REPLY" ]; then out="$out $sl_base --fast $REPLY "; used_fast=1
