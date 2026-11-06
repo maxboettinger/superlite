@@ -74,7 +74,7 @@ def test_start_refusals(bk, capsys):
     assert run(capsys, "start")[0] == 3 and not any(c[0] == "spawn" for c in bk.calls)
 
 def test_start_resumes_a_parked_batch_and_survives_a_blocked_spawn(bk, capsys, monkeypatch):
-    put(bk, b("B1", ["a.py"], "parked", reason="tui red"), b("B2", ["b.py"]))
+    put(bk, b("B1", ["a.py"], "parked", reason="tui red", worktree=str(bk.root / "wts" / "superlite-b1-t")), b("B2", ["b.py"]))
     assert run(capsys, "start", "B1")[0] == 0 and get(bk, "B1")["state"] == "running"
     brief = (bk.root / "wts" / "superlite-b1-t" / ".superlite" / "briefs" / "lead.md").read_text()
     assert "resume=True" in brief or "Resume: this batch was parked (tui red)" in brief
@@ -150,3 +150,14 @@ def test_start_never_spawns_a_second_lead_while_the_first_pane_lives(bk, capsys)
     assert rc == 2 and "still running" in out and not any(c[0] == "spawn" for c in bk.calls)
     bk.states.clear()
     assert run(capsys, "start", "B1")[0] == 0 and any(c[0] == "spawn" for c in bk.calls)
+
+def test_a_batch_main_parked_starts_only_by_name_and_fresh(bk, capsys):
+    put(bk, b("B1", ["a.py"], "parked", reason="hold", parked_by="main"))
+    assert run(capsys, "start") == (0, "no startable batch\n")
+    assert run(capsys, "start", "B1")[0] == 0 and get(bk, "B1")["state"] == "running"
+    brief = (bk.root / "wts" / "superlite-b1-t" / ".superlite" / "briefs" / "lead.md").read_text()
+    assert ("resume=False" in brief) if brief.startswith("brief ") else ("Resume" not in brief)
+
+def test_wait_names_issues_the_merge_left_open(bk, capsys):
+    running(bk, merged=True, pr=201, version="1.5.8", open_issues=[1, 9]); bk.stops["W1"] = {"t": 2000, "last": "Status: DONE"}
+    assert run(capsys, "wait", "--timeout", "0")[1] == f"B1 shipped PR #201 1.5.8 summary={bk.sd / 'backlog' / 'B1.md'}\nB1 OPEN #1 #9\n"

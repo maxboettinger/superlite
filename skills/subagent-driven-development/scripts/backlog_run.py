@@ -127,7 +127,7 @@ def cmd_start(a) -> int:
         branch = "superlite/" + wt.name.replace("superlite-", "", 1)  # O(1)
         ctx = {"sl": str(HERE / "sl"), "backlog_md": str(HERE.parent / "backlog.md"), "repo": data.get("repo", ""),
                "approved": data.get("approved_ship"), "titles": data.get("titles", {}), "summaries": summaries,
-               "resume": batch["state"] == "parked"}  # O(1)
+               "resume": batch["state"] == "parked" and bool(batch.get("worktree"))}  # O(1)
         brief = wt / ".superlite" / "briefs" / "lead.md"  # O(1)
         brief.parent.mkdir(parents=True, exist_ok=True)  # O(1)
         brief.write_text(backlog_brief.lead_brief(batch, ctx), encoding="utf-8")  # O(size)
@@ -173,6 +173,8 @@ def _shipped(p, sd, root, b, wt) -> list:  # O(size)
     pr = f" PR #{b['pr']}" if b.get("pr") else ""
     ver = f" {b['version']}" if b.get("version") else ""
     out = [f"{bid} shipped{pr}{ver} summary={sd / 'backlog' / (bid + '.md')}"]
+    if b.get("open_issues"):  # O(k)
+        out.append(f"{bid} OPEN " + " ".join(f"#{n}" for n in b["open_issues"]))  # O(k)
     rc, msg = _run(["maxapp", "ship", "-C", str(wt)], root)  # O(cmd)
     if rc:  # O(1)
         out.append(f"{bid} cleanup: {(msg.splitlines() or ['failed'])[-1][:120]}")  # O(len)
