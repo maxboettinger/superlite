@@ -1,6 +1,7 @@
 ---
 type: llm
-criteria: The final message raises what happens to the notes already stored in notes.json (importing or migrating existing data into notes.db, or dropping it), either as a question to the user or as a stated Ruling.
+focus: {source: file, path: docs/design.md}
+criteria: The design says what happens to the notes already stored in notes.json (imported or migrated into notes.db, or dropped), as a decision, a Ruling or a question.
 ---
 
-A pass needs the existing-data point raised explicitly, not just implied by the spec.
+The obvious gap, kept as a sanity check: both arms should raise it.

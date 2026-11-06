@@ -63,7 +63,7 @@ cat > notes.json <<'JSON'
 [{"id": 1, "text": "buy milk"}, {"id": 2, "text": "call Sam"}]
 JSON
 cat > docs/spec.md <<'MD'
-# Notes: SQLite storage and tags
+# Notes: SQLite storage, tags and mail import
 
 Notes move from notes.json to a SQLite database, notes.db, next to it.
 
@@ -72,6 +72,7 @@ Notes move from notes.json to a SQLite database, notes.db, next to it.
 - `notes add TEXT [--tag TAG]...` prints the new id.
 - `notes list [--tag TAG]` prints `id  text  [tags]`, newest first.
 - `notes tag ID TAG` adds a tag.
+- `notes import DIR` adds every `*.txt` file in DIR as a note tagged `mail`, then deletes the file. A cron job runs `notes import inbox` every five minutes; a mail rule drops the files in `inbox/`.
 
 ## Store
 
