@@ -33,8 +33,12 @@ LOCKFILES = [("uv.lock", "uv sync"), ("package-lock.json", "npm ci"), ("pnpm-loc
 SKELETON = re.compile(r"wave\s*0|skeleton|scaffold|bootstrap", re.I)  # O(1)
 LANGS = [("TypeScript", r"typescript|\btsc\b|\.tsx?\b"), ("JavaScript", r"javascript|\bnode(?:\.js)?\b|\.m?jsx?\b"),  # O(1)
          ("Python", r"python|pyproject|pytest|\.py\b"), ("Go", r"\bgolang\b|\bgo\.mod\b|\.go\b"),
-         ("Rust", r"\brust\b|cargo|\.rs\b"), ("C#", r"c#|\.net\b|csproj|\.cs\b"), ("Java", r"\bjava\b|\.java\b"),
-         ("Ruby", r"\bruby\b|\.rb\b")]
+         ("Rust", r"\brust\b|cargo|\.rs\b"), ("C#", r"c#|(?<!\w)\.net\b|\bdotnet\b|csproj|\.cs\b"), ("Java", r"\bjava\b|\.java\b"),
+         ("Ruby", r"\bruby\b|\.rb\b"), ("Swift", r"\bswift\b|\.swift\b|xcodebuild|xcodeproj"),
+         ("Kotlin", r"\bkotlin\b|\.kts?\b"), ("PHP", r"\bphp\b|composer\.json|\.php\b")]
+# `sl testcmd` language id -> display name
+PRETTY = {"python": "Python", "typescript": "TypeScript", "javascript": "JavaScript", "go": "Go", "rust": "Rust", "swift": "Swift",  # O(1)
+          "csharp": "C#", "kotlin": "Kotlin", "php": "PHP", "java": "Java", "ruby": "Ruby"}
 # Root-level and glob paths a synthesized T0 owns (commit_task matches `*` patterns; files another task owns are left alone).
 SYNTH_OWNS = ["package.json", "package-lock.json", "tsconfig*.json", "pyproject.toml", "uv.lock", "go.mod", "go.sum", "Cargo.toml",  # O(1)
               "Cargo.lock", "Makefile", "*.csproj", "*.sln", "pom.xml", "build.gradle", "Gemfile", ".gitignore",
@@ -97,7 +101,26 @@ def constraint_lines(plan) -> list[str]:  # O(L)
     return out  # O(1)
 
 
-def language_facts(lines: list[str], plan) -> str:  # O(L)
+def resolved_language(root: Path | None) -> str:  # O(m + f)
+    """The language `sl testcmd` resolves for `root` (config file or marker files), "" when none."""
+    if root is None:  # O(1)
+        return ""  # O(1)
+    try:  # O(1)
+        import testcmd  # O(1)
+        found = testcmd.resolve(root)  # O(m + f)
+    except Exception:  # an unreadable root never stops the brief | O(1)
+        return ""  # O(1)
+    lang = ((found or {}).get("language") or "").strip()  # O(1)
+    return "" if lang.lower() == "unknown" else lang  # O(1)
+
+
+def language_facts(lines: list[str], plan, root: Path | None = None) -> str:  # O(L)
+    lang = resolved_language(root)  # O(m + f)
+    if lang:  # the repo's own resolved language names it alone | O(1)
+        return (f"The project's language: {PRETTY.get(lang.lower(), lang)} (its resolved test command, `sl testcmd`). "
+                "Use the tooling the plan's constraints name; where they are silent, "
+                "use the project's own declared tooling found in the repo (package.json, go.mod, Cargo.toml, pyproject.toml, "
+                "*.csproj, Makefile).")  # O(1)
     stated = " ".join(lines)  # O(L)
     if not stated.strip():  # O(1)
         stated = " ".join(plan.lines[:40])  # O(1)
@@ -143,17 +166,35 @@ def seam_names(plan) -> set[str]:  # O(q*s)
 
 
 def stub_items(task, seams: set[str]) -> list[str]:  # O(k*s)
-    """The task's Produces items another task consumes."""
-    return [it for it in task.produces  # O(k*s)
+    """The task's Produces items another task consumes, as the plan writes them (backticks kept)."""
+    return [it for it in raw_items(task, "produces")  # O(k*s)
             if pt.strip_ticks(it) in seams or ((pt.parse_signature(it) or {}).get("name") in seams)]
 
 
-def stub_files(plan) -> list[str]:  # O(n*q*s)
-    """Non-test files of every task that produces a consumed item, in plan order, deduped."""
+def exists_under(root: Path | None, path: str) -> bool:  # O(1)
+    """A plain path (no `*`, no trailing `/`) that is a file under `root`; nothing exists without a root."""
+    if root is None or "*" in path or path.endswith("/"):  # O(1)
+        return False  # O(1)
+    return (Path(root) / path).is_file()  # O(1)
+
+
+def stub_picks(plan, root: Path | None = None) -> list[tuple]:  # O(n*q*s)
+    """(task, consumed Produces items, files to stub) per task that needs a stub: at least one signature item and one
+    non-test Owns file that does not exist yet."""
     seams, out = seam_names(plan), []  # O(q*s)
     for t in plan.tasks:  # O(n)
-        if stub_items(t, seams):  # O(k*s)
-            out += [o for o in t.owns if not TEST_PATH.search(o) and o not in out]  # O(o^2)
+        items = stub_items(t, seams)  # O(k*s)
+        files = [o for o in t.owns if not TEST_PATH.search(o) and not exists_under(root, o)]  # O(o)
+        if files and any(pt.parse_signature(it) for it in items):  # O(k*s)
+            out.append((t, items, files))  # O(1)
+    return out  # O(n)
+
+
+def stub_files(plan, root: Path | None = None) -> list[str]:  # O(n*q*s)
+    """Non-test files of every task that needs a stub, in plan order, deduped."""
+    out: list[str] = []  # O(1)
+    for _, _, files in stub_picks(plan, root):  # O(n)
+        out += [f for f in files if f not in out]  # O(o^2)
     return out  # O(1)
 
 
@@ -163,22 +204,18 @@ def wait_tasks(plan, stubs: list[str], wid: str) -> list[str]:  # O(n*o*f)
     return [t.id for t in plan.tasks if t.id != wid and any(next_tasks.owns_match(f, t.owns) for f in stubs)]  # O(n*o*f)
 
 
-def stub_spec(plan) -> str:  # O(q*s)
+def stub_spec(plan, root: Path | None = None) -> str:  # O(q*s)
     """Language-neutral YAML: per producing task, its files and the signatures another task consumes."""
     out = ["tasks:"]  # O(1)
-    seams = seam_names(plan)  # O(q*s)
-    for t in plan.tasks:  # O(n)
-        items = stub_items(t, seams)  # O(k*s)
-        if not items:  # O(1)
-            continue  # O(1)
+    for t, items, files in stub_picks(plan, root):  # O(n)
         out.append(f"  - id: {t.id}")  # O(1)
         out.append(f"    contract: {quote(t.title or t.id)}")  # O(s)
-        out.append(f"    files: [{', '.join(quote(o) for o in t.owns if not TEST_PATH.search(o))}]")  # O(o)
+        out.append(f"    files: [{', '.join(quote(o) for o in files)}]")  # O(o)
         out.append("    produces:")  # O(1)
         for it in items:  # O(q) iterations
             sig = pt.parse_signature(it)  # O(s)
-            if not sig:  # O(1)
-                out.append(f"      - {{raw: {quote(it)}}}")  # O(s)
+            if not sig:  # no full signature: nothing to stub | O(1)
+                out.append(f"      - {{no_stub: {quote(it)}}}")  # O(s)
                 continue  # O(1)
             params = [p.strip() for p in pt.split_top_level(sig["args"]) if p.strip()]  # O(s)
             out.append(f"      - name: {quote(sig['name'])}")  # O(1)
@@ -195,6 +232,7 @@ OWNS_SYNTH = ("manifest, package/module initialisers, test-runner config, shared
 
 
 def build_brief(plan, plan_path: str, task, tid: str) -> str:  # O(L + q*s)
+    root = pt.stable_root(plan_path)  # O(d)
     lines = constraint_lines(plan)  # O(L)
     if task is not None:  # O(1)
         owns_txt = "The plan's own Wave 0 task, verbatim:\n\n" + task.text.strip() + "\n"  # O(block)
@@ -213,17 +251,17 @@ You are {tid}, a one-off skeleton task. This message is your whole task, not the
 
 ## Language and layout
 
-{language_facts(lines, plan)}
+{language_facts(lines, plan, root)}
 
 ## What you own
 
 {owns_txt}
 ## Stub spec (language-neutral)
 
-Write one stub per `produces` item below (only the signatures another task consumes; an empty list means no stubs) in the project's own language, in the files listed, with exactly these names, parameters and return types (map the types to the language). Each stub fails with a clear not-implemented error naming its task id (never returns a plausible value). Keep it to signatures: no logic. Everything you need is in this brief: read no SPEC or plan section, search nothing, and create the files in as few tool calls as you can. If a listed file already exists, an implementer is building it: leave it untouched, never overwrite.
+Write one stub per `produces` item below that has a `name` (a `no_stub` item has no full signature: write nothing for it; only the signatures another task consumes; an empty list means no stubs) in the project's own language, in the files listed, with exactly these names, parameters and return types (map the types to the language). Each stub fails with a clear not-implemented error naming its task id (never returns a plausible value). Keep it to signatures: no logic. Everything you need is in this brief: read no SPEC or plan section, search nothing, and create the files in as few tool calls as you can. If a listed file already exists, an implementer is building it: leave it untouched, never overwrite.
 
 ```yaml
-{stub_spec(plan)}```
+{stub_spec(plan, root)}```
 
 ## Done when
 
@@ -261,7 +299,7 @@ def write_brief(plan_path: str, out_path: str | None = None):  # O(L + q*s)
     out = Path(out_path) if out_path else sl_dir(plan_path) / "briefs" / "wave0.md"  # O(1)
     out.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     out.write_text(build_brief(plan, plan_path, task, tid), encoding="utf-8", newline="\n")  # O(size)
-    stubs = stub_files(plan)  # O(n*q*s)
+    stubs = stub_files(plan, pt.stable_root(plan_path))  # O(n*q*s)
     meta = {"id": tid, "synthetic": task is None, "title": "Wave 0 skeleton", "owns": SYNTH_OWNS if task is None else task.owns,  # O(1)
             "stubs": stubs, "wait": wait_tasks(plan, stubs, tid)}
     out.with_suffix(".json").write_text(json.dumps(meta, indent=1), encoding="utf-8")  # O(1)
