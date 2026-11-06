@@ -119,6 +119,8 @@ def test_ai_cases_grade_outcomes():
     for name in ("raises-decisions", "one-batch"):
         fm = frontmatter(once / f"{name}.md")
         assert fm["type"] == "llm" and fm.get("criteria"), name
+    one_batch = frontmatter(once / "one-batch.md")
+    assert "requests to enable a denied tool or permission are not counted" in one_batch["criteria"]
     quiet = EVALS / "ai-bounded-quiet" / "graders"
     assert frontmatter(quiet / "no-questions.md")["type"] == "llm"
     fm = frontmatter(quiet / "changed.md")
