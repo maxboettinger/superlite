@@ -148,6 +148,37 @@ def answer(data: dict, answers: dict, by: str, now: str) -> list:
     return errs
 
 
+def skip_issue(data: dict, n: int) -> str:
+    hit = next((b for b in data.get("batches", []) if n in b.get("issues", [])), None)  # O(batches * issues)
+    if hit is None:
+        msg = f"skipped #{n} (in no batch)"
+    else:
+        if hit["state"] != "planned" and not (hit["state"] == "parked" and not hit.get("worktree")):
+            raise ValueError(f"#{n} is in {hit['id']}, which is {hit['state']}")
+        hit["issues"] = [i for i in hit["issues"] if i != n]  # O(issues)
+        if hit["issues"]:
+            msg = f"skipped #{n} ({hit['id']} keeps " + " ".join(f"#{i}" for i in hit["issues"]) + ")"
+        else:
+            data["batches"] = [b for b in data["batches"] if b is not hit]  # O(batches)
+            for b in data["batches"]:  # O(batches * depends)
+                b["depends"] = [d for d in b.get("depends", []) if d != hit["id"]]
+            msg = f"skipped #{n} ({hit['id']} dropped)"
+    data["outside"] = [o for o in data.get("outside", []) if o.get("number") != n]  # O(outside)
+    if n not in data["skipped"]:  # O(skipped)
+        data["skipped"].append(n)
+    return msg
+
+
+def park(data: dict, bid: str, reason: str) -> str:
+    b = batch(data, bid)
+    if b["state"] != "planned":
+        raise ValueError(f"{bid} is {b['state']}; only a planned batch can be parked")
+    if not isinstance(reason, str) or not 1 <= len(reason) <= 200 or re.search(r"[\x00-\x1f\x7f]", reason):
+        raise ValueError("reason: 1 to 200 characters, no control characters")
+    b["state"], b["reason"], b["parked_by"] = "parked", reason, "main"
+    return f"{bid} parked: {reason}"
+
+
 def status_lines(data: dict) -> list:
     bs = data.get("batches", [])
     run = sum(1 for b in bs if b["state"] in ACTIVE)
@@ -172,7 +203,7 @@ def status_lines(data: dict) -> list:
         elif s == "parked":
             nxt = (b.get("reason") or "-")[:40]
         else:
-            nxt = b.get("version") or "-"
+            nxt = (b.get("version") or "-") + (" OPEN " + " ".join(f"#{i}" for i in b["open_issues"]) if b.get("open_issues") else "")
         issues = " ".join(f"#{i}" for i in b.get("issues", []))
         lines.append(f"{b['id']} | {issues} | {s} | {b.get('lead') or '-'} | {'#%s' % b['pr'] if b.get('pr') else '-'} | {nxt}")
     n = len(open_questions(data))

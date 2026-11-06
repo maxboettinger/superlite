@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches), decide (Max's answers); start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches), decide (Max's answers), skip <issue>, park <batch> --reason R; start|wait|answer and ship are routed."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -206,6 +206,29 @@ def cmd_decide(a) -> int:
     return 0
 
 
+def _main_only(name: str, fn) -> int:
+    import backlog_state as bs  # O(1)
+    if os.environ.get("SUPERLITE_FLEET_WORKER"):
+        print(f"refused: sl backlog {name} runs only in the main session")
+        return 2
+    res = {}
+    try:
+        bs.update(bs.path(_root()), lambda data: res.update(msg=fn(bs, data)))
+    except (ValueError, KeyError) as e:
+        print(f"refused: {e.args[0]}")
+        return 2
+    print(res["msg"])
+    return 0
+
+
+def cmd_skip(a) -> int:
+    return _main_only("skip", lambda bs, d: bs.skip_issue(d, a.issue))
+
+
+def cmd_park(a) -> int:
+    return _main_only("park", lambda bs, d: bs.park(d, a.batch, a.reason))
+
+
 def cmd_status(a) -> int:
     import backlog_state as bs  # O(1)
     print("\n".join(bs.status_lines(bs.load(bs.path(_root())))))
@@ -233,6 +256,13 @@ def main(argv=None) -> int:
     de.add_argument("--batch")
     de.add_argument("--file")
     de.set_defaults(fn=cmd_decide)
+    sk = sub.add_parser("skip")
+    sk.add_argument("issue", type=int)
+    sk.set_defaults(fn=cmd_skip)
+    pk = sub.add_parser("park")
+    pk.add_argument("batch")
+    pk.add_argument("--reason", required=True)
+    pk.set_defaults(fn=cmd_park)
     a = ap.parse_args(argv)
     try:
         return a.fn(a)

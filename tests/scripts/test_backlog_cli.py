@@ -112,3 +112,20 @@ def test_status_and_router(bk, capsys, monkeypatch):
     monkeypatch.setitem(sys.modules, "backlog_ship", types.SimpleNamespace(main=lambda argv: seen.append(argv) or 4))
     assert [bl.main(a) for a in (["start", "B2"], ["wait"], ["answer", "B2", "--file", "a.json"], ["ship", "B2", "merge"])] == [0, 0, 0, 4]
     assert seen == [["start", "B2"], ["wait"], ["answer", "B2", "--file", "a.json"], ["B2", "merge"]]
+
+def test_skip_and_park_from_main(bk, capsys, monkeypatch):
+    cli(capsys, "plan")
+    assert cli(capsys, "skip", "1") == (0, "skipped #1 (B1 keeps #2)\n") and load(bk)["skipped"] == [1]
+    assert cli(capsys, "park", "B1", "--reason", "hold for #208") == (0, "B1 parked: hold for #208\n")
+    assert load(bk)["batches"][0]["state"] == "parked"
+    assert cli(capsys, "park", "B9", "--reason", "x") == (2, "refused: unknown batch B9\n")
+    assert cli(capsys, "park", "B1", "--reason", "x") == (2, "refused: B1 is parked; only a planned batch can be parked\n")
+    monkeypatch.setenv("SUPERLITE_FLEET_WORKER", "W3")
+    assert cli(capsys, "skip", "2") == (2, "refused: sl backlog skip runs only in the main session\n")
+    assert cli(capsys, "park", "B1", "--reason", "x") == (2, "refused: sl backlog park runs only in the main session\n")
+
+def test_a_skipped_issue_stays_out_of_the_next_plan(bk, capsys):
+    cli(capsys, "plan"); cli(capsys, "skip", "1"); bk.issues.clear(); bk.batches = [{**BATCH, "issues": [2]}]
+    assert cli(capsys, "plan", "--reset")[0] == 0
+    brief = (bk.sd / "briefs" / "triage.md").read_text()
+    assert "#1 One" not in brief and "#2 Two" in brief and load(bk)["batches"][0]["issues"] == [2]

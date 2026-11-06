@@ -51,3 +51,39 @@ def test_status_lines_one_screen():
         "B4 | #4 | parked | - | - | tui layer red"]
     assert bs.status_lines(bs.default()) == ["backlog: 0 batches, 0 running, 0 shipped, ship not approved"]
     assert bs.status_lines(data(b("B1", ["a.py"], decisions=[Q])))[-2:] == ["B1 | #1 | planned | - | - | decide", "questions: 2 open (sl backlog decide --print)"]
+
+def test_skip_issue_drops_it_and_an_emptied_batch():
+    d = data(b("B1", ["a.py"], issues=[1, 7]), b("B2", ["b.py"], depends=["B1"]), b("B3", ["c.py"], depends=["B2"]))
+    assert bs.skip_issue(d, 1) == "skipped #1 (B1 keeps #7)" and d["batches"][0]["issues"] == [7]
+    assert bs.skip_issue(d, 7) == "skipped #7 (B1 dropped)" and [x["id"] for x in d["batches"]] == ["B2", "B3"]
+    assert d["batches"][0]["depends"] == [] and d["batches"][1]["depends"] == ["B2"]
+    d["outside"] = [{"number": 9, "title": "x", "author": "eve"}]
+    assert bs.skip_issue(d, 9) == "skipped #9 (in no batch)" and d["outside"] == []
+    bs.skip_issue(d, 9)
+    assert d["skipped"] == [1, 7, 9]
+
+def test_skip_and_park_refuse_started_batches():
+    d = data(b("B1", ["a.py"], "running"), b("B2", ["b.py"], "parked", worktree="/w/b2", reason="tui red"), b("B3", ["c.py"]))
+    for n, msg in ((1, "#1 is in B1, which is running"), (2, "#2 is in B2, which is parked")):
+        with pytest.raises(ValueError, match=msg):
+            bs.skip_issue(d, n)
+    with pytest.raises(ValueError, match="B1 is running; only a planned batch can be parked"):
+        bs.park(d, "B1", "hold")
+    for bad in ("", "x" * 201, "a\x1bb"):
+        with pytest.raises(ValueError, match="reason: 1 to 200 characters, no control characters"):
+            bs.park(d, "B3", bad)
+    with pytest.raises(KeyError):
+        bs.park(d, "B9", "hold")
+    assert d["skipped"] == [] and d["batches"][2]["state"] == "planned"
+
+def test_park_holds_a_planned_batch_from_plain_start():
+    d = data(b("B1", ["a.py"]), b("B2", ["b.py"]))
+    assert bs.park(d, "B1", "umbrella: run acceptance") == "B1 parked: umbrella: run acceptance"
+    x = d["batches"][0]
+    assert (x["state"], x["reason"], x["parked_by"]) == ("parked", "umbrella: run acceptance", "main")
+    assert bs.startable(d, 2) == ["B2"] and "B1 | #1 | parked | - | - | umbrella: run acceptance" in bs.status_lines(d)
+    assert bs.skip_issue(d, 1) == "skipped #1 (B1 dropped)"
+
+def test_status_names_issues_a_shipped_batch_left_open():
+    d = data(b("B1", ["a.py"], "shipped", pr=201, version="1.5.8", lead="W1", open_issues=[1, 9]), approved_ship=APPROVED)
+    assert bs.status_lines(d)[-1] == "B1 | #1 | shipped | W1 | #201 | 1.5.8 OPEN #1 #9"
