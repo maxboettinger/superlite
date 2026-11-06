@@ -6,9 +6,13 @@
 Resolution, the same order as the hooks (hooks/superlite-state.sh), plus step 2 (#178):
   1. $SUPERLITE_STATE_DIR (a .superlite path), for hosts without session ids;
   2. the run of the linked worktree the cwd is in: its `.superlite` when that holds a run marker (stable.json, prime.md or
-     pool.json), so one coordinator working on several plans reaches each plan's run from that plan's worktree;
+     pool.json), so one coordinator working on several plans reaches each plan's run from that plan's worktree. A linked
+     worktree is a `.git` file whose gitdir is `<common>/worktrees/<name>`; a submodule's `.git` file is not one (#225);
   3. the session's binding: $SUPERLITE_HOME/sessions/<session id> (default ~/.superlite/sessions/) holds the absolute
-     path of the bound .superlite folder; used while that folder exists and no other session owns it;
+     path of the bound .superlite folder; used while that folder exists and no other session owns it. When the cwd is in
+     a linked worktree and the bound folder lies outside it, `resolve()` prints one line and raises `Foreign` (exit 2):
+     a writer never follows a binding into another worktree (#224). `resolve(strict=False)` and `where` still report it;
+     $SUPERLITE_STATE_DIR, an explicit plan and the session's private folder pass;
   4. ./.superlite, unless another live session owns it; then the session's private folder
      $SUPERLITE_HOME/sessions/<session id>.d/.superlite (state set before any plan, moved to the plan's folder on the
      next bind; the hooks judge paths against the launch directory meanwhile).
@@ -23,7 +27,7 @@ id), moves a pending gate (orchestrator.json, human-replies.jsonl) from the sess
 folder another live session owns (`force` takes it over). An owner is live while its binding points at the folder.
 Paths stay as given (absolute, symlinks not resolved, a relative path joined to $PWD), as the hooks see them. A
 binding also records $CLAUDE_PID, so the SessionStart hook moves it to the new id after /clear (same process). Bindings
-older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, worktree_run, for_plan, resolve, pool_path, bind, unbind, owner, live_owner. Stdlib only.
+older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, linked_worktree, worktree_top, worktree_run, foreign_worktree, Foreign, for_plan, resolve, pool_path, bind, unbind, owner, live_owner. Stdlib only.
 """
 # Complexity notation:
 #   d = depth of a path (parents walked), b = bindings in $SUPERLITE_HOME/sessions
@@ -43,6 +47,15 @@ _SID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")  # a session id is also a file name
 
 class Owned(Exception):  # O(1)
     """bind refused: another live session owns the folder."""
+
+
+class Foreign(SystemExit):  # O(1)
+    """resolve refused: the session binding names a folder outside the linked worktree the cwd is in (exit 2, `line` says why)."""
+
+    def __init__(self, sd, top):  # O(1)
+        super().__init__(2)  # O(1)
+        self.line = (f"superlite: cwd is in worktree {top}, but the session binding names {sd}; not used. "  # O(1)
+                     f"Pass --plan {top}/.superlite for this worktree's run, --plan {sd}, or set SUPERLITE_STATE_DIR")
 
 
 def home() -> Path:  # O(1)
@@ -195,26 +208,66 @@ def has_run(sd) -> bool:  # O(1)
     return any((Path(sd) / m).is_file() for m in RUN_MARKERS)  # O(1) iterations (3)
 
 
+def linked_worktree(top) -> bool:  # O(1)
+    """True when top/.git is a file whose gitdir is `<common>/worktrees/<name>`: a linked worktree. A submodule or a
+    separate-git-dir checkout also has a `.git` file but points elsewhere (#225); a folder, garbage or no `.git` give False."""
+    try:  # O(1)
+        text = (Path(top) / ".git").read_text(encoding="utf-8", errors="replace").strip()  # O(1)
+    except OSError:  # a folder, or nothing | O(1)
+        return False  # O(1)
+    gd = text.partition(":")[2].strip() if text.startswith("gitdir:") else ""  # O(1)
+    return gd.replace(chr(92), "/").rstrip("/").rsplit("/", 2)[-2:-1] == ["worktrees"]  # O(1)
+
+
+def worktree_top(path=".") -> Path | None:  # O(d)
+    """The nearest `.git` holder at or above path when it is a linked worktree, else None."""
+    top = git_root(path)  # O(d)
+    return top if top is not None and linked_worktree(top) else None  # O(d)
+
+
 def worktree_run():  # O(d)
-    """The `.superlite` of the linked worktree the cwd is in (the nearest `.git` above it is a file), while it holds a
-    run marker; else None. A main checkout, a folder outside git and a worktree with no run give None."""
-    top = git_root(".")  # O(d)
-    if top is None or not (top / ".git").is_file():  # a main checkout keeps `.git` as a folder | O(1)
+    """The `.superlite` of the linked worktree the cwd is in, while it holds a run marker; else None. A main checkout,
+    a submodule, a folder outside git and a worktree with no run give None."""
+    top = worktree_top(".")  # O(d)
+    if top is None:  # O(1)
         return None  # O(1)
     sd = top / ".superlite"  # O(1)
     return sd if has_run(sd) else None  # O(1)
 
 
+def foreign_worktree(sd) -> Path | None:  # O(d)
+    """The cwd's worktree top when the cwd is in a linked worktree and sd lies outside it, else None.
+    The session's private folder always passes; paths compare logical, then resolved (symlinks)."""
+    top = worktree_top(".")  # O(d)
+    if top is None:  # O(1)
+        return None  # O(1)
+    s = _abs(sd)  # O(d)
+    sid = session_id()  # O(1)
+    if sid and s == _abs(private_dir(sid)):  # O(d)
+        return None  # O(1)
+    for c, p in ((s, top), (s.resolve(), top.resolve())):  # O(1) iterations (2)
+        if c == p or p in c.parents:  # O(d)
+            return None  # O(1)
+    return top  # O(1)
+
+
 def for_plan(plan) -> Path:  # O(d)
     """The run folder of an explicit plan: its `.superlite` (`plan_dir`) once that holds a run marker, else what `resolve()`
-    names, so a plan whose run has not started keeps the session's folder (#178)."""
+    names, so a plan whose run has not started keeps the session's folder (#178), unless that is a binding into another
+    worktree: then the plan's own folder (#224)."""
     sd = plan_dir(plan)  # O(d)
-    return sd if has_run(sd) else resolve()  # O(d)
+    if has_run(sd):  # O(1)
+        return sd  # O(1)
+    r = resolve(strict=False)  # O(d)
+    if not os.environ.get("SUPERLITE_STATE_DIR") and foreign_worktree(r) is not None:  # O(d)
+        return sd  # O(1)
+    return r  # O(1)
 
 
-def resolve(plan_or_dir=None) -> Path:  # O(d)
+def resolve(plan_or_dir=None, strict: bool = True) -> Path:  # O(d)
     """An explicit plan or folder wins; else $SUPERLITE_STATE_DIR, the cwd's worktree run, the session's binding,
-    ./.superlite or the private folder."""
+    ./.superlite or the private folder. A binding outside the cwd's linked worktree raises Foreign after one stderr
+    line; strict=False follows it (readers, `where`, the #199 check)."""
     if plan_or_dir is not None:  # O(1)
         return plan_dir(plan_or_dir)  # O(d)
     env = os.environ.get("SUPERLITE_STATE_DIR", "")  # O(1)
@@ -225,6 +278,11 @@ def resolve(plan_or_dir=None) -> Path:  # O(d)
         return w  # O(1)
     b = bound()  # O(d)
     if b is not None:  # O(1)
+        top = foreign_worktree(b) if strict else None  # O(d)
+        if top is not None:  # O(1)
+            e = Foreign(b, top)  # O(1)
+            print(e.line, file=sys.stderr)  # O(1)
+            raise e  # O(1)
         return b  # O(1)
     sid = session_id()  # O(1)
     other = live_owner(".superlite", sid) if sid else None  # O(d)
@@ -319,7 +377,7 @@ def main(argv=None):  # O(d)
     w = sub.add_parser("where")  # O(1)
     w.add_argument("--plan")  # O(1)
     a = ap.parse_args(argv)  # O(1)
-    sd = resolve(a.plan)  # O(d)
+    sd = resolve(a.plan, strict=False)  # O(d)
     if a.plan:  # O(1)
         how = "plan"  # O(1)
     elif os.environ.get("SUPERLITE_STATE_DIR"):  # O(1)
@@ -328,6 +386,9 @@ def main(argv=None):  # O(d)
         how = "worktree run"  # O(1)
     else:  # O(1)
         how = "session binding" if bound() else "current directory"  # O(d)
+        top = foreign_worktree(sd) if how == "session binding" else None  # O(d)
+        if top is not None:  # O(1)
+            how += f"; foreign: cwd is in worktree {top}, writers refuse it"  # O(1)
     print(f"{_abs(sd)} ({how})")  # O(d)
     return 0  # O(1)
 

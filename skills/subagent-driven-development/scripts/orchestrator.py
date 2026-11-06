@@ -17,13 +17,13 @@ releases the session's binding, so the coordinator guard stops. In human mode `p
 `prune` stay allowed so the plan can be shown whole with its Gantt. In AI mode nothing is gated. With no file nothing is
 gated (existing runs behave as before). `--ruling` on `set ai` also appends a `Ruling:` line to `.superlite/progress.md`
 (for a headless run where no human can answer).
-Without --plan, `end` and `set` refuse (exit 2, one line naming both folders) when the cwd is in a linked worktree and the folder found lies outside it, so one worktree never ends or rewrites another worktree's run (#199).
+Without --plan, `end` and `set` refuse (exit 2, one line naming both folders) when the cwd is in a linked worktree and the folder found lies outside it, so one worktree never ends or rewrites another worktree's run (#199). Every other command without --plan refuses the same way when the session binding names a folder in another worktree (`state.resolve`, #224); `bind` never resolves and binds the launch folder. A submodule's `.git` file is not a linked worktree (#225).
 In human mode `approve` needs `--review PATH` (the plain-language review plan; refused without it, exit 2; a missing file exit 2)
 and evidence of a real human reply: `.superlite/human-replies.jsonl` (written only by the UserPromptSubmit hook, one
 {"t": epoch ms, "approves": bool, "text": ...} per human prompt while unapproved) must hold a line with approves true whose t is
 later than the review file's modification time, else exit 3 with a BLOCKED line. The path and sha256 are recorded. AI mode never
 needs `approve`. `status` and `finish` print the review plan path; `status` also says whether an approving reply exists. Library: gate(plan_or_dir, tool) -> message or None,
-require(plan_or_dir, tool) -> exit code (prints the message), read_state, summary_line. Stdlib only.
+require(plan_or_dir, tool) -> exit code (prints the message), read_state, summary_line, foreign_worktree (= state.foreign_worktree). Stdlib only.
 """
 # Complexity notation:
 #   everything here is O(1) file work
@@ -156,26 +156,7 @@ def end(sd: Path) -> str:  # O(files)
     return f"orchestrator: run ended; {len(present)} files moved to {dest}"  # O(1)
 
 
-def foreign_worktree(sd):  # O(d)
-    """The cwd's worktree top when the cwd is in a linked worktree (`.git` is a file) and sd lies outside it, else None.
-    The session's private folder always passes; paths compare logical, then resolved (symlinks)."""
-    top = state.git_root(".")  # O(d)
-    if top is None or not (top / ".git").is_file():  # O(1)
-        return None  # O(1)
-    try:  # a submodule or separate-git-dir checkout also has a `.git` file; only `<common>/worktrees/<name>` is a linked worktree | O(1)
-        gd = (top / ".git").read_text(encoding="utf-8", errors="replace").strip().partition(":")[2].strip()  # O(1)
-    except OSError:  # O(1)
-        return None  # O(1)
-    if gd.replace(chr(92), "/").rstrip("/").rsplit("/", 2)[-2:-1] != ["worktrees"]:  # O(1)
-        return None  # O(1)
-    s = state._abs(sd)  # O(d)
-    sid = state.session_id()  # O(1)
-    if sid and s == state._abs(state.private_dir(sid)):  # O(d)
-        return None  # O(1)
-    for c, p in ((s, top), (s.resolve(), top.resolve())):  # O(1) iterations (2)
-        if c == p or p in c.parents:  # O(d)
-            return None  # O(1)
-    return top  # O(1)
+foreign_worktree = state.foreign_worktree  # the #199 check and state.resolve share one test (#224) | O(1)
 
 
 def main(argv=None):  # O(1)
@@ -197,9 +178,14 @@ def main(argv=None):  # O(1)
     b_.add_argument("--force", action="store_true", help="take over a folder another live session owns")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     review = getattr(a, "review", None)  # O(1)
-    sd = state.plan_dir(review) if a.cmd == "approve" and review and not a.plan else sl_dir(a.plan)  # O(d)
-    if a.cmd == "bind" and not a.plan:  # bind without a plan targets the launch directory, never the private folder | O(d)
+    if a.cmd == "bind" and not a.plan:  # bind without a plan targets the launch directory, never resolves | O(d)
         sd = state.launch_dir() / ".superlite"  # O(d)
+    elif a.cmd in ("end", "set") and not a.plan:  # the #199 check below words the refusal | O(d)
+        sd = state.resolve(None, strict=False)  # O(d)
+    elif a.cmd == "approve" and review and not a.plan:  # O(1)
+        sd = state.plan_dir(review)  # O(d)
+    else:  # a writer or reader following a foreign binding exits 2 inside resolve (#224) | O(d)
+        sd = sl_dir(a.plan)  # O(d)
     if a.cmd in ("end", "set") and not a.plan:  # without --plan never act on another worktree's run (#199) | O(d)
         top = foreign_worktree(sd)  # O(d)
         if top:  # O(1)
