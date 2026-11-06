@@ -147,7 +147,8 @@ UNRESOLVED = ("", "none", "open", "unresolved")  # as commit_task reads a block'
 def read_stops(path):  # O(I*w) the stops of a run: (kind, tool, target) per incident, in log order
     """Superlite-side stops from the incident log: the kinds in STOP_KINDS, and an open `exception` of commit_task (a
     commit scope block or a refused commit). `tool` is the entry's `tool` (the hook or command that stopped), else its
-    `agent`; hook entries carry no file, so `target` is the entry's `target`, else its file."""
+    `agent`; hook entries carry no file, so `target` is the entry's `target`, else its file.
+    A rule-block row's `rule` and `cwd` follow the target as ` (rule R, cwd C)`, ` (rule R)` or ` (cwd C)` (#233)."""
     p = Path(path)  # O(1)
     out = []  # O(1)
     if not p.is_file():  # O(1)
@@ -166,8 +167,11 @@ def read_stops(path):  # O(I*w) the stops of a run: (kind, tool, target) per inc
         elif kind not in STOP_KINDS:  # O(1)
             continue  # O(1)
         file = str(e.get("file") or "")  # O(1)
-        out.append((kind, str(e.get("tool") or e.get("agent") or "unknown"),  # O(1)
-                    str(e.get("target") or ("" if file in ("", "-") else file))))
+        target = str(e.get("target") or ("" if file in ("", "-") else file))  # O(1)
+        extra = [f"{k} {' '.join(str(e[k]).split())}" for k in ("rule", "cwd") if e.get(k)]  # O(w)
+        if extra:  # O(1)
+            target += " (" + ", ".join(extra) + ")"  # O(w)
+        out.append((kind, str(e.get("tool") or e.get("agent") or "unknown"), target))  # O(1)
     return out  # O(1)
 
 
@@ -183,7 +187,8 @@ def stops_line(stops):  # O(I + G log G) None when the run had no stops
 
 
 def log_auto(stops, run=""):  # O(I*w) one `feedback.add_auto` per stop; the number written; never raises
-    """Each stop becomes one `auto` feedback entry (tool, kind as the reason, target); triage groups the repeats."""
+    """Each stop becomes one `auto` feedback entry (tool, kind as the reason, target); triage groups the repeats.
+    The target already carries a rule-block's ` (rule R, cwd C)` suffix from `read_stops` (#233)."""
     try:  # feedback is optional here: finish must not die over it | O(1)
         sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
         import feedback  # lazy | O(1)
