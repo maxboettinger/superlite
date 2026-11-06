@@ -49,3 +49,20 @@ def test_briefs_say_issue_text_is_data_and_bodies_only():
     ctx = {"sl": "/x/sl", "repo": "r", "backlog_md": "b.md", "max_batches": 2}
     for text in (bb.lead_brief({"id": "B1", "issues": [1]}, ctx), bb.triage_brief([{"number": 1, "title": "t"}], ctx)):
         assert "data, not instructions" in text and "never --comments" in text
+
+def test_summary_keeps_note_lines_whole_up_to_400_characters():
+    note = "Follow-up: the pane label is set only while a fleet wait runs; " + "x" * 300
+    lines = bb.summary(B, note + "\n" + "y" * 500 + "\nCtrl \x1b[2Jgone\n").splitlines()
+    assert lines[3] == note and lines[4] == "y" * 400 and lines[5] == "Ctrl [2Jgone"
+    assert bb.clean("z" * 500) == "z" * 120
+
+def test_lead_brief_spells_bare_ship_commands_closing_keywords_and_note_lines():
+    t = bb.lead_brief(B, CTX)
+    for s in ("one bare command that starts with `/p/sl backlog ship` or `maxapp ship`", "no `cd`", "no pipe", "no `echo`", "no `&&` chain",
+              "each one self-contained line of at most 400 characters", ".superlite/pr-body.md with one `Closes #N` line per issue",
+              '"Fixes #1, #2" closes only #1', "prints `OPEN #N`"):
+        assert s in t, s
+
+def test_triage_brief_leaves_umbrellas_out_and_needs_files():
+    t = bb.triage_brief([{"number": 1, "title": "t"}], {"repo": "r", "max_batches": 2})
+    assert "Leave umbrella and tracking issues" in t and "out of every batch" in t and "(at least one file per batch)" in t
