@@ -67,6 +67,11 @@ def save_state(st):
     p.write_text(json.dumps(st, indent=1) + "\n", encoding="utf-8")
 
 
+def base_of(st):  # O(1)
+    """The run's base commit: `base`, or `head` in states written before `base` existed."""  # O(1)
+    return st.get("base") or st.get("head", "")  # O(1)
+
+
 def head_sha():
     r = git("rev-parse", "--verify", "-q", "HEAD", check=False)
     return r.stdout.strip() if r.returncode == 0 else ""
@@ -116,10 +121,11 @@ def checkpoint(tid, title, files, plan):
     st = load_state()
     if not st or plan_key(st.get("plan")) != plan_key(plan):
         stem = Path(plan).stem if plan else "run"
-        st = {"plan": plan_key(plan), "run": f"{stem}-{date.today():%Y%m%d}", "head": head_sha(),
+        h = head_sha()
+        st = {"plan": plan_key(plan), "run": f"{stem}-{date.today():%Y%m%d}", "base": h, "head": h,
               "branch": git("symbolic-ref", "-q", "HEAD", check=False).stdout.strip(),
               "entries": []}
-    parent = st["entries"][-1]["sha"] if st["entries"] else st["head"]
+    parent = st["entries"][-1]["sha"] if st["entries"] else base_of(st)
     idx = str(Path(TEMP_INDEX).resolve())
     Path(idx).parent.mkdir(parents=True, exist_ok=True)
     Path(idx).unlink(missing_ok=True)
@@ -259,8 +265,8 @@ def apply(squash=True):
         sys.exit("apply: refused, the checked-out branch changed since the run started")
     files = {f for e in st["entries"] for f in e["files"]}
     left = dirty_outside(files, st.get("plan"))  # unrelated changes stay in the tree, uncommitted
-    moved = head_sha() != st["head"]
-    hit = moved_overlap(st["head"], head_sha(), files)
+    moved = head_sha() != base_of(st)
+    hit = moved_overlap(base_of(st), head_sha(), files)
     if hit:
         sys.exit("apply: refused, commits made since the run started touched checkpointed files: "
                  + ", ".join(hit[:8]) + (" ..." if len(hit) > 8 else "")
@@ -317,7 +323,7 @@ def listing():
     st = load_state()
     if not st:
         return "no checkpoints"
-    out = [f"checkpoints for run {st['run']} (base {st['head'][:10]}):"]
+    out = [f"checkpoints for run {st['run']} (base {base_of(st)[:10]}):"]
     out += [f"- {e['sha'][:10]} {e['title']} ({len(e['files'])} files)" for e in st["entries"]]
     return "\n".join(out)
 
