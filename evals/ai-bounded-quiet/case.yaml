@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: ai-bounded-quiet
+description: A bounded, fully specified change in AI mode is made without asking the user anything.
+runs: 2
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: sonnet
+  max_turns: 25
+  timeout_seconds: 900
+  allowed_tools: [Read, Glob, Grep, Skill, Edit, Write, Bash]

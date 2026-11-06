@@ -1,14 +1,15 @@
 """Eval suite layout: cases, graders, frontmatter keys, scaffolds, runner flags."""
 from __future__ import annotations
 
-import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EVALS = ROOT / "evals"
-CASES = {"brainstorm-first", "setup-report", "debug-flow", "brainstorm-coverage"}
+CASES = {"brainstorm-first", "setup-report", "debug-flow", "brainstorm-coverage",
+         "ai-asks-once", "ai-bounded-quiet"}
 PROMPT_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs", "expected_outcome", "model",
                "max_turns", "timeout_seconds", "allowed_tools", "append_system_prompt", "env"}
 GRADER_TYPES = {"regex", "tool_used", "tool_order", "file_exists", "llm", "baseline"}
@@ -49,12 +50,13 @@ def test_frontmatter_keys_are_known():
             assert frontmatter(g).get("type") in GRADER_TYPES, g
         settings = frontmatter(d / "prompt.md") if not (d / "case.yaml").exists() else parse_lines((d / "case.yaml").read_text())
         assert settings["model"] == "sonnet", d
-        assert settings["runs"] == "2", d
+        assert settings["runs"] == ("3" if d.name == "debug-flow" else "2"), d
 
 
 def test_scaffold_scripts_are_executable_bash(tmp_path):
     scripts = sorted(EVALS.glob("*/scaffold.sh"))
-    assert {s.parent.name for s in scripts} == {"setup-report", "debug-flow", "brainstorm-coverage"}
+    assert {s.parent.name for s in scripts} == {"setup-report", "debug-flow", "brainstorm-coverage", "ai-asks-once",
+                                                     "ai-bounded-quiet"}
     for s in scripts:
         assert s.read_text().startswith("#!/usr/bin/env bash")
         assert os.access(s, os.X_OK), s
@@ -69,15 +71,9 @@ def test_scaffold_scripts_are_executable_bash(tmp_path):
     assert "2024" in (debug / "tests/test_core.py").read_text()
     assert "pythonpath" in (debug / "pyproject.toml").read_text()
     assert (tmp_path / "setup-report/src/app/__init__.py").exists()
-
-
-def test_coverage_scaffold_spec_is_thin(tmp_path):
-    subprocess.run([str(EVALS / "brainstorm-coverage" / "scaffold.sh")], cwd=tmp_path, check=True)
-    spec = (tmp_path / "docs/spec.md").read_text().lower()
-    for word in ("migrat", "error", "corrupt", "fail", "recover"):
-        assert word not in spec, word
-    assert len(json.loads((tmp_path / "notes.json").read_text())) == 2
-    assert "json.load" in (tmp_path / "src/notes/store.py").read_text()
+    for name in ("ai-asks-once", "ai-bounded-quiet"):
+        assert (tmp_path / name / "src/notes/cli.py").exists(), name
+        assert 'version = "1.2.3"' in (tmp_path / name / "pyproject.toml").read_text(), name
 
 
 def test_runner_flags():
@@ -112,13 +108,32 @@ def test_regex_graders_nest_file_targets_under_target():
                 assert "path" in fm["target"], g
 
 
-def test_coverage_case_grades_the_final_message():
-    graders = EVALS / "brainstorm-coverage" / "graders"
-    assert not any(frontmatter(g).get("tool") == "AskUserQuestion" for g in graders.glob("*.md"))
-    for name in ("raises-migration", "raises-errors"):
-        fm = frontmatter(graders / f"{name}.md")
-        assert fm.get("type") == "llm" and fm.get("criteria"), name
-    fm = frontmatter(graders / "reads-coverage.md")
-    assert fm.get("type") == "tool_used" and fm.get("tool") == "Read" and fm.get("arm") == "with-only"
-    assert (EVALS / "brainstorm-coverage" / "prompt.md").read_text().startswith("/superlite:brainstorming ")
-    assert not (graders / "skill-fired.md").exists()
+def test_ai_cases_grade_outcomes():
+    once = EVALS / "ai-asks-once" / "graders"
+    for name in ("no-code-edit", "no-code-write"):
+        fm = frontmatter(once / f"{name}.md")
+        assert fm["type"] == "tool_used" and fm["min"] == "0" and fm["max"] == "0" and fm["arm"] == "both", name
+        pattern = re.compile(fm["input_match"])
+        assert pattern.search('"file_path": "/x/src/notes/cli.py"'), name
+        assert not pattern.search('"file_path": "/x/docs/plan.md"'), name
+    for name in ("raises-decisions", "one-batch"):
+        fm = frontmatter(once / f"{name}.md")
+        assert fm["type"] == "llm" and fm.get("criteria"), name
+    quiet = EVALS / "ai-bounded-quiet" / "graders"
+    assert frontmatter(quiet / "no-questions.md")["type"] == "llm"
+    fm = frontmatter(quiet / "changed.md")
+    assert fm["type"] == "regex"
+    assert "source: file" in fm["target"] and "path: src/notes/cli.py" in fm["target"]
+    assert fm["pattern"] == "--version"
+
+
+def test_ai_prompts_name_the_orchestrator():
+    for name in ("ai-asks-once", "ai-bounded-quiet"):
+        text = (EVALS / name / "prompt.md").read_text()
+        assert "AI orchestrator" in text and "I am at my desk" in text, name
+        assert not text.startswith("/"), name
+
+
+def test_testing_doc_counts_cases():
+    row = next(l for l in (ROOT / "docs/testing.md").read_text().splitlines() if l.startswith("| evals"))
+    assert "six cases" in row
