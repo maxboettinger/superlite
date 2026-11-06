@@ -73,3 +73,13 @@ def test_decisions_are_rebuilt_from_validated_fields_only():
     out = norm(bt("B1", [1], ["a.py"], decisions=[dirty]))
     assert out[0]["decisions"] == [{"questions": [Q0]}]
     assert bc.clean_question(dirty) == {"questions": [Q0]}
+
+@pytest.mark.parametrize("drop", [False, True])
+def test_a_batch_without_files_is_rejected(drop):
+    b = bt("B1", [1], [])
+    if drop:
+        del b["files"]
+    assert bc.check_proposal({"batches": [b]}, {1}) == ([], ["B1: files must list at least one repo-relative file"])
+
+def test_a_files_value_that_is_not_a_list_gets_one_error():
+    assert bc.check_proposal({"batches": [{**bt("B1", [1], []), "files": "a.py"}]}, {1}) == ([], ["B1: files must be a list"])

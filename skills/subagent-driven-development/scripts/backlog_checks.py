@@ -150,13 +150,15 @@ def check_proposal(obj: dict, known: set[int]) -> tuple[list[dict], list[str]]:
         clean: set = set()
         if not isinstance(files, list):
             errs.append(f"{bid}: files must be a list")
-            files = []
-        for f in files:
+            files = None
+        for f in files or []:
             p = _plain(f)
             if p is None:
                 errs.append(f"{bid}: file {f!r} is not a plain relative path")
             else:
                 clean.add(p)
+        if files is not None and not files:
+            errs.append(f"{bid}: files must list at least one repo-relative file")
         deps = b.get("depends", [])
         if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
             errs.append(f"{bid}: depends must be a list of batch ids")
