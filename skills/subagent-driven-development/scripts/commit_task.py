@@ -467,6 +467,17 @@ def baseline_dirty(plan):  # O(b) paths dirty before the run from stable.json; N
         return None  # O(1)
 
 
+def wave0_stubs(plan):  # O(1) file read
+    """(T0 id, stub files) from wave0.json, or None when missing, unreadable, without `id` or without stubs."""
+    try:  # O(1)
+        import wave0  # O(1) lazy
+        d = json.loads((wave0.sl_dir(plan) / "briefs" / "wave0.json").read_text(encoding="utf-8"))  # O(1) file read
+        stubs = [x for x in d.get("stubs") or [] if isinstance(x, str)]  # O(s)
+        return (str(d["id"]), stubs) if d.get("id") and stubs else None  # O(1)
+    except Exception:  # missing, unreadable, not JSON | O(1)
+        return None  # O(1)
+
+
 def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (status, add, commit, rev-parse)
     """Commit one task; (exit code, sha or None). Files other tasks own are left alone. A task not committed leaves its
     reason in a.failed[tid] for the `Tn FAILED: <reason>` line."""
@@ -486,6 +497,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
              if o not in SHARED_OWNS]
 
     mine, out_of_scope = [], []  # O(1)
+    w0, done = getattr(a, "w0", None), committed_tasks(a.ledger)  # stub record of T0, tasks already committed | O(c)
     skip = plan_folder(a.plan)  # O(1) + process spawn
     shared, cand = [], []  # modified tracked tests no task owns | O(1)
     entries = changed_entries()  # O(m log m) + process spawn
@@ -509,6 +521,10 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         if f.startswith("docs/") and f.endswith(".md") and not nt.owns_match(f, owns):  # docs: only owned ones count | O(f)
             continue  # O(1)
         if f in own_files and not nt.owns_match(f, owns):  # O(f)
+            continue  # O(1)
+        if w0 and tid == w0[0] and tid not in done and nt.owns_match(f, w0[1]) and not any(  # a stub whose owner is not committed yet: T0 commits it | O(t*o)
+                t2 in done and nt.owns_match(f, i2["owns"]) for t2, i2 in info.items() if t2 != tid):  # O(t*o)
+            mine.append(f)  # O(1)
             continue  # O(1)
         if tid == "T0" and nt.owns_match(f, other):  # Wave 0 globs never take another task's file | O(f)
             continue  # O(1)
@@ -647,6 +663,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
         w0 = wave0.synth_info(a.plan)  # O(1) file read
         if w0:  # O(1)
             info["T0"] = {"id": "T0", "title": w0["title"], "owns": w0["owns"], "body": ""}  # O(1)
+    a.w0 = wave0_stubs(a.plan)  # O(1) file read, once per call
     add_also_owns(info, a.ledger)  # O(c + o) --also files stay owned by their task
     if a.claim:  # a claim only records the ruling: nothing is committed | O(k)
         if a.task[0] not in info:  # O(1)
