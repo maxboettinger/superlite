@@ -105,3 +105,13 @@ def test_guard_error_row_unchanged(P):
     gj._incident(str(P / ".superlite"), "guard-error", "Bash", "x" * 300)
     row = json.loads((P / ".superlite" / "incidents.jsonl").read_text().splitlines()[-1])
     assert "rule" not in row and "cwd" not in row and len(row["target"]) == 120
+
+
+def test_rm_skip_needs_one_known_folder_and_literal_target(P):
+    (P / "src" / "stray-E").write_text("x")
+    (P / "stray-E").write_text("x")
+    for cmd in ("cd $X && rm stray-E", "cd nope || true; rm stray-E", "cd src; cd $X; rm stray-E",
+                "rm $X/stray-E", "rm src/$X", "rm src/`echo a.py`", "(cd src || cd ..) && rm a.py"):
+        v = j(P, cmd)
+        assert v is not None and v.kind == "code", cmd
+    assert j(P, "cd src && rm stray-E") is None
