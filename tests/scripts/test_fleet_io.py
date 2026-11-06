@@ -98,7 +98,7 @@ def test_verify_line_lists_test_folder_files(tmp_path):
     plan = make_plan(tmp_path, [{"id": "T2", "owns": "scripts/test_layers.py, tests/scripts/test_test_layers.py, docs/testing.md"}, {"id": "T5", "owns": "src/a_test.go, src/a.go"}, {"id": "T6", "owns": "src/x.py, docs/x.md"}])
     assert "`/sl/sl run_tests --fast tests/scripts/test_test_layers.py --task T2 --background`" in io.task_message(plan, ["T2"], "/sl/sl", "/sl")
     assert "run_tests --fast src/a_test.go --task T5 --background" in io.task_message(plan, ["T5"], "/sl/sl", "/sl")
-    assert "run_tests --fast src/x.py docs/x.md --task T6 --background" in io.task_message(plan, ["T6"], "/sl/sl", "/sl")
+    assert "run_tests --fast src/x.py --task T6 --background" in io.task_message(plan, ["T6"], "/sl/sl", "/sl")
 
 def test_verify_line_skips_fixture_data_in_test_folder(tmp_path):
     plan = make_plan(tmp_path, [{"id": "T2", "owns": "src/h.py, tests/scripts/test_h.py, tests/scripts/fixtures/fleet/herdr"}, {"id": "T3", "owns": "src/h.py, tests/scripts/fixtures/fleet/herdr"}])
@@ -164,7 +164,7 @@ def test_status_parsed_from_lead_line(world, tmp_path):
 
 def test_send_text_and_keys_cli(world):
     assert io.main(["send", "W1", "--text", "use the fake", "--plan", str(world.plan)]) == 0
-    assert [c for c in world.fh.calls if c[0] != "call"][-1][:3] == ("prompt", "sl-proj-w1", "use the fake") and json.loads((world.sd / "pool.json").read_text())["agents"][0]["busy"] is False
+    c = [c for c in world.fh.calls if c[0] != "call"][-1]; assert c[:2] == ("prompt", "sl-proj-w1") and c[2].startswith("use the fake") and json.loads((world.sd / "pool.json").read_text())["agents"][0]["busy"] is False
     assert io.main(["keys", "W1", "Down", "Enter"]) == 0 and world.fh.calls[-1] == ("send_keys", "sl-proj-w1", ["Down", "Enter"])
 
 def test_real_herdr_binary_argv(world, tmp_path, monkeypatch):
@@ -177,6 +177,10 @@ def test_real_herdr_binary_argv(world, tmp_path, monkeypatch):
     logged = [json.loads(l) for l in log.read_text().splitlines()]; argv = logged[0]; assert argv[:3] == ["agent", "prompt", "sl-proj-w1"] and "--until" in argv and "working" in argv
     assert ["pane", "rename", "w6:p1", "W1 T3"] in logged  # the real verb reaches the binary
     assert io.pane_label(world.sd, "W1", "W1 T3") is True
+
+def test_pane_label_without_timeout_passes_no_keyword(world, monkeypatch):
+    calls = []; monkeypatch.setattr(io.hc, "call", lambda args: calls.append(args))
+    assert io.pane_label(world.sd, "W1", "W1 T3") is True and calls == [["pane", "rename", "w6:p1", "W1 T3"]]
 
 def test_wait_blocked_reads_the_screen_by_agent_name(world):
     io.send(world.sd, world.plan, "W2", ["T4"], "/sl/sl", "/sl"); world.fh.states = [{"sl-proj-w2": "blocked"}]
@@ -194,3 +198,116 @@ def test_send_reaches_a_worker_record_without_a_stored_name(world):
 def test_keys_takes_plan_to_find_the_run(world, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert io.main(["keys", "W1", "Enter", "--plan", str(world.plan)]) == 0 and world.fh.calls[-1] == ("send_keys", "sl-proj-w1", ["Enter"])
+
+
+# --- #237: a stop record ends the wait whatever Herdr says; a turn without a report is UNKNOWN with the pane's last lines
+def stop_at(world, tr, t, last=""):
+    (world.sd / "metrics.jsonl").write_text(json.dumps({"ev": "stop", "t": t, "agent_id": "W1", "type": "x", "transcript": str(tr), "last": last}) + "\n")
+
+def test_wait_ends_on_a_reported_stop_while_herdr_says_working(world, tmp_path, capsys):
+    io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]
+    tr = tmp_path / "w1.jsonl"; transcript(tr, "Status: BLOCKED - two background calls still run"); stop_at(world, tr, sent + 10)
+    world.fh.states = [{"sl-proj-w1": "working"}]
+    out = io.wait(world.sd, ["W1"], 60000)
+    assert [(r["status"], r["source"]) for r in out] == [("BLOCKED", "transcript")] and "TIMEOUT" not in capsys.readouterr().out
+    assert json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]["state"] == "ready"
+
+def test_wait_keeps_waiting_on_an_unreported_stop_while_working(world, tmp_path, capsys):
+    io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]
+    tr = tmp_path / "w1.jsonl"; transcript(tr, "Verify runs in the background; waiting for it."); stop_at(world, tr, sent + 10)
+    world.fh.states = [{"sl-proj-w1": "working"}]
+    assert io.wait(world.sd, ["W1"], 5000) == [] and "TIMEOUT W1" in capsys.readouterr().out
+    assert not (world.sd / "fleet" / "reports" / "T3.md").exists()
+
+def test_wait_unreported_stop_on_idle_is_unknown_with_pane_tail(world, tmp_path, capsys):
+    io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]
+    tr = tmp_path / "w1.jsonl"; rec(tr, user("task"), assistant("Verify runs in the background; waiting for it."), HOOK, assistant(LEFTOVERS))
+    stop_at(world, tr, sent + 10, last="Verify runs in the background; waiting for it.")
+    world.fh.screen = "Status: DONE (an older turn)\n⏺ Waiting for the verify run\n"; world.fh.states = [{"sl-proj-w1": "idle"}]
+    out = io.wait(world.sd, ["W1"], 5000)
+    assert [(r["status"], r["source"]) for r in out] == [("UNKNOWN", "transcript")]
+    md = (world.sd / "fleet" / "reports" / "T3.md").read_text()
+    assert md.startswith("UNKNOWN (turn ended without a report)") and LEFTOVERS in md and "Waiting for the verify run" in md
+    assert json.loads((world.sd / "fleet" / "reports" / "T3.json").read_text())["status"] == "UNKNOWN"
+    o = capsys.readouterr().out; assert "W1 T3 UNKNOWN findings=0" in o and "(turn ended without a report)" in o
+    assert ("read_screen", "sl-proj-w1") in world.fh.calls
+
+def test_wait_reads_metrics_once_per_poll(world, monkeypatch):
+    io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); io.send(world.sd, world.plan, "W2", ["T4"], "/sl/sl", "/sl")
+    world.fh.states = [{"sl-proj-w1": "working", "sl-proj-w2": "working"}]
+    calls, real = [], io._stops
+    monkeypatch.setattr(io, "_stops", lambda sd: calls.append(1) or real(sd))
+    assert io.wait(world.sd, ["W1", "W2"], 5000) == []
+    polls = sum(1 for c in world.fh.calls if c == ("agent_states",))
+    assert polls >= 2 and len(calls) == polls
+
+def test_latest_stop_takes_a_preread_list(tmp_path):
+    stops = [{"ev": "stop", "t": 5, "agent_id": "W1", "transcript": "a"}, {"ev": "stop", "t": 9, "agent_id": "W1", "transcript": "b"}, {"ev": "stop", "t": 7, "agent_id": "W2"}]
+    assert io.latest_stop(tmp_path, "W1", 6, stops)["transcript"] == "b" and io.latest_stop(tmp_path, "W1", 10, stops) is None
+    (tmp_path / "metrics.jsonl").write_text("".join(json.dumps(s) + "\n" for s in stops) + '{"ev": "turn", "t": 8}\nnot json\n{"ev": "stop", "t": "x", "agent_id": "W1"}\n')
+    assert io._stops(tmp_path) == stops and io.latest_stop(tmp_path, "W2", 0)["t"] == 7
+
+
+# --- #241: the verify line follows the Tests field and the code files in Owns; #237 case 3: text sends carry the report contract
+import fleet_report  # noqa: E402
+
+def test_build_task_verifies_with_a_full_run(tmp_path):
+    plan = make_plan(tmp_path, [{"id": "T2", "owns": "Sources/App/AppShell.swift", "tests": "build"}, {"id": "T4", "owns": "src/d.py, tests/test_d.py"}])
+    m = io.task_message(plan, ["T2"], "/sl/sl", "/sl")
+    assert "`/sl/sl run_tests --full --task T2 --background`" in m and "--fast" not in m and "in the foreground" in m
+    assert "run_tests --fast tests/test_d.py --task T2 --background" in io.task_message(plan, ["T2", "T4"], "/sl/sl", "/sl")
+
+def test_docs_only_task_gets_no_run_tests_line(tmp_path):
+    plan = make_plan(tmp_path, [{"id": "T2", "owns": "docs/fleet.md, README.md"}, {"id": "T3", "owns": "tests/scripts/fixtures/fleet/herdr, docs/x.rst"}])
+    for tid in ("T2", "T3"):
+        m = io.task_message(plan, [tid], "/sl/sl", "/sl")
+        assert "run_tests" not in m and "Verify: no test command (no code file in Owns)" in m
+
+def test_verify_wait_line_runs_in_the_foreground(world):
+    assert "then run the printed `wait:` line in the foreground" in io.task_message(world.plan, ["T3"], "/sl/sl", "/sl")
+
+def test_send_text_appends_the_report_contract(world):
+    prompts = lambda: [c for c in world.fh.calls if c[0] == "prompt"]
+    io.send_text(world.sd, "W1", "use the fake")
+    assert prompts()[-1][2].startswith("use the fake") and prompts()[-1][2].endswith(fleet_report.WORK)
+    for role, want in (("final-reviewer", "recheck\n\n" + fleet_report.REVIEW), ("layer", "recheck")):
+        data = json.loads((world.sd / "fleet.json").read_text()); data["workers"]["W2"]["role"] = role; (world.sd / "fleet.json").write_text(json.dumps(data))
+        io.send_text(world.sd, "W2", "recheck")
+        assert prompts()[-1][2] == want
+
+
+# --- #226: the worker's stop hook relabels its pane, whether or not a `fleet wait` runs
+from test_fleet_hooks import run_hook  # noqa: E402
+REPORTED = ["pane", "rename", "w6:p1", "W1 T3 reported, waiting for coordinator"]
+
+def test_stopped_labels_the_pane_reported(world):
+    io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]
+    assert io.stopped(world.sd, "W1", sent + 10) is True and world.fh.calls[-1] == ("call", REPORTED)
+
+def test_stopped_after_wait_uses_the_last_task(world):
+    data = json.loads((world.sd / "fleet.json").read_text()); data["workers"]["W1"].update({"state": "ready", "task": None, "last_task": "T3", "sent": 1500}); (world.sd / "fleet.json").write_text(json.dumps(data))
+    assert io.stopped(world.sd, "W1", 2000) is True and world.fh.calls[-1] == ("call", REPORTED)
+
+def test_stopped_skips_a_worker_sent_new_work_and_an_unknown_one(world):
+    io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]; n = len(world.fh.calls)
+    assert io.stopped(world.sd, "W1", sent - 1) is False and io.stopped(world.sd, "W9", sent) is False and len(world.fh.calls) == n
+
+def test_stopped_cli_is_exit_0(world):
+    assert io.main(["stopped", "W9", "--sd", str(world.sd), "--t", "5"]) == 0 and io.main(["stopped", "W1", "--sd", str(world.sd)]) == 0
+
+def hook_env(sd, log):
+    return {"SUPERLITE_FLEET_WORKER": "W1", "SUPERLITE_FLEET_AGENT": "superlite:implementer", "SUPERLITE_STATE_DIR": str(sd),
+            "SUPERLITE_HERDR_BIN": str(FIXTURES / "fleet" / "herdr"), "FAKE_HERDR_LOG": str(log)}
+
+def test_stop_hook_writes_the_record_then_renames_the_pane(world, tmp_path):
+    data = json.loads((world.sd / "fleet.json").read_text()); data["workers"]["W1"].update({"state": "busy", "task": "T3", "sent": 1000}); (world.sd / "fleet.json").write_text(json.dumps(data))
+    (world.sd / "stable.json").write_text("{}"); log = tmp_path / "herdr.log"
+    stdin = json.dumps({"session_id": "s1", "transcript_path": "/t/w1.jsonl", "last_assistant_message": "Status: DONE"})
+    r = run_hook("capture-worker-stop", stdin, hook_env(world.sd, log), world.proj)
+    assert r.returncode == 0 and json.loads((world.sd / "metrics.jsonl").read_text().splitlines()[-1])["agent_id"] == "W1"
+    assert REPORTED in [json.loads(line) for line in log.read_text().splitlines()]
+
+def test_stop_hook_without_a_fleet_calls_no_herdr(tmp_path):
+    sd = tmp_path / "proj" / ".superlite"; sd.mkdir(parents=True); (sd / "stable.json").write_text("{}"); log = tmp_path / "herdr.log"
+    r = run_hook("capture-worker-stop", json.dumps({"session_id": "s1", "transcript_path": "/t", "last_assistant_message": "x"}), hook_env(sd, log), sd.parent)
+    assert r.returncode == 0 and (sd / "metrics.jsonl").exists() and not log.exists()

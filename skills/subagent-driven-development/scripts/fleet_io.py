@@ -6,10 +6,12 @@
     fleet_io.py send WID --text TEXT [--plan P]
     fleet_io.py keys WID KEY [KEY ...]
     fleet_io.py wait [--timeout MS] [--any] [WID ...]
+    fleet_io.py stopped WID --sd DIR [--t MS]       (the worker stop hook: relabel the pane)
 
 `wait` prints one line per finished worker (`W1 T3 DONE findings=0 <report json>`; a layer worker: `W3 layer-headless
 GREEN exit=0 <log>` plus its last log line), `BLOCKED-UI` plus the screen for a blocked one, and `TIMEOUT W2 ...` for the
-rest. Its exit code is always 0. A report is written as `<id>.md` (the text) and `<id>.json` (`fleet_report.parse`);
+rest. A stop record ends the wait in any Herdr state when it holds a status; one without a status on a done or idle
+pane is UNKNOWN plus the last pane lines. Its exit code is always 0. A report is written as `<id>.md` (the text) and `<id>.json` (`fleet_report.parse`);
 a one-turn worker (fixer, reviewer, research, layer) is stopped once its status is final.
 """
 # Complexity notation:
@@ -48,6 +50,9 @@ def sleep(s):  # O(1)
     time.sleep(s)  # O(s)
 
 
+DOCS = (".md", ".markdown", ".mdx", ".rst", ".txt", ".adoc")  # files that are no code | O(1)
+
+
 def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + k*s)
     plan = Path(plan).resolve()  # O(1)
     pl = pt.Plan.load(str(plan))  # O(L)
@@ -57,15 +62,23 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
     owns = [o for t in mine for o in t.owns]  # O(k*o)
     dirs = lambda o: o.replace("\\", "/").lower().split("/")[:-1]  # O(depth)
     data = lambda o: any(d in ("fixtures", "fixture", "testdata") for d in dirs(o))  # fixture data is no test file | O(depth)
-    in_tests = [o for o in owns if not data(o) and any(d in ("tests", "test") for d in dirs(o))]  # a `tests/` or `test/` folder | O(o*depth)
-    tests = in_tests or [o for o in owns if not data(o) and testcmd.is_test_path(o)] or [o for o in owns if not data(o)] or owns  # O(o)
+    doc = lambda o: o.lower().endswith(DOCS)  # O(1)
+    code = [o for o in owns if not data(o) and not doc(o)]  # O(o)
+    in_tests = [o for o in code if any(d in ("tests", "test") for d in dirs(o))]  # a `tests/` or `test/` folder | O(o*depth)
+    tests = in_tests or [o for o in code if testcmd.is_test_path(o)] or code  # O(o)
+    build = all(t.features.get("tests") == "build" for t in mine)  # O(k*s)
     out = [f"# Task{'s' if len(tasks) > 1 else ''} {ids}", "", f"SUPERLITE={superlite_root}", f"PLAN={plan}", f"sl (type it literally in every command): {sl_path}"]  # O(1)
     if tier == "haiku":  # O(1)
         out += ["", "Your task text:", ""] + [taskmod.render(pl, t) for t in tasks]  # O(k*n*q*s)
     else:  # O(1)
         out += ["Your task text: " + " and ".join(f"`{sl_path} task {t} --plan {plan}`" for t in tasks)]  # O(k)
     out += [f"Owns: {', '.join(owns)}", f"Do not touch: {', '.join(others) if others else '(nothing else is owned)'}"]  # O(n*o)
-    out += [f"Verify: `{sl_path} run_tests --fast {' '.join(tests)} --task {tasks[0]} --background`, then the printed `wait:` line."]  # O(o)
+    if build:  # O(1)
+        out += [f"Verify: `{sl_path} run_tests --full --task {tasks[0]} --background` (Tests: build, a build check), then run the printed `wait:` line in the foreground."]  # O(1)
+    elif not code:  # O(1)
+        out += ["Verify: no test command (no code file in Owns); check that each owned file exists and says what the task asks."]  # O(1)
+    else:  # O(1)
+        out += [f"Verify: `{sl_path} run_tests --fast {' '.join(tests)} --task {tasks[0]} --background`, then run the printed `wait:` line in the foreground."]  # O(o)
     out += ["", f"Reply in at most 200 words, starting with `{STATUS_LINE}` (pick one), then files changed, the test command and its result line, and open questions."]  # O(1)
     return "\n".join(out) + "\n"  # O(out)
 
@@ -136,20 +149,28 @@ def report_text(transcript):  # the last assistant text of the latest turn that 
     return next((t for t in reversed(texts) if _has_status(t)), texts[-1] if texts else "")  # O(T)
 
 
-def latest_stop(sd, wid, after_ms):  # O(m)
-    found = None  # O(1)
+def _stops(sd):  # the stop records of metrics.jsonl in file order | O(m)
     try:  # O(1)
         lines = (Path(sd) / "metrics.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()  # O(m)
     except OSError:  # O(1)
-        return None  # O(1)
+        return []  # O(1)
+    out = []  # O(1)
     for line in lines:  # O(m) iterations
         try:  # O(1)
             e = json.loads(line)  # O(len line)
         except ValueError:  # O(1)
             continue  # O(1)
-        if isinstance(e, dict) and e.get("ev") == "stop" and e.get("agent_id") == wid and isinstance(e.get("t"), int) and e["t"] >= after_ms:  # O(1)
-            if found is None or e["t"] >= found["t"]:  # O(1)
-                found = e  # O(1)
+        if isinstance(e, dict) and e.get("ev") == "stop" and isinstance(e.get("t"), int):  # O(1)
+            out.append(e)  # O(1)
+    return out  # O(1)
+
+
+def latest_stop(sd, wid, after_ms, stops=None):  # the newest stop record of WID at or after AFTER_MS; STOPS is a pre-read _stops list | O(m)
+    stops = _stops(sd) if stops is None else stops  # O(m)
+    found = None  # O(1)
+    for e in stops:  # O(m) iterations
+        if e.get("agent_id") == wid and e["t"] >= after_ms and (found is None or e["t"] >= found["t"]):  # O(1)
+            found = e  # O(1)
     return found  # O(1)
 
 
@@ -182,13 +203,22 @@ def baseline_k(sd, wid):  # context after READY, cached in fleet.json; None is n
     return k  # O(1)
 
 
-def pane_label(sd, wid, text):  # rename the worker's Herdr pane; a Herdr failure or an unknown worker never matters, a wrong verb or a missing hc.call does | O(w)
+def pane_label(sd, wid, text, timeout_ms=None):  # rename the worker's Herdr pane; a Herdr failure or an unknown worker never matters, a wrong verb or a missing hc.call does | O(w)
     try:  # O(1)
         pane = fs.load(Path(sd))["workers"][wid]["pane_id"]  # O(w)
-        hc.call(["pane", "rename", pane, text])  # O(len text)
+        args = ["pane", "rename", pane, text]  # O(len text)
+        hc.call(args) if timeout_ms is None else hc.call(args, timeout_ms=timeout_ms)  # a caller's default timeout stays hc's own | O(len text)
         return True  # O(1)
     except (hc.HerdrError, KeyError):  # O(1)
         return False  # O(1)
+
+
+def stopped(sd, wid, t_ms):  # the stop hook: label the pane reported unless the worker was sent new work after the stop | O(w)
+    w = fs.load(Path(sd))["workers"].get(wid)  # O(w)
+    if w is None or int(w.get("sent") or 0) > t_ms:  # O(1)
+        return False  # O(1)
+    label = w.get("task") or w.get("last_task") or wid  # O(1)
+    return pane_label(sd, wid, f"{wid} {label} reported, waiting for coordinator", 3000)  # O(w)
 
 
 def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
@@ -247,7 +277,9 @@ def send_text(sd, wid, text):  # O(w + len text)
     sd = Path(sd)  # O(1)
     name = fs.worker_name(sd, wid)  # KeyError for an unknown worker | O(w)
     sent = now_ms()  # O(1)
-    hc.prompt(name, text, ["working"], 15000)  # O(len text)
+    role = fs.load(sd)["workers"].get(wid, {}).get("role") or "implementer"  # O(w)
+    contract = "" if role == "layer" else (fleet_report.REVIEW if role == "final-reviewer" else fleet_report.WORK)  # O(1)
+    hc.prompt(name, f"{text}\n\n{contract}" if contract else text, ["working"], 15000)  # O(len text)
     task = None  # O(1)
     with fs.locked(sd):  # O(1) plus wait
         data = fs.load(sd)  # O(w)
@@ -281,21 +313,28 @@ def _stop_worker(sd, wid):  # O(w) plus herdr calls
         pass  # O(1)
 
 
-def _finish(sd, wid, w, text, source):  # O(len + w)
+def _finish(sd, wid, w, text, source, tail=None):  # TAIL: the last pane lines of a turn that ended without a report | O(len + w)
     label = w.get("task") or wid  # O(1)
     rid = label.split(",")[0]  # O(1)
     rdir = Path(sd) / "fleet" / "reports"  # O(1)
     mp, jp = rdir / f"{rid}.md", rdir / f"{rid}.json"  # O(1)
-    _write(mp, text)  # O(len)
+    _write(mp, text if tail is None else "UNKNOWN (turn ended without a report)\n\n" + text + "\n\nLast pane lines:\n" + tail)  # O(len)
     rep = fleet_report.parse(text, rid, allow_json=source == "transcript")  # a screen holds no trustworthy json block | O(len)
     _write(jp, json.dumps({**rep, "id": wid, "label": label, "role": w.get("role") or "implementer", "source": source, "report": str(mp)}, indent=2) + "\n")  # O(len)
     n = len(rep["findings"])  # O(1)
-    print(f"{wid} {label} {rep['status']} findings={n} {jp}" + (" (screen)" if source == "screen" else ""))  # O(1)
+    print(f"{wid} {label} {rep['status']} findings={n} {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else ""))  # O(1)
     _ready(sd, wid, label)  # O(w)
     pane_label(sd, wid, f"{wid} {label} reported, waiting for coordinator")  # before the worker may be stopped | O(w)
     if w.get("one_turn") and rep["status"] in FINAL:  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker | O(1)
         _stop_worker(sd, wid)  # O(w)
     return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n}  # O(1)
+
+
+def _pane_tail(sd, wid, w):  # the last pane lines, or the reason there are none | O(s)
+    try:  # O(1)
+        return hc.read_screen(fs.name_of(sd, wid, w), 20, "recent")  # O(s)
+    except hc.HerdrError as e:  # O(1)
+        return f"(no screen: {e})"  # O(1)
 
 
 def _finish_layer(sd, wid, w, r):  # a finished layer worker: its result as json and two lines, then the worker is stopped | O(w)
@@ -328,6 +367,7 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
     workers = fs.load(sd)["workers"]  # O(w)
     pending = list(ids) if ids else [k for k, v in workers.items() if v.get("state") == "busy"]  # O(w)
     changed = {}  # wid -> ms the state first read done or idle | O(1)
+    seen = {}  # wid -> (stop t, report text), so a transcript is read once per stop record | O(1)
     results = []  # O(1)
     start = clock()  # O(1)
     while pending:  # O(timeout/poll) iterations
@@ -336,6 +376,7 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
         except hc.HerdrError:  # O(1)
             states = {}  # O(1)
         now = clock()  # O(1)
+        stops = _stops(sd)  # one metrics read per poll | O(m)
         for wid in list(pending):  # O(w) iterations
             w = fs.load(sd)["workers"].get(wid, {})  # O(w)
             if w.get("role") == "layer":  # a shell pane: its exit file tells, herdr has no agent state for it | O(1)
@@ -345,17 +386,21 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
                     pending.remove(wid)  # O(w)
                 continue  # O(1)
             st = states.get(fs.name_of(sd, wid, w))  # herdr lists agents by name, not by worker id | O(1)
-            if st == "blocked":  # O(1)
+            rec = latest_stop(sd, wid, int(w.get("sent") or 0), stops)  # O(m)
+            if rec is not None and seen.get(wid, (None,))[0] != rec["t"]:  # read each stop record's transcript once | O(1)
+                text = report_text(rec["transcript"]) if rec.get("transcript") else ""  # O(T)
+                seen[wid] = (rec["t"], text or rec.get("last", ""))  # O(1)
+            text = seen[wid][1] if rec is not None else ""  # O(1)
+            reported = rec is not None and fleet_report.parse(text, (w.get("task") or wid).split(",")[0])["status"] != "UNKNOWN"  # O(len)
+            if rec is not None and (reported or st in ("done", "idle")):  # a stop record ends the wait in any herdr state once it holds a status | O(1)
+                results.append(_finish(sd, wid, w, text, "transcript", None if reported else _pane_tail(sd, wid, w)))  # O(len + s)
+                pending.remove(wid)  # O(w)
+            elif st == "blocked":  # O(1)
                 results.append(_blocked(sd, wid, w))  # O(s + w)
                 pending.remove(wid)  # O(w)
             elif st in ("done", "idle"):  # O(1)
                 changed.setdefault(wid, now)  # O(1)
-                rec = latest_stop(sd, wid, int(w.get("sent") or 0))  # O(m)
-                if rec is not None:  # O(1)
-                    text = report_text(rec["transcript"]) if rec.get("transcript") else ""  # O(T)
-                    results.append(_finish(sd, wid, w, text or rec.get("last", ""), "transcript"))  # O(len)
-                    pending.remove(wid)  # O(w)
-                elif now - changed[wid] >= SETTLE_MS:  # O(1)
+                if now - changed[wid] >= SETTLE_MS:  # O(1)
                     try:  # O(1)
                         text = hc.read_screen(fs.name_of(sd, wid, w), 80, "recent")  # O(s)
                     except hc.HerdrError as e:  # O(1)
@@ -392,6 +437,10 @@ def main(argv=None):  # O(wait)
     kp.add_argument("wid")  # O(1)
     kp.add_argument("keys", nargs="+")  # O(1)
     kp.add_argument("--plan")  # O(1)
+    stp = sub.add_parser("stopped")  # O(1)
+    stp.add_argument("wid")  # O(1)
+    stp.add_argument("--sd", required=True)  # O(1)
+    stp.add_argument("--t", type=int)  # O(1)
     wp = sub.add_parser("wait")  # O(1)
     wp.add_argument("--timeout", type=int, default=540000)  # O(1)
     wp.add_argument("--poll", type=float, default=2.0)  # O(1)
@@ -399,6 +448,12 @@ def main(argv=None):  # O(wait)
     wp.add_argument("--any", action="store_true")  # O(1)
     wp.add_argument("ids", nargs="*")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    if a.cmd == "stopped":  # the hook calls this: it never fails | O(w)
+        try:  # O(1)
+            stopped(a.sd, a.wid, a.t if a.t is not None else now_ms())  # O(w)
+        except Exception:  # O(1)
+            pass  # O(1)
+        return 0  # O(1)
     sd = state.resolve(a.plan) if getattr(a, "plan", None) else state.resolve()  # O(d)
     try:  # O(1)
         if a.cmd == "keys":  # O(1)

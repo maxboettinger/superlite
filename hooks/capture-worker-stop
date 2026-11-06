@@ -2,7 +2,7 @@
 # Stop hook for fleet workers: when SUPERLITE_FLEET_WORKER is set, append one stop record to <state dir>/metrics.jsonl:
 #   {"ev":"stop","t":<epoch ms>,"agent_id":<worker id>,"type":"fleet:<agent>","transcript":<path>,"last":<max 160 chars>}
 # Writes nothing outside a worker or when stop_hook_active is true.
-# Bash builtins only. Never blocks: always exits 0.
+# Bash builtins only, plus one `sl fleet_io stopped` call (pane label) when the run has a fleet.json. Never blocks: always exits 0.
 
 [ -n "${SUPERLITE_FLEET_WORKER:-}" ] || exit 0
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
@@ -48,4 +48,6 @@ now="${EPOCHREALTIME//[.,]/}"; now="${now%???}"   # epoch ms
 [[ $now =~ ^[0-9]{13,}$ ]] || now="$(date +%s)000"
 printf '{"ev":"stop","t":%s,"agent_id":"%s","type":"%s","transcript":"%s","last":"%s"}\n' \
   "$now" "$id" "$type" "$tr" "$last" >> "$sd/metrics.jsonl" 2>/dev/null
+# #226: the pane shows "reported" as soon as the turn ends, even while no `fleet wait` runs; only for a run with a fleet.
+if [ -f "$sd/fleet.json" ]; then bash "${BASH_SOURCE[0]%/*}/../skills/subagent-driven-development/scripts/sl" fleet_io stopped "$SUPERLITE_FLEET_WORKER" --sd "$sd" --t "$now" >/dev/null 2>&1; fi
 exit 0
