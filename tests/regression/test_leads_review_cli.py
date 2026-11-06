@@ -44,6 +44,8 @@ def test_merge_reads_notes_before_maxapp_removes_the_worktree(sh, capsys, monkey
     seen = {}
     monkeypatch.setitem(sys.modules, "backlog_brief", type("M", (), {"summary": staticmethod(lambda b, n: seen.setdefault("n", n) or "x")}))
     def run(cmd, cwd, timeout=None):
+        if cmd[:2] != ["maxapp", "ship"]:
+            return 0, "CLOSED"
         (sh.wt / ".superlite" / "notes.md").unlink()
         return 0, "merged #7"
     monkeypatch.setattr(bsh, "_run", run)

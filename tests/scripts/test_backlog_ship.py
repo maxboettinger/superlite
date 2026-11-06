@@ -82,12 +82,41 @@ def test_bump(sh, capsys):
 def test_merge_records_the_pr_writes_the_summary_and_releases(sh, capsys):
     locked(sh, capsys); bs.update(bs.path(sh.root), lambda d: bs.batch(d, "B1").update({"version": "1.5.8"}))
     (sh.wt / ".superlite").mkdir(); (sh.wt / ".superlite" / "notes.md").write_text("Ruling: x\n")
+    body = sh.wt / "b.md"; body.write_text("Batch B1.\n")
     sh.replies = {"maxapp ship": (0, "pr https://github.com/o/r/pull/201\nmerged #201 as abc\nnext: maxapp ship -C /wt (from outside the worktree)\n")}
-    s = sh.sd / "backlog" / "B1.md"
-    assert ship(capsys, "B1", "merge", "--title", "B1: leads", "--body-file", "/b.md") == (0, f"B1 shipped PR #201 1.5.8 summary={s}\n")
-    assert ["maxapp", "ship", "-C", str(sh.wt), "--timeout", "8", "--title", "B1: leads", "--body-file", "/b.md"] in sh.calls
-    assert s.read_text().startswith("B1 shipped: #5") and (b1(sh)["pr"], b1(sh)["merged"], b1(sh)["state"]) == (201, True, "running")
+    s, pb = sh.sd / "backlog" / "B1.md", sh.sd / "backlog" / "B1.pr-body.md"
+    assert ship(capsys, "B1", "merge", "--title", "B1: leads", "--body-file", str(body)) == (0, f"B1 shipped PR #201 1.5.8 summary={s}\n")
+    assert ["maxapp", "ship", "-C", str(sh.wt), "--timeout", "8", "--title", "B1: leads", "--body-file", str(pb)] in sh.calls
+    assert pb.read_text() == "Batch B1.\n\nCloses #5\n" and ["gh", "issue", "view", "5", "-R", "o/r", "--json", "state", "-q", ".state"] in sh.calls
+    assert s.read_text().startswith("B1 shipped: #5") and (b1(sh)["pr"], b1(sh)["merged"], b1(sh)["state"], b1(sh)["open_issues"]) == (201, True, "running", [])
     assert ship_lock.holder(sh.lock) is None
+
+def test_with_closes_adds_one_keyword_line_per_missing_issue():
+    assert bsh.with_closes("Fixes #1, #2\n", [1, 2]) == "Fixes #1, #2\n\nCloses #2\n"
+    assert bsh.with_closes("", [5, 6]) == "Closes #5\nCloses #6\n"
+    assert bsh.with_closes("closes: #5, Resolved #6", [5, 6]) == "closes: #5, Resolved #6"
+    assert bsh.with_closes("Closes #20 and fixes#2", [2]) == "Closes #20 and fixes#2\n\nCloses #2\n"
+
+def test_merge_uses_the_pr_body_file_and_reports_issues_left_open(sh, capsys):
+    locked(sh, capsys); bs.update(bs.path(sh.root), lambda d: bs.batch(d, "B1").update({"issues": [5, 6]}))
+    (sh.wt / ".superlite").mkdir(); (sh.wt / ".superlite" / "pr-body.md").write_text("Fixes #5, #6\n")
+    sh.replies = {"maxapp ship": (0, "merged #201 as abc\n"), "gh issue view 6": (0, "OPEN\n")}
+    assert ship(capsys, "B1", "merge") == (0, f"B1 shipped PR #201 - summary={sh.sd / 'backlog' / 'B1.md'}\nOPEN #6\n")
+    assert (sh.sd / "backlog" / "B1.pr-body.md").read_text() == "Fixes #5, #6\n\nCloses #6\n"
+    assert [c[3] for c in sh.calls if c[:3] == ["gh", "issue", "view"]] == ["5", "6", "6"]
+    assert (b1(sh)["open_issues"], b1(sh)["merged"]) == ([6], True)
+
+def test_merge_counts_a_failed_issue_check_as_open(sh, capsys):
+    locked(sh, capsys); sh.replies = {"maxapp ship": (0, "merged #201\n"), "gh issue view": (1, "HTTP 502")}
+    assert ship(capsys, "B1", "merge")[1].endswith("\nOPEN #5\n") and b1(sh)["open_issues"] == [5]
+
+def test_merge_refuses_an_unreadable_body_file(sh, capsys):
+    locked(sh, capsys); f = sh.wt / "nope.md"
+    assert ship(capsys, "B1", "merge", "--body-file", str(f)) == (2, f"refused: cannot read {f}\n")
+    assert not any(c[:2] == ["maxapp", "ship"] for c in sh.calls)
+
+def test_ship_accepts_and_ignores_plan(sh, capsys):
+    assert ship(capsys, "B1", "release", "--plan", ".superlite") == (0, "B1 lock not held\n")
 
 def test_merge_timeouts_red_checks_and_release(sh, capsys):
     locked(sh, capsys); sh.replies = {"maxapp ship": (3, "check tests failed\nsee https://x\n")}
@@ -100,3 +129,14 @@ def test_merge_timeouts_red_checks_and_release(sh, capsys):
     bs.update(bs.path(sh.root), lambda d: bs.batch(d, "B1").update({"state": "running"})); locked(sh, capsys)
     assert ship(capsys, "B1", "release", "--park", "conflict in a.py") == (0, "B1 lock released, parked\n")
     assert ship_lock.holder(sh.lock) is None and (b1(sh)["state"], b1(sh)["reason"]) == ("parked", "conflict in a.py")
+
+
+def test_merge_refuses_a_body_file_that_is_not_utf8_and_keeps_utf8_intact(sh, capsys):
+    locked(sh, capsys); f = sh.wt / "bad.md"; f.write_bytes(b"\xff\xfe bad")
+    assert ship(capsys, "B1", "merge", "--body-file", str(f)) == (2, f"refused: cannot read {f}\n")
+    assert not any(c[:2] == ["maxapp", "ship"] for c in sh.calls)
+    (sh.wt / ".superlite").mkdir(); pb = sh.wt / ".superlite" / "pr-body.md"; pb.write_bytes(b"\xff")
+    assert ship(capsys, "B1", "merge")[0] == 2 and not any(c[:2] == ["maxapp", "ship"] for c in sh.calls)
+    pb.write_text("Umlaut ä ✓\n", encoding="utf-8"); sh.replies = {"maxapp ship": (0, "merged #201\n")}
+    assert ship(capsys, "B1", "merge")[0] == 0
+    assert (sh.sd / "backlog" / "B1.pr-body.md").read_text(encoding="utf-8").startswith("Umlaut ä ✓")
