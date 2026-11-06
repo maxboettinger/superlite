@@ -42,9 +42,9 @@ def test_normal_run_with_saved_projection_and_tests(tmp_path):
     assert c["concurrency"]["peak"] >= 1 and c["cost_split"]["total_usd"] >= c["cost_split"]["agents_usd"]
     txt = go(tmp_path, p)  # the default is the summary
     assert "tests 9 passed, 1 failed" in txt and "takeaway: " in txt and "model mix:" not in txt and len(txt.splitlines()) <= 10
-    assert txt.rstrip().splitlines()[-1] == "Full report: " + (p.with_name(p.stem + ".report.md")).as_posix()
+    assert txt.rstrip().splitlines()[-1] == "Full report: " + (p.with_name(p.stem + ".build-report.md")).as_posix()
     full = go(tmp_path, p, "--full")
-    assert "Projected" in full and "model mix:" in full and full.splitlines() == (sl / "report.md").read_text(encoding="utf-8").splitlines() == p.with_name(p.stem + ".report.md").read_text(encoding="utf-8").splitlines()
+    assert "Projected" in full and "model mix:" in full and full.splitlines() == (sl / "report.md").read_text(encoding="utf-8").splitlines() == p.with_name(p.stem + ".build-report.md").read_text(encoding="utf-8").splitlines()
     assert json.loads((sl / "report.json").read_text(encoding="utf-8"))["quality"]["tests"]["failed"] == 1
 
 
@@ -92,13 +92,13 @@ def test_two_builds_in_one_project_keep_two_reports_and_list_and_show_them(tmp_p
     go(tmp_path, p1)
     p2 = mech_plan(tmp_path, 1, name="second.md")
     go(tmp_path, p2)  # the same .superlite, a second plan: the latest copy changes, the first build's pair stays
-    assert p1.with_name("plan.report.md").is_file() and p2.with_name("second.report.md").is_file()
-    assert p1.with_name("plan.report.json").is_file() and p2.with_name("second.report.json").is_file()
-    assert (tmp_path / ".superlite" / "report.md").read_bytes() == p2.with_name("second.report.md").read_bytes()
+    assert p1.with_name("plan.build-report.md").is_file() and p2.with_name("second.build-report.md").is_file()
+    assert p1.with_name("plan.build-report.json").is_file() and p2.with_name("second.build-report.json").is_file()
+    assert (tmp_path / ".superlite" / "report.md").read_bytes() == p2.with_name("second.build-report.md").read_bytes()
     lst = run(REPORT, "--list", "--plans", tmp_path, cwd=tmp_path).out
     assert "plan  " in lst and "second  " in lst
     assert len(lst.strip().splitlines()) == 2 and "time " in lst and "cost " in lst
     shown = run(REPORT, "--show", "plan", "--plans", tmp_path, cwd=tmp_path).out
-    assert shown.startswith("build report (projected -> actual)") and "plan.report.md" in shown
+    assert shown.startswith("build report (projected -> actual)") and "plan.build-report.md" in shown
     assert "model mix:" in run(REPORT, "--show", "plan.md", "--full", "--plans", tmp_path, cwd=tmp_path).out
     assert "no stored report for nope" in run(REPORT, "--show", "nope", "--plans", tmp_path, cwd=tmp_path).out

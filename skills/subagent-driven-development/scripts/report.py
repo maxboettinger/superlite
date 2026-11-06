@@ -10,7 +10,7 @@ projection is recomputed from the plan as it is now, and the report says so. Pro
 critical path of the task graph under the predictor's estimates (plan_tools.schedule_report: parse_taskgraph +
 effective_times, unlimited-lane CPM build minutes); the closing test tail is not counted, as actual wall-clock
 runs from the first agent launch to the last finished task or fix. Anything with no projection prints `n/a`.
-Prints a short summary (default) or the full text (--full); always writes the full report and json next to the plan (`<plan>.report.md`/`.json`, one pair per build) and a copy of the latest in <dir>. Stdlib only.
+Prints a short summary (default) or the full text (--full); always writes the full report and json next to the plan (`<plan>.build-report.md`/`.json`, one pair per build; not `<plan>.report.md`, which may belong to a plan task) and a copy of the latest in <dir>. Stdlib only.
 """
 # Complexity notation:
 #   M = metrics lines, B = bytes of agent transcripts, n = tasks, e = dependency edges, I = incident lines
@@ -239,7 +239,14 @@ def summary(c, path) -> str:  # O(n)
 
 
 def stored_paths(plan_path) -> tuple[Path, Path]:  # O(1)
-    """`<plan dir>/<plan basename>.report.md` and `.report.json`: one pair per build, next to the archived plan."""
+    """`<plan dir>/<plan basename>.build-report.md` and `.build-report.json`: one pair per build, next to the archived plan.
+    Not `<plan>.report.md`: a plan task may own that name."""
+    p = Path(plan_path)  # O(1)
+    return p.with_name(p.stem + ".build-report.md"), p.with_name(p.stem + ".build-report.json")  # O(1)
+
+
+def legacy_paths(plan_path) -> tuple[Path, Path]:  # O(1)
+    """The pair older builds wrote: `<plan basename>.report.md` and `.report.json`."""
     p = Path(plan_path)  # O(1)
     return p.with_name(p.stem + ".report.md"), p.with_name(p.stem + ".report.json")  # O(1)
 
@@ -259,13 +266,17 @@ def write_report(plan_path, sl_dir) -> tuple[dict, Path]:  # O(M + B + n*(n + e)
 
 def list_reports(plans_dir) -> str:  # O(R log R)
     """Stored reports under plans_dir, newest first: plan name, date, wall-clock and cost deltas."""
-    found = sorted(Path(plans_dir).glob("*.report.json"), key=lambda f: -f.stat().st_mtime)  # O(R log R)
+    seen: dict[str, Path] = {}  # name -> json, the new name wins | O(1)
+    for pat, suf in (("*.build-report.json", ".build-report.json"), ("*.report.json", ".report.json")):  # O(1) iterations
+        for f in Path(plans_dir).glob(pat):  # O(R)
+            seen.setdefault(f.name[:-len(suf)], f)  # O(1)
+    found = sorted(seen.items(), key=lambda kv: -kv[1].stat().st_mtime)  # O(R log R)
     out = []  # O(1)
-    for f in found:  # O(R)
+    for name, f in found:  # O(R)
         c = _read_json(f) or {}  # O(file)
         h = c.get("headline") or {}  # O(1)
         w, k = (h.get(x) or {} for x in ("wall_min", "cost_usd_agents"))  # O(1)
-        out.append(f"{f.name[:-len('.report.json')]}  {datetime.fromtimestamp(f.stat().st_mtime):%Y-%m-%d}  "
+        out.append(f"{name}  {datetime.fromtimestamp(f.stat().st_mtime):%Y-%m-%d}  "
                    f"time {_delta(delta(w.get('projected'), w.get('actual')), '', '+.1f')}  "
                    f"cost {_delta(delta(k.get('projected'), k.get('actual')), '', '+.2f')}")  # O(1)
     return "\n".join(out) + "\n" if out else f"no stored reports in {plans_dir}\n"  # O(R)
@@ -274,9 +285,12 @@ def list_reports(plans_dir) -> str:  # O(R log R)
 def show_report(name, plans_dir, full=False) -> str:  # O(file)
     """A stored build's summary (or its full file); NAME is a plan name or basename, with or without extension."""
     stem = Path(name).name
-    for suf in (".md", ".report", ".json"):  # O(1)
+    for suf in (".md", ".json", ".build-report", ".report"):  # O(1)
         stem = stem[:-len(suf)] if stem.endswith(suf) else stem  # O(1)
-    md, js = stored_paths(Path(plans_dir) / (stem + ".md"))  # O(1)
+    for paths in (stored_paths, legacy_paths):  # the new pair first | O(1) iterations
+        md, js = paths(Path(plans_dir) / (stem + ".md"))  # O(1)
+        if md.is_file() and js.is_file():  # O(1)
+            break  # O(1)
     if not md.is_file() or not js.is_file():  # O(1)
         return f"report: no stored report for {stem} in {plans_dir}" + chr(10)  # O(1)
     return md.read_bytes().decode("utf-8") if full else summary(_read_json(js), md.as_posix())  # O(file)
