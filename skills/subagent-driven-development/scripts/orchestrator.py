@@ -17,6 +17,7 @@ releases the session's binding, so the coordinator guard stops. In human mode `p
 `prune` stay allowed so the plan can be shown whole with its Gantt. In AI mode nothing is gated. With no file nothing is
 gated (existing runs behave as before). `--ruling` on `set ai` also appends a `Ruling:` line to `.superlite/progress.md`
 (for a headless run where no human can answer).
+Without --plan, `end` and `set` refuse (exit 2, one line naming both folders) when the cwd is in a linked worktree and the folder found lies outside it, so one worktree never ends or rewrites another worktree's run (#199).
 In human mode `approve` needs `--review PATH` (the plain-language review plan; refused without it, exit 2; a missing file exit 2)
 and evidence of a real human reply: `.superlite/human-replies.jsonl` (written only by the UserPromptSubmit hook, one
 {"t": epoch ms, "approves": bool, "text": ...} per human prompt while unapproved) must hold a line with approves true whose t is
@@ -29,6 +30,7 @@ require(plan_or_dir, tool) -> exit code (prints the message), read_state, summar
 import argparse  # O(1)
 import hashlib  # O(1)
 import json  # O(1)
+import os  # O(1)
 import sys  # O(1)
 import time  # O(1)
 from datetime import datetime  # O(1)
@@ -154,6 +156,28 @@ def end(sd: Path) -> str:  # O(files)
     return f"orchestrator: run ended; {len(present)} files moved to {dest}"  # O(1)
 
 
+def foreign_worktree(sd):  # O(d)
+    """The cwd's worktree top when the cwd is in a linked worktree (`.git` is a file) and sd lies outside it, else None.
+    The session's private folder always passes; paths compare logical, then resolved (symlinks)."""
+    top = state.git_root(".")  # O(d)
+    if top is None or not (top / ".git").is_file():  # O(1)
+        return None  # O(1)
+    try:  # a submodule or separate-git-dir checkout also has a `.git` file; only `<common>/worktrees/<name>` is a linked worktree | O(1)
+        gd = (top / ".git").read_text(encoding="utf-8", errors="replace").strip().partition(":")[2].strip()  # O(1)
+    except OSError:  # O(1)
+        return None  # O(1)
+    if gd.replace(chr(92), "/").rstrip("/").rsplit("/", 2)[-2:-1] != ["worktrees"]:  # O(1)
+        return None  # O(1)
+    s = state._abs(sd)  # O(d)
+    sid = state.session_id()  # O(1)
+    if sid and s == state._abs(state.private_dir(sid)):  # O(d)
+        return None  # O(1)
+    for c, p in ((s, top), (s.resolve(), top.resolve())):  # O(1) iterations (2)
+        if c == p or p in c.parents:  # O(d)
+            return None  # O(1)
+    return top  # O(1)
+
+
 def main(argv=None):  # O(1)
     ap = argparse.ArgumentParser(description=__doc__.split(chr(10))[0])  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
@@ -176,6 +200,14 @@ def main(argv=None):  # O(1)
     sd = state.plan_dir(review) if a.cmd == "approve" and review and not a.plan else sl_dir(a.plan)  # O(d)
     if a.cmd == "bind" and not a.plan:  # bind without a plan targets the launch directory, never the private folder | O(d)
         sd = state.launch_dir() / ".superlite"  # O(d)
+    if a.cmd in ("end", "set") and not a.plan:  # without --plan never act on another worktree's run (#199) | O(d)
+        top = foreign_worktree(sd)  # O(d)
+        if top:  # O(1)
+            how = "SUPERLITE_STATE_DIR" if os.environ.get("SUPERLITE_STATE_DIR") else "session binding"  # O(1)
+            print(f"orchestrator: cwd is in worktree {top}, but the run folder found is {state._abs(sd)} ({how}); "
+                  f"{'not ended' if a.cmd == 'end' else 'not set'}; pass --plan {top / '.superlite'} for this worktree's run, "
+                  f"or --plan {state._abs(sd)}", file=sys.stderr)  # O(d)
+            return 2  # O(1)
     if a.cmd == "end":  # O(1)
         if a.plan and not Path(a.plan).exists():  # a removed worktree's path would walk up to another checkout | O(1)
             print(f"orchestrator: plan not found: {a.plan}; end before removing the worktree", file=sys.stderr)  # O(1)
