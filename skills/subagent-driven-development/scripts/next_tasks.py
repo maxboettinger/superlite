@@ -265,8 +265,9 @@ def owns_match(path, owns):  # O(f * len)
     return False  # O(1)
 
 
-def wave0_waiting(sl_dir):  # O(ledger + brief) | stub owners held until T0 commits
-    """Task ids in briefs/wave0.json `wait` while its `id` (default T0) has no commit line and no skip ruling."""
+def wave0_waiting(sl_dir, committed=None):  # O(ledger + brief + c) | stub owners held until T0 commits
+    """Task ids in briefs/wave0.json `wait` while its `id` (default T0) has no commit line, no skip ruling
+    and is not in `committed` (the caller's own committed list)."""
     sl_dir = Path(sl_dir)  # O(1)
     try:  # O(1)
         data = json.loads((sl_dir / "briefs" / "wave0.json").read_text(encoding="utf-8"))  # O(brief)
@@ -276,6 +277,8 @@ def wave0_waiting(sl_dir):  # O(ledger + brief) | stub owners held until T0 comm
     if not isinstance(wait, list):  # O(1)
         return set()  # O(1)
     tid = data.get("id") if isinstance(data.get("id"), str) else "T0"  # O(1)
+    if tid in set(committed or ()):  # O(c)
+        return set()  # O(1)
     try:  # O(1)
         lines = (sl_dir / "progress.md").read_text(encoding="utf-8", errors="replace").splitlines()  # O(ledger)
     except OSError:  # O(1)
@@ -287,7 +290,7 @@ def wave0_waiting(sl_dir):  # O(ledger + brief) | stub owners held until T0 comm
     return {w for w in wait if isinstance(w, str)}  # O(wait)
 
 
-def stable_filter(plan):  # O(S) read, or None when the plan has no stable.json
+def stable_filter(plan, committed=None):  # O(S + c) read, or None when the plan has no stable.json
     """Stable task ids from .superlite/stable.json for this plan, or None if the file is absent
     or unreadable (then every non-draft task is offered, as before)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
@@ -296,9 +299,31 @@ def stable_filter(plan):  # O(S) read, or None when the plan has no stable.json
     if not f.is_file():  # O(1)
         return None  # O(1)
     try:  # O(1)
-        return set(json.loads(f.read_text(encoding="utf-8")).get("stable") or []) - wave0_waiting(f.parent)  # O(S)
+        return set(json.loads(f.read_text(encoding="utf-8")).get("stable") or []) - wave0_waiting(f.parent, committed)  # O(S + c)
     except (ValueError, AttributeError):  # O(1)
         return None  # O(1)
+
+
+_HOLD = re.compile(r"^\s*[-*+]?\s*Hold\s+([A-Z]{1,3}\d+[A-Za-z]?)\b\s*:\s*(.*?)\s*$")  # O(1)
+_RELEASE = re.compile(r"^\s*[-*+]?\s*Release\s+([A-Z]{1,3}\d+[A-Za-z]?)(?![A-Za-z0-9])")  # O(1)
+
+
+def held_tasks(ledger):  # O(ledger)
+    """{task id: reason} for tasks the ledger holds (`- Hold T5: why`) and has not released (`- Release T5`)."""
+    try:  # O(1)
+        lines = Path(ledger).read_text(encoding="utf-8", errors="replace").splitlines()  # O(ledger)
+    except OSError:  # O(1)
+        return {}  # O(1)
+    held = {}  # O(1)
+    for ln in lines:  # O(ledger lines) iterations
+        m = _HOLD.match(ln)  # O(len line)
+        if m:  # O(1)
+            held[m.group(1)] = m.group(2)  # O(1)
+            continue  # O(1)
+        m = _RELEASE.match(ln)  # O(len line)
+        if m:  # O(1)
+            held.pop(m.group(1), None)  # O(1)
+    return held  # O(1)
 
 
 def csv(value):  # O(len)
@@ -318,7 +343,7 @@ def draft_blocked(graph, status):  # O(n + e)
     return blocked  # O(1)
 
 
-def ready_tasks(graph, times, committed, running, cap, status=None, stable=None):  # O(n*(n + e) + R log R) worst case (draft closure); O(n + e + R log R) without drafts
+def ready_tasks(graph, times, committed, running, cap, status=None, stable=None, held=None):  # O(n*(n + e) + R log R) worst case (draft closure); O(n + e + R log R) without drafts
     free = cap - len(running)  # O(1)
     if free <= 0:  # O(1)
         return []  # O(1)
@@ -326,7 +351,8 @@ def ready_tasks(graph, times, committed, running, cap, status=None, stable=None)
     blocked = draft_blocked(graph, status)  # O(n + e) per round
     ready = [t for t, deps in graph.items()  # O(n + e)
              if t not in done and t not in busy and t not in blocked and all(d in done for d in deps)  # O(1)
-             and (stable is None or t in stable)]  # O(1) stable.json ANDed with the draft filter
+             and (stable is None or t in stable)  # O(1) stable.json ANDed with the draft filter
+             and not (held and t in held)]  # O(1) a held task waits for a human step
     order = {t: i for i, t in enumerate(graph)}  # O(n)
     ready.sort(key=lambda t: (-times.get(t, DEFAULT_TIME), order[t]))  # O(R log R)
     return ready[:free]  # O(cap)
@@ -344,7 +370,10 @@ def main(argv=None):  # O(L + n + e + R log R) + process spawn
     info = parse_plan(a.plan)  # O(L)
     times = {t: (info[t]["est_time"] if t in info and info[t]["est_time"] is not None  # O(n)
                  else DEFAULT_TIME) for t in graph}  # O(1)
-    for t in ready_tasks(graph, times, csv(a.committed), csv(a.running), a.cap, status, stable_filter(a.plan)):  # O(cap) iterations after O(n + e + R log R) ready_tasks
+    state = sibling("state")  # O(1)
+    held = held_tasks(state.plan_dir(a.plan) / "progress.md")  # O(ledger)
+    for t in ready_tasks(graph, times, csv(a.committed), csv(a.running), a.cap, status,  # O(cap) iterations after O(n + e + R log R) ready_tasks
+                         stable_filter(a.plan, csv(a.committed)), held):  # O(S + c)
         print(t)  # O(1)
     return 0  # O(1)
 
