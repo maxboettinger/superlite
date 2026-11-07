@@ -27,6 +27,7 @@ from pathlib import Path  # O(1)
 DEFAULT_OUT = ".superlite/prime.md"  # O(1)
 MINI_OUT = ".superlite/prime-haiku.md"  # O(1)
 DEFAULT_MAX_BYTES = 120_000  # O(1)
+FG = "- Run the verify command your task message names; start it with --background, then run its printed `wait:` line in the foreground (never as a background command) and end your turn only after that line reports."  # O(1)
 
 PREAMBLE = """\
 # superlite prime
@@ -38,6 +39,7 @@ Rules:
 - Build only what your task owns (its `Owns` files). Never edit other files.
 - Test first: write the failing test, run it, implement, run it again.
 - Run only fast, focused tests. Slow suites run later through run_tests.py.
+- Run the verify command your task message names; start it with --background, then run its printed `wait:` line in the foreground (never as a background command) and end your turn only after that line reports.
 - Code to the interface stubs and the plan's Consumes and Produces lines.
   Never change a signature without a coordinator ruling.
 - Log every unexpected failure, workaround or guess with incident.py add.
@@ -58,6 +60,7 @@ Rules:
 - Build only what your task owns (its `Owns` files). Never edit other files.
 - Test first: write the failing test, run it, implement, run it again.
 - Run only fast, focused tests. Slow suites run later through run_tests.py.
+- Run the verify command your task message names; start it with --background, then run its printed `wait:` line in the foreground (never as a background command) and end your turn only after that line reports.
 - Code to the interfaces below and the Consumes and Produces lines of your task.
   Never change a signature without a coordinator ruling.
 - Your task text is in your task message, generated from the current plan. To read a neighbour, run
@@ -81,6 +84,7 @@ are not in your context: your task message and this prime state everything you n
 Rules:
 - Build only what your task owns (its `Owns` files). Never edit other files.
 - Test first, run only the fast focused tests, code to the interfaces below. Never change a signature.
+- Run the verify command your task message names; start it with --background, then run its printed `wait:` line in the foreground (never as a background command) and end your turn only after that line reports.
 - Do not commit. Kill processes by PID only.
 - Reply READY after reading this prime, then wait for your task. Finish with DONE, DONE_WITH_CONCERNS,
   BLOCKED or NEEDS_CONTEXT in at most 200 words.
@@ -263,7 +267,7 @@ def build_mini(plan, tier):  # O(B + n*s)
     cons = wave0.constraint_lines(pl)  # O(B)
     nl = "\n"
     parts = [with_root(PREAMBLE_MINI, plan), "## Constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none)"),  # O(B)
-             "## Stub spec" + nl + nl + "```yaml" + nl + normalize(wave0.stub_spec(pl)) + nl + "```"]  # O(q*s)
+             "## Stub spec" + nl + nl + "```yaml" + nl + normalize(wave0.stub_spec(pl, pt.stable_root(plan))) + nl + "```"]  # O(q*s)
     lines = []  # O(1)
     for t in mine:  # O(n) iterations
         lines.append(f"### {t.id} {t.title}")  # O(1)

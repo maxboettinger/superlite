@@ -81,6 +81,7 @@ SURROGATE = re.compile("[\ud800-\udfff]")  # lone surrogates from argv cannot be
 TASK_ID = re.compile(r"\b[A-Z]{1,3}\d+[A-Za-z]?\b")  # O(1)
 
 IMPORT_DRIVER = r"""
+# a file inside a package imports by its dotted name from the package base
 import importlib, importlib.util, json, os, sys, traceback
 sys.dont_write_bytecode = True
 root = os.path.abspath(sys.argv[1])
@@ -102,10 +103,35 @@ for rel in files:
         parts = parts[1:]
     if parts and parts[-1] == "__init__":
         parts = parts[:-1]
+    base = os.path.dirname(os.path.abspath(path))
+    while (os.path.isfile(os.path.join(base, "__init__.py")) and base != os.path.abspath(root)
+           and base != os.path.dirname(base)):
+        base = os.path.dirname(base)
+    dotted = []
+    if base != os.path.dirname(os.path.abspath(path)):
+        dotted = os.path.relpath(path, base)[:-3].replace("\\", "/").split("/")
+        if dotted[-1] == "__init__":
+            dotted = dotted[:-1]
     try:
         if parts and all(p.isidentifier() for p in parts):
             importlib.import_module(".".join(parts))
+        elif dotted and all(p.isidentifier() for p in dotted):
+            top = dotted[0]
+            cached = sys.modules.get(top)
+            if cached is not None and not any(os.path.abspath(q) == os.path.join(base, top)
+                                              for q in getattr(cached, "__path__", [])):
+                # a same-named package from another base: forget it, this file's base wins
+                for k in [k for k in sys.modules if k == top or k.startswith(top + ".")]:
+                    del sys.modules[k]
+                if base in sys.path:
+                    sys.path.remove(base)
+                sys.path.insert(0, base)
+            elif base not in sys.path:
+                sys.path.append(base)
+            importlib.import_module(".".join(dotted))
         else:
+            if dotted and base not in sys.path:
+                sys.path.append(base)
             name = "_slcheck_" + "_".join(p.replace("-", "_") for p in parts)
             sys.path.append(os.path.dirname(path))
             spec = importlib.util.spec_from_file_location(name, path)
