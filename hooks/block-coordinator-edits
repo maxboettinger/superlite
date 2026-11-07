@@ -15,7 +15,9 @@
 #     jpeg, gif, svg, webp), any docs.md, .superlite/** and .git/info/exclude (a stray untracked file may also be removed with rm), in the project or a linked worktree in it. `sl orchestrator end` closes the run.
 #  4. Fleet on (.superlite/fleet.json says "on": true): an Agent call of a superlite role (implementer, implementer-haiku,
 #     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher) is denied with the
-#     `sl fleet spawn --role` hint, as the role is a fleet worker then. Other agents (Explore, general-purpose) fall through.
+#     `sl fleet spawn --role` hint, as the role is a fleet worker then. The message says the block repeats on every call (no retry);
+#     a researcher's message gives the research path (brief under <state folder>/briefs/, spawn, send, `fleet wait Wn`,
+#     report under <state folder>/fleet/reports/). Other agents (Explore, general-purpose) fall through.
 # The .superlite folder is the session's own (hooks/superlite-state.sh): its binding, else the launch
 # directory's unless another session owns that one.
 # Who judges what: the path of an Edit, Write or NotebookEdit call is judged here (project_code). A Bash or PowerShell
@@ -128,7 +130,12 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
       if [ -n "$frole" ]; then
         printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)","rule":"fleet","cwd":"%s"}\n' "$tool" "$REPLY" "$cwdv" \
           >> "$sd/incidents.jsonl" 2>/dev/null
-        printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). sl fleet off goes back to in-process agents." >&2
+        again="It is blocked on every call while fleet is on: do not retry it."
+        if [ "$frole" = research ]; then
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $sd/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $sd/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $sd/fleet/reports/<name>.md. PLAN is the plan file, or $sd before a plan exists. sl fleet off goes back to in-process agents." >&2
+        else
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). sl fleet off goes back to in-process agents." >&2
+        fi
         exit 2
       fi
     fi
