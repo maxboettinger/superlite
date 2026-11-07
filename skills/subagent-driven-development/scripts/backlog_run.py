@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Backlog runner (phase 3): start batch leads, wait for them, answer an escalated lead.
 
-    backlog_run.py start [B] [--cap 2] [--model opus]
+    backlog_run.py start [B ...] [--cap 2] [--model opus]
     backlog_run.py wait [--timeout 21600] [--poll 10]
     backlog_run.py answer B --file F        (F = {"answers": {question: answer}})
 
+`start` takes several ids: each refusal prints BLOCKED, the others start. A lead whose stop text holds no
+Status line is re-prompted once (`reprompted`), then parked.
 Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
 """
 # Complexity notation: b = batches, w = workers, m = lines of metrics.jsonl
 import argparse  # O(1)
 import json  # O(1)
+import re  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
 import os  # O(1)
@@ -22,6 +25,10 @@ import backlog_checks as bc  # noqa: E402 | O(1)
 import backlog_state as bs  # noqa: E402 | O(1)
 
 ACTIVE = ("running", "needs_decision")
+STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_DECISION|NEEDS_CONTEXT|BLOCKED)\b", re.I)
+REPROMPT = ("superlite: your last turn ended without a status line. Go on with the batch; end your turn only with "
+            "Status: DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED, or write .superlite/question.json and end with "
+            "Status: NEEDS_DECISION.")
 
 
 def _root() -> Path:
@@ -61,29 +68,39 @@ def _refuse(msg: str, code: int = 2) -> int:
     return code  # O(1)
 
 
-def _pick(data: dict, bid, cap: int):
-    """-> (ids, None) or (None, (message, exit code))."""
-    if not bid:  # O(1)
-        ids = bs.startable(data, cap)  # O(b log b)
-        return (ids, None) if ids else (None, ("", 0))  # O(1)
-    try:  # O(1)
-        b = bs.batch(data, bid)  # O(b)
-    except KeyError:  # O(1)
-        return None, (f"unknown batch {bid}", 2)  # O(1)
-    if b["state"] not in ("planned", "parked"):  # O(1)
-        return None, (f"{bid} is {b['state']}", 2)  # O(1)
-    for d in b.get("depends", []):  # O(depends * b)
-        if not any(x["id"] == d and x["state"] == "shipped" for x in data["batches"]):
-            return None, (f"{bid} waits for {d}", 2)  # O(1)
+def _pick(data: dict, bids: list, cap: int, live: dict) -> tuple:
+    """-> (ids to start, refusal messages); a passed id counts as active for the later ids."""
     active = [x for x in data["batches"] if x["state"] in ACTIVE]  # O(b)
-    for o in active:  # O(b * files)
-        if set(b.get("files", [])) & set(o.get("files", [])):
-            return None, (f"{bid} shares files with running {o['id']}", 2)  # O(1)
-    if _unanswered(b):  # O(q)
-        return None, (f"{bid} has open decisions (sl backlog decide --print)", 2)  # O(1)
-    if len(active) >= cap:  # O(1)
-        return None, (f"no free slot for {bid} (cap {cap})", 2)  # O(1)
-    return [bid], None  # O(1)
+    ids, msgs = [], []  # O(1)
+    for bid in (list(dict.fromkeys(bids)) if bids else bs.startable(data, cap)):  # O(ids * b * files)
+        try:  # O(1)
+            b = bs.batch(data, bid)  # O(b)
+        except KeyError:  # O(1)
+            msgs.append(f"unknown batch {bid}")  # O(1)
+            continue  # O(1)
+        if b["state"] not in ("planned", "parked"):  # O(1)
+            msgs.append(f"{bid} is {b['state']}")  # O(1)
+            continue  # O(1)
+        wait = next((d for d in b.get("depends", []) if not any(x["id"] == d and x["state"] == "shipped" for x in data["batches"])), None)  # O(depends * b)
+        if wait:  # O(1)
+            msgs.append(f"{bid} waits for {wait}")  # O(1)
+            continue  # O(1)
+        other = next((o for o in active if set(b.get("files", [])) & set(o.get("files", []))), None)  # O(b * files)
+        if other:  # O(1)
+            msgs.append(f"{bid} shares files with running {other['id']}")  # O(1)
+            continue  # O(1)
+        if _unanswered(b):  # O(q)
+            msgs.append(f"{bid} has open decisions (sl backlog decide --print)")  # O(1)
+            continue  # O(1)
+        if len(active) >= cap:  # O(1)
+            msgs.append(f"no free slot for {bid} (cap {cap})")  # O(1)
+            continue  # O(1)
+        if b.get("agent") and b["agent"] in live:  # O(1)
+            msgs.append(f"{bid} lead {b.get('lead', '')} is still running (sl backlog wait)")  # O(1)
+            continue  # O(1)
+        ids.append(bid)  # O(1)
+        active.append(b)  # O(1)
+    return ids, msgs  # O(ids)
 
 
 def cmd_start(a) -> int:
@@ -104,16 +121,13 @@ def cmd_start(a) -> int:
         live = fleet.hc.agent_states()  # O(w)
     except fleet.hc.HerdrError as e:  # O(1)
         return _refuse(f"Herdr not reachable ({e})", 3)  # O(1)
-    ids, err = _pick(data, a.batch, a.cap)  # O(b log b)
-    if err:  # O(1)
-        if err[1] == 0:  # O(1)
-            print("no startable batch")  # O(1)
-            return 0  # O(1)
-        return _refuse(err[0], err[1])  # O(1)
-    for bid in ids:  # O(ids)
-        x = bs.batch(data, bid)  # O(b)
-        if x.get("agent") and x["agent"] in live:  # O(1)
-            return _refuse(f"{bid} lead {x.get('lead', '')} is still running (sl backlog wait)")  # O(1)
+    ids, msgs = _pick(data, a.batch, a.cap, live)  # O(b log b)
+    for m in msgs:  # O(msgs)
+        _refuse(m)  # O(1)
+    if not ids and not msgs:  # O(1)
+        print("no startable batch")  # O(1)
+        return 0  # O(1)
+    code = 2 if msgs else 0  # O(1)
     summaries = []  # O(1)
     for b in data["batches"]:  # O(b)
         f = sd / "backlog" / f"{b['id']}.md"  # O(1)
@@ -143,10 +157,21 @@ def cmd_start(a) -> int:
         def mark(d, bid=bid, rec=rec, wt=wt, branch=branch):  # O(b)
             x = bs.batch(d, bid)
             x.update({"state": "running", "lead": rec["id"], "agent": rec["name"], "worktree": str(wt), "branch": branch,
-                      "since": _now_ms(), "reason": "", "ship_runs": 0})
+                      "since": _now_ms(), "reason": "", "ship_runs": 0, "reprompted": False})
         bs.update(p, mark)  # O(size)
         print(f"{bid} running lead={rec['id']} worktree={wt}")  # O(1)
-    return 0  # O(1)
+    return code  # O(1)
+
+
+def _stop_text(rec) -> str:
+    import fleet_io
+    text = ""  # O(1)
+    if rec.get("transcript"):  # O(1)
+        try:  # O(1)
+            text = str(fleet_io.report_text(rec["transcript"]) or "")  # O(size)
+        except Exception:  # O(1)
+            text = ""  # O(1)
+    return text or str(rec.get("last") or "")  # O(len)
 
 
 def _park(p, sd, repo, b, reason, out):  # O(size)
@@ -234,8 +259,18 @@ def _round(root, sd, p, states) -> list:
         if b.get("merged"):  # O(1)
             out.extend(_shipped(p, sd, root, b, wt))  # O(size)
             continue  # O(1)
-        last = " ".join(str(rec.get("last") or "lead stopped").split())[:120]  # O(len)
-        _park(p, sd, data.get("repo", ""), b, last, out)  # O(size)
+        if STATUS.search(_stop_text(rec)):  # O(len)
+            last = " ".join(str(rec.get("last") or "lead stopped").split())[:120]  # O(len)
+            _park(p, sd, data.get("repo", ""), b, last, out)  # O(size)
+            continue  # O(1)
+        cut = " ".join(str(rec.get("last") or "").split())[:120] or "-"  # O(len)
+        reason = f"no status in stop text: {cut}"  # O(1)
+        if b.get("reprompted"):  # O(1)
+            _park(p, sd, data.get("repo", ""), b, reason, out)  # O(size)
+            continue  # O(1)
+        bs.update(p, lambda d, bid=bid: bs.batch(d, bid).update({"reprompted": True, "since": _now_ms()}))  # O(size)
+        if fleet_io.main(["send", b["lead"], "--text", REPROMPT, "--plan", str(sd)]):  # O(w)
+            _park(p, sd, data.get("repo", ""), b, reason, out)  # O(size)
     return out  # O(b)
 
 
@@ -300,7 +335,7 @@ def cmd_answer(a) -> int:
     def mark(d):  # O(b)
         x = bs.batch(d, a.batch)
         x.setdefault("answers", {}).update(ans)
-        x.update({"questions": n, "state": "running", "since": _now_ms()})
+        x.update({"questions": n, "state": "running", "since": _now_ms(), "reprompted": False})
     bs.update(p, mark)  # O(size)
     msg = f"Max answered your question: read {af} (record it as a Ruling), then go on with the batch."  # O(1)
     rc = fleet_io.main(["send", b["lead"], "--text", msg, "--plan", str(sd)])  # O(w)
@@ -315,7 +350,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="backlog_run")  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
     s = sub.add_parser("start")  # O(1)
-    s.add_argument("batch", nargs="?")  # O(1)
+    s.add_argument("batch", nargs="*")  # O(1)
     s.add_argument("--cap", type=int, default=2)  # O(1)
     s.add_argument("--model", default="opus")  # O(1)
     w = sub.add_parser("wait")  # O(1)
