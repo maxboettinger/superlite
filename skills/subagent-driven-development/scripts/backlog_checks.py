@@ -7,6 +7,7 @@ import re
 ID_RE = re.compile(r"^B[1-9][0-9]?$")
 TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 FENCE_RE = re.compile(r"```json[ \t]*\r?\n(.*?)```", re.S)
+REC = " (Recommended)"
 DEFAULTS = {"state": "planned", "answers": {}, "lead": None, "agent": None, "worktree": None, "branch": None, "since": 0,
             "pr": None, "merged": False, "version": None, "reason": "", "ship_runs": 0, "questions": 0}
 
@@ -30,6 +31,47 @@ def as_batch(q):
     if isinstance(q, dict) and "questions" not in q and "question" in q:  # O(1)
         return {"questions": [q]}
     return q
+
+
+def _cut(v: str, hi: int) -> str:
+    if v.endswith(REC) and hi > len(REC):  # O(len)
+        return v[:len(v) - len(REC)][:hi - len(REC)].rstrip() + REC
+    return v[:hi].rstrip()
+
+
+def _fit(holder: dict, key: str, hi: int, name: str, what: str, notes: list) -> None:
+    v = holder.get(key)
+    if not isinstance(v, str) or len(v) <= hi:  # O(1)
+        return
+    c = _cut(v, hi)
+    if c.strip():
+        holder[key] = c
+        notes.append(f'"{name}" {what}: {len(v)} -> {len(c)} characters')
+
+
+def fit_proposal(obj: object) -> list[str]:
+    """Cut an over-long header (12), option label (60) and option description (200) in place; return one note per cut.
+
+    A label ending in " (Recommended)" keeps that suffix. A cut that would leave only blanks is not made. Every other
+    error, and every unknown key, is left alone for check_proposal."""
+    notes: list[str] = []
+    batches = obj.get("batches") if isinstance(obj, dict) else None
+    for b in batches if isinstance(batches, list) else []:  # O(batches * decisions * options)
+        decisions = b.get("decisions") if isinstance(b, dict) else None
+        for d in decisions if isinstance(decisions, list) else []:
+            qs = as_batch(d).get("questions") if isinstance(d, dict) else None
+            for e in qs if isinstance(qs, list) else []:
+                if not isinstance(e, dict):
+                    continue
+                t = e.get("question")
+                name = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", t).split())[:60] if isinstance(t, str) else "?"
+                _fit(e, "header", 12, name, "header", notes)
+                opts = e.get("options")
+                for n, o in enumerate(opts if isinstance(opts, list) else [], 1):
+                    if isinstance(o, dict):
+                        _fit(o, "label", 60, name, f"option {n} label", notes)
+                        _fit(o, "description", 200, name, f"option {n} description", notes)
+    return notes
 
 
 def check_question(q: dict) -> list[str]:
