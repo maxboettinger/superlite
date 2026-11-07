@@ -60,6 +60,13 @@ def test_fleet_worker_matched_by_env(proj):
     assert "run_tests --fast" in r.stderr and "--task T5" in r.stderr and "T6" not in r.stderr
 
 
+def test_lead_pane_vars_cleared_for_tests():
+    from _fixtures import HOST_VARS  # a batch lead pane exports these; left set, the hook sees a lead, not a worker
+    for var in ("SUPERLITE_FLEET_ROLE", "SUPERLITE_FLEET_PARENT_DIR", "SUPERLITE_STATE_DIR"):
+        assert var in HOST_VARS
+        assert var not in os.environ
+
+
 def test_configured_command_by_its_two_words_denied(proj):
     r = run(proj, "xcodebuild test -scheme X -only-testing:AppTests/FooTests", agent_id="a1")
     assert r.returncode == 2 and "--task T3" in r.stderr
