@@ -98,7 +98,8 @@ def test_block_row_has_rule_and_cwd(P, monkeypatch, capsys):
 def test_command_target_keeps_400_chars(P, monkeypatch, capsys):
     rc, rows, _ = run_main(P, monkeypatch, capsys, "echo " + "a" * 450 + " && rm $(cat list)", P)
     assert rc == 2
-    assert len(rows[-1]["target"]) == 400 and rows[-1]["target"].startswith("echo aaa")
+    t = rows[-1]["target"]
+    assert len(t) == 400 and t.startswith("unresolved ") and " in: echo aaa" in t
 
 
 def test_guard_error_row_unchanged(P):
