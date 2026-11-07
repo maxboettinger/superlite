@@ -11,6 +11,9 @@ stdout, one line per batch of ready tasks (one agent, one message), longest pred
     T0 wave0             synthesized Wave 0 skeleton still pending (`sl wave0`): its own agent, first line;
                          a ledger line `- Ruling: skip T0` silences it
 A task with a ledger `- Hold Tn: reason` (and no later `- Release Tn`) is never offered; stderr `held=Tn reason`.
+A stable.json `fix` task whose only reasons are `depends on unstable X` is offered once every such X is committed.
+stderr `unstable=Tn reason; rerun sl lint --stable` names each ready task stable.json still holds back.
+`--committed` and `--running` take ids separated by commas or spaces; stderr `warning: --committed: T7 is not a task of the plan` per unknown id.
 `--committed T0` also opens the stable-split stub owners, as a `- commit T0` ledger line does.
 stderr: `evict=<id> <reason>` for each idle agent eligible for none of the ready tasks; each is also removed
 from pool.json (`pool.remove`), so no later round offers it and the next run does not evict it again.
@@ -262,14 +265,19 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=Non
         poolmod.sync(pool, Path(pool_path).parent)  # O(a*m + a*T)
         if json.dumps(pool, sort_keys=True) != before:  # O(pool bytes)
             poolmod.save(pool_path, pool)  # O(pool bytes) atomic
-    done = nt.csv(committed) if committed is not None else sorted(ct.committed_tasks(ledger))  # O(c)
-    busy = nt.csv(running) if running is not None else running_from_pool(pool, done)  # O(a)
+    graph = nt.taskgraph(plan)  # O(L + n + e), memoized
+    for flag, value in (("committed", committed), ("running", running)):  # O(1)
+        if value is not None:  # only a flag that was given is checked | O(ids)
+            nt.warn_unknown(flag, nt.task_ids(value), graph)  # O(ids)
+    done = nt.task_ids(committed) if committed is not None else sorted(ct.committed_tasks(ledger))  # O(c)
+    busy = nt.task_ids(running) if running is not None else running_from_pool(pool, done)  # O(a)
     import wave0  # noqa: E402 | O(1) lazy
     held = {t: r for t, r in nt.held_tasks(ledger).items() if t not in done}  # a committed task is no longer held | O(c)
     w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy and "T0" not in held and not skip_t0(ledger, plan)  # synthesized Wave 0 still pending | O(1)
     lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0, sl_dir=Path(pool_path).parent, batch=batch, held=held)  # see plan_dispatch
     for t, r in held.items():  # O(h)
         print(f"held={t} {r}", file=sys.stderr)  # O(1)
+    nt.print_unstable(nt.stable_blocked(plan, graph, done, busy, nt.taskgraph_full(plan).get("status", {}), held))  # O(n + e + S)
     drop_evicted(pool_path, evict)  # an evicted agent is never offered by a later round | O(pool bytes)
     if w0:  # first line, a haiku lane agent | O(R)
         cfg = routing.load_cfg()  # O(file)
