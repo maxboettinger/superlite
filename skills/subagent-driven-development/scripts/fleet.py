@@ -12,6 +12,7 @@ Roles: implementer (default), fixer, package-reviewer, final-reviewer, research 
 Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-dispatch` prints one
 `Wn Tn[,Tm] sent` line per worker, `BLOCKED: Tn[,Tm] not sent (<reason>)` for a line that got no worker
 (the other lines still go out; exit 3); the Wave 0 line starts a haiku worker and sends it `briefs/wave0.md`.
+A start that fails with `not an available shell` (a freed pane) is retried once after SHELL_PAUSE_S.
 """
 
 # Complexity notation:
@@ -36,8 +37,14 @@ import routing  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
 
 TRUST = "Yes, I trust this folder"  # O(1)
+SHELL_PAUSE_S = 3.0  # O(1)
+SHELL_MSG = "not an available shell"  # O(1)
 PASS_THROUGH = ("CLAUDE_CODE_PLUGIN_CACHE_DIR",)  # O(1)
 SCREEN_ROWS = 1000  # O(1) spawn reads the whole pane: the fullscreen TUI pins the prompt to the bottom, READY and the trust dialog sit above it
+
+
+def _pause(s):  # tests swap it | O(s)
+    time.sleep(s)  # O(s)
 
 
 def worker_env(sd, wid, agent, config_dir, base_env):  # O(1)
@@ -219,10 +226,17 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer"):  # O
     def first_line(screen, e):  # O(s)
         return next((x.strip() for x in screen.splitlines() if x.strip()), e.message or e.code)  # O(s)
 
-    st, screen = "idle", ""  # O(1)
+    st, screen, retried = "idle", "", ""  # O(1)
     try:  # O(1)
         try:  # O(1)
-            hc.start_agent(name, pane, argv)  # O(1)
+            try:  # O(1)
+                hc.start_agent(name, pane, argv)  # O(1)
+            except hc.HerdrError as e:  # a freed pane is not a shell yet: one pause, one more start | O(1)
+                if SHELL_MSG not in (getattr(e, "message", "") or ""):  # O(len)
+                    raise  # O(1)
+                _pause(SHELL_PAUSE_S)  # O(1)
+                retried = "; retried once"  # O(1)
+                hc.start_agent(name, pane, argv)  # O(1)
         except hc.HerdrError as e:  # O(1)
             screen = ""  # O(1)
             try:  # O(1)
@@ -230,7 +244,8 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer"):  # O
             except hc.HerdrError:  # O(1)
                 pass  # O(1)
             if e.code != "agent_not_ready" or TRUST not in screen:  # O(s)
-                fail(f"startup: {first_line(screen, e)}", screen)  # O(s)
+                shell = SHELL_MSG in (getattr(e, "message", "") or "")  # O(len)
+                fail(f"startup: {e.message if shell else first_line(screen, e)}{retried}", screen)  # O(s)
             hc.send_keys(name, ["Down", "Enter"])  # O(1)
             hc.wait_state(name, ["idle"], 60000)  # O(1)
         if launch["prime"]:  # a one-turn worker gets its brief as the first message, no prime | O(1)
@@ -336,6 +351,8 @@ def for_dispatch(sd, plan, project):  # O(R * (spawn + send)): one dispatch roun
             except fio.hc.HerdrError as e:  # O(1)
                 why = e.message or e.code  # O(1)
         if why is not None:  # O(1)
+            if SHELL_MSG in why:  # O(len)
+                why += "; rerun sl fleet spawn --for-dispatch"  # O(1)
             print(f"BLOCKED: {tasks} not sent ({why})")  # O(1)
             blocked = True  # the next line still goes out | O(1)
     return 3 if blocked else 0  # O(1)

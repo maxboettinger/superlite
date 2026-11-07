@@ -3,7 +3,7 @@
 
     fleet_io.py send WID Tn [Tm ...] [--plan P]     (also as `sl fleet send`)
     fleet_io.py send WID --brief FILE [--label L] [--plan P]
-    fleet_io.py send WID --text TEXT [--plan P]
+    fleet_io.py send WID --text TEXT [--plan P]    (task ids, --brief and --text are exclusive: two of them exit 2)
     fleet_io.py keys WID KEY [KEY ...]
     fleet_io.py wait [--timeout MS] [--any] [WID ...]
     fleet_io.py stopped WID --sd DIR [--t MS]       (the worker stop hook: relabel the pane)
@@ -479,6 +479,9 @@ def main(argv=None):  # O(wait)
         return 0  # O(1)
     sd = state.resolve(a.plan) if getattr(a, "plan", None) else state.resolve()  # O(d)
     try:  # O(1)
+        if a.cmd == "send" and sum([bool(a.tasks), a.text is not None, a.brief is not None]) > 1:  # before any herdr call or file check | O(1)
+            print("error: send takes task ids, --text or --brief, not two of them", file=sys.stderr)  # O(1)
+            return 2  # O(1)
         if a.cmd == "keys":  # O(1)
             hc.send_keys(fs.worker_name(sd, a.wid), a.keys)  # O(w + len keys)
             print(f"{a.wid} keys sent")  # O(1)
