@@ -123,8 +123,8 @@ def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int) -> 
               "Per finding: read `.superlite/fixes/<id>.md` first if it exists, and rewrite it when you finish (fixing.md format). "  # O(1)
               "Fix only these findings, one regression test each.",  # O(1)
               "",  # O(1)
-              f"Verify: `{sl_path} run_tests --fast <the test files you touched> --background`, then the printed "  # O(1)
-              "`run_tests --wait <path>` line.",  # O(1)
+              f"Verify: `{sl_path} run_tests --fast <the test files you touched> --background`, then run the printed "  # O(1)
+              "`wait:` line in the foreground (never as a background command) and end your turn only after it reports.",  # O(1)
               f"Commit: `{sl_path} commit_task {task.id} --plan {plan}`"]  # O(1)
     for f in outside:  # O(k) iterations
         lines.append(f"Before committing {f} (outside {task.id}'s Owns): "  # O(1)
