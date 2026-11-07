@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks for backlog questions and batch proposals; merging of clashing batches."""
+"""Checks for backlog questions and batch proposals; one cut rule for plan and lead questions; merging of clashing batches."""
 import copy
 import json
 import re
@@ -49,28 +49,47 @@ def _fit(holder: dict, key: str, hi: int, name: str, what: str, notes: list) -> 
         notes.append(f'"{name}" {what}: {len(v)} -> {len(c)} characters')
 
 
+def fit_question(q: object) -> list[str]:
+    """Cut an over-long header (12), option label (60) and option description (200) of a question batch in place.
+
+    q is {"questions": [...]} or a bare question object (cut in the caller's dict). Returns one note per cut. A label
+    ending in " (Recommended)" keeps that suffix. A cut that would leave only blanks is not made. The question text is
+    never cut; every other error, and every unknown key, is left alone for check_question."""
+    notes: list[str] = []
+    qs = as_batch(q).get("questions") if isinstance(q, dict) else None
+    for e in qs if isinstance(qs, list) else []:  # O(questions * options)
+        if not isinstance(e, dict):
+            continue
+        t = e.get("question")
+        name = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", t).split())[:60] if isinstance(t, str) else "?"
+        _fit(e, "header", 12, name, "header", notes)
+        opts = e.get("options")
+        for n, o in enumerate(opts if isinstance(opts, list) else [], 1):
+            if isinstance(o, dict):
+                _fit(o, "label", 60, name, f"option {n} label", notes)
+                _fit(o, "description", 200, name, f"option {n} description", notes)
+    return notes
+
+
+def cut_lines(notes: list[str], prefix: str = "") -> list[str]:
+    """One `<prefix>shortened: <note>` line per cut note, at most 5, then `<prefix>shortened: N more`."""
+    lines = [f"{prefix}shortened: {n}" for n in notes[:5]]  # O(1)
+    if len(notes) > 5:
+        lines.append(f"{prefix}shortened: {len(notes) - 5} more")
+    return lines
+
+
 def fit_proposal(obj: object) -> list[str]:
     """Cut an over-long header (12), option label (60) and option description (200) in place; return one note per cut.
 
-    A label ending in " (Recommended)" keeps that suffix. A cut that would leave only blanks is not made. Every other
-    error, and every unknown key, is left alone for check_proposal."""
+    Uses fit_question for every decision. A label ending in " (Recommended)" keeps that suffix. A cut that would leave
+    only blanks is not made. Every other error, and every unknown key, is left alone for check_proposal."""
     notes: list[str] = []
     batches = obj.get("batches") if isinstance(obj, dict) else None
     for b in batches if isinstance(batches, list) else []:  # O(batches * decisions * options)
         decisions = b.get("decisions") if isinstance(b, dict) else None
         for d in decisions if isinstance(decisions, list) else []:
-            qs = as_batch(d).get("questions") if isinstance(d, dict) else None
-            for e in qs if isinstance(qs, list) else []:
-                if not isinstance(e, dict):
-                    continue
-                t = e.get("question")
-                name = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", t).split())[:60] if isinstance(t, str) else "?"
-                _fit(e, "header", 12, name, "header", notes)
-                opts = e.get("options")
-                for n, o in enumerate(opts if isinstance(opts, list) else [], 1):
-                    if isinstance(o, dict):
-                        _fit(o, "label", 60, name, f"option {n} label", notes)
-                        _fit(o, "description", 200, name, f"option {n} description", notes)
+            notes += fit_question(d)
     return notes
 
 
