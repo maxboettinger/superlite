@@ -13,6 +13,8 @@ shell may sit in) follows `cd`, `pushd`, `popd`, `cd -` through `&&`/`||` chains
 and a pipeline get a copy, `eval` and `source /dev/stdin` the shell's own state. Wrappers (env, sudo, nice, timeout,
 command, exec, nohup, time, xargs, find -exec) are unwrapped. Targets come from `guard_files` and `guard_tools` and are
 resolved against each possible directory, then judged by the path policy.
+A readable `for NAME in WORDS; do ...; done` is walked once per word with NAME bound to it; the variable of every other
+`for` or `select` loop is unknown. A block on an unknown target names the word the guard could not resolve.
 """
 # Complexity notation:
 #   n = characters of the command text, s = segments, d = directories the shell may sit in (<= MAX_DIRS),
@@ -23,7 +25,7 @@ import re  # O(1)
 import stat  # O(1)
 import sys  # O(1)
 import time  # O(1)
-from dataclasses import dataclass  # O(1)
+from dataclasses import dataclass, field, replace  # O(1)
 from fnmatch import fnmatchcase  # O(1)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))  # O(1)
@@ -58,6 +60,7 @@ POISON = frozenset({"alias", "unalias", "enable", "trap"})  # commands that can 
 DISTURB = frozenset({"rm", "rmdir", "mv", "unlink", "shred", "chmod", "chown", "chgrp", "rsync", "find", "git", "tar",  # O(1)
                      "unzip", "7z", "cpio", "patch", "xargs", "eval", "source", ".", "trap", "alias", "unalias", "enable"})  # O(1)
 WRITE_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>", ">&"})  # O(1)
+NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")  # O(1)
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")  # O(1)
 VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")  # O(1)
 FUNC = re.compile(r"(^|[;&|{}\s])(function\s+\S+|[A-Za-z_][\w.:-]*\s*\(\s*\)\s*\{)")  # a function definition: its body runs later | O(1)
@@ -83,6 +86,7 @@ class Verdict:  # O(1)
     rel: str  # project-relative path, "." for the whole tree, "?" for an unknown target  | O(1)
     abs: str  # absolute path, same exceptions | O(1)
     kind: str  # "protected" | "human" | "code" | O(1)
+    word: str = field(default="", compare=False)  # for an unknown target: the word the guard could not resolve | O(1)
 
 
 class _Ctx:  # O(p)
@@ -99,6 +103,8 @@ class _Ctx:  # O(p)
         self.home = os.environ.get("HOME") or os.path.expanduser("~")  # O(1)
         self.cdpath = bool(os.environ.get("CDPATH")) or "cdpath" in low  # CDPATH may send a relative cd elsewhere | O(n)
         self.steps = 0  # O(1)
+        self.ifs = re.search(r"\bIFS\b", command) is not None  # IFS (case-sensitive) may split a loop list's expanded words | O(1)
+        self.cmd = None  # base name of the command being judged, for the word of a "?" target | O(1)
         self.deadline = time.monotonic() + MAX_SECONDS  # O(1)
         cache = os.environ.get("SUPERLITE_CACHE_DIR") or os.path.join(  # O(p)
             os.environ.get("XDG_CACHE_HOME") or os.path.join(self.home, ".cache"), "superlite")  # O(p)
@@ -148,6 +154,7 @@ class _Cmd:  # O(1)
     """One simple command as walked: its segment, the directories it runs in, and the directories it leaves."""
     def __init__(self, seg, inn, persist, piped, docs, cond):  # O(1)
         self.seg, self.inn, self.persist, self.piped, self.docs, self.cond = seg, inn, persist, piped, docs, cond  # O(1)
+        self.chained = False  # after && or ||: the command may not run | O(1)
         self.ok = self.fail = inn  # directories after the command succeeds / fails | O(1)
 
 
@@ -175,10 +182,10 @@ def _base(w):  # O(p) | command name: no folder, no .exe
     return b[:-4] if b.lower().endswith(".exe") else b  # O(1)
 
 
-def _unknown(ctx):  # O(1) | verdict for a target the guard cannot name; next to a protected name it may be that file
+def _unknown(ctx, word):  # O(1) | verdict for a target the guard cannot name; next to a protected name it may be that file
     if ctx.mentions:  # O(1)
-        return Verdict("?", "?", "protected")  # O(1)
-    return Verdict("?", "?", ctx.kind) if ctx.enforce else None  # O(1)
+        return Verdict("?", "?", "protected", word)  # O(1)
+    return Verdict("?", "?", ctx.kind, word) if ctx.enforce else None  # O(1)
 
 
 def _allowed(rel, mode):  # O(patterns) | may the coordinator write the project-relative path?
@@ -235,16 +242,16 @@ def _judge_path(path, base, ctx, name=None):  # O(p + depth) | the policy's verd
         k = parts.index("?")  # O(p)
         prefix = "/".join(parts[:k]) or ("/" if p.startswith("/") else "")  # O(p)
         if not prefix or (base is None and not prefix.startswith("/")) or ".." in parts[k:]:  # O(p)
-            return _unknown(ctx)  # O(1)
+            return _unknown(ctx, path)  # O(1)
         real = _real(_clean(prefix if prefix.startswith("/") else base + "/" + prefix))  # O(p) syscalls
         rel = _rel(real, ctx.projreal)  # O(p)
         if real.lower() in ctx.cache_dirs:  # an unknown name in the Python cache folder may be the cache | O(p)
             return Verdict(real, real, "protected")  # O(1)
         if rel is None:  # outside: allowed unless the folder holds the project, where the unknown part may lead in | O(p)
             holds = (ctx.projreal.lower() + "/").startswith(real.lower().rstrip("/") + "/")  # O(p)
-            return _unknown(ctx) if holds else None  # O(1)
+            return _unknown(ctx, path) if holds else None  # O(1)
         if ctx.mentions:  # the unknown part may be a protected name | O(1)
-            return _unknown(ctx)  # O(1)
+            return _unknown(ctx, path)  # O(1)
         if rel == "" and k == len(parts) - 1:  # the project's whole tree | O(1)
             return Verdict(".", ctx.projn, ctx.kind) if ctx.enforce else None  # O(1)
     if name is not None and p not in (".", "./") and (p.endswith("/") or _isdir(p, base)):  # a folder: the file lands inside | O(p)
@@ -407,7 +414,7 @@ def _check_flagged(t, inn, st, ctx, name, flag):  # O(MAX_BRACE * d * p) | a glo
             return v  # O(1)
     alts = [t] if flag == "g" else _braces(t) if flag == "b" else None  # O(MAX_BRACE * p)
     if alts is None:  # a brace the guard cannot expand ({1..9}, a quoted part, too many words): unknown | O(1)
-        return _unknown(ctx)  # O(1)
+        return _unknown(ctx, t)  # O(1)
     found = None  # O(1)
     for a in alts:  # a literal brace word: each word it expands to | O(alts)
         v = _glob_check(a, inn, st, ctx, name) if _is_glob(a) else _check(a, inn, st, ctx, name)  # O(d * p)
@@ -420,11 +427,13 @@ def _check(t, inn, st, ctx, name=None, flag=""):  # O(d * (p + depth)) | verdict
     t = _expand(t, st, ctx)  # O(p + v)
     if flag:  # a glob or brace word: its text is a pattern, not the file | O(alts * d * p)
         return _check_flagged(t, inn, st, ctx, name, flag)  # O(MAX_BRACE * d * p)
+    word = t if t != "?" else "? (from " + (ctx.cmd or "the command") + ")"  # the target as read, before the $VAR/ cut | O(p)
     m = re.match(r"^\$(?:\{\w+\}|\w+)/+(.+)$", t)  # `$VAR/rest`: rest judged from an unknown directory | O(p)
-    if m and "$" not in m.group(1) and "`" not in m.group(1):  # O(p)
+    cut = bool(m) and "$" not in m.group(1) and "`" not in m.group(1)  # O(p)
+    if cut:  # O(1)
         t, inn = m.group(1), (None,)  # O(1)
     if t == "?" or "$" in t or "`" in t:  # not a literal: unknown | O(p)
-        return _unknown(ctx)  # O(1)
+        return _unknown(ctx, word)  # O(1)
     found = None  # O(1)
     for base in inn:  # O(d)
         if base is not None or t.startswith("/"):  # a later mkdir or cd into this path is not sure | O(p)
@@ -432,6 +441,8 @@ def _check(t, inn, st, ctx, name=None, flag=""):  # O(d * (p + depth)) | verdict
         v = _judge_path(t, base, ctx, name)  # O(p + depth)
         if v is not None and (found is None or v.kind == "protected"):  # protected wins | O(1)
             found = v  # O(1)
+    if cut and found is not None:  # blocked only because $VAR was unknown: the verdict names that word too | O(1)
+        found.word = word  # O(1)
     return found  # O(1)
 
 
@@ -520,7 +531,7 @@ def _unwrap(words, dyn, c, st, ctx):  # O(w) | (command words, dyn, directories,
 
 def _walk_text(text, st, ctx, depth, force_cond=False):  # O(n) | verdict for a command line of its own
     if depth > MAX_DEPTH:  # O(1)
-        return _unknown(ctx)  # O(1)
+        return _unknown(ctx, f"nesting deeper than {MAX_DEPTH}")  # O(1)
     _tick(ctx)  # O(1)
     segs = guard_lex.split(text)  # O(n)
     for seg in segs:  # a heredoc whose delimiter line is missing: its body is judged as commands too | O(s)
@@ -546,6 +557,21 @@ def _walk_text(text, st, ctx, depth, force_cond=False):  # O(n) | verdict for a 
     return v  # O(n)
 
 
+def _copy_back(st, st2):  # O(v) | take a nested shell's variables back; changed ones keep their earlier value, and its extra values stay possible
+    for name, val in st2.vars.items():  # O(v)
+        if name in st.vars and st.vars[name] != val:  # O(1)
+            _assign(st, name, val)  # O(1)
+        else:  # O(1)
+            st.vars[name] = val  # O(1)
+    for name, vals in st2.multi.items():  # O(v)
+        have = st.multi.setdefault(name, [])  # O(1)
+        for x in vals:  # O(v)
+            if x not in have and x != st.vars.get(name):  # O(v)
+                have.append(x)  # O(1)
+        if not have:  # O(1)
+            del st.multi[name]  # O(1)
+
+
 def _walk_docs(docs, c, st, ctx, depth, shared=False):  # O(sum of docs) | judge heredoc programs as shell text
     for doc in docs:  # O(docs)
         st2 = st.fork(c.inn)  # O(v)
@@ -554,7 +580,7 @@ def _walk_docs(docs, c, st, ctx, depth, shared=False):  # O(sum of docs) | judge
             return v  # O(1)
         if shared:  # the shell's own state keeps the program's cd | O(1)
             c.ok = c.fail = st2.dirs  # O(1)
-            st.vars.update(st2.vars)  # O(v)
+            _copy_back(st, st2)  # O(v)
     return None  # O(1)
 
 
@@ -611,12 +637,12 @@ def _shell(words, dyn, c, st, ctx, depth):  # O(n) | a shell's -c body, stdin pr
         return v  # O(1)
     script = words[i] if i < n else None  # O(1)
     if script is not None and (script.startswith(("<(", ">("))):  # process substitution: a program the guard cannot read | O(1)
-        return _unknown(ctx)  # O(1)
+        return _unknown(ctx, script)  # O(1)
     if script is not None and not has_s and script not in ("/dev/stdin", "/dev/fd/0", "-"):  # a script file | O(1)
         return None  # O(1)
     if c.docs:  # O(1)
         return _walk_docs(c.docs, c, st, ctx, depth)  # O(docs)
-    return _unknown(ctx) if c.piped else None  # a program piped in: unknown | O(1)
+    return _unknown(ctx, f"program piped into {words[0]}") if c.piped else None  # a program piped in: unknown | O(1)
 
 
 def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and source/. run in the shell's own state
@@ -628,18 +654,18 @@ def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and sou
             return v  # O(1)
         c.ok = c.fail = st2.dirs  # O(1)
         if c.persist:  # O(1)
-            st.vars.update(st2.vars)  # O(v)
+            _copy_back(st, st2)  # O(v)
         if any("$" in p or "`" in p for p in parts):  # a body the guard cannot read: it may cd, and may read the heredocs | O(w * p)
             c.ok = c.fail = (None,)  # O(1)
             return _walk_docs(c.docs, c, st, ctx, depth)  # O(docs)
         return None  # O(1)
     operand = words[1] if len(words) > 1 else None  # source / . | O(1)
     if operand is not None and operand.startswith(("<(", ">(")):  # O(1)
-        return _unknown(ctx)  # O(1)
+        return _unknown(ctx, operand)  # O(1)
     if operand in ("/dev/stdin", "/dev/fd/0") or (operand is None and c.docs):  # O(1)
         if c.docs:  # O(1)
             return _walk_docs(c.docs, c, st, ctx, depth, shared=True)  # O(docs)
-        return _unknown(ctx) if c.piped else None  # O(1)
+        return _unknown(ctx, f"program piped into {words[0]}") if c.piped else None  # O(1)
     if operand is not None and ACTIVATE.search(operand):  # O(p)
         return None  # O(1)
     c.ok = c.fail = (None,)  # a script file may cd | O(1)
@@ -919,6 +945,7 @@ def _run_words(words, dyn, c, st, ctx, depth):  # O(n) | judge one command's wor
     words, dyn, inn, xargs, _sh = _unwrap(list(words), list(dyn), c, st, ctx)  # O(w)
     if not words:  # O(1)
         return None  # O(1)
+    ctx.cmd = _base(words[0])  # O(p)
     c.inn = c.ok = c.fail = inn  # the wrapper may have changed the directory | O(1)
     words = [_expand(w, st, ctx) if d else w for w, d in zip(words, dyn)]  # the variables the guard knows | O(w * p)
     dyn = [d and ("$" in w or "`" in w) for w, d in zip(words, dyn)]  # O(w)
@@ -954,9 +981,42 @@ def _run_words(words, dyn, c, st, ctx, depth):  # O(n) | judge one command's wor
     return v  # O(1)
 
 
+CLOBBER = frozenset({"read", "mapfile", "readarray", "getopts", "let", "unset"})  # builtins that set a variable the guard cannot read | O(1)
+ARITH = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)|(?:\+\+|--)\s*([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\+|--)")  # O(1)
+
+
+def _arith_names(text):  # O(p) | every variable an arithmetic text assigns: `=`, `op=`, `++`/`--` before or after the name
+    return [a or b or c for a, b, c in ARITH.findall(text)]  # O(p)
+
+
+def _clobber(words, sub, st):  # O(w + p) | a builtin or `((...))` that sets variables: they become unknown
+    names = []  # O(1)
+    if not words and sub and sub.startswith("(") and sub.endswith(")"):  # `((v=1))` | O(1)
+        names = _arith_names(sub)  # O(p)
+    elif words and words[0] == "let":  # `let v++`, `let 'v += 1'` | O(w)
+        names = _arith_names(" ".join(words[1:]))  # O(w)
+    elif words and words[0] in CLOBBER:  # `read v`, `let v=1`, `unset v` | O(w)
+        names = [re.split(r"[=\[]", x)[0] for x in words[1:] if NAME.match(re.split(r"[=\[]", x)[0])]  # O(w)
+    elif words and words[0] == "printf" and "-v" in words[:-1]:  # `printf -v v ...` | O(w)
+        names = [words[words.index("-v") + 1].split("[")[0]]  # O(1)
+    for n in names:  # O(w)
+        _assign(st, n, None)  # O(1)
+
+
+def _assign(st, name, new):  # O(1) | set a shell variable; a reassigned one keeps its earlier value to be judged too
+    old = st.vars.get(name, new)  # O(1)
+    if old != new:  # reassigned: every value is judged (_alternatives) | O(1)
+        if old is None or new is None:  # O(1)
+            new = None  # O(1)
+        elif old not in st.multi.get(name, []):  # O(v)
+            st.multi.setdefault(name, []).append(old)  # O(1)
+    st.vars[name] = new  # O(1)
+
+
 def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, then the command
     seg = c.seg  # O(1)
     _tick(ctx)  # O(1)
+    ctx.cmd = None  # O(1)
     for body in seg.bodies:  # substitutions run in a subshell | O(bodies)
         v = _walk_text(body, st.fork(c.inn), ctx, depth + 1)  # O(body)
         if v is not None:  # O(1)
@@ -985,8 +1045,12 @@ def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, th
     while i < len(words) and words[i] in LEAD_KW:  # O(w)
         neg = neg != (words[i] == "!" and not dyn[i])  # O(1)
         i += 1  # O(1)
+    if i + 1 < len(words) and words[i] in ("for", "select") and not dyn[i] and NAME.match(words[i + 1]):  # a loop the walk did not unroll: its variable is unknown | O(1)
+        _assign(st, words[i + 1], None)  # O(1)
+        return None  # O(1)
     if i < len(words) and words[i] in NO_CMD_KW:  # O(1)
         return None  # O(1)
+    _clobber(words[i:], seg.subshell, st)  # O(w + p)
     assigns = []  # O(1)
     while i < len(words) and ASSIGN.match(words[i]):  # leading NAME=value words | O(w)
         assigns.append((words[i], dyn[i]))  # O(1)
@@ -998,16 +1062,15 @@ def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, th
         if c.persist:  # O(1)
             for w, d in assigns:  # O(w)
                 name, val = w.split("=", 1)  # O(p)
-                name = name.rstrip("+")  # O(1)
+                plus, name = name.endswith("+"), name.rstrip("+")  # O(1)
                 val = _expand(val, st, ctx) if d else val  # O(p)
+                if plus:  # `NAME+=x` appends to the value; one this command never set is unknown | O(1)
+                    val = "$" if st.vars.get(name) is None else st.vars[name] + val  # O(p)
                 new = None if ("$" in val or "`" in val) else val  # O(p)
-                old = st.vars.get(name, new)  # O(1)
-                if old != new:  # reassigned: every value is judged (_alternatives) | O(1)
-                    if old is None or new is None:  # O(1)
-                        new = None  # O(1)
-                    else:  # O(1)
-                        st.multi.setdefault(name, []).append(old)  # O(1)
-                st.vars[name] = new  # O(1)
+                if plus and not (c.cond or c.chained):  # the appended value replaces the old one; the old is not a second value | O(1)
+                    st.vars[name] = new  # O(1)
+                else:  # a loop body or conditional chain: the earlier value stays possible  # O(1)
+                    _assign(st, name, new)  # O(p)
         return None  # O(1)
     v = _run_words(words[i:], dyn[i:], c, st, ctx, depth)  # O(n)
     if neg:  # O(1)
@@ -1015,17 +1078,134 @@ def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, th
     return v  # O(1)
 
 
-def _alternatives(seg, st):  # O(w * v) | (name, earlier value) for each reassigned variable the segment uses
+def _alternatives(seg, st):  # O(w * v + MAX_BRACE * v) | every mix of earlier values ({name: value}) of the reassigned variables the segment uses; None when over MAX_BRACE
     if not st.multi:  # O(1)
         return []  # O(1)
     text = " ".join(seg.words + [r.target for r in seg.redirects] + seg.heredocs + seg.bodies + [seg.subshell or ""])  # O(w)
-    return [(k, val) for k, vals in st.multi.items() if re.search(r"\$\{?" + k + r"\b", text) for val in vals]  # O(w * v)
+    used = [(k, vals) for k, vals in st.multi.items() if re.search(r"\$\{?" + k + r"\b", text)]  # O(w * v)
+    total = 1  # O(1)
+    for _, vals in used:  # O(v)
+        total *= len(vals) + 1  # the current value or one earlier value | O(1)
+    if total - 1 > MAX_BRACE:  # O(1)
+        return None  # O(1)
+    combos = [{}]  # O(1)
+    for k, vals in used:  # O(v)
+        combos = [dict(c, **{k: x}) if x is not None else c for c in combos for x in [None] + list(vals)]  # O(MAX_BRACE)
+    return [c for c in combos if c]  # the all-current mix is already judged | O(MAX_BRACE)
+
+
+def _lit(seg, k):  # O(1) | is word k there, not dynamic and not quoted (a missing quoted entry counts as False)?
+    return k < len(seg.words) and not seg.dyn[k] and not (seg.quoted[k] if k < len(seg.quoted) else False)  # O(1)
+
+
+def _lead(seg):  # O(w) | index of the first word after the leading `do`, `then`, `!` ... keywords
+    k = 0  # O(1)
+    while _lit(seg, k) and seg.words[k] in LEAD_KW and seg.words[k] not in OPEN_KW:  # `if`, `while`, `until` open a block themselves | O(w)
+        k += 1  # O(1)
+    return k  # O(1)
+
+
+def _opens(seg):  # O(w) | does the segment open a block (`if`, `for` ... after leading keywords)?
+    k = _lead(seg)  # O(w)
+    return _lit(seg, k) and seg.words[k] in OPEN_KW  # O(1)
+
+
+def _closes(seg):  # O(1) | does the segment close a block (`fi`, `done`, `esac`)?
+    return _lit(seg, 0) and seg.words[0] in CLOSE_KW  # O(1)
+
+
+def _loop_values(seg, k, st, ctx):  # O(MAX_BRACE * w * p) | the words bash binds for a for header's list (from word k), None when unreadable
+    vals = []  # O(1)
+    for x in range(k, len(seg.words)):  # O(w)
+        w, q = seg.words[x], (seg.quoted[x] if x < len(seg.quoted) else False)  # O(1)
+        g = seg.globs[x] if x < len(seg.globs) else ""  # O(1)
+        if g in ("g", "u"):  # an unquoted glob, or a brace in a quoted word | O(1)
+            return None  # O(1)
+        if g == "b":  # O(1)
+            cand = _braces(w)  # O(MAX_BRACE * p)
+            if cand is None:  # a sequence, or too many words | O(1)
+                return None  # O(1)
+        elif seg.dyn[x]:  # O(1)
+            if ctx.ifs or any(re.search(r"\$\{?" + n + r"\b", w) for n in st.multi) or (q and w.startswith("~")):  # O(w * v)
+                return None  # O(v)
+            cand = [_expand(w, st, ctx)]  # O(p + v)
+        elif not q and (w == "~" or w.startswith("~/")):  # O(1)
+            cand = [ctx.home + w[1:]]  # O(p)
+        elif not q and w.startswith("~"):  # `~+`, `~-`, `~user`: a folder the guard cannot name | O(1)
+            return None  # O(1)
+        else:  # O(1)
+            cand = [w]  # O(1)
+        if any(a == "" or re.search(r"[$`\s*?\[]", a) for a in cand):  # bash splits and globs an unquoted `$NAME` later | O(MAX_BRACE * p)
+            return None  # O(1)
+        vals.extend(cand)  # O(MAX_BRACE)
+        if len(vals) > MAX_BRACE:  # O(1)
+            return None  # O(1)
+    return vals or None  # O(1)
+
+
+_MISSING = object()  # O(1)
+
+
+def _after_loop(st, name, vals, pre):  # O(v) | past the last done: the loop may have run fewer times, or in a subshell
+    if pre is None:  # O(1)
+        st.vars[name] = None  # O(1)
+        return  # O(1)
+    cur = st.vars.get(name)  # O(1)
+    if cur is None:  # O(1)
+        return  # O(1)
+    for old in list(vals) + ([] if pre is _MISSING else [pre]):  # O(v)
+        if old != cur and old not in st.multi.get(name, []):  # O(v)
+            st.multi.setdefault(name, []).append(old)  # O(1)
+
+
+def _unroll(segs, i, st, ctx):  # O(s + MAX_BRACE * s) | (index of done, segments with the body once per value, binds) for a readable for loop
+    seg = segs[i]  # O(1)
+    p, w = _lead(seg), seg.words  # O(w)
+    if not (_lit(seg, p) and _lit(seg, p + 1) and _lit(seg, p + 2) and w[p] == "for" and w[p + 2] == "in" and NAME.match(w[p + 1])):  # O(1)
+        return None  # O(1)
+    if seg.bodies or seg.subshell is not None or seg.redirects or seg.heredocs:  # O(1)
+        return None  # O(1)
+    name = w[p + 1]  # O(1)
+    vals = _loop_values(seg, p + 3, st, ctx)  # O(MAX_BRACE * w * p)
+    if vals is None:  # O(1)
+        return None  # O(1)
+    depth, end = 1, None  # O(1)
+    for e in range(i + 1, len(segs)):  # the matching `done` | O(s)
+        if _opens(segs[e]):  # O(w)
+            depth += 1  # O(1)
+        elif _closes(segs[e]):  # O(1)
+            depth -= 1  # O(1)
+            if depth == 0:  # O(1)
+                end = e  # O(1)
+                break  # O(1)
+    if end is None or segs[end].words[0] != "done":  # O(1)
+        return None  # O(1)
+    if any(re.search(r"\$\{?" + name + r"\b", r.target) for r in segs[end].redirects):  # bash reads it before the loop binds NAME | O(redirects * p)
+        return None  # O(redirects * p)
+    new, binds, done, last = [], {}, segs[end], None  # O(1)
+    pre = st.vars.get(name, _MISSING)  # the value before the loop | O(1)
+    cut = lambda xs, pad: (list(xs) + [pad] * p)[:p] + [pad] * 4  # O(p)
+    for n, val in enumerate(vals):  # O(MAX_BRACE)
+        h = replace(seg, words=w[:p] + ["for", name, "in", val], dyn=cut(seg.dyn, False), quoted=cut(seg.quoted, False), globs=cut(seg.globs, ""))  # O(w)
+        binds[id(h)] = (name, val)  # O(1)
+        new.append(h)  # O(1)
+        new.extend(segs[i + 1:end])  # O(s)
+        last = replace(done) if n == len(vals) - 1 else replace(done, sep=";")  # O(1)
+        new.append(last)  # O(1)
+    return end, new, binds, {id(last): (name, vals, pre)}  # O(MAX_BRACE * s)
 
 
 def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segments in order; st.dirs follows the cds
+    segs, heads, dones = list(segs), {}, {}  # a for loop is unrolled in the copy; heads: header copy -> (variable, value) | O(s)
     n, i, ok, fail, depth_c = len(segs), 0, None, None, 0  # O(1)
     start = st.dirs  # O(1)
     while i < n:  # O(s)
+        un = _unroll(segs, i, st, ctx) if id(segs[i]) not in heads and segs[i].sep != "|" else None  # O(MAX_BRACE * s)
+        if un is not None:  # O(1)
+            segs[i:un[0] + 1] = un[1]  # O(s)
+            n = len(segs)  # O(1)
+            heads.update(un[2])  # O(MAX_BRACE)
+            dones.update(un[3])  # O(1)
         j = i  # O(1)
         while j < n - 1 and segs[j].sep == "|":  # a pipeline: every part runs in its own subshell | O(s)
             j += 1  # O(1)
@@ -1038,12 +1218,19 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
         u_ok = u_fail = inn  # O(1)
         for k in range(i, j + 1):  # O(pipeline)
             seg = segs[k]  # O(1)
-            w0 = seg.words[0] if seg.words and not seg.dyn[0] else ""  # O(1)
-            if w0 in OPEN_KW:  # O(1)
+            if _opens(seg):  # O(w)
                 depth_c += 1  # O(1)
-            elif w0 in CLOSE_KW:  # O(1)
+            elif _closes(seg):  # O(1)
                 depth_c = max(0, depth_c - 1)  # O(1)
             if not inn:  # a branch that cannot run | O(1)
+                continue  # O(1)
+            if id(seg) in dones:  # the last done copy: the earlier values stay possible | O(1)
+                _after_loop(st, *dones[id(seg)])  # O(v)
+            if id(seg) in heads:  # an unrolled header: it binds its variable to this copy's value | O(1)
+                _tick(ctx)  # O(1)
+                st.vars[heads[id(seg)][0]] = heads[id(seg)][1]  # O(1)
+                if i == j:  # O(1)
+                    u_ok, u_fail = inn, inn  # O(1)
                 continue  # O(1)
             docs, m = list(seg.heredocs) + [r.target + "\n" for r in seg.redirects if r.op == "<<<"], k + 1  # O(docs)
             prev = segs[k - 1] if k > i else None  # O(1)
@@ -1054,14 +1241,31 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
                 m += 1  # O(1)
             persist = i == j and sep != "&"  # O(1)
             c = _Cmd(seg, inn, persist, k > 0 and segs[k - 1].sep == "|", docs, st.cond or force_cond or depth_c > 0)  # O(1)
+            c.chained = op in ("&&", "||")  # O(1)
             v = _run(c, st, ctx, depth)  # O(n)
-            for name, val in (_alternatives(seg, st) if v is None else []):  # a reassigned variable: its earlier values | O(v * n)
-                keep = st.vars.get(name)  # O(1)
-                st.vars[name] = val  # O(1)
-                v = _run(_Cmd(seg, c.inn, False, c.piped, docs, c.cond), st, ctx, depth)  # O(n)
-                st.vars[name] = keep  # O(1)
+            alts = _alternatives(seg, st) if v is None else []  # a reassigned variable: its earlier values | O(v * n)
+            if alts is None:  # O(1)
+                v = _unknown(ctx, "too many variable values")  # O(1)
+            for combo in (alts or []):  # O(MAX_BRACE * n)
+                before = dict(st.vars)  # O(v)
+                st2 = st.fork(c.inn)  # an earlier value runs for real on its own copy of the shell | O(v)
+                st2.vars.update(combo)  # O(v)
+                c2 = _Cmd(seg, c.inn, c.persist, c.piped, docs, c.cond)  # O(1)
+                c2.chained = c.chained  # O(1)
+                v = _run(c2, st2, ctx, depth)  # O(n)
                 if v is not None:  # O(1)
                     break  # O(1)
+                c.ok, c.fail = _union(c.ok, c2.ok), _union(c.fail, c2.fail)  # O(d)
+                for name, val in st2.vars.items():  # what the run changed goes back, so derived names keep every value | O(v)
+                    if val != combo.get(name, before.get(name, _MISSING)):  # O(1)
+                        _assign(st, name, val)  # O(1)
+                for name, vals in st2.multi.items():  # O(v)
+                    have = st.multi.setdefault(name, [])  # O(1)
+                    for x in vals:  # O(v)
+                        if x not in have and x != st.vars.get(name):  # O(v)
+                            have.append(x)  # O(1)
+                    if not have:  # O(1)
+                        del st.multi[name]  # O(1)
             if v is not None:  # O(1)
                 return v  # O(1)
             if i == j:  # O(1)
@@ -1086,8 +1290,8 @@ def judge(command, cwd, project, mode, sds=()):  # O(s * n * d) | Verdict for th
         here = _clean(ctx.projn + "/" + here)  # O(p)
     try:  # O(1)
         return _walk_text(command, _State((here,)), ctx, 0)  # O(s * n * d)
-    except _Unknown:  # a NUL in a path, or the step or time budget spent: blocks when the guard enforces | O(1)
-        return _unknown(ctx)  # O(1)
+    except _Unknown as e:  # a NUL in a path, or the step or time budget spent: blocks when the guard enforces | O(1)
+        return _unknown(ctx, "a path with a NUL" if e.args == ("path",) else "step or time budget")  # O(1)
 
 
 MESSAGES = {  # O(1)
@@ -1180,10 +1384,13 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
         _ack()  # O(1)
         return 0  # O(1)
     named = v.rel not in ("?", ".")  # O(1)
-    _incident(sd, "rule-block", tool, v.rel if named else cmd, rule=v.kind, cwd=cwd or project)  # O(len)
+    target = v.rel if named and not v.word else f"unresolved {_flat(v.word)} in: {cmd}" if v.word else cmd  # the word first: the incident cuts the rest | O(len)
+    _incident(sd, "rule-block", tool, target, rule=v.kind, cwd=cwd or project)  # O(len)
     for line in MESSAGES[v.kind]:  # O(1)
         _err(line)  # O(len)
     if v.kind != "protected":  # the protected message names no target | O(1)
+        if v.word:  # the word the guard could not resolve | O(len)
+            _err(f"Unresolved word: {_flat(v.word, 500)}")  # O(len)
         if named:  # the absolute path on its own line; the last line stays `Blocked target: <rel>` as before | O(len)
             _err(f"Absolute target: {_flat(v.abs, 500)}")  # O(len)
             _err(f"Blocked target: {_flat(v.rel, 500)}")  # O(len)
