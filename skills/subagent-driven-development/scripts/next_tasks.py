@@ -297,18 +297,82 @@ def wave0_waiting(sl_dir, committed=None):  # O(ledger + brief + c) | stub owner
     return {w for w in wait if isinstance(w, str)}  # O(wait)
 
 
-def stable_filter(plan, committed=None):  # O(S + c) read, or None when the plan has no stable.json
-    """Stable task ids from .superlite/stable.json for this plan, or None if the file is absent
-    or unreadable (then every non-draft task is offered, as before)."""
+_TASK_ID = re.compile(r"[A-Z]{1,3}\d+[A-Za-z]?")  # O(1)
+_DEPENDS = re.compile(r"^depends on unstable\s+((?:[A-Z]{1,3}\d+[A-Za-z]?)(?:\s*,\s*[A-Z]{1,3}\d+[A-Za-z]?)*)$")  # only an id list follows; any other text keeps the entry held | O(1)
+
+
+def _stable_data(plan):  # O(S) read | (stable.json dir, parsed dict) or None when absent or unreadable
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
     import state  # O(1)
     f = state.plan_dir(plan) / "stable.json"  # where lint --stable wrote it | O(d)
     if not f.is_file():  # O(1)
         return None  # O(1)
     try:  # O(1)
-        return set(json.loads(f.read_text(encoding="utf-8")).get("stable") or []) - wave0_waiting(f.parent, committed)  # O(S + c)
-    except (ValueError, AttributeError):  # O(1)
+        data = json.loads(f.read_text(encoding="utf-8"))  # O(S)
+    except (OSError, ValueError):  # O(1)
         return None  # O(1)
+    return (f.parent, data) if isinstance(data, dict) else None  # O(1)
+
+
+def lapsed_fix(fix, committed):  # O(F * reasons + c) | fix ids whose only reasons are `depends on unstable X` with every X committed
+    done = set(committed or ())  # O(c)
+    out = set()  # O(1)
+    for e in fix if isinstance(fix, list) else ():  # O(F)
+        if not isinstance(e, dict) or not isinstance(e.get("task"), str):  # O(1)
+            continue  # O(1)
+        reasons = e.get("reasons")  # O(1)
+        if not isinstance(reasons, list) or not reasons:  # O(1)
+            continue  # O(1)
+        need = []  # O(1)
+        for r in reasons:  # O(reasons)
+            m = _DEPENDS.match(r.strip()) if isinstance(r, str) else None  # O(len)
+            ids = _TASK_ID.findall(m.group(1)) if m else []  # O(len)
+            if not ids:  # any other reason keeps the entry held | O(1)
+                need = None  # O(1)
+                break  # O(1)
+            need += ids  # O(ids)
+        if need is not None and all(i in done for i in need):  # O(ids)
+            out.add(e["task"])  # O(1)
+    return out  # O(F)
+
+
+def stable_filter(plan, committed=None):  # O(S + c) read, or None when the plan has no stable.json
+    """Stable task ids from .superlite/stable.json for this plan plus `fix` tasks that lapsed (only reason:
+    `depends on unstable X`, every X committed), or None if the file is absent or unreadable (then every
+    non-draft task is offered, as before)."""
+    got = _stable_data(plan)  # O(S)
+    if got is None:  # O(1)
+        return None  # O(1)
+    sl_dir, data = got  # O(1)
+    try:  # O(1)
+        return (set(data.get("stable") or []) | lapsed_fix(data.get("fix"), committed)) - wave0_waiting(sl_dir, committed)  # O(S + c)
+    except TypeError:  # O(1)
+        return None  # O(1)
+
+
+def stable_blocked(plan, graph, committed, running, status=None, held=None):  # O(n + e + S) | {task id: reason} stable.json still holds back
+    """Graph-ready tasks that stable_filter leaves out (and wave0 does not hold), with the reason."""
+    got = _stable_data(plan)  # O(S)
+    if got is None:  # O(1)
+        return {}  # O(1)
+    sl_dir, data = got  # O(1)
+    done, busy = set(committed or ()), set(running or ())  # O(c)
+    allowed = stable_filter(plan, done)  # O(S + c)
+    if allowed is None:  # O(1)
+        return {}  # O(1)
+    waiting = wave0_waiting(sl_dir, done)  # O(ledger)
+    reasons = {}  # O(1)
+    for e in data.get("fix") if isinstance(data.get("fix"), list) else ():  # O(F)
+        if isinstance(e, dict) and isinstance(e.get("task"), str) and isinstance(e.get("reasons"), list):  # O(1)
+            reasons[e["task"]] = " ".join("; ".join(str(r) for r in e["reasons"]).split())  # O(len)
+    blocked = draft_blocked(graph, status)  # O(n + e)
+    out = {}  # O(1)
+    for t, deps in graph.items():  # O(n + e)
+        if (t in done or t in busy or t in blocked or t in allowed or t in waiting or (held and t in held)  # O(1)
+                or not all(d in done for d in deps)):  # O(deps)
+            continue  # O(1)
+        out[t] = reasons.get(t) or "not in stable.json"  # O(1)
+    return out  # O(n)
 
 
 _HOLD = re.compile(r"^\s*[-*+]?\s*Hold\s+([A-Z]{1,3}\d+[A-Za-z]?)\b\s*:\s*(.*?)\s*$")  # O(1)
@@ -335,6 +399,24 @@ def held_tasks(ledger):  # O(ledger)
 
 def csv(value):  # O(len)
     return [x.strip() for x in (value or "").split(",") if x.strip()]  # O(len)
+
+
+def task_ids(value):  # O(len) | ids split on commas and whitespace, no empties or repeats, in order
+    return list(dict.fromkeys((value or "").replace(",", " ").split()))  # O(len)
+
+
+def unknown_ids(ids, graph):  # O(ids)
+    return [i for i in ids if i not in graph and i != "T0"]  # O(ids)
+
+
+def warn_unknown(flag, ids, graph):  # O(ids)
+    for i in unknown_ids(ids, graph):  # O(ids)
+        print(f"warning: --{flag}: {i} is not a task of the plan", file=sys.stderr)  # O(1)
+
+
+def print_unstable(blocked):  # O(blocked)
+    for t, why in blocked.items():  # O(blocked)
+        print(f"unstable={t} {why}; rerun sl lint --stable", file=sys.stderr)  # O(1)
 
 
 def draft_blocked(graph, status):  # O(n + e)
@@ -379,9 +461,16 @@ def main(argv=None):  # O(L + n + e + R log R) + process spawn
                  else DEFAULT_TIME) for t in graph}  # O(1)
     state = sibling("state")  # O(1)
     held = held_tasks(state.plan_dir(a.plan) / "progress.md")  # O(ledger)
-    for t in ready_tasks(graph, times, csv(a.committed), csv(a.running), a.cap, status,  # O(cap) iterations after O(n + e + R log R) ready_tasks
-                         stable_filter(a.plan, csv(a.committed)), held):  # O(S + c)
+    done, busy = task_ids(a.committed), task_ids(a.running)  # O(len)
+    warn_unknown("committed", done, graph)  # O(c)
+    warn_unknown("running", busy, graph)  # O(c)
+    for t in ready_tasks(graph, times, done, busy, a.cap, status,  # O(cap) iterations after O(n + e + R log R) ready_tasks
+                         stable_filter(a.plan, done), held):  # O(S + c)
         print(t)  # O(1)
+    for t, r in held.items():  # O(h)
+        if t not in done:  # O(1)
+            print(f"held={t} {r}", file=sys.stderr)  # O(1)
+    print_unstable(stable_blocked(a.plan, graph, done, busy, status, held))  # O(n + e + S)
     return 0  # O(1)
 
 
