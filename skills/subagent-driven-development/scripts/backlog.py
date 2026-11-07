@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers), skip <issue>, park <batch> --reason R; start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, park <batch> --reason R; start|wait|answer and ship are routed."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -128,9 +128,7 @@ def cmd_plan(a) -> int:
     if err:
         print("\n".join(err))
         return 3
-    cuts = [f"shortened: {n}" for n in bc.fit_proposal(prop)]  # O(q)
-    if len(cuts) > 5:
-        cuts = cuts[:5] + [f"shortened: {len(cuts) - 5} more"]
+    cuts = bc.cut_lines(bc.fit_proposal(prop))  # O(q)
     batches, errs = bc.check_proposal(prop, {t["number"] for t in trusted})
     if errs:
         why = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(prop.get("summary", ""))).split())[:300]
@@ -184,14 +182,17 @@ def cmd_decide(a) -> int:
         try:
             b = bs.batch(d, a.batch)
             q = json.loads((Path(b["worktree"]) / ".superlite" / "question.json").read_text())
-        except (KeyError, TypeError, OSError, ValueError) as e:
+        except (KeyError, TypeError, OSError, ValueError, RecursionError) as e:
             print(f"BLOCKED: {a.batch} question.json unreadable: {e}")
             return 3
+        cuts = bc.fit_question(q)  # O(q)
         errs = bc.check_question(q)
         if errs:
             print(f"BLOCKED: {a.batch} question.json invalid: " + "; ".join(errs[:5]))
             return 3
         print(json.dumps(bc.clean_question(q), indent=2))
+        for line in bc.cut_lines(cuts):  # O(q)
+            print(line, file=sys.stderr)
         return 0
     if not a.file:
         print("BLOCKED: decide needs --print or --file")

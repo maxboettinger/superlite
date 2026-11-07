@@ -6,7 +6,9 @@
     backlog_run.py answer B --file F        (F = {"answers": {question: answer}})
 
 `start` takes several ids: each refusal prints BLOCKED, the others start. A lead whose stop text holds no
-Status line is re-prompted once (`reprompted`), then parked. A stop record whose transcript lags (blank, or
+Status line is re-prompted once (`reprompted`), then parked. A question.json is cut to the limits (header, label,
+description; each cut is reported as `shortened:`); one still invalid is sent back to the lead once
+(`question_reprompted`), then parked. A stop record whose transcript lags (blank, or
 without the status its `last` holds) is re-read for fleet_io.READ_MS, then parked "(transcript unread)".
 Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
 """
@@ -30,6 +32,10 @@ STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_DECISION|
 REPROMPT = ("superlite: your last turn ended without a status line. Go on with the batch; end your turn only with "
             "Status: DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED, or write .superlite/question.json and end with "
             "Status: NEEDS_DECISION.")
+QUESTION_FIX = ("superlite: your .superlite/question.json is invalid: {errs}. Limits: 1 to 4 distinct questions, each question 1 to 300 "
+                "characters, a header of 1 to 12, 2 to 4 options with distinct labels of 1 to 60 and descriptions up to 200 "
+                "(an over-long header, label or description is cut for you). Rewrite the file and end your turn with "
+                "Status: NEEDS_DECISION.")
 
 
 def _root() -> Path:
@@ -158,7 +164,7 @@ def cmd_start(a) -> int:
         def mark(d, bid=bid, rec=rec, wt=wt, branch=branch):  # O(b)
             x = bs.batch(d, bid)
             x.update({"state": "running", "lead": rec["id"], "agent": rec["name"], "worktree": str(wt), "branch": branch,
-                      "since": _now_ms(), "reason": "", "ship_runs": 0, "reprompted": False})
+                      "since": _now_ms(), "reason": "", "ship_runs": 0, "reprompted": False, "question_reprompted": False})
         bs.update(p, mark)  # O(size)
         print(f"{bid} running lead={rec['id']} worktree={wt}")  # O(1)
     return code  # O(1)
@@ -252,14 +258,22 @@ def _round(root, sd, p, states) -> list:
             fresh = False  # O(1)
         if fresh:  # O(1)
             try:  # O(1)
-                errs = bc.check_question(json.loads(q.read_text(encoding="utf-8")))  # O(size)
+                obj = json.loads(q.read_text(encoding="utf-8"))  # O(size)
+                cuts = bc.fit_question(obj)  # O(size)
+                errs = bc.check_question(obj)  # O(size)
             except (OSError, ValueError, RecursionError):  # O(1)
-                errs = ["not JSON"]  # O(1)
-            if errs:  # O(1)
-                _park(p, sd, data.get("repo", ""), b, f"invalid question.json: {'; '.join(errs)}", out)  # O(size)
+                cuts, errs = [], ["not JSON"]  # O(1)
+            reason = f"invalid question.json: {'; '.join(errs)}"  # O(1)
+            if errs and b.get("question_reprompted"):  # O(1)
+                _park(p, sd, data.get("repo", ""), b, reason, out)  # O(size)
+            elif errs:  # O(1)
+                bs.update(p, lambda d, bid=bid: bs.batch(d, bid).update({"question_reprompted": True, "since": _now_ms()}))  # O(size)
+                if fleet_io.main(["send", b["lead"], "--text", QUESTION_FIX.format(errs="; ".join(errs[:5])), "--plan", str(sd)]):  # O(w)
+                    _park(p, sd, data.get("repo", ""), b, reason, out)  # O(size)
             else:  # O(1)
                 bs.update(p, lambda d, bid=bid: bs.batch(d, bid).__setitem__("state", "needs_decision"))  # O(size)
                 out.append(f"{bid} needs_decision question={q}")  # O(1)
+                out.extend(bc.cut_lines(cuts, f"{bid} "))  # O(c)
             continue  # O(1)
         if b.get("merged"):  # O(1)
             out.extend(_shipped(p, sd, root, b, wt))  # O(size)
@@ -352,7 +366,7 @@ def cmd_answer(a) -> int:
     def mark(d):  # O(b)
         x = bs.batch(d, a.batch)
         x.setdefault("answers", {}).update(ans)
-        x.update({"questions": n, "state": "running", "since": _now_ms(), "reprompted": False})
+        x.update({"questions": n, "state": "running", "since": _now_ms(), "reprompted": False, "question_reprompted": False})
     bs.update(p, mark)  # O(size)
     msg = f"Max answered your question: read {af} (record it as a Ruling), then go on with the batch."  # O(1)
     rc = fleet_io.main(["send", b["lead"], "--text", msg, "--plan", str(sd)])  # O(w)

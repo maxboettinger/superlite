@@ -87,7 +87,7 @@ def test_wait_needs_decision_or_invalid_question(bk, capsys):
     wt = running(bk); q = wt / ".superlite" / "question.json"; q.write_text(json.dumps(Q)); bk.stops["W1"] = {"t": 2000, "last": "Status: NEEDS_DECISION"}
     assert run(capsys, "wait", "--timeout", "0") == (0, f"B1 needs_decision question={q}\n")
     assert get(bk, "B1")["state"] == "needs_decision" and not any(c[0] == "stop" for c in bk.calls)
-    running(bk); q.write_text('{"questions": []}')
+    running(bk, question_reprompted=True); q.write_text('{"questions": []}')
     assert run(capsys, "wait", "--timeout", "0")[1] == "B1 parked: invalid question.json: questions: 1 to 4 entries\n"
 
 def test_wait_ships_stops_the_lead_and_cleans_up(bk, capsys):
@@ -132,7 +132,7 @@ def test_start_passes_summary_paths_not_contents(bk, capsys, monkeypatch):
     assert run(capsys, "start")[0] == 0 and seen == [[str(f)]]
 
 def test_wait_parks_on_a_deeply_nested_question_json(bk, capsys):
-    wt = running(bk); bk.stops["W1"] = {"t": 2000, "last": "Status: NEEDS_DECISION"}
+    wt = running(bk, question_reprompted=True); bk.stops["W1"] = {"t": 2000, "last": "Status: NEEDS_DECISION"}
     (wt / ".superlite" / "question.json").write_text("[" * 200000 + "]" * 200000)
     rc, out = run(capsys, "wait", "--timeout", "0")
     assert rc == 0 and out.startswith("B1 parked: invalid question.json") and get(bk, "B1")["state"] == "parked"
