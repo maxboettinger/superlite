@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches; over-long question texts are shortened and named), decide (Max's answers), skip <issue>, park <batch> --reason R; start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers), skip <issue>, park <batch> --reason R; start|wait|answer and ship are routed."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -14,6 +14,7 @@ from pathlib import Path  # O(1)
 
 TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")  # O(1)
 MAX_BATCHES = 7  # O(1)
+ISSUE_LIMIT = 200  # O(1)
 ROUTED = ("start", "wait", "answer")  # O(1)
 
 
@@ -109,7 +110,9 @@ def cmd_plan(a) -> int:
         print("BLOCKED: backlog has open batches (" + ", ".join(f"{b['id']} {b['state']}" for b in open_) + ")")
         return 2
     info = _gh(["repo", "view", "--json", "nameWithOwner,visibility"])
-    issues = _gh(["api", "--paginate", "repos/{owner}/{repo}/issues?state=open&per_page=100", "--jq", ISSUES_JQ])[:200]
+    issues = _gh(["api", "--paginate", "repos/{owner}/{repo}/issues?state=open&per_page=100", "--jq", ISSUES_JQ])
+    rest = issues[ISSUE_LIMIT:]
+    issues = issues[:ISSUE_LIMIT]
     admitted, skipped = set(d["admitted"]), set(d["skipped"])
     public = info.get("visibility") == "PUBLIC"
     trusted, outside = [], []
@@ -142,6 +145,11 @@ def cmd_plan(a) -> int:
             print("\n".join(cuts))
         return 3
     batches = bc.separate(batches)
+    planned = {n for b in batches for n in b["issues"]}
+    why_out = "not planned (cap)" if len(prop["batches"]) >= MAX_BATCHES else "not planned (triage)"
+    outside += [{"number": t["number"], "title": t["title"], "reason": why_out} for t in trusted if t["number"] not in planned]  # O(i)
+    outside += [{"number": i["number"], "title": i.get("title", ""), "reason": f"not triaged ({ISSUE_LIMIT} cap)"}
+                for i in rest if i["number"] not in skipped]  # O(i)
     shown = {}
 
     def apply(data):
@@ -152,6 +160,7 @@ def cmd_plan(a) -> int:
         data["repo"] = info["nameWithOwner"]
         data["titles"] = {str(t["number"]): t["title"] for t in trusted}
         data["outside"] = outside
+        data["approved_ship"] = None
         data["batches"] += _renumber(copy.deepcopy(batches), data["batches"])
         shown["lines"] = bs.status_lines(data)
     bs.update(p, apply)
