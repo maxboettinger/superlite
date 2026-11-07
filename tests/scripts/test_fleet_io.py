@@ -86,13 +86,15 @@ def test_report_survives_a_broken_json_line_in_the_latest_turn(tmp_path):
     tr.write_text(json.dumps(user("task")) + "\n" + json.dumps(assistant("Status: DONE")) + "\n{broken json\n" + json.dumps(assistant("Files: a.py")) + "\n", encoding="utf-8")
     assert io.report_text(tr) == "Status: DONE"
 
-def test_report_empty_turn_returns_empty_and_wait_uses_last(world, tmp_path):
+def test_report_empty_turn_returns_empty_and_wait_reports_unknown(world, tmp_path):
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]
     tr = tmp_path / "w1.jsonl"; rec(tr, user("task"), assistant("Status: DONE"), user("next"), assistant({"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}))
     assert io.report_text(tr) == ""
     (world.sd / "metrics.jsonl").write_text(json.dumps({"ev": "stop", "t": sent + 10, "agent_id": "W1", "type": "x", "transcript": str(tr), "last": "Status: BLOCKED - from last"}) + "\n")
     world.fh.states = [{"sl-proj-w1": "done"}]
-    assert io.wait(world.sd, ["W1"], 5000)[0]["status"] == "BLOCKED"
+    assert io.wait(world.sd, ["W1"], 30000)[0]["status"] == "UNKNOWN"
+    md = (world.sd / "fleet" / "reports" / "T3.md").read_text()
+    assert "Status: BLOCKED - from last" in md.split("Stop record line (cut at 160 chars, not the report):")[1] and "Status: BLOCKED - from last" not in md.split("Stop record line")[0]
 
 def test_verify_line_lists_test_folder_files(tmp_path):
     plan = make_plan(tmp_path, [{"id": "T2", "owns": "scripts/test_layers.py, tests/scripts/test_test_layers.py, docs/testing.md"}, {"id": "T5", "owns": "src/a_test.go, src/a.go"}, {"id": "T6", "owns": "src/x.py, docs/x.md"}])
