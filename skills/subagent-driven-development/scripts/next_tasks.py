@@ -5,6 +5,7 @@
 
 Also hosts the small plan-parsing helpers the other run scripts import
 (plan sections, Owns expansion, task graph via plan_tools). Stdlib only.
+Headings and fields inside fenced code blocks are ignored by the plan parser.
 """
 
 # Complexity notation:
@@ -149,14 +150,15 @@ def parse_plan(plan):  # O(L)
     info: title, est_time (min), est_context (k tokens), owns (list), body.
     """
     lines = read_text(plan).split("\n")  # O(L)
+    fenced, _ = sibling("plan_tools").scan_fences(lines)  # O(L)
     tasks, cur = {}, None  # O(1)
-    for line in lines:  # O(L lines) iterations
-        m = _TASK_HEADING.match(line)  # O(len line)
+    for line, fen in zip(lines, fenced):  # O(L lines) iterations
+        m = None if fen else _TASK_HEADING.match(line)  # O(len line)
         if m:  # O(1)
             cur = {"id": m.group(1), "head": m.group(2), "body": []}  # O(1)
             tasks[cur["id"]] = cur  # O(1)
             continue  # O(1)
-        if _HEADING.match(line) and len(_HEADING.match(line).group(1)) <= 3:  # O(len line) regex, run twice
+        if not fen and _HEADING.match(line) and len(_HEADING.match(line).group(1)) <= 3:  # O(len line) regex, run twice
             cur = None  # O(1)
             continue  # O(1)
         if cur is not None:  # O(1)
@@ -164,7 +166,9 @@ def parse_plan(plan):  # O(L)
     out = {}  # O(1)
     for tid, t in tasks.items():  # O(n) iterations
         body = "\n".join(t["body"])  # O(len body)
-        if not (re.match(r"T\d", tid) or "**Owns:**" in body):  # `### S3 storage` is prose, not a task | O(len body)
+        flags, _ = sibling("plan_tools").scan_fences(t["body"])  # O(len body)
+        plain = "\n".join(b for b, f in zip(t["body"], flags) if not f)  # unfenced lines only | O(len body)
+        if not (re.match(r"T\d", tid) or "**Owns:**" in plain):  # `### S3 storage` is prose, not a task | O(len body)
             continue  # O(1)
         head = t["head"]  # O(1)
         parts = [p.strip() for p in head.split("·")]  # O(len head)
@@ -174,8 +178,8 @@ def parse_plan(plan):  # O(L)
         out[tid] = {  # O(1)
             "id": tid,  # O(1)
             "title": title or tid,  # O(1)
-            "est_time": _num(r"Est\.?\s*time:?\*{0,2}\s*([\d.]+)\s*min", head, body),  # O(len body) regex
-            "est_context": _num(r"Est\.?\s*context:?\*{0,2}\s*([\d.]+)\s*k", head, body),  # O(len body) regex
+            "est_time": _num(r"Est\.?\s*time:?\*{0,2}\s*([\d.]+)\s*min", head, plain),  # O(len body) regex
+            "est_context": _num(r"Est\.?\s*context:?\*{0,2}\s*([\d.]+)\s*k", head, plain),  # O(len body) regex
             "owns": parse_owns(_field(body, "Owns")),  # O(len body + owns text)
             "body": body,  # O(1)
         }  # O(1)
@@ -191,7 +195,10 @@ def _num(pattern, head, body):  # O(len text)
 
 
 def _field(body, name):  # O(len body)
-    m = re.search(rf"^\*\*{name}:\*\*[ \t]*(.*)$", body, re.M)  # O(len body)
+    lines = body.split("\n")  # O(len body)
+    fenced, _ = sibling("plan_tools").scan_fences(lines)  # O(len body)
+    plain = "\n".join(ln for ln, f in zip(lines, fenced) if not f)  # O(len body)
+    m = re.search(rf"^\*\*{name}:\*\*[ \t]*(.*)$", plain, re.M)  # O(len body)
     return m.group(1) if m else ""  # O(1)
 
 

@@ -5,7 +5,9 @@
 
 The lookup agents use to read their own task and their neighbours instead of asking the coordinator. It reads
 the plan file on every call, so it is never stale. Output: the task block verbatim, then `## Consumed
-interfaces`: for each producer of an item Tn consumes, its title, Produces lines and `e.g.` examples.
+interfaces`: for each producer of an item Tn consumes, its title, Produces lines and `e.g.` examples; then
+`## Plan sections this task names`: the text of each `##`/`###` plan section whose heading phrase the task
+block mentions (a one-word heading only in an explicit form such as `Design section`), when there is any.
 Exit 2 for an unknown task or a missing plan. Language-neutral. Stdlib only.
 """
 # Complexity notation:
@@ -45,6 +47,61 @@ def producers_of(plan, task) -> list:  # O(n*q*s)
     return sorted(found, key=pt.nkey), missing  # O(k log k)
 
 
+SKELETON = {"coverage", "task graph", "predicted schedule", "review focus", "self-review", "self review"}  # O(1)
+SEC_HEAD = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")  # O(1)
+
+
+def _phrase(heading: str) -> str:  # O(s)
+    t = re.sub(r"[`*]", "", heading).strip()  # O(s)
+    t = re.sub(r"^\d+(?:\.\d+)*\.?\s+", "", t)  # O(s)
+    return " ".join(t.rstrip(":").split()).lower()  # O(s)
+
+
+def _names(phrase: str, text: str) -> bool:  # O(L)
+    """True when `text` names the section phrase: two or more words anywhere, one word only in explicit forms."""
+    words = phrase.split()  # O(s)
+    if not words:  # O(1)
+        return False  # O(1)
+    if len(words) == 1:  # O(1)
+        w = re.escape(phrase)  # O(s)
+        pat = rf"(?<![\w-])(?:{w}\s+section|section\s+{w}|§\s*{w}|##\s*{w})(?![\w-])"  # O(1)
+    else:  # O(1)
+        base = phrase[:-1] if phrase.endswith("s") else phrase  # O(1)
+        pat = rf"(?<![\w-]){re.escape(base)}s?(?![\w-])"  # O(1)
+    return re.search(pat, text) is not None  # O(L)
+
+
+def referenced_sections(plan, task) -> list:  # O(L + sections*L)
+    """Text of each plan section (`##`/`###`, not a task heading) whose heading phrase the task block names."""
+    lines, task_lines = plan.lines, {t.line for t in plan.tasks}  # O(n)
+    n = len(task.text.split("\n"))  # O(block)
+    mine = [ln for i, ln in enumerate(lines[task.line:task.line + n], task.line) if not plan.fenced[i]]  # O(block)
+    text = " ".join(" ".join(re.sub(r"[`*]", "", "\n".join(mine)).lower().split()).split())  # O(block)
+    heads = []  # (index, level) of unfenced headings | O(1)
+    for i, ln in enumerate(lines):  # O(L) iterations
+        m = None if plan.fenced[i] else SEC_HEAD.match(ln)  # O(s)
+        if m:  # O(1)
+            heads.append((i, len(m.group(1)), m.group(2)))  # O(1)
+    out, last_end = [], -1  # O(1)
+    for k, (i, level, title) in enumerate(heads):  # O(H) iterations
+        if level not in (2, 3) or i in task_lines or i < last_end:  # O(1)
+            continue  # O(1)
+        end = len(lines)  # O(1)
+        for j, lv, _ in heads[k + 1:]:  # O(H) iterations
+            if lv <= level or j in task_lines:  # O(1)
+                end = j  # O(1)
+                break  # O(1)
+        body = lines[i + 1:end]  # O(section)
+        phrase = _phrase(title)  # O(s)
+        if not any(b.strip() for b in body) or phrase in SKELETON or not _names(phrase, text):  # O(L)
+            continue  # O(1)
+        while body and not body[-1].strip():  # O(blank)
+            body = body[:-1]  # O(section)
+        out.append("\n".join([lines[i]] + body))  # O(section)
+        last_end = i + 1 + len(body)  # O(1)
+    return out  # O(1)
+
+
 def render(plan, tid) -> str:  # O(n*q*s)
     task = plan.by_id.get(tid)  # O(1)
     if task is None:  # O(1)
@@ -59,6 +116,11 @@ def render(plan, tid) -> str:  # O(n*q*s)
         out += [f"Produces: {x}" for x in p.produces] + [f"e.g.: {x}" for x in p.examples]  # O(q)
     for item in missing:  # O(q) iterations
         out += ["", f"Consumes: {item} (no task in the plan produces it)"]  # O(1)
+    secs = referenced_sections(plan, task)  # O(L)
+    if secs:  # O(1)
+        out += ["", "## Plan sections this task names"]  # O(1)
+        for sec in secs:  # O(k) iterations
+            out += ["", sec]  # O(1)
     return "\n".join(out) + "\n"  # O(out)
 
 
