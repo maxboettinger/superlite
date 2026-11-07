@@ -11,7 +11,7 @@
 `wait` prints one line per finished worker (`W1 T3 DONE findings=0 <report json>`; a layer worker: `W3 layer-headless
 GREEN exit=0 <log>` plus its last log line), `BLOCKED-UI` plus the screen for a blocked one, and `TIMEOUT W2 ...` for the
 rest. A stop record ends the wait in any Herdr state when it holds a status; one without a status on a done or idle
-pane is UNKNOWN plus the last pane lines. Its exit code is always 0. A report is written as `<id>.md` (the text) and `<id>.json` (`fleet_report.parse`);
+pane is UNKNOWN plus the last pane lines. A stop record whose transcript reads empty, or without the status its cut `last` line holds, is re-read for READ_MS (10 s), then reported UNKNOWN (transcript unread); the cut line is never the report. Its exit code is always 0. A report is written as `<id>.md` (the text) and `<id>.json` (`fleet_report.parse`);
 a one-turn worker (fixer, reviewer, research, layer) is stopped once its status is final.
 """
 # Complexity notation:
@@ -39,6 +39,7 @@ import testcmd  # noqa: E402 | O(1)
 STATUS_LINE = "Status: DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED"  # O(1)
 FINAL = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "APPROVED", "CHANGES_REQUESTED")  # a one-turn worker with one of these is stopped | O(1)
 SETTLE_MS = 10000  # a stop record must appear within this long after the state change | O(1)
+READ_MS = 10000  # a transcript that lags its stop record is re-read this long before the report is UNKNOWN | O(1)
 HERE = Path(__file__).resolve().parent  # O(1)
 
 
@@ -313,16 +314,26 @@ def _stop_worker(sd, wid):  # O(w) plus herdr calls
         pass  # O(1)
 
 
-def _finish(sd, wid, w, text, source, tail=None):  # TAIL: the last pane lines of a turn that ended without a report | O(len + w)
+def _lags(text, last, label):  # the transcript text is behind its stop record: empty, or without a status while the cut line has one | O(len)
+    if fleet_report.parse(text, label)["status"] != "UNKNOWN":  # O(len)
+        return False  # O(1)
+    return not text.strip() or fleet_report.parse(last, label)["status"] != "UNKNOWN"  # O(len)
+
+
+def _finish(sd, wid, w, text, source, tail=None, cut=None):  # TAIL: the last pane lines of a turn that ended without a report; CUT: the stop record line of a transcript that stayed behind | O(len + w)
     label = w.get("task") or wid  # O(1)
     rid = label.split(",")[0]  # O(1)
     rdir = Path(sd) / "fleet" / "reports"  # O(1)
     mp, jp = rdir / f"{rid}.md", rdir / f"{rid}.json"  # O(1)
-    _write(mp, text if tail is None else "UNKNOWN (turn ended without a report)\n\n" + text + "\n\nLast pane lines:\n" + tail)  # O(len)
+    if cut is not None:  # O(1)
+        body = f"UNKNOWN (transcript empty or behind its stop record after {READ_MS // 1000} s: {cut[0]})\n\n" + (text + "\n\n" if text.strip() else "") + "Stop record line (cut at 160 chars, not the report):\n" + cut[1] + "\n\nLast pane lines:\n" + (tail or "")  # O(len)
+    else:  # O(1)
+        body = text if tail is None else "UNKNOWN (turn ended without a report)\n\n" + text + "\n\nLast pane lines:\n" + tail  # O(len)
+    _write(mp, body)  # O(len)
     rep = fleet_report.parse(text, rid, allow_json=source == "transcript")  # a screen holds no trustworthy json block | O(len)
     _write(jp, json.dumps({**rep, "id": wid, "label": label, "role": w.get("role") or "implementer", "source": source, "report": str(mp)}, indent=2) + "\n")  # O(len)
     n = len(rep["findings"])  # O(1)
-    print(f"{wid} {label} {rep['status']} findings={n} {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else ""))  # O(1)
+    print(f"{wid} {label} {rep['status']} findings={n} {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
     _ready(sd, wid, label)  # O(w)
     pane_label(sd, wid, f"{wid} {label} reported, waiting for coordinator")  # before the worker may be stopped | O(w)
     if w.get("one_turn") and rep["status"] in FINAL:  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker | O(1)
@@ -367,7 +378,7 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
     workers = fs.load(sd)["workers"]  # O(w)
     pending = list(ids) if ids else [k for k, v in workers.items() if v.get("state") == "busy"]  # O(w)
     changed = {}  # wid -> ms the state first read done or idle | O(1)
-    seen = {}  # wid -> (stop t, report text), so a transcript is read once per stop record | O(1)
+    seen = {}  # wid -> {t: stop t, first: ms first seen, text, lag}; a flushed transcript is read once per stop record, a lagging one each poll | O(1)
     results = []  # O(1)
     start = clock()  # O(1)
     while pending:  # O(timeout/poll) iterations
@@ -387,11 +398,23 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
                 continue  # O(1)
             st = states.get(fs.name_of(sd, wid, w))  # herdr lists agents by name, not by worker id | O(1)
             rec = latest_stop(sd, wid, int(w.get("sent") or 0), stops)  # O(m)
-            if rec is not None and seen.get(wid, (None,))[0] != rec["t"]:  # read each stop record's transcript once | O(1)
-                text = report_text(rec["transcript"]) if rec.get("transcript") else ""  # O(T)
-                seen[wid] = (rec["t"], text or rec.get("last", ""))  # O(1)
-            text = seen[wid][1] if rec is not None else ""  # O(1)
-            reported = rec is not None and fleet_report.parse(text, (w.get("task") or wid).split(",")[0])["status"] != "UNKNOWN"  # O(len)
+            label = (w.get("task") or wid).split(",")[0]  # O(1)
+            if rec is not None:  # O(1)
+                sn = seen.get(wid)  # O(1)
+                if sn is None or sn["t"] != rec["t"]:  # a newer stop record resets | O(1)
+                    sn = seen[wid] = {"t": rec["t"], "first": now, "text": "", "lag": True}  # O(1)
+                if sn["lag"]:  # read once per stop record, again only while the transcript lags | O(1)
+                    tr = rec.get("transcript")  # O(1)
+                    text = (report_text(tr) if tr else "") or ("" if tr else rec.get("last", ""))  # O(T)
+                    sn["text"], sn["lag"] = text, bool(tr) and _lags(text, rec.get("last", ""), label)  # O(len)
+                    if sn["lag"] and now - sn["first"] >= READ_MS:  # the window is over: the cut line is no report | O(1)
+                        results.append(_finish(sd, wid, w, text, "transcript", tail=_pane_tail(sd, wid, w), cut=(tr, rec.get("last", ""))))  # O(len)
+                        pending.remove(wid)  # O(w)
+                        continue  # O(1)
+                    if sn["lag"]:  # keep re-reading; neither the blocked screen nor the settle fallback applies to a turn that has a stop record | O(1)
+                        continue  # O(1)
+            text = seen[wid]["text"] if rec is not None else ""  # O(1)
+            reported = rec is not None and fleet_report.parse(text, label)["status"] != "UNKNOWN"  # O(len)
             if rec is not None and (reported or st in ("done", "idle")):  # a stop record ends the wait in any herdr state once it holds a status | O(1)
                 results.append(_finish(sd, wid, w, text, "transcript", None if reported else _pane_tail(sd, wid, w)))  # O(len + s)
                 pending.remove(wid)  # O(w)
