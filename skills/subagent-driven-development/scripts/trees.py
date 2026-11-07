@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Isolated test tree per task, so parallel agents never compile each other's half-edited files.
 
-    trees.py clean            remove every tree under .superlite/trees, print `removed N`
-    trees.py path Tn          print the tree path of task Tn (without creating it)
+    trees.py clean [--plan P]   remove every tree under .superlite/trees, print `removed N`
+    trees.py path Tn [--plan P] print the tree path of task Tn (without creating it)
+
+`--plan P` (anywhere in the arguments) works in the git checkout holding P, else in the current folder.
 
 A tree is a detached git worktree at `.superlite/trees/<task>` on the base commit (the newest
 checkpoint, else HEAD). `prepare` resets it to the base and overlays only the task's own files
@@ -150,14 +152,22 @@ def clean(root):  # O(T) + spawns
 
 
 def main(argv=None):  # O(T) + spawns
+    import autocommit  # O(1) lazy: run_tests imports this module
+    import state  # O(1) lazy
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
-    if argv[:1] == ["clean"] and len(argv) == 1:  # O(1)
-        print(f"removed {clean('.')}")  # O(T)
+    rest, plan = autocommit.split_plan(argv)  # O(len argv)
+    usage = "usage: trees.py clean | path Tn [--plan P]"  # O(1)
+    if plan == "":  # O(1) --plan without a value
+        print(usage, file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    root = (state.git_root(plan) or ".") if plan else "."  # O(d)
+    if rest == ["clean"]:  # O(1)
+        print(f"removed {clean(root)}")  # O(T)
         return 0  # O(1)
-    if argv[:1] == ["path"] and len(argv) == 2:  # O(1)
-        print(tree_path(".", argv[1]).resolve())  # O(1)
+    if len(rest) == 2 and rest[0] == "path":  # O(1)
+        print(tree_path(root, rest[1]).resolve())  # O(1)
         return 0  # O(1)
-    print("usage: trees.py clean | path Tn", file=sys.stderr)  # O(1)
+    print(usage, file=sys.stderr)  # O(1)
     return 2  # O(1)
 
 
