@@ -7,7 +7,9 @@
     feedback.py triage [--host H]... [--all] [--issues FILE | --repo OWNER/NAME]
                                                    untriaged entries of this machine and the listed hosts, duplicates
                                                    grouped, ranked by count, each matched against the open issues
-    feedback.py mark ID...                         record entries as triaged (filed, merged or dropped)
+    feedback.py mark ID... [--host H]...           record entries as triaged (filed, merged or dropped); each argument
+                                                   splits on whitespace, an id in no inbox (this machine, the triaged
+                                                   file, then the hosts) is exit 2 and nothing is written
 
 Files: `$SUPERLITE_HOME/feedback.jsonl` (default `~/.superlite/`), append-only, one per machine;
 `feedback-triaged.json` there holds the triaged ids; `feedback-hosts` there lists other machines (one ssh host per
@@ -369,14 +371,30 @@ def cmd_triage(a) -> int:  # O(i*g*w + g*t*w) + h ssh processes + one gh process
     return 0  # O(1)
 
 
-def cmd_mark(a) -> int:  # O(x + n)
+def cmd_mark(a) -> int:  # O(x + n + i) + h ssh processes only when an id is unknown locally
+    want = [t for x in a.ids for t in x.split()]  # O(n)
+    if not want:  # O(1)
+        print("feedback mark: no feedback ids given", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    prior = triaged()  # O(x)
+    known = prior | {e["id"] for e in local_entries()}  # O(x + i*w)
+    missing = [t for t in dict.fromkeys(want) if t not in known]  # O(n)
+    hs = hosts(a.host) if missing else []  # O(h)
+    if missing:  # O(1)
+        known |= {e["id"] for h in hs for e in remote_entries(h)}  # O(h*i*w) + h ssh processes
+    bad = [t for t in dict.fromkeys(want) if t not in known]  # O(n)
+    if bad:  # O(1)
+        where = f" (searched hosts: {', '.join(hs)})" if hs else ""  # O(h)
+        for t in bad:  # O(n) iterations
+            print(f"feedback mark: unknown feedback id {t}{where}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
     f = home() / "feedback-triaged.json"  # O(1)
-    ids = sorted(triaged() | set(a.ids))  # O((x + n) log(x + n))
+    ids = sorted(prior | set(want))  # O((x + n) log(x + n))
     f.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     tmp = f.with_suffix(".tmp")  # O(1)
     tmp.write_text(json.dumps({"ids": ids}) + "\n", encoding="utf-8")  # O(x + n)
     tmp.replace(f)  # O(1) atomic replace
-    print(f"feedback marked: {len(a.ids)} ({len(ids)} triaged in total)")  # O(1)
+    print(f"feedback marked: {len(set(want))} ({len(ids)} triaged in total)")  # O(1)
     return 0  # O(1)
 
 
@@ -395,6 +413,7 @@ def main(argv=None) -> int:  # O(1) + the subcommand
     p.add_argument("--repo", help="OWNER/NAME for gh (default: origin of superlite's checkout, else of the working folder)")  # O(1)
     p = sub.add_parser("mark", help="record entries as triaged")  # O(1)
     p.add_argument("ids", nargs="+")  # O(1)
+    p.add_argument("--host", action="append", help="ssh host whose inbox may hold the ids (default: feedback-hosts)")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     sys.stdout.reconfigure(encoding="utf-8")  # O(1)
     return {"add": cmd_add, "triage": cmd_triage, "mark": cmd_mark}[a.cmd](a)  # O(1) + the subcommand
