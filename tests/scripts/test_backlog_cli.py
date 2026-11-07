@@ -83,7 +83,7 @@ def test_outside_issues_cannot_be_smuggled_and_private_repos_trust_all(bk, capsy
     rc, out = cli(capsys, "plan")
     assert rc == 3 and "BLOCKED: proposal rejected" in out and "B1: unknown issue #3" in out and load(bk)["batches"] == []
     bk.vis = "PRIVATE"
-    assert cli(capsys, "plan")[0] == 0 and load(bk)["outside"] == [] and "- #3 Three" in (bk.sd / "briefs" / "triage.md").read_text()
+    assert cli(capsys, "plan")[0] == 0 and not [o for o in load(bk)["outside"] if "author" in o] and "- #3 Three" in (bk.sd / "briefs" / "triage.md").read_text()
 
 def test_plan_refuses_while_batches_are_open(bk, capsys):
     cli(capsys, "plan")

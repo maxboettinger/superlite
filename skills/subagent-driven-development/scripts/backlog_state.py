@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Backlog state (phase 3): `<main root>/.superlite/backlog.json`, locked read-modify-write, questions, status lines."""
+"""Backlog state (phase 3): `<main root>/.superlite/backlog.json`, locked read-modify-write, questions, status lines.
+
+An `outside[]` entry with a non-empty string `reason` is a left-out issue (the plan did not take it): it never becomes an
+Admit question and `status_lines` prints it grouped by reason. An entry without one is an outside-author issue."""
 import fcntl
 import json
 import os
@@ -103,6 +106,22 @@ def _title(t) -> str:
     return re.sub(r"[\x00-\x1f\x7f]", " ", str(t))[:80]  # O(len)
 
 
+def _left_out(o: dict) -> bool:
+    return isinstance(o.get("reason"), str) and bool(o["reason"])  # O(1)
+
+
+def admit_entries(data: dict) -> list:
+    return [o for o in data.get("outside", []) if not _left_out(o)]  # O(outside)
+
+
+def left_out_lines(data: dict) -> list:
+    groups = {}
+    for o in data.get("outside", []):  # O(outside)
+        if _left_out(o):
+            groups.setdefault(_title(o["reason"]), []).append(f"#{o['number']}")
+    return [f"{r}: {' '.join(ns)}" for r, ns in groups.items()]  # O(groups)
+
+
 def _admit_q(o: dict) -> str:
     return f"Admit outside issue #{o['number']} ({_title(o.get('title', ''))}, by {o.get('author', '')}) into the backlog?"
 
@@ -113,7 +132,7 @@ def open_questions(data: dict) -> list:
         out.append({"question": SHIP_Q, "header": "Ship", "multiSelect": False, "options": [
             {"label": SHIP_OK, "description": "one yes for all batches"},
             {"label": SHIP_NO, "description": "leads stop before ship"}]})
-    for o in data.get("outside", []):  # O(outside)
+    for o in admit_entries(data):  # O(outside)
         out.append({"question": _admit_q(o), "header": f"#{o['number']}", "multiSelect": False, "options": [
             {"label": "Admit", "description": "triaged on the next sl backlog plan"},
             {"label": "Skip", "description": "stays out of this backlog"}]})
@@ -125,7 +144,7 @@ def open_questions(data: dict) -> list:
 
 def answer(data: dict, answers: dict, by: str, now: str) -> list:
     qs = {q["question"] for q in open_questions(data)}
-    errs, outside = [], {_admit_q(o): o for o in data.get("outside", [])}
+    errs, outside = [], {_admit_q(o): o for o in admit_entries(data)}
     for q, a in answers.items():  # O(answers * batches)
         if q not in qs:
             errs.append(f"no open question: {q}")
@@ -187,7 +206,7 @@ def status_lines(data: dict) -> list:
     repo = f" {data['repo']}" if data.get("repo") else ""
     head = f"backlog{repo}: {len(bs)} batches, {run} running, {sum(1 for b in bs if b['state'] == 'shipped')} shipped, {sh}"
     if not bs:
-        return [head]
+        return [head] + left_out_lines(data)
     active = [b for b in bs if b["state"] in ACTIVE]
     lines = [head, "batch | issues | state | lead | PR | next"]
     for b in bs:  # O(batches)
@@ -206,6 +225,7 @@ def status_lines(data: dict) -> list:
             nxt = (b.get("version") or "-") + (" OPEN " + " ".join(f"#{i}" for i in b["open_issues"]) if b.get("open_issues") else "")
         issues = " ".join(f"#{i}" for i in b.get("issues", []))
         lines.append(f"{b['id']} | {issues} | {s} | {b.get('lead') or '-'} | {'#%s' % b['pr'] if b.get('pr') else '-'} | {nxt}")
+    lines.extend(left_out_lines(data))
     n = len(open_questions(data))
     if n:
         lines.append(f"questions: {n} open (sl backlog decide --print)")
