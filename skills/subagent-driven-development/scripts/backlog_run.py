@@ -6,7 +6,8 @@
     backlog_run.py answer B --file F        (F = {"answers": {question: answer}})
 
 `start` takes several ids: each refusal prints BLOCKED, the others start. A lead whose stop text holds no
-Status line is re-prompted once (`reprompted`), then parked.
+Status line is re-prompted once (`reprompted`), then parked. A stop record whose transcript lags (blank, or
+without the status its `last` holds) is re-read for fleet_io.READ_MS, then parked "(transcript unread)".
 Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
 """
 # Complexity notation: b = batches, w = workers, m = lines of metrics.jsonl
@@ -163,6 +164,10 @@ def cmd_start(a) -> int:
     return code  # O(1)
 
 
+def _lags(text, last) -> bool:
+    return not STATUS.search(text) and (not text.strip() or bool(STATUS.search(last)))  # O(len)
+
+
 def _stop_text(rec) -> str:
     import fleet_io
     text = ""  # O(1)
@@ -259,6 +264,18 @@ def _round(root, sd, p, states) -> list:
         if b.get("merged"):  # O(1)
             out.extend(_shipped(p, sd, root, b, wt))  # O(size)
             continue  # O(1)
+        if rec.get("transcript"):  # O(1)
+            try:  # O(1)
+                text = str(fleet_io.report_text(rec["transcript"]) or "")  # O(size)
+            except Exception:  # O(1)
+                text = ""  # O(1)
+            lastc = " ".join(str(rec.get("last") or "lead stopped").split())[:120]  # O(len)
+            if _lags(text, str(rec.get("last") or "")):  # O(len)
+                if _now_ms() - rec.get("t", 0) < fleet_io.READ_MS:  # O(1)
+                    continue  # O(1)
+                if STATUS.search(str(rec.get("last") or "")):  # O(len)
+                    _park(p, sd, data.get("repo", ""), b, f"{lastc} (transcript unread)", out)  # O(size)
+                    continue  # O(1)
         if STATUS.search(_stop_text(rec)):  # O(len)
             last = " ".join(str(rec.get("last") or "lead stopped").split())[:120]  # O(len)
             _park(p, sd, data.get("repo", ""), b, last, out)  # O(size)
