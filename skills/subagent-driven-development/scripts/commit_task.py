@@ -7,7 +7,8 @@
                       [--dispatch [--pool .superlite/pool.json] [--running T3] [--cap 10] [--batch N]]
 
 Several ids commit in order in one process (one plan parse, one exclude check). Output:
-the SHA for one task; `Tn <sha>` per task for several. A task that is not checkpointed prints `Tn FAILED: <reason>`
+the SHA for one task; `Tn <sha>` per task for several; `Tn: no change since its last checkpoint <sha>` for a task
+re-run with no change since its own checkpoint (no new commit, no probe or seam check). A task that is not checkpointed prints `Tn FAILED: <reason>`
 (one task or several) and the call exits non-zero. Each committed
 task's agent in the pool (`current: Tn`) gets `current` cleared, `busy: false`, and Tn in
 its `tasks`. `--dispatch` then prints `next:` and the `dispatch` lines (ready tasks and
@@ -623,6 +624,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     if shared:  # O(1)
         nt.add_incidents(a.log, [(f, 0, f"{tid}: shared test adjusted", "workaround", "commit_task", "accepted")  # O(m) one append
                                  for f in shared])
+    reused = False  # O(1)
     if autocommit.is_on():  # opt-in: a real commit on the user's branch | O(1)
         git("add", "-A", "--", *mine)  # O(m) + process spawn
         title = autocommit.message(tid, task["title"], a.plan)  # O(L) file read
@@ -633,13 +635,19 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
             return fail(1, "git commit failed: " + (err.splitlines() or ["no output"])[0][:120])  # O(len)
         sha = git("rev-parse", "HEAD").stdout.strip()  # O(1) + process spawn
     else:  # default: shadow checkpoint under refs/superlite, HEAD/branch/index/tree untouched | O(m) + git spawns
-        sha = autocommit.checkpoint(tid, task["title"], mine, a.plan)  # O(m) + process spawn
-    append_ledger(a.ledger, f"- commit {tid} {sha[:10]} {task['title']}")  # O(1) file I/O
+        sha, reused = autocommit.record(tid, task["title"], mine, a.plan)  # O(m) + process spawn
+        if reused:  # nothing changed since the task's own checkpoint: no new commit | O(1)
+            if not hasattr(a, "unchanged"):  # O(1)
+                a.unchanged = set()  # O(1)
+            a.unchanged.add(tid)  # O(1)
+    if tid not in done or not reused:  # a reused checkpoint is in the ledger already | O(1)
+        append_ledger(a.ledger, f"- commit {tid} {sha[:10]} {task['title']}")  # O(1) file I/O
     for f in also:  # O(k) iterations
         append_ledger(a.ledger, f"- Ruling: {tid} also commits {named.get(f, f)} - {a.ruling}")  # O(1) file I/O
     resolve_blocked(a.log, tid, set(mine))  # O(log size)
-    launch_probes(sha, a.plan)  # O(L) + process spawn
-    launch_seam_checks(a.plan, tid, a.ledger, a.log)  # O(c + s) + process spawn per seam (graph memoized)
+    if not reused:  # O(1)
+        launch_probes(sha, a.plan)  # O(L) + process spawn
+        launch_seam_checks(a.plan, tid, a.ledger, a.log)  # O(c + s) + process spawn per seam (graph memoized)
     return 0, sha  # O(1)
 
 
@@ -734,7 +742,10 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
         worst = max(worst, code)  # O(1)
         if sha:  # O(1)
             committed.append(tid)  # O(1)
-            print(sha if len(a.task) == 1 else f"{tid} {sha}")  # O(1)
+            if tid in getattr(a, "unchanged", ()):  # O(1)
+                print(f"{tid}: no change since its last checkpoint {sha}")  # O(1)
+            else:  # O(1)
+                print(sha if len(a.task) == 1 else f"{tid} {sha}")  # O(1)
         else:  # a task that is not checkpointed always says so, one task or several (#179) | O(1)
             print(f"{tid} FAILED: {a.failed.get(tid, 'not checkpointed')}")  # O(1)
     if a.blocked:  # one hint for every task, not one per task | O(1)
