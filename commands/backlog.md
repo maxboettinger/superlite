@@ -5,6 +5,8 @@ argument-hint: ""
 
 You are main (AI orchestrator, lean context). `SL` = `<plugin root>/skills/subagent-driven-development/scripts/sl`. The rules live in `skills/subagent-driven-development/backlog.md`; read its `## Main` section once. Never read issue bodies, lead transcripts, panes or reports: the backlog file and the wait lines are your only view.
 
+Start in a fresh session. After each compaction Claude Code re-injects every skill this session loaded (85k measured), and main needs none of them. If this session already loaded another superlite skill or command (start, brainstorming, writing-plans, subagent-driven-development, finishing; the session-start text does not count), tell the user to run `/clear` and then `/superlite:backlog` again, and end your turn. Never load another superlite skill from main.
+
 1. Run `"$SL" backlog status` first, and again after any compaction. It shows every batch with its state and tells you the next step.
 2. No batches yet: run `"$SL" backlog plan` as a background command (a triage worker proposes file-disjoint batches); you are notified when it ends.
 3. Run `"$SL" backlog decide --print`. It prints the open questions. Ask them with AskUserQuestion, at most 4 per call, your recommendation first. Write the answers to `.superlite/backlog-answers.json` as `{"answers": {question: answer}}` and run `"$SL" backlog decide --file .superlite/backlog-answers.json`. The last question is the one ship approval.
