@@ -359,7 +359,10 @@ def resolve(root=".", paths=()):  # O(m + f)
     command = template.replace("{files}", files) if paths else cfg["test"]  # O(1)
     if paths and "{files}" not in template:  # a test_file without {files} runs everything | O(1)
         command = template  # O(1)
-    command = command.replace("{names}", names_filter(paths)).replace("{only_testing}", only_testing(paths, root))  # O(p)
+    if "{names}" in command:  # O(1)
+        command = command.replace("{names}", names_filter(paths))  # O(p)
+    if "{only_testing}" in command:  # only an Xcode template pays for suite detection and its warning | O(1)
+        command = command.replace("{only_testing}", only_testing(paths, root))  # O(p)
     return {"language": lang, "isolate": iso, "python": False, "command": command, "junit": cfg.get("junit") or "",  # O(1)
             "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src}
 

@@ -11,7 +11,8 @@ test becomes a `test-failure` incident; on a --full run each test file whose
 tests all pass becomes a `verified` incident (once per distinct entry). With `--task Tn` each
 `test-failure` incident carries `task`, and a later run closes that task's open ones whose test
 now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a pytest run that produces
-no results logs one `no-result` incident (so does a non-Python run that prints no test count: `no tests ran:`). A `--fast` path that does not exist (node suffix `::` ignored) is a usage error: exit 2, `test path not found`, no incident. Appends
+no results logs one `no-result` incident (so does a non-Python run that prints no test count: `no tests ran:`). A `--fast` path that does not exist (node suffix `::` ignored) is a usage error: exit 2, `test path not found`, no incident. A Node project without `node_modules` is refused the same way
+(exit 2, `node_modules missing in <dir>: run <install> first`, no incident); in an isolated `--task` tree the root's `node_modules` is symlinked in first (relative link, no setup command), and the guard checks the tree. Appends
 a `tests` line to the progress ledger. On every run it also writes
 `.superlite/test-summary.json` (--summary), the file `pt_review packet` reads:
 `{"passed": N, "failed": N, "skipped": N, "seconds": S, "mode": "fast|full",
@@ -413,6 +414,38 @@ def node_install_line(root, spec):  # O(m + f) the usage-error text for a Node r
     return f"node_modules missing in {root}: run {lock} first"  # O(1)
 
 
+def link_node_modules(root, tree, spec):  # O(1) link the root's node_modules into an isolated task tree; True when it changed the link
+    if (spec.get("setup") or "").strip():  # a setup command installs inside the tree itself | O(1)
+        return False  # O(1)
+    root, tree = Path(root).resolve(), Path(tree)  # O(1)
+    src, dst = root / "node_modules", tree / "node_modules"  # O(1)
+    if not (root / "package.json").is_file() or not src.is_dir():  # O(1)
+        return False  # O(1)
+    if dst.is_symlink():  # O(1)
+        try:  # a link loop must not crash the run | O(1)
+            same = dst.resolve() == src.resolve()  # O(d)
+        except (OSError, RuntimeError):  # O(1)
+            same = False  # O(1)
+        if same:  # already the root's | O(1)
+            return False  # O(1)
+        dst.unlink()  # dangling, looping or wrong link | O(1)
+    elif dst.exists():  # a real folder in the tree stays | O(1)
+        return False  # O(1)
+    try:  # O(1)
+        os.symlink(os.path.relpath(src, tree.resolve()), dst)  # O(d)
+    except OSError:  # O(1)
+        return False  # the tree guard then names the tree | O(1)
+    return True  # O(1)
+
+
+def usage_error(a, label, reason):  # O(summary size) a usage error: stderr, zero summary, exit 2
+    print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+    write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
+    publish_summary(a)  # O(summary size)
+    print("0 0 0 0.0")  # O(1)
+    return 2  # O(1)
+
+
 def unit_snapshot(a, label):  # the unit layer's digests before a full run, None when it cannot be stamped | O(n * size) n = repo files
     if label != "full" or a.task:  # O(1)
         return None  # O(1)
@@ -655,19 +688,11 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         a.unit_snap = None  # O(1)
     node_gone = node_install_line(Path.cwd(), spec)  # O(m + f)
     if node_gone:  # no install yet: a usage error, not a test failure (#269) | O(1)
-        print(f"run_tests: {node_gone}", file=sys.stderr)  # O(1)
-        write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=node_gone)  # O(1)
-        publish_summary(a)  # O(summary size)
-        print("0 0 0 0.0")  # O(1)
-        return 2  # O(1)
+        return usage_error(a, label, node_gone)  # O(summary size)
     if spec["python"] and paths:  # a missing path is a usage error, not a no-result stop (#235) | O(p)
         gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd())  # O(p)
         if gone:  # O(1)
-            print(f"run_tests: {gone}", file=sys.stderr)  # O(1)
-            write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=gone)  # O(1)
-            publish_summary(a)  # O(summary size)
-            print("0 0 0 0.0")  # O(1)
-            return 2  # O(1)
+            return usage_error(a, label, gone)  # O(summary size)
     if not spec["python"]:  # O(1)
         tree = None  # O(1)
         if a.task and spec.get("isolate", False):  # compiled stack: test own files only, in an isolated tree | O(1)
@@ -676,16 +701,16 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             if not plan or not Path(plan).is_file():  # O(1)
                 tried = a.plan or ", ".join(x for x in (sp and f"{sp} (.superlite/stable.json)", nt.DEFAULT_PLAN) if x)  # O(1)
                 reason = f"--task {a.task} needs its plan: pass --plan PLAN (tried {tried}, not found)"  # O(1)
-                print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
-                write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
-                publish_summary(a)  # O(summary size)
-                print("0 0 0 0.0")  # O(1)
-                return 2  # O(1)
+                return usage_error(a, label, reason)  # O(summary size)
             info = nt.parse_plan(plan)  # O(L)
             if a.task not in info:  # O(1)
                 nt.die(f"unknown task {a.task}")  # O(1)
             ct.add_also_owns(info, a.ledger)  # --also and --claim rulings own their files too (#239) | O(c + o)
             tree = trees.prepare(".", a.task, info[a.task]["owns"])  # O(f * o) + git checkout
+            link_node_modules(Path.cwd(), tree, spec)  # O(d)
+            tree_gone = node_install_line(tree, spec)  # a tree without node_modules fails like the root | O(m + f)
+            if tree_gone:  # O(1)
+                return usage_error(a, label, tree_gone)  # O(summary size)
         return run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
 
     with tempfile.TemporaryDirectory() as tmp:  # O(1) mkdtemp
