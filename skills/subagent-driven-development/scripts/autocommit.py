@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in auto-commit and hidden checkpoints for superlite runs.
 
-    autocommit.py on|off|status
+    autocommit.py on|off|status         any command also takes --plan P (plan, folder or .superlite): work in P's checkout
     autocommit.py apply [--no-squash]   real commits on the current branch, one per task (--no-squash: one per checkpoint)
     autocommit.py clean      delete refs/superlite/* and the checkpoint state
 
@@ -113,7 +113,15 @@ def stage(files, env):
 
 
 def checkpoint(tid, title, files, plan):
-    """Shadow-commit `files` on top of the previous checkpoint (HEAD for the first); return the sha.
+    """Shadow-commit `files` like `record`; return the sha."""
+    return record(tid, title, files, plan)[0]
+
+
+def record(tid, title, files, plan):
+    """Shadow-commit `files` on top of the previous checkpoint (HEAD for the first); return (sha, reused).
+
+    When the staged tree equals the parent's and the task already has an entry, nothing is
+    committed: (the task's newest sha, True).
 
     A temporary index holds the parent's tree plus the owned files, so HEAD, the branch,
     the user's index and the working tree are not touched. A file gone from disk and from
@@ -135,13 +143,39 @@ def checkpoint(tid, title, files, plan):
         tree = stage(files, env)
     finally:
         Path(idx).unlink(missing_ok=True)
+    ptree = git("rev-parse", f"{parent}^{{tree}}").stdout.strip() if parent else EMPTY_TREE
+    if tree == ptree:
+        same = [e for e in st["entries"] if e["task"] == tid]
+        if same:
+            return same[-1]["sha"], True
     msg = message(tid, title, plan)
     cmd = ["commit-tree", tree, "-m", msg] + (["-p", parent] if parent else [])
     sha = git(*cmd).stdout.strip()
     git("update-ref", f"{REF_ROOT}/{st['run']}/{tid}", sha)
     st["entries"].append({"task": tid, "sha": sha, "title": msg, "files": files})
     save_state(st)
-    return sha
+    return sha, False
+
+
+def split_plan(argv):
+    """Remove every `--plan P` / `--plan=P`; return (the other items, the last P: None if absent, "" if valueless)."""
+    rest, plan, i = [], None, 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--plan":
+            nxt = argv[i + 1] if i + 1 < len(argv) else ""
+            if nxt.startswith("--"):  # another option, not a value
+                plan, i = "", i + 1
+                continue
+            plan = nxt
+            i += 2
+            continue
+        if a.startswith("--plan="):
+            plan = a[len("--plan="):]
+        else:
+            rest.append(a)
+        i += 1
+    return rest, plan
 
 
 def refs():
@@ -330,19 +364,29 @@ def listing():
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    cmd = argv[0] if argv else "status"
+    usage = __doc__.split("\n")[0] + "\nusage: autocommit.py on|off|status|apply [--no-squash]|clean [--plan P]"
+    rest, plan = split_plan(argv)
+    if plan == "":
+        print(usage, file=sys.stderr)
+        return 2
+    if plan:
+        import state
+        root = state.git_root(plan)
+        if root:
+            os.chdir(root)
+    cmd = rest[0] if rest else "status"
     if cmd in ("on", "off"):
         set_on(cmd == "on")
         print(f"autocommit {cmd}")
     elif cmd == "status":
         print(f"autocommit: {'on (commit each task on your branch)' if is_on() else 'off (hidden checkpoints, work stays uncommitted)'}")
         print(listing())
-    elif cmd == "apply" and set(argv[1:]) <= {"--no-squash"}:
-        return apply(squash="--no-squash" not in argv[1:])
+    elif cmd == "apply" and set(rest[1:]) <= {"--no-squash"}:
+        return apply(squash="--no-squash" not in rest[1:])
     elif cmd == "clean":
         clean()
     else:
-        print(__doc__.split("\n")[0] + "\nusage: autocommit.py on|off|status|apply [--no-squash]|clean", file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
     return 0
 
