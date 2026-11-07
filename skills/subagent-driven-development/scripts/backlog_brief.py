@@ -78,7 +78,10 @@ def triage_brief(issues, ctx):  # O(i)
         out += ["    " + CTRL.sub("", ln.rstrip("\r")) for ln in str(i.get("body") or "").splitlines()]  # O(body)
     out.append("Rules: no two batches share a file unless one depends on the other; list every repo-relative file a batch "
                "touches (at least one file per batch); depends names batches that must ship first; decisions lists each batch's major decisions, one "
-               "AskUserQuestion call object {\"questions\": [...]} per decision (2 to 4 options, header at most 12 characters), "
+               "AskUserQuestion call object {\"questions\": [...]} per decision (1 to 4 distinct questions per decision, question at most 300 characters, "
+               "header at most 12 characters, 2 to 4 options with distinct labels, option label at most 60 characters, "
+               "description at most 200 characters; an over-long header, label or description is cut to its limit, "
+               "any other violation rejects the whole proposal), "
                "recommended option first. Leave umbrella and tracking issues (whose acceptance is the run itself or other issues) "
                "out of every batch.")  # O(1)
     out.append('End with Status: DONE, then one fenced json block: {"status": "DONE", "files": [], "tests": "", "findings": [], '

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches), decide (Max's answers), skip <issue>, park <batch> --reason R; start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches; over-long question texts are shortened and named), decide (Max's answers), skip <issue>, park <batch> --reason R; start|wait|answer and ship are routed."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -125,6 +125,9 @@ def cmd_plan(a) -> int:
     if err:
         print("\n".join(err))
         return 3
+    cuts = [f"shortened: {n}" for n in bc.fit_proposal(prop)]  # O(q)
+    if len(cuts) > 5:
+        cuts = cuts[:5] + [f"shortened: {len(cuts) - 5} more"]
     batches, errs = bc.check_proposal(prop, {t["number"] for t in trusted})
     if errs:
         why = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(prop.get("summary", ""))).split())[:300]
@@ -135,6 +138,8 @@ def cmd_plan(a) -> int:
         except (OSError, TypeError, ValueError):
             where = ""
         print("BLOCKED: proposal rejected\n" + "\n".join(errs[:5]) + where + f"\ntriage worker {prop.get('status', '?')}: {why or 'no summary'}")
+        if cuts:
+            print("\n".join(cuts))
         return 3
     batches = bc.separate(batches)
     shown = {}
@@ -150,7 +155,7 @@ def cmd_plan(a) -> int:
         data["batches"] += _renumber(copy.deepcopy(batches), data["batches"])
         shown["lines"] = bs.status_lines(data)
     bs.update(p, apply)
-    print("\n".join(shown["lines"]))
+    print("\n".join(shown["lines"] + cuts))
     return 0
 
 
