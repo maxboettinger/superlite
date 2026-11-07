@@ -12,7 +12,7 @@ tests all pass becomes a `verified` incident (once per distinct entry). With `--
 `test-failure` incident carries `task`, and a later run closes that task's open ones whose test
 now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a pytest run that produces
 no results logs one `no-result` incident (so does a non-Python run that prints no test count: `no tests ran:`). A `--fast` path that does not exist (node suffix `::` ignored) is a usage error: exit 2, `test path not found`, no incident. A Node project without `node_modules` is refused the same way
-(exit 2, `node_modules missing in <dir>: run <install> first`, no incident); in an isolated `--task` tree the root's `node_modules` is symlinked in first (relative link, no setup command), and the guard checks the tree. Appends
+(exit 2, `node_modules missing in <dir>: run <install> first`, no incident); in an isolated `--task` tree the root's and each workspace package's `node_modules` are symlinked in first (relative link, no setup command), and the guard checks the tree. Appends
 a `tests` line to the progress ledger. On every run it also writes
 `.superlite/test-summary.json` (--summary), the file `pt_review packet` reads:
 `{"passed": N, "failed": N, "skipped": N, "seconds": S, "mode": "fast|full",
@@ -414,28 +414,52 @@ def node_install_line(root, spec):  # O(m + f) the usage-error text for a Node r
     return f"node_modules missing in {root}: run {lock} first"  # O(1)
 
 
-def link_node_modules(root, tree, spec):  # O(1) link the root's node_modules into an isolated task tree; True when it changed the link
-    if (spec.get("setup") or "").strip():  # a setup command installs inside the tree itself | O(1)
-        return False  # O(1)
-    root, tree = Path(root).resolve(), Path(tree)  # O(1)
-    src, dst = root / "node_modules", tree / "node_modules"  # O(1)
-    if not (root / "package.json").is_file() or not src.is_dir():  # O(1)
-        return False  # O(1)
+def _link_dir(src, dst):  # O(d) symlink dst to src (relative); True when the link changed
     if dst.is_symlink():  # O(1)
         try:  # a link loop must not crash the run | O(1)
             same = dst.resolve() == src.resolve()  # O(d)
         except (OSError, RuntimeError):  # O(1)
             same = False  # O(1)
-        if same:  # already the root's | O(1)
+        if same:  # already the source | O(1)
             return False  # O(1)
-        dst.unlink()  # dangling, looping or wrong link | O(1)
+        try:  # O(1)
+            dst.unlink()  # dangling, looping or wrong link | O(1)
+        except OSError:  # O(1)
+            return False  # O(1)
     elif dst.exists():  # a real folder in the tree stays | O(1)
         return False  # O(1)
     try:  # O(1)
-        os.symlink(os.path.relpath(src, tree.resolve()), dst)  # O(d)
+        os.symlink(os.path.relpath(src, dst.parent.resolve()), dst)  # O(d)
     except OSError:  # O(1)
         return False  # the tree guard then names the tree | O(1)
     return True  # O(1)
+
+
+def package_dirs(tree):  # O(F log F) the tree's package folders (posix, sorted), outside node_modules; [] on a git error
+    try:  # O(1)
+        names = trees.split_z(trees.git(tree, "ls-files", "-co", "--exclude-standard", "-z"))  # O(F)
+    except (RuntimeError, OSError):  # not a git tree, or no git binary | O(1)
+        return []  # O(1)
+    out = set()  # O(1)
+    for name in names:  # O(F)
+        parts = name.split("/")  # O(len name)
+        if parts[-1] == "package.json" and len(parts) > 1 and "node_modules" not in parts:  # O(len name)
+            out.add("/".join(parts[:-1]))  # O(len name)
+    return sorted(out)  # O(F log F)
+
+
+def link_node_modules(root, tree, spec):  # O(F log F) link the root's and each package's node_modules into an isolated task tree; True when any link changed
+    if (spec.get("setup") or "").strip():  # a setup command installs inside the tree itself | O(1)
+        return False  # O(1)
+    root, tree = Path(root).resolve(), Path(tree)  # O(1)
+    if not (root / "package.json").is_file():  # O(1)
+        return False  # O(1)
+    changed = False  # O(1)
+    for d in ["", *package_dirs(tree)]:  # O(F log F + P)
+        src = root / d / "node_modules"  # O(1)
+        if src.is_dir() and (tree / d).is_dir():  # O(1)
+            changed = _link_dir(src, tree / d / "node_modules") or changed  # O(d)
+    return changed  # O(1)
 
 
 def usage_error(a, label, reason):  # O(summary size) a usage error: stderr, zero summary, exit 2
