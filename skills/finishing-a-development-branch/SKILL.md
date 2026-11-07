@@ -23,7 +23,7 @@ Also note the current branch, `git status --short` (superlite default: the build
 
 ## 3. Summarize
 
-Prepare: branch, base, commits ahead (`git log --oneline <base>..HEAD`), `git diff --stat <base>..HEAD`, the test counts line, and the rulings list recorded during the work (including review findings left unfixed). When the work was a superlite build, also the build report summary from `finish` (or `sl report --plan <plan>`); print it before the options and name `<plan>.report.md` (next to the plan) as the full report, to show on request.
+Prepare: branch, base, commits ahead (`git log --oneline <base>..HEAD`), `git diff --stat <base>..HEAD`, the test counts line, and the rulings list recorded during the work (including review findings left unfixed). When the work was a superlite build, also the build report summary from `finish` (or `sl report --plan <plan>`); print it before the options and name `<plan>.build-report.md` (next to the plan) as the full report, to show on request.
 
 ## 4. Decide
 
