@@ -15,6 +15,7 @@ command, exec, nohup, time, xargs, find -exec) are unwrapped. Targets come from 
 resolved against each possible directory, then judged by the path policy.
 A readable `for NAME in WORDS; do ...; done` is walked once per word with NAME bound to it; the variable of every other
 `for` or `select` loop is unknown. A block on an unknown target names the word the guard could not resolve.
+A block's or group's heredoc, here-string or pipe reaches every command inside it (`done <<EOF`, `{ ...; } <<EOF`).
 A variable's value is used only when bash would not split it (default IFS or the IFS the command sets) and a value with a
 glob is judged as a glob in every mode; `~+`, `~-` and `~` follow PWD, OLDPWD and HOME, `~user` is unknown, and PWD is the
 directory the current command runs in.
@@ -148,12 +149,14 @@ class _State:  # O(1)
         self.nested = False  # a shell's -c body: its cd lands where the guard cannot follow (the old guard's rule) | O(1)
         self.multi = {}  # variable -> its earlier values in this command (each is judged too) | O(1)
         self.here = tuple(dirs)  # the directories the current command runs in (PWD, ~+) | O(1)
+        self.stdin, self.pipe = [], False  # what every command of this walk reads: a block's heredocs and here-strings, a pipe | O(1)
 
     def fork(self, dirs):  # O(v)
         s = _State(dirs)  # O(1)
         s.old, s.stack, s.vars, s.made = self.old, list(self.stack), dict(self.vars), set(self.made)  # O(v)
         s.multi = {k: list(v) for k, v in self.multi.items()}  # O(v)
         s.shared, s.cond, s.nested = self.shared, self.cond, self.nested  # O(1)
+        s.stdin, s.pipe = list(self.stdin), self.pipe  # O(docs)
         return s  # O(1)
 
 
@@ -162,6 +165,7 @@ class _Cmd:  # O(1)
     def __init__(self, seg, inn, persist, piped, docs, cond):  # O(1)
         self.seg, self.inn, self.persist, self.piped, self.docs, self.cond = seg, inn, persist, piped, docs, cond  # O(1)
         self.chained = False  # after && or ||: the command may not run | O(1)
+        self.stdin, self.pipe = [], False  # what the blocks around the command feed it (already part of docs / piped) | O(1)
         self.ok = self.fail = inn  # directories after the command succeeds / fails | O(1)
 
 
@@ -933,6 +937,15 @@ def _stray(v, ctx):  # O(p) + git | an untracked, unowned regular file in active
         return False  # O(1)
 
 
+def _prog_pairs(w, flag, progs):  # O(docs * w) | (target, "?") of each heredoc or here-string read as the interpreter's program
+    out = []  # O(1)
+    for doc in progs:  # O(docs)
+        k = w.index("-", 1) if "-" in w[1:] else len(w)  # O(w)
+        w2 = _argv_sub(w[:k] + [flag, doc] + w[k + 1:])  # O(w + doc)
+        out.extend((t, "?") for t in guard_tools.targets(w2))  # O(doc)
+    return out  # O(docs)
+
+
 def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judge the paths guard_files and guard_tools name
     base = "ln" if base == "link" else base  # `link A B` is `ln A B` | O(1)
     w = [base] + list(words[1:]) + (["?"] if xargs else [])  # xargs adds operands read from stdin | O(w)
@@ -952,11 +965,12 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
     if m:  # O(1)
         flag = {"node": "-e", "nodejs": "-e", "bun": "-e", "perl": "-e", "ruby": "-e", "php": "-r"}.get(base, "-c")  # O(1)
     has_code = m is not None and (flag in w[1:] or (flag == "-c" and "-m" in w[1:]))  # O(w)
-    script = _script(w, c.inn, st) if (m and flag == "-c" and not has_code and not c.docs) else None  # O(w * d)
+    script = _script(w, c.inn, st) if (m and flag == "-c" and not has_code) else None  # O(w * d)
     if base in guard_tools.COMMANDS or base.lower() in guard_tools.COMMANDS or m:  # O(1)
         progs = c.docs if (m and not has_code) else []  # a heredoc or here-string is the program | O(docs)
         if script is not None:  # a script this command wrote by heredoc: its code, with the words after it as argv | O(code)
             pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub([base, "-c", script[0]] + script[1])))  # O(code)
+            pairs.extend(_prog_pairs(w, flag, progs))  # the docs on its stdin are judged too | O(docs)
         elif base == "git":  # git: from each directory, with the command's variables and the project as top | O(d * w)
             env = dict(st.vars)  # O(v)
             for x in c.seg.words:  # NAME=value words before git | O(w)
@@ -974,10 +988,7 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
                 ts.append("?")  # the patch lands below a folder git does not name as its cwd | O(1)
             pairs.extend((t, "?") for t in ts)  # O(t)
         elif progs:  # O(docs)
-            for doc in progs:  # O(docs)
-                k = w.index("-", 1) if "-" in w[1:] else len(w)  # O(w)
-                w2 = _argv_sub(w[:k] + [flag, doc] + w[k + 1:])  # O(w + doc)
-                pairs.extend((t, "?") for t in guard_tools.targets(w2))  # O(doc)
+            pairs.extend(_prog_pairs(w, flag, progs))  # O(docs)
         elif m and not has_code and c.piped and (len(w) == 1 or "-" in w[1:]):  # a program piped in | O(w)
             pairs.append(("?", None))  # O(1)
         else:  # O(1)
@@ -1074,12 +1085,16 @@ def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, th
     _tick(ctx)  # O(1)
     st.here = c.inn  # O(1)
     ctx.cmd = None  # O(1)
-    for body in seg.bodies:  # substitutions run in a subshell | O(bodies)
-        v = _walk_text(body, st.fork(c.inn), ctx, depth + 1)  # O(body)
+    for body in seg.bodies:  # substitutions run in a subshell that reads the block's stdin | O(bodies)
+        sub = st.fork(c.inn)  # O(v)
+        sub.stdin, sub.pipe = list(c.stdin), c.piped  # O(docs)
+        v = _walk_text(body, sub, ctx, depth + 1)  # O(body)
         if v is not None:  # O(1)
             return v  # O(1)
     if seg.subshell is not None:  # O(1)
-        v = _walk_text(seg.subshell, st.fork(c.inn), ctx, depth + 1)  # O(subshell)
+        sub = st.fork(c.inn)  # O(v)
+        sub.stdin, sub.pipe = list(c.docs), c.piped  # a `( ... ) <<EOF` subshell reads the command's own docs too | O(docs)
+        v = _walk_text(seg.subshell, sub, ctx, depth + 1)  # O(subshell)
         if v is not None:  # O(1)
             return v  # O(1)
     for r in seg.redirects:  # O(redirects)
@@ -1255,10 +1270,36 @@ def _unroll(segs, i, st, ctx):  # O(s + MAX_BRACE * s) | (index of done, segment
     return end, new, binds, {id(last): (name, vals, pre)}  # O(MAX_BRACE * s)
 
 
+def _docs_of(seg):  # O(docs) | the heredocs and here-string texts a segment feeds its command
+    return list(seg.heredocs) + [r.target + "\n" for r in seg.redirects if r.op == "<<<"]  # O(docs)
+
+
+def _block_stdin(segs):  # O(s * w) | id(segment) -> (docs, piped) it takes from the blocks and groups of this list
+    out, stack = {}, []  # O(1)
+    for e, seg in enumerate(segs):  # O(s)
+        if _opens(seg):  # O(w)
+            stack.append(e)  # O(1)
+        elif _closes(seg) and stack:  # O(1)
+            o = stack.pop()  # O(1)
+            docs, piped = _docs_of(seg), o > 0 and segs[o - 1].sep == "|"  # O(docs)
+            if piped and segs[o - 1].words[:1] == ["cat"] and all(x.startswith("-") for x in segs[o - 1].words[1:]):  # `cat <<EOF | while ...` | O(w)
+                docs = _docs_of(segs[o - 1]) + docs  # O(docs)
+            for x in segs[o:e]:  # O(s)
+                have = out.get(id(x), ([], False))  # O(1)
+                out[id(x)] = (have[0] + docs, have[1] or piped)  # O(docs)
+        elif not seg.words and seg.subshell is None and (seg.heredocs or seg.redirects):  # a closing group's redirects: `{ ...; } <<EOF` | O(1)
+            docs = _docs_of(seg)  # O(docs)
+            for x in segs[:e]:  # O(s)
+                have = out.get(id(x), ([], False))  # O(1)
+                out[id(x)] = (have[0] + docs, have[1])  # O(docs)
+    return out  # O(s)
+
+
 def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segments in order; st.dirs follows the cds
     segs, heads, dones = list(segs), {}, {}  # a for loop is unrolled in the copy; heads: header copy -> (variable, value) | O(s)
     n, i, ok, fail, depth_c = len(segs), 0, None, None, 0  # O(1)
     start = st.dirs  # O(1)
+    bstdin = _block_stdin(segs)  # O(s * w)
     while i < n:  # O(s)
         op = segs[i - 1].sep if i > 0 else ""  # O(1)
         if op in ("&&", "||") and ok is not None:  # O(1)
@@ -1271,6 +1312,7 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
             segs[i:un[0] + 1] = un[1]  # O(s)
             n = len(segs)  # O(1)
             heads.update(un[2])  # O(MAX_BRACE)
+            bstdin = _block_stdin(segs)  # the copies are new segments | O(s * w)
             dones.update(un[3])  # O(1)
         j = i  # O(1)
         while j < n - 1 and segs[j].sep == "|":  # a pipeline: every part runs in its own subshell | O(s)
@@ -1293,16 +1335,16 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
                 if i == j:  # O(1)
                     u_ok, u_fail = inn, inn  # O(1)
                 continue  # O(1)
-            docs, m = list(seg.heredocs) + [r.target + "\n" for r in seg.redirects if r.op == "<<<"], k + 1  # O(docs)
+            extra, bpipe = bstdin.get(id(seg), ([], False))  # what the blocks and groups around it feed it | O(1)
+            cstdin, cpipe = st.stdin + extra, st.pipe or bpipe  # O(docs)
+            docs = _docs_of(seg)  # O(docs)
             prev = segs[k - 1] if k > i else None  # O(1)
             if prev is not None and prev.words[:1] == ["cat"] and all(x.startswith("-") for x in prev.words[1:]):  # O(w)
-                docs = list(prev.heredocs) + [r.target + "\n" for r in prev.redirects if r.op == "<<<"] + docs  # `cat <<EOF | sh` | O(docs)
-            while m < n and not segs[m].words and segs[m].subshell is None:  # redirects of a closing group: `{ ...; } <<EOF` | O(s)
-                docs += list(segs[m].heredocs) + [r.target + "\n" for r in segs[m].redirects if r.op == "<<<"]  # O(docs)
-                m += 1  # O(1)
+                docs = _docs_of(prev) + docs  # `cat <<EOF | sh` | O(docs)
+            docs += cstdin  # O(docs)
             persist = i == j and sep != "&"  # O(1)
-            c = _Cmd(seg, inn, persist, k > 0 and segs[k - 1].sep == "|", docs, st.cond or force_cond or depth_c > 0)  # O(1)
-            c.chained = op in ("&&", "||")  # O(1)
+            c = _Cmd(seg, inn, persist, (k > 0 and segs[k - 1].sep == "|") or cpipe, docs, st.cond or force_cond or depth_c > 0)  # O(1)
+            c.chained, c.stdin, c.pipe = op in ("&&", "||"), cstdin, cpipe  # O(1)
             v = _run(c, st, ctx, depth)  # O(n)
             alts = _alternatives(seg, st) if v is None else []  # a reassigned variable: its earlier values | O(v * n)
             if alts is None:  # O(1)
@@ -1312,7 +1354,7 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
                 st2 = st.fork(c.inn)  # an earlier value runs for real on its own copy of the shell | O(v)
                 st2.vars.update(combo)  # O(v)
                 c2 = _Cmd(seg, c.inn, c.persist, c.piped, docs, c.cond)  # O(1)
-                c2.chained = c.chained  # O(1)
+                c2.chained, c2.stdin, c2.pipe = c.chained, c.stdin, c.pipe  # O(1)
                 v = _run(c2, st2, ctx, depth)  # O(n)
                 if v is not None:  # O(1)
                     break  # O(1)
