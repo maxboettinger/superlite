@@ -49,12 +49,13 @@ def _fit(holder: dict, key: str, hi: int, name: str, what: str, notes: list) -> 
         notes.append(f'"{name}" {what}: {len(v)} -> {len(c)} characters')
 
 
-def fit_question(q: object) -> list[str]:
-    """Cut an over-long header (12), option label (60) and option description (200) of a question batch in place.
+def fit_question(q: object, question: bool = False) -> list[str]:
+    """Cut an over-long question (300, only with question=True), header (12), option label (60) and option description (200) of a question batch in place.
 
     q is {"questions": [...]} or a bare question object (cut in the caller's dict). Returns one note per cut. A label
     ending in " (Recommended)" keeps that suffix. A cut that would leave only blanks is not made. The question text is
-    never cut; every other error, and every unknown key, is left alone for check_question."""
+    cut only with question=True, which plan uses; a lead's question keeps its text because main answers it by that
+    text. Every other error, and every unknown key, is left alone for check_question."""
     notes: list[str] = []
     qs = as_batch(q).get("questions") if isinstance(q, dict) else None
     for e in qs if isinstance(qs, list) else []:  # O(questions * options)
@@ -62,6 +63,8 @@ def fit_question(q: object) -> list[str]:
             continue
         t = e.get("question")
         name = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", t).split())[:60] if isinstance(t, str) else "?"
+        if question:
+            _fit(e, "question", 300, name, "question", notes)
         _fit(e, "header", 12, name, "header", notes)
         opts = e.get("options")
         for n, o in enumerate(opts if isinstance(opts, list) else [], 1):
@@ -80,16 +83,16 @@ def cut_lines(notes: list[str], prefix: str = "") -> list[str]:
 
 
 def fit_proposal(obj: object) -> list[str]:
-    """Cut an over-long header (12), option label (60) and option description (200) in place; return one note per cut.
+    """Cut an over-long question (300), header (12), option label (60) and option description (200) in place; return one note per cut.
 
-    Uses fit_question for every decision. A label ending in " (Recommended)" keeps that suffix. A cut that would leave
+    Uses fit_question(question=True) for every decision. A label ending in " (Recommended)" keeps that suffix. A cut that would leave
     only blanks is not made. Every other error, and every unknown key, is left alone for check_proposal."""
     notes: list[str] = []
     batches = obj.get("batches") if isinstance(obj, dict) else None
     for b in batches if isinstance(batches, list) else []:  # O(batches * decisions * options)
         decisions = b.get("decisions") if isinstance(b, dict) else None
         for d in decisions if isinstance(decisions, list) else []:
-            notes += fit_question(d)
+            notes += fit_question(d, question=True)
     return notes
 
 
