@@ -36,20 +36,213 @@
 
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
 
+# bl_scan CMD: the shell words of the Bash command CMD, quotes and backslashes removed, into BLW (a $'\001'
+# between simple commands); the quoted text and heredoc bodies into BLT (text only) or BLS (text that may run:
+# an assignment's quoted value, an unquoted-delimiter heredoc body holding $( or a backtick). A $( or backtick
+# opens its own words, inside double quotes too. BLLONG=1 when a line is over 4096 characters (the scan stops).
+# Bash builtins only; one line at a time, so no step copies the whole command.
+bl_scan() {
+  local LC_ALL=C
+  local rest="$1" ln n i c d w="" wt="" wa=0 mt="" stk="" m dl dq ds j seg cmp body k more=1
+  local -a dep=() pd=() pq=() pt=()
+  BLW=(); BLT=(); BLS=(); BLLONG=0
+  bl_emit() {
+    if [ "$wa" = 1 ]; then
+      BLW[${#BLW[@]}]="$w"
+      if [[ $w =~ ^[A-Za-z_][A-Za-z0-9_]*\+?= ]]; then BLS[${#BLS[@]}]="${w#*=}"   # the whole value, escaped spaces too
+      elif [ -n "$wt" ]; then BLT[${#BLT[@]}]="$wt"; fi
+    fi
+    w=""; wt=""; wa=0
+  }
+  bl_sep() { bl_emit; BLW[${#BLW[@]}]=$'\001'; }
+  bl_line() {   # next line of rest into ln; more=0 after the last one
+    ln="${rest%%$'\n'*}"
+    if [ ${#ln} -gt 4096 ]; then BLLONG=1; more=0; ln=""; rest=""; return; fi
+    if [ ${#ln} = ${#rest} ]; then more=0; rest=""; else rest="${rest:${#ln}+1}"; fi
+  }
+  while [ "$more" = 1 ]; do
+    bl_line; n=${#ln}; i=0
+    while [ "$i" -lt "$n" ]; do
+      c="${ln:i:1}"; m="${stk: -1}"
+      case "$m" in
+        Q) seg="${ln:i}"; d="${seg%%\'*}"; w+="$d"; wt+="$d"
+           if [ ${#d} = ${#seg} ]; then i=$n; else stk="${stk%?}"; i=$((i + ${#d} + 1)); fi
+           continue ;;
+        A) if [ "$c" = '\' ]; then d="${ln:i+1:1}"; w+="$d"; wt+="$d"; i=$((i + 2))
+           elif [ "$c" = "'" ]; then stk="${stk%?}"; i=$((i + 1))
+           else w+="$c"; wt+="$c"; i=$((i + 1)); fi
+           continue ;;
+        M) mt+="$c"   # arithmetic $(( )) or (( )): a << is a shift here, not a heredoc; its text is scanned whole
+           case "$c" in
+             '(') dep[${#stk}]=$((dep[${#stk}] + 1)) ;;
+             ')') dep[${#stk}]=$((dep[${#stk}] - 1))
+                  if [ "${dep[${#stk}]}" -le 0 ]; then stk="${stk%?}"; BLS[${#BLS[@]}]="$mt"; mt=""; fi ;;
+             '$') if [ "${ln:i+1:1}" = '(' ] && [ "${ln:i+2:1}" != '(' ]; then bl_sep; stk+=S; dep[${#stk}]=0; i=$((i + 1)); fi ;;
+             '`') bl_sep; stk+=B ;;
+           esac
+           i=$((i + 1)); continue ;;
+        R) mt+="$c"   # arithmetic $[ ]: like M, with [ ] as the brackets
+           case "$c" in
+             '[') dep[${#stk}]=$((dep[${#stk}] + 1)) ;;
+             ']') dep[${#stk}]=$((dep[${#stk}] - 1))
+                  if [ "${dep[${#stk}]}" -le 0 ]; then stk="${stk%?}"; BLS[${#BLS[@]}]="$mt"; mt=""; fi ;;
+             '$') if [ "${ln:i+1:1}" = '(' ] && [ "${ln:i+2:1}" != '(' ]; then bl_sep; stk+=S; dep[${#stk}]=0; i=$((i + 1)); fi ;;
+             '`') bl_sep; stk+=B ;;
+           esac
+           i=$((i + 1)); continue ;;
+        D) case "$c" in
+             '"') stk="${stk%?}"; i=$((i + 1)) ;;
+             '\') d="${ln:i+1:1}"
+                  case "$d" in '"'|'\'|'$'|'`') w+="$d"; wt+="$d" ;; '') ;; *) w+="\\$d"; wt+="\\$d" ;; esac
+                  i=$((i + 2)) ;;
+             '$') if [ "${ln:i:3}" = '$((' ]; then stk+=M; dep[${#stk}]=2; mt='(('; i=$((i + 3))
+                  elif [ "${ln:i+1:1}" = '(' ]; then bl_sep; stk+=S; dep[${#stk}]=0; i=$((i + 2))
+                  elif [ "${ln:i+1:1}" = '[' ]; then stk+=R; dep[${#stk}]=1; mt='['; i=$((i + 2))
+                  else w+='$'; wt+='$'; i=$((i + 1)); fi ;;
+             '`') bl_sep; stk+=B; i=$((i + 1)) ;;
+             *) seg="${ln:i}"; seg="${seg%%[\"\\\$\`]*}"; w+="$seg"; wt+="$seg"; i=$((i + ${#seg})) ;;
+           esac
+           continue ;;
+      esac
+      case "$c" in
+        ' '|$'\t') bl_emit; i=$((i + 1)) ;;
+        '\') if [ $((i + 1)) -lt "$n" ]; then w+="${ln:i+1:1}"; wa=1; fi
+             i=$((i + 2)) ;;
+        "'") stk+=Q; wa=1; i=$((i + 1)) ;;
+        '"') stk+=D; wa=1; i=$((i + 1)) ;;
+        '$') case "${ln:i+1:1}" in
+               '(') if [ "${ln:i:3}" = '$((' ]; then stk+=M; dep[${#stk}]=2; mt='(('; i=$((i + 3))
+                    else bl_sep; stk+=S; dep[${#stk}]=0; i=$((i + 2)); fi ;;
+               "'") stk+=A; wa=1; i=$((i + 2)) ;;
+               '{') seg="${ln:i}"; d="${seg%%\}*}"; w+="$d}"; wa=1; i=$((i + ${#d} + 1))
+                    if [[ $d == *'$('* || $d == *'`'* ]]; then BLS[${#BLS[@]}]="$d}"; fi ;;
+               '[') stk+=R; dep[${#stk}]=1; mt='['; wa=1; i=$((i + 2)) ;;
+               *) w+='$'; wa=1; i=$((i + 1)) ;;
+             esac ;;
+        '`') bl_sep; if [ "$m" = B ]; then stk="${stk%?}"; else stk+=B; fi; i=$((i + 1)) ;;
+        '(') if [ "$wa" = 0 ] && [ "${ln:i:2}" = '((' ]; then stk+=M; dep[${#stk}]=2; mt='(('; i=$((i + 2)); continue; fi
+             bl_sep; [ "$m" = S ] && dep[${#stk}]=$((dep[${#stk}] + 1)); i=$((i + 1)) ;;
+        ')') bl_sep
+             if [ "$m" = S ]; then
+               if [ "${dep[${#stk}]}" = 0 ]; then stk="${stk%?}"; else dep[${#stk}]=$((dep[${#stk}] - 1)); fi
+             fi
+             i=$((i + 1)) ;;
+        ';'|'&'|'|') bl_sep; i=$((i + 1)) ;;
+        '<') if [ "${ln:i:3}" = '<<<' ]; then bl_emit; i=$((i + 3))
+             elif [ "${ln:i:2}" = '<<' ]; then
+               bl_emit; i=$((i + 2)); ds=0; dq=0; dl=""
+               [ "${ln:i:1}" = - ] && { ds=1; i=$((i + 1)); }
+               while [[ ${ln:i:1} == [' '$'\t'] ]]; do i=$((i + 1)); done
+               while [ "$i" -lt "$n" ]; do
+                 d="${ln:i:1}"
+                 case "$d" in
+                   ' '|$'\t'|';'|'&'|'|'|'<'|'>'|'('|')') break ;;
+                   "'"|'"') dq=1; seg="${ln:i+1}"; j="${seg%%"$d"*}"; dl+="$j"; i=$((i + ${#j} + 2)) ;;
+                   '\') dq=1; dl+="${ln:i+1:1}"; i=$((i + 2)) ;;
+                   *) dl+="$d"; i=$((i + 1)) ;;
+                 esac
+               done
+               pd[${#pd[@]}]="$dl"; pq[${#pq[@]}]="$dq"; pt[${#pt[@]}]="$ds"
+             else bl_emit; i=$((i + 1)); fi ;;
+        '>') bl_emit; i=$((i + 1)) ;;
+        '#') if [ "$wa" = 0 ]; then i=$n; else w+='#'; i=$((i + 1)); fi ;;
+        *) seg="${ln:i}"; seg="${seg%%[[:space:]\\\'\"\$\`\(\)\;\&\|\<\>]*}"
+           [ -z "$seg" ] && seg="$c"
+           w+="$seg"; wa=1; i=$((i + ${#seg})) ;;
+      esac
+    done
+    # end of line: a newline inside quotes is text; after a trailing backslash it joins the lines
+    m="${stk: -1}"
+    case "$m" in
+      Q|A|D) w+=$'\n'; wt+=$'\n'; continue ;;
+      M|R) mt+=$'\n'; continue ;;
+    esac
+    [ "$more" = 1 ] && [[ $ln == *'\' ]] && [ "$i" -gt "$n" ] && continue
+    bl_sep
+    for ((k = 0; k < ${#pd[@]}; k++)); do
+      body=""
+      while [ "$more" = 1 ]; do
+        bl_line
+        cmp="$ln"; [ "${pt[k]}" = 1 ] && { while [[ $cmp == $'\t'* ]]; do cmp="${cmp#?}"; done; }
+        [ "$cmp" = "${pd[k]}" ] && break
+        body+="$ln"$'\n'
+      done
+      if [ "${pq[k]}" = 0 ] && [[ $body == *'$('* || $body == *'`'* ]]; then BLS[${#BLS[@]}]="$body"
+      else BLT[${#BLT[@]}]="$body"; fi
+    done
+    pd=(); pq=(); pt=()
+  done
+  bl_emit
+}
+
+# bl_judge CMD: succeeds, the subcommand in BLHIT, when the Bash command CMD runs sl backlog decide|answer|start|plan:
+# the two words in a row, or the text of a quote or heredoc that may run (a runner word in the command, an assignment).
+# A line over 4096 characters succeeds without a scan, BLHIT unchanged (the caller's raw match stands).
+bl_judge() {
+  local k nx v b cp run=0 envw=0 envs=0 t re='backlog(\.py)?[[:space:]]+(decide|answer|start|plan)([^[:alnum:]_-]|$)'
+  local -a texts=()
+  bl_scan "$1"
+  [ "$BLLONG" = 1 ] && return 0
+  shopt -s nocasematch
+  for ((k = 0; k < ${#BLW[@]}; k++)); do
+    v="${BLW[k]}"; nx="${BLW[k+1]}"
+    if [[ $v == *backlog || $v == *backlog.py ]] && [[ $nx == decide || $nx == answer || $nx == start || $nx == plan ]]; then
+      shopt -u nocasematch; BLHIT="$nx"; return 0
+    fi
+    b="${v##*/}"; b="${b##*\\}"; b="${b%.exe}"
+    cp=0   # command position: first word, or after a separator or a reserved word
+    if [ "$k" = 0 ]; then cp=1; else
+      case "${BLW[k-1]}" in $'\001'|then|do|else|elif|if|while|until|'{'|'!'|time) cp=1 ;; esac
+    fi
+    [ "$cp" = 1 ] && [[ $v == \$* && $nx == -*c* ]] && run=1   # $SHELL -c '...'
+    case "$b" in
+      sh|bash|zsh|dash|ksh|ash|mksh|yash|fish|csh|tcsh|busybox|eval|trap|xargs|ssh|su|watch|script|tmux|screen|herdr|pwsh|powershell|cmd|iex|invoke-expression|python*|pypy*|node|nodejs|deno|bun|perl|ruby|php|lua|osascript|expect|awk|gawk|mawk|nawk|make) run=1 ;;
+      source|.|exec) [ "$cp" = 1 ] && run=1 ;;
+      env) envw=1 ;;
+      --split-string*|-S*) envs=1 ;;
+    esac
+  done
+  [ "$envw" = 1 ] && [ "$envs" = 1 ] && run=1
+  texts=("${BLS[@]}")
+  [ "$run" = 1 ] && texts+=("${BLT[@]}")
+  for t in "${texts[@]}"; do
+    t="${t//\\/}"; t="${t//\"/}"; t="${t//\'/}"
+    if [[ $t =~ $re ]]; then BLHIT="${BASH_REMATCH[2]}"; shopt -u nocasematch; return 0; fi
+  done
+  shopt -u nocasematch
+  return 1
+}
+
 # Fleet session (any role, a lead too; the env is the session's, so a command's `env -u` cannot change it): `sl backlog
-# decide|answer|start|plan` is Max's main session only. Judged on the raw hook JSON in any spelling ($SL, an absolute path,
-# env -u ... sl, bash -c, python3 .../backlog.py): quotes and backslashes dropped, `backlog[.py]` then the subcommand.
-# Only a fleet session pays for it (builtin string work, no spawn); the idle coordinator path is untouched.
+# decide|answer|start|plan` is Max's main session only. A raw match on the hook JSON comes first (quotes and backslashes
+# dropped, `backlog[.py]` then the subcommand): no match falls through at once. A Bash match is then judged on its
+# command alone by bl_judge (#276): the two words run as a command block in any spelling ($SL, an absolute path,
+# env -u ... sl, python3 .../backlog.py, $( ) or backticks, quoted words); text that a heredoc or a quoted argument only
+# writes passes, unless the command can run it (a shell, eval, an interpreter, xargs, ssh, env -S, a variable). PowerShell,
+# a Bash call without a readable command and a line over 4096 characters keep the raw match. Only a fleet session pays
+# for it (builtin string work, no spawn); the idle coordinator path is untouched.
 if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then
   re_bl_tool='"tool_name"[[:space:]]*:[[:space:]]*"(Bash|PowerShell)"'
   if [[ $input =~ $re_bl_tool ]]; then
-    bl="${input//\\t/ }"; bl="${bl//\\/}"; bl="${bl//\"/}"; bl="${bl//\'/}"
+    bl_tool="${BASH_REMATCH[1]}"
+    bl="${input//\\\\/$'\x01'}"; bl="${bl//\\t/ }"; bl="${bl//\\n/ }"; bl="${bl//$'\x01'/}"; bl="${bl//\\/}"; bl="${bl//\"/}"; bl="${bl//\'/}"
     re_bl='backlog(\.py)?[[:space:]]+(decide|answer|start|plan)([^[:alnum:]_-]|$)'
     shopt -s nocasematch
     if [[ $bl =~ $re_bl ]]; then
       shopt -u nocasematch
-      printf '%s\n' "Blocked: sl backlog ${BASH_REMATCH[2]} runs only in the main session (Max's session), never in a fleet worker or lead. Use sl backlog status or wait, and report NEEDS_DECISION instead." >&2
-      exit 2
+      BLHIT="${BASH_REMATCH[2]}"; bl_block=1
+      re_bl_cmd='"command"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
+      if [ "$bl_tool" = Bash ] && [[ $input =~ $re_bl_cmd ]]; then
+        blc="${BASH_REMATCH[1]}"
+        blc="${blc//\\\\/$'\x01'}"   # JSON \\ first, so \\" and \\n keep their shell meaning
+        blc="${blc//\\\"/\"}"; blc="${blc//\\t/$'\t'}"; blc="${blc//\\r/}"; blc="${blc//\\n/$'\n'}"
+        blc="${blc//$'\x01'/\\}"
+        bl_judge "$blc" || bl_block=0
+      fi
+      if [ "$bl_block" = 1 ]; then
+        printf '%s\n' "Blocked: sl backlog ${BLHIT} runs only in the main session (Max's session), never in a fleet worker or lead. Use sl backlog status or wait, and report NEEDS_DECISION instead." >&2
+        exit 2
+      fi
     fi
     shopt -u nocasematch
   fi
