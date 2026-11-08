@@ -21,7 +21,7 @@ a `tests` line to the progress ledger. On every run it also writes
 (a run where pytest produced nothing records failed=1 and the reason, also as `"error"`). Exit 0 when nothing failed, 1 when a
 test failed or none ran, 2 when pytest could not run.
 
---background starts a detached run of the same command, prints `summary: <path>` and exits 0
+--background starts a detached run of the same command, prints `summary: <path>`, a `next:` line (run the wait line now, in the foreground; do not end your turn until it reports) and, last, the `wait:` line, and exits 0
 at once. Each background run gets its own summary file (`test-summary-<id>.json` next to
 --summary) and the pointer `test-summary.latest` (atomic) names the newest run; when a run
 finishes it also publishes its summary to --summary, unless a newer run has started since.
@@ -124,6 +124,9 @@ def read_pointer(summary):  # O(1)
         return None  # O(1)
 
 
+WAIT_CUE = "next: tests still running; run the wait line below now, in the foreground (never as a background command), and do not end your turn until it reports."  # O(1)
+
+
 def start_background(a, argv):  # O(len argv) + one detached spawn
     run_id = f"{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}-{os.urandom(3).hex()}"  # O(1) unique id
     mine = run_summary_path(a.summary, run_id).resolve()  # O(1) absolute: --wait may run from another cwd
@@ -135,6 +138,7 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
                                                       "mode": "fast" if "--fast" in argv else "full"}) + "\n")  # O(1)
     pyrun.spawn_detached(child, mine.with_suffix(".log"))  # O(1) + process spawn
     print(f"summary: {mine}")  # O(1)
+    print(WAIT_CUE)  # O(1) the cue sits right above the wait line, which stays last (#286)
     print(wait_line(mine))  # O(1)
     return 0  # O(1)
 

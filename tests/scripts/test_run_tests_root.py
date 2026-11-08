@@ -57,7 +57,7 @@ def test_background_from_subdirectory(tmp_path):
     cp = go(sub, "--fast", "tests/test_a.py", "--background")
     assert cp.returncode == 0, cp.stdout + cp.stderr
     lines = cp.stdout.splitlines()
-    assert lines[0].startswith("summary: ") and lines[1].startswith("wait: ")
+    assert lines[0].startswith("summary: ") and lines[-1].startswith("wait: ")
     path = lines[0].split("summary: ", 1)[1]
     assert str(root) in path
     w = go(sub, "--timeout", "60", "--wait", path)
