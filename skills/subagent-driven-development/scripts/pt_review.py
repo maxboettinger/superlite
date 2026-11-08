@@ -195,6 +195,8 @@ def parse_plan(path: str | Path) -> Plan:  # O(W + L*m + H^2) total
     fence_id = [0] * len(lines)  # O(L) list alloc
     fid = 0  # O(1)
     heads: list[tuple[int, int, str]] = []  # O(1)
+    import plan_tools as _pt  # lazy: plan_tools imports this module lazily too | O(1)
+    refs = _pt.ref_headings(lines, [bool(f) for f in _pt.scan_fences(lines)[0]])  # reference lines | O(L*r)
     for i, line in enumerate(lines):  # O(L) iterations
         m = re.match(r"^\s*(`{3,}|~{3,})", line)  # O(m) per iteration
         if m:  # O(1)
@@ -211,7 +213,7 @@ def parse_plan(path: str | Path) -> Plan:  # O(W + L*m + H^2) total
             fence_id[i] = fid  # O(1)
             continue  # O(1)
         hm = re.match(r"^(#{1,6})\s+(.*)$", line)  # O(m) per iteration
-        if hm:  # O(1)
+        if hm and i not in refs:  # a reference line stays in its task | O(1)
             heads.append((i, len(hm.group(1)), hm.group(2).strip()))  # O(m)
     headings = []  # O(1)
     for n, (i, lvl, title) in enumerate(heads):  # O(H) iterations

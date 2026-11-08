@@ -6,6 +6,8 @@ Subcommands adapter, packet and contract live in pt_review.py (lazy import).
 
 Exit codes: 0 ok, 1 findings (stubs import failure, lint issues), 2 bad plan or usage.
 Stdlib only.
+
+A repeated `##`/`###` heading inside a task that is followed by a task field is a reference line and does not end the task.
 """
 # Complexity notation:
 # n = tasks in plan, e = dependency edges, L = lines in plan, C = chars in plan (<= 15k), b = fenced blocks
@@ -72,6 +74,46 @@ class FenceBlock:  # O(1)
     end: int  # index of closing fence line (or last line if unterminated) | O(1)
     info: str  # O(1)
     content: list[str]  # O(1)
+
+
+TASK_FIELDS = frozenset({  # O(1)
+    "owns", "components", "loc owned", "tests", "kind", "model", "est. time", "est. context", "consumes",
+    "produces", "covers", "review focus", "test code", "steps", "notes", "status",
+})  # O(1)
+CAND_RE = re.compile(r"^#{2,3}\s+(.+?)\s*#*\s*$")  # O(1)
+
+
+def heading_phrase(title: str) -> str:  # O(s)
+    t = re.sub(r"[`*]", "", title).strip()  # O(s)
+    t = re.sub(r"^\d+(?:\.\d+)*\.?\s+", "", t)  # O(s)
+    return " ".join(t.rstrip(":").split()).lower()  # O(s)
+
+
+def ref_headings(lines: list[str], fenced: list[bool]) -> set[int]:  # O(L * r) worst, r = repeated candidates
+    cands: dict[int, str] = {}  # O(1)
+    for i, ln in enumerate(lines):  # O(L)
+        if fenced[i] or HEADING_RE.match(ln):  # O(s)
+            continue  # O(1)
+        m = CAND_RE.match(ln)  # O(s)
+        ph = heading_phrase(m.group(1)) if m else ""  # O(s)
+        if ph:  # O(1)
+            cands[i] = ph  # O(1)
+    count: dict[str, int] = {}  # O(1)
+    for ph in cands.values():  # O(L)
+        count[ph] = count.get(ph, 0) + 1  # O(1)
+    rep = {i for i, ph in cands.items() if count[ph] > 1}  # O(L)
+    out: set[int] = set()  # O(1)
+    for i in sorted(rep):  # O(r)
+        for j in range(i + 1, len(lines)):  # O(L) per candidate
+            if fenced[j] or not lines[j].strip() or j in rep:  # O(1)
+                continue  # O(1)
+            if ANY_HEADING_RE.match(lines[j]):  # O(s)
+                break  # O(1)
+            fm = FIELD_RE.match(lines[j].strip())  # O(s)
+            if fm and fm.group(1).strip().lower() in TASK_FIELDS:  # O(s)
+                out.add(i)  # O(1)
+                break  # O(1)
+    return out  # O(1)
 
 
 def scan_fences(lines: list[str]):  # O(L+C) total
@@ -276,6 +318,7 @@ class Plan:  # O(1)
         self.text = text.replace("\r\n", "\n")  # O(C)
         self.lines = self.text.split("\n")  # O(C)
         self.fenced, self.blocks = scan_fences(self.lines)  # O(C+L)
+        self.refs = ref_headings(self.lines, self.fenced)  # O(L * r)
         self.tasks: list[Task] = [t for t in self._parse_tasks() if is_task(t.id, "owns" in t.fields)]  # O(C+L)
         self.by_id = {t.id: t for t in self.tasks}  # O(n)
 
@@ -311,7 +354,7 @@ class Plan:  # O(1)
                     tasks.append(cur)  # O(1)
                     cur_field, body = None, [ln]  # O(1)
                     continue  # O(1)
-                if ANY_HEADING_RE.match(ln):  # O(s)
+                if ANY_HEADING_RE.match(ln) and i not in self.refs:  # O(s)
                     close()  # O(body chars)
                     cur, cur_field, body = None, None, []  # O(1)
                     continue  # O(1)
