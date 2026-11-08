@@ -50,7 +50,7 @@ def test_a_bare_question_decision_is_fitted_in_place():
     assert p["batches"][0]["decisions"][0] is bare
 
 def test_every_other_error_is_left_for_check_proposal():
-    bad = {"question": "?" * 301, "header": "", "options": [{"label": "", "description": "d"}, {"label": "a\x1b", "description": "d"}]}
+    bad = {"question": "", "header": "", "options": [{"label": "", "description": "d"}, {"label": "a\x1b", "description": "d"}]}
     p = prop({"questions": [bad]})
     assert bc.fit_proposal(p) == []
     assert {"B1 decision 1: q1 question: 1 to 300 characters", "B1 decision 1: q1 header: 1 to 12 characters",
