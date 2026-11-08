@@ -1,0 +1,113 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-08T13:44:38 (plan edited since)",
+ "headline": {
+  "wall_min": {
+   "projected": 4.587,
+   "actual": 8.348
+  },
+  "cost_usd_agents": {
+   "projected": 0.465366,
+   "actual": 1.812101
+  },
+  "task_min": {
+   "projected": 4.587,
+   "actual": 7.247
+  },
+  "agents": {
+   "projected": 3,
+   "actual": 5
+  }
+ },
+ "cost_split": {
+  "agents_usd": 1.812101,
+  "rework_usd": 0,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 1.812101
+ },
+ "concurrency": {
+  "peak": 1,
+  "projected_peak": 1
+ },
+ "critical_path": {
+  "actual": [
+   "T1",
+   "T2",
+   "T3"
+  ],
+  "projected": [
+   "T1",
+   "T2",
+   "T3"
+  ],
+  "projected_min": 4.587
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 3,
+   "cost_usd": 1.812101
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "passed": 67,
+   "failed": 0,
+   "skipped": 0,
+   "seconds": 6.6,
+   "mode": "fast",
+   "failures": [],
+   "skipped_tests": [],
+   "files": {
+    "tests/scripts/test_lead_guard_heredoc_276.py": [
+     67,
+     0
+    ]
+   },
+   "started": 1794143229.011976
+  },
+  "first_time_pass": 0,
+  "first_time_n": 0,
+  "rework_dispatches": 0,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 1.671,
+   "actual_min": 2.885,
+   "delta": {
+    "abs": 1.214,
+    "pct": 72.7
+   },
+   "cost_usd": 0.734135,
+   "first_time_pass": null
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 1.309,
+   "actual_min": 2.083,
+   "delta": {
+    "abs": 0.7743,
+    "pct": 59.2
+   },
+   "cost_usd": 0.534816,
+   "first_time_pass": null
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 1.607,
+   "actual_min": 2.278,
+   "delta": {
+    "abs": 0.6713,
+    "pct": 41.8
+   },
+   "cost_usd": 0.54315,
+   "first_time_pass": null
+  }
+ ]
+}
