@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, park <batch> --reason R; start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, park <batch> --reason R; start|wait|answer and ship are routed."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -99,9 +99,25 @@ def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_m
     return prop, None
 
 
+def _read_proposal(f: str):
+    import backlog_checks as bc  # O(1)
+    try:  # O(1)
+        text = Path(f).read_text(encoding="utf-8-sig")  # O(len)
+    except (OSError, ValueError) as e:
+        return None, f"BLOCKED: proposal {f} unreadable: {e}"
+    try:  # O(1)
+        o = json.loads(text)  # O(len)
+    except (ValueError, RecursionError):
+        o = bc.proposal_from(text)  # O(len)
+    if not isinstance(o, dict):
+        return None, f"BLOCKED: proposal {f} holds no JSON object"
+    return o, None
+
+
 def cmd_plan(a) -> int:
     import backlog_checks as bc  # O(1)
     import backlog_state as bs  # O(1)
+    proposal = getattr(a, "proposal", None)
     root = _root()
     sd, p = root / ".superlite", bs.path(root)
     d = bs.load(p)
@@ -109,6 +125,12 @@ def cmd_plan(a) -> int:
     if open_ and (not a.reset or any(b["state"] in ("running", "needs_decision") for b in open_)):
         print("BLOCKED: backlog has open batches (" + ", ".join(f"{b['id']} {b['state']}" for b in open_) + ")")
         return 2
+    prop = None
+    if proposal is not None:
+        prop, perr = _read_proposal(proposal)
+        if perr:
+            print(perr)
+            return 2
     info = _gh(["repo", "view", "--json", "nameWithOwner,visibility"])
     issues = _gh(["api", "--paginate", "repos/{owner}/{repo}/issues?state=open&per_page=100", "--jq", ISSUES_JQ])
     rest = issues[ISSUE_LIMIT:]
@@ -124,10 +146,11 @@ def cmd_plan(a) -> int:
             trusted.append({"number": n, "title": i.get("title", ""), "body": _body(i.get("body"))})
         else:
             outside.append({"number": n, "title": i.get("title", ""), "author": _author(i)})
-    prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min)
-    if err:
-        print("\n".join(err))
-        return 3
+    if proposal is None:
+        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min)
+        if err:
+            print("\n".join(err))
+            return 3
     cuts = bc.cut_lines(bc.fit_proposal(prop))  # O(q)
     batches, errs = bc.check_proposal(prop, {t["number"] for t in trusted})
     if errs:
@@ -136,9 +159,9 @@ def cmd_plan(a) -> int:
         try:
             kept.write_text(json.dumps(prop, indent=2), encoding="utf-8")
             where = f"\nproposal kept: {kept}"
-        except (OSError, TypeError, ValueError):
+        except (OSError, TypeError, ValueError, RecursionError):
             where = ""
-        print("BLOCKED: proposal rejected\n" + "\n".join(errs[:5]) + where + f"\ntriage worker {prop.get('status', '?')}: {why or 'no summary'}")
+        print("BLOCKED: proposal rejected\n" + "\n".join(errs[:5]) + where + ("" if proposal is not None else f"\ntriage worker {prop.get('status', '?')}: {why or 'no summary'}"))
         if cuts:
             print("\n".join(cuts))
         return 3
@@ -153,7 +176,7 @@ def cmd_plan(a) -> int:
     def apply(data):
         live = [b for b in data["batches"] if b["state"] != "shipped" and (not a.reset or b["state"] in ("running", "needs_decision"))]
         if live:  # a batch changed while the triage worker ran: never overwrite it
-            raise RuntimeError("backlog changed while triage ran (" + ", ".join(f"{b['id']} {b['state']}" for b in live) + ")")
+            raise RuntimeError("backlog changed while " + ("the proposal was checked" if proposal else "triage ran") + " (" + ", ".join(f"{b['id']} {b['state']}" for b in live) + ")")
         data["batches"] = [b for b in data["batches"] if b["state"] == "shipped"]
         data["repo"] = info["nameWithOwner"]
         data["titles"] = {str(t["number"]): t["title"] for t in trusted}
@@ -265,6 +288,7 @@ def main(argv=None) -> int:
     pl.add_argument("--tier", default="sonnet")
     pl.add_argument("--timeout-min", type=int, default=60)
     pl.add_argument("--reset", action="store_true")
+    pl.add_argument("--proposal", metavar="FILE")
     pl.set_defaults(fn=cmd_plan)
     de = sub.add_parser("decide")
     de.add_argument("--print", action="store_true")
