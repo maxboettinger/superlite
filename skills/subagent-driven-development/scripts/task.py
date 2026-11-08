@@ -7,7 +7,8 @@ The lookup agents use to read their own task and their neighbours instead of ask
 the plan file on every call, so it is never stale. Output: the task block verbatim, then `## Consumed
 interfaces`: for each producer of an item Tn consumes, its title, Produces lines and `e.g.` examples; then
 `## Plan sections this task names`: the text of each `##`/`###` plan section whose heading phrase the task
-block mentions (a one-word heading only in an explicit form such as `Design section`), when there is any.
+block mentions (a one-word heading only in an explicit form such as `Design section`), when there is any; last
+`## Global constraints`: the plan's constraint, Tech stack and Architecture lines (`wave0.constraint_lines`).
 Exit 2 for an unknown task or a missing plan. Language-neutral. Stdlib only.
 """
 # Complexity notation:
@@ -22,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import next_tasks as nt  # noqa: E402 | O(1)
 import plan_tools as pt  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
+import wave0  # noqa: E402 | O(1)
 
 
 def producers_of(plan, task) -> list:  # O(n*q*s)
@@ -51,12 +53,6 @@ SKELETON = {"coverage", "task graph", "predicted schedule", "review focus", "sel
 SEC_HEAD = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")  # O(1)
 
 
-def _phrase(heading: str) -> str:  # O(s)
-    t = re.sub(r"[`*]", "", heading).strip()  # O(s)
-    t = re.sub(r"^\d+(?:\.\d+)*\.?\s+", "", t)  # O(s)
-    return " ".join(t.rstrip(":").split()).lower()  # O(s)
-
-
 def _names(phrase: str, text: str) -> bool:  # O(L)
     """True when `text` names the section phrase: two or more words anywhere, one word only in explicit forms."""
     words = phrase.split()  # O(s)
@@ -74,6 +70,7 @@ def _names(phrase: str, text: str) -> bool:  # O(L)
 def referenced_sections(plan, task) -> list:  # O(L + sections*L)
     """Text of each plan section (`##`/`###`, not a task heading) whose heading phrase the task block names."""
     lines, task_lines = plan.lines, {t.line for t in plan.tasks}  # O(n)
+    in_task = {i for t in plan.tasks for i in range(t.line, t.line + len(t.text.split("\n")))}  # O(L)
     n = len(task.text.split("\n"))  # O(block)
     mine = [ln for i, ln in enumerate(lines[task.line:task.line + n], task.line) if not plan.fenced[i]]  # O(block)
     text = " ".join(" ".join(re.sub(r"[`*]", "", "\n".join(mine)).lower().split()).split())  # O(block)
@@ -84,7 +81,7 @@ def referenced_sections(plan, task) -> list:  # O(L + sections*L)
             heads.append((i, len(m.group(1)), m.group(2)))  # O(1)
     out, last_end = [], -1  # O(1)
     for k, (i, level, title) in enumerate(heads):  # O(H) iterations
-        if level not in (2, 3) or i in task_lines or i < last_end:  # O(1)
+        if level not in (2, 3) or i in in_task or i < last_end:  # O(1)
             continue  # O(1)
         end = len(lines)  # O(1)
         for j, lv, _ in heads[k + 1:]:  # O(H) iterations
@@ -92,8 +89,8 @@ def referenced_sections(plan, task) -> list:  # O(L + sections*L)
                 end = j  # O(1)
                 break  # O(1)
         body = lines[i + 1:end]  # O(section)
-        phrase = _phrase(title)  # O(s)
-        if not any(b.strip() for b in body) or phrase in SKELETON or not _names(phrase, text):  # O(L)
+        phrase = pt.heading_phrase(title)  # O(s)
+        if not any(b.strip() for b in body) or phrase in SKELETON or phrase == "global constraints" or not _names(phrase, text):  # O(L)
             continue  # O(1)
         while body and not body[-1].strip():  # O(blank)
             body = body[:-1]  # O(section)
@@ -121,6 +118,9 @@ def render(plan, tid) -> str:  # O(n*q*s)
         out += ["", "## Plan sections this task names"]  # O(1)
         for sec in secs:  # O(k) iterations
             out += ["", sec]  # O(1)
+    cons = wave0.constraint_lines(plan)  # O(L)
+    if cons:  # O(1)
+        out += ["", "## Global constraints", "", "\n".join(cons)]  # O(L)
     return "\n".join(out) + "\n"  # O(out)
 
 

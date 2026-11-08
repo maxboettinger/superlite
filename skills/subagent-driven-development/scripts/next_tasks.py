@@ -151,14 +151,15 @@ def parse_plan(plan):  # O(L)
     """
     lines = read_text(plan).split("\n")  # O(L)
     fenced, _ = sibling("plan_tools").scan_fences(lines)  # O(L)
+    refs = sibling("plan_tools").ref_headings(lines, fenced)  # reference lines stay in their task | O(L*r)
     tasks, cur = {}, None  # O(1)
-    for line, fen in zip(lines, fenced):  # O(L lines) iterations
+    for idx, (line, fen) in enumerate(zip(lines, fenced)):  # O(L lines) iterations
         m = None if fen else _TASK_HEADING.match(line)  # O(len line)
         if m:  # O(1)
             cur = {"id": m.group(1), "head": m.group(2), "body": []}  # O(1)
             tasks[cur["id"]] = cur  # O(1)
             continue  # O(1)
-        if not fen and _HEADING.match(line) and len(_HEADING.match(line).group(1)) <= 3:  # O(len line) regex, run twice
+        if not fen and idx not in refs and _HEADING.match(line) and len(_HEADING.match(line).group(1)) <= 3:  # O(len line) regex, run twice
             cur = None  # O(1)
             continue  # O(1)
         if cur is not None:  # O(1)

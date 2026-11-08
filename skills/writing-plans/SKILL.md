@@ -38,7 +38,7 @@ In both modes, write for the split:
 
 ## Plan shape, in this order
 
-1. **Header** (an Xcode project: put `.superlite/test-cmd.json` `{"language":"swift","test":"xcodebuild test -scheme X {only_testing}"}` in the plan's setup; `{only_testing}` expands per test file): Goal, Architecture, Tech stack, Spec path, `**Detail:** contracts | tests | full` (default `tests`), `**Target-min:** N` (predicted-total target, default 11), `**Ticket:** KEY` (prefixes commit messages `KEY Tn: title`), `**Wave0:** none` (no Wave 0 skeleton; use it when the project already builds), `**Coverage:** off` (skips the coverage check), global constraints (exact values copied from the spec: version floors, names, formats). Task briefs point here, so do not repeat constraints per task.
+1. **Header** (an Xcode project: put `.superlite/test-cmd.json` `{"language":"swift","test":"xcodebuild test -scheme X {only_testing}"}` in the plan's setup; `{only_testing}` expands per test file): Goal, Architecture, Tech stack, Spec path, `**Detail:** contracts | tests | full` (default `tests`), `**Target-min:** N` (predicted-total target, default 11), `**Ticket:** KEY` (prefixes commit messages `KEY Tn: title`), `**Wave0:** none` (no Wave 0 skeleton; use it when the project already builds), `**Coverage:** off` (skips the coverage check), global constraints (exact values copied from the spec: version floors, names, formats). `sl task` appends them, with the Tech stack and Architecture lines, to every task's text, so do not repeat constraints per task.
 2. **Coverage:** the `## Coverage` table from brainstorming (`../brainstorming/coverage.md`); spike tasks (`S1`, ...) come first.
 3. **Main diagram** (always): Mermaid of components and data flow.
 4. **File structure:** every file and its one responsibility. Split by responsibility, not by layer, and follow the repo's patterns.
@@ -149,7 +149,7 @@ Rules:
 
 ## Plan size: aim for 15k characters
 
-The plan no longer rides in the sonnet prime (implementers read their task with `sl task Tn`), but it is written on the critical path. Keep contracts, verbatim tests and the required diagrams. Move spec excerpts out and reference them by section. Over the cap is a lint `NOTE`, not an issue; a project with larger plans sets `**Max chars:** N` in the plan header.
+The plan no longer rides in the sonnet prime (implementers read their task with `sl task Tn`: the block, the Produces lines it consumes, the plan sections it names and the Global constraints), but it is written on the critical path. Keep contracts, verbatim tests and the required diagrams. Move spec excerpts out and reference them by section. Over the cap is a lint `NOTE`, not an issue; a project with larger plans sets `**Max chars:** N` in the plan header.
 
 ## No placeholders
 
