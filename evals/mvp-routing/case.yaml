@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: mvp-routing
+description: A plain /superlite:mvp request loads brainstorming before anything else.
+runs: 2
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: sonnet
+  max_turns: 6
+  timeout_seconds: 300
+  allowed_tools: [Read, Glob, Grep, Skill, Edit, Write]

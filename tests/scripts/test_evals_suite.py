@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 EVALS = ROOT / "evals"
 CASES = {"brainstorm-first", "setup-report", "debug-flow", "brainstorm-coverage",
-         "ai-asks-once", "ai-bounded-quiet", "feature-routing"}
+         "ai-asks-once", "ai-bounded-quiet", "feature-routing", "mvp-routing"}
 PROMPT_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs", "expected_outcome", "model",
                "max_turns", "timeout_seconds", "allowed_tools", "append_system_prompt", "env"}
 GRADER_TYPES = {"regex", "tool_used", "tool_order", "file_exists", "llm", "baseline"}
@@ -56,7 +56,7 @@ def test_frontmatter_keys_are_known():
 def test_scaffold_scripts_are_executable_bash(tmp_path):
     scripts = sorted(EVALS.glob("*/scaffold.sh"))
     assert {s.parent.name for s in scripts} == {"setup-report", "debug-flow", "brainstorm-coverage", "ai-asks-once",
-                                                     "ai-bounded-quiet", "feature-routing"}
+                                                     "ai-bounded-quiet", "feature-routing", "mvp-routing"}
     for s in scripts:
         assert s.read_text().startswith("#!/usr/bin/env bash")
         assert os.access(s, os.X_OK), s
@@ -74,6 +74,9 @@ def test_scaffold_scripts_are_executable_bash(tmp_path):
     for name in ("ai-asks-once", "ai-bounded-quiet", "feature-routing"):
         assert (tmp_path / name / "src/notes/cli.py").exists(), name
         assert 'version = "1.2.3"' in (tmp_path / name / "pyproject.toml").read_text(), name
+    mvp = tmp_path / "mvp-routing"
+    assert 'name = "readinglist"' in (mvp / "pyproject.toml").read_text()
+    assert not (mvp / "src").exists()
 
 
 def test_runner_flags():
@@ -136,6 +139,19 @@ def test_ai_prompts_name_the_orchestrator():
         assert not text.startswith("/"), name
 
 
+def test_routing_cases_grade_the_brainstorming_load():
+    for name, command in (("feature-routing", "/superlite:feature "), ("mvp-routing", "/superlite:mvp ")):
+        graders = sorted((EVALS / name / "graders").glob("*.md"))
+        assert [g.name for g in graders] == ["skill-fired.md"], name
+        fm = frontmatter(graders[0])
+        assert fm["type"] == "tool_used" and fm["tool"] == "Skill" and fm["arm"] == "with-only", name
+        pattern = re.compile(fm["input_match"])
+        assert pattern.search('"skill": "superlite:brainstorming"') and pattern.search('"skill":"brainstorming"'), name
+        assert not pattern.search('"skill": "superlite:writing-plans"'), name
+        assert (EVALS / name / "prompt.md").read_text().startswith(command), name
+
+
 def test_testing_doc_counts_cases():
     row = next(l for l in (ROOT / "docs/testing.md").read_text().splitlines() if l.startswith("| evals"))
-    assert "six cases" in row
+    words = {7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve"}
+    assert f"{words[len(CASES)]} cases" in row
