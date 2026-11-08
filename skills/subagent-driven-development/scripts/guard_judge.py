@@ -19,6 +19,8 @@ A block's or group's heredoc, here-string or pipe reaches every command inside i
 A variable's value is used only when bash would not split it (default IFS or the IFS the command sets) and a value with a
 glob is judged as a glob in every mode; `~+`, `~-` and `~` follow PWD, OLDPWD and HOME, `~user` is unknown, and PWD is the
 directory the current command runs in.
+A loop is walked again while its variables change (still changing after MAX_DIRS rounds: those variables are unknown), and
+a name first assigned in a block or after `&&`/`||` is one possible value, not the value, once that block or chain ends.
 """
 # Complexity notation:
 #   n = characters of the command text, s = segments, d = directories the shell may sit in (<= MAX_DIRS),
@@ -67,6 +69,7 @@ WRITE_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>", ">&"})  # O(1)
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")  # O(1)
 DEFAULT_IFS = " \t\n"  # the characters bash splits an unquoted expansion on unless IFS is set | O(1)
 TILDE_FORM = {"HOME": "~", "PWD": "~+", "OLDPWD": "~-"}  # variable -> the tilde that reads it | O(1)
+KNOWN = frozenset({"PWD", "CLAUDE_PROJECT_DIR", "HOME", "IFS"})  # names whose value before the command the guard reads itself | O(1)
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")  # O(1)
 VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")  # O(1)
 FUNC = re.compile(r"(^|[;&|{}\s])(function\s+\S+|[A-Za-z_][\w.:-]*\s*\(\s*\)\s*\{)")  # a function definition: its body runs later | O(1)
@@ -110,6 +113,7 @@ class _Ctx:  # O(p)
         self.cdpath = bool(os.environ.get("CDPATH")) or "cdpath" in low  # CDPATH may send a relative cd elsewhere | O(n)
         self.steps = 0  # O(1)
         self.ifs = re.search(r"\bIFS\b", command) is not None  # IFS (case-sensitive) may split a loop list's expanded words | O(1)
+        self.rolled = 0  # for loops the walk met that it did not unroll (their body runs again from the state it left) | O(1)
         self.vglob = set()  # texts a variable's value gave that hold a glob: judged as globs, also when quoted | O(1)
         self.cmd = None  # base name of the command being judged, for the word of a "?" target | O(1)
         self.deadline = time.monotonic() + MAX_SECONDS  # O(1)
@@ -593,18 +597,32 @@ def _walk_text(text, st, ctx, depth, force_cond=False):  # O(n) | verdict for a 
                 if v is not None:  # O(1)
                     return v  # O(1)
     func = FUNC.search(text) is not None  # O(n)
-    loop = func or any(s.words[:1] in (["for"], ["while"], ["until"], ["select"]) for s in segs)  # O(s)
+    loop = func or any(_loopy(s) for s in segs)  # O(s)
+    wloop, rolled = func or any(_loopy(s, False) for s in segs), ctx.rolled  # a for loop the walk unrolls runs its copies in order: the variables need no second walk | O(s)
     # `{ ...; } && cd x`: the lexer flattens the group and drops its `&&`, so every cd may not run | O(n)
     cond = force_cond or func or re.search(r"\}\s*(&&|\|\|)", text) is not None  # O(n)
-    start = st.dirs  # O(1)
+    start, before = st.dirs, _snap(st)  # O(d + v)
     v = _walk(segs, st, ctx, depth, cond)  # O(n)
-    for _ in range(MAX_DIRS):  # a loop or a function runs its body again from where the last run left the shell | O(d * n)
-        if v is not None or not loop:  # O(1)
-            break  # O(1)
+    after, changed = _snap(st), False  # O(v)
+    for _ in range(MAX_DIRS):  # a loop or a function runs its body again from where the last run left the shell and the variables | O(d * n)
         dirs = _union(start, st.dirs)  # O(d)
-        if dirs == start:  # O(d)
+        wloop = wloop or ctx.rolled != rolled  # O(1)
+        changed = dirs != start or (wloop and after != before)  # O(d + v)
+        if v is not None or not loop or not changed:  # O(1)
             break  # O(1)
         st.dirs = start = dirs  # O(1)
+        before = after  # O(1)
+        v = _walk(segs, st, ctx, depth, cond)  # O(n)
+        after = _snap(st)  # O(v)
+    else:  # the state still changes after the last round: what changed is unknown | O(1)
+        wloop = wloop or ctx.rolled != rolled  # O(1)
+        changed = _union(start, st.dirs) != start or (wloop and after != before)  # O(d + v)
+    if v is None and loop and changed and wloop:  # O(1)
+        bv, av, bm, am = dict(before[0]), dict(after[0]), dict(before[1]), dict(after[1])  # O(v)
+        for name in set(bv) | set(av) | set(bm) | set(am):  # O(v)
+            if bv.get(name, _MISSING) != av.get(name, _MISSING) or bm.get(name) != am.get(name):  # O(v)
+                st.vars[name] = None  # O(1)
+                st.multi.pop(name, None)  # O(1)
         v = _walk(segs, st, ctx, depth, cond)  # O(n)
     return v  # O(n)
 
@@ -1169,6 +1187,31 @@ def _alternatives(seg, st):  # O(w * v + MAX_BRACE * v) | every mix of earlier v
     return [c for c in combos if c]  # the all-current mix is already judged | O(MAX_BRACE)
 
 
+def _maybe_unset(st, name):  # O(v) | past a block or chain that may not have run the first assignment of a name: its value is one possible value
+    if name not in st.vars:  # O(1)
+        return  # O(1)
+    val = st.vars[name]  # O(1)
+    if val is None:  # an unknown value stays unknown; a KNOWN name keeps the mark | O(1)
+        if name not in KNOWN:  # O(1)
+            del st.vars[name]  # O(1)
+        return  # O(1)
+    del st.vars[name]  # O(1)
+    have = st.multi.setdefault(name, [])  # O(1)
+    if val not in have:  # O(v)
+        have.append(val)  # O(1)
+
+
+def _snap(st):  # O(v) | the variables and their earlier values, comparable between two walks
+    return frozenset(st.vars.items()), frozenset((k, frozenset(v)) for k, v in st.multi.items())  # O(v)
+
+
+def _loopy(seg, fors=True):  # O(w) | does the segment start a loop (`for`, `while`, `until`, `select`, after `time`)?
+    k = _lead(seg)  # O(w)
+    while _lit(seg, k) and seg.words[k] == "time":  # O(w)
+        k += 1  # O(1)
+    return _lit(seg, k) and seg.words[k] in (("for",) if fors else ()) + ("while", "until", "select")  # O(1)
+
+
 def _lit(seg, k):  # O(1) | is word k there, not dynamic and not quoted (a missing quoted entry counts as False)?
     return k < len(seg.words) and not seg.dyn[k] and not (seg.quoted[k] if k < len(seg.quoted) else False)  # O(1)
 
@@ -1300,6 +1343,7 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
     n, i, ok, fail, depth_c = len(segs), 0, None, None, 0  # O(1)
     start = st.dirs  # O(1)
     bstdin = _block_stdin(segs)  # O(s * w)
+    pend = []  # (name, block depth, chained) of first assignments that may not have run | O(1)
     while i < n:  # O(s)
         op = segs[i - 1].sep if i > 0 else ""  # O(1)
         if op in ("&&", "||") and ok is not None:  # O(1)
@@ -1325,6 +1369,11 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
                 depth_c += 1  # O(1)
             elif _closes(seg):  # O(1)
                 depth_c = max(0, depth_c - 1)  # O(1)
+                for e in [e for e in pend if e[1] > depth_c]:  # O(p)
+                    pend.remove(e)  # O(p)
+                    _maybe_unset(st, e[0])  # O(v)
+            if id(seg) not in heads and _loopy(seg) and not _loopy(seg, False):  # a for loop that was not unrolled | O(w)
+                ctx.rolled += 1  # O(1)
             if not inn:  # a branch that cannot run | O(1)
                 continue  # O(1)
             if id(seg) in dones:  # the last done copy: the earlier values stay possible | O(1)
@@ -1345,6 +1394,7 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
             persist = i == j and sep != "&"  # O(1)
             c = _Cmd(seg, inn, persist, (k > 0 and segs[k - 1].sep == "|") or cpipe, docs, st.cond or force_cond or depth_c > 0)  # O(1)
             c.chained, c.stdin, c.pipe = op in ("&&", "||"), cstdin, cpipe  # O(1)
+            known = set(st.vars)  # O(v)
             v = _run(c, st, ctx, depth)  # O(n)
             alts = _alternatives(seg, st) if v is None else []  # a reassigned variable: its earlier values | O(v * n)
             if alts is None:  # O(1)
@@ -1371,6 +1421,8 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
                         del st.multi[name]  # O(1)
             if v is not None:  # O(1)
                 return v  # O(1)
+            if c.chained or depth_c > 0:  # a first assignment that may not have run | O(1)
+                pend.extend((x, depth_c, c.chained) for x in st.vars if x not in known)  # O(v)
             if i == j:  # O(1)
                 u_ok, u_fail = c.ok, c.fail  # O(1)
         if ok is None:  # O(1)
@@ -1382,7 +1434,12 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
         if sep not in ("&&", "||"):  # the chain ends: the shell may sit in any directory the chain can leave it | O(d)
             st.dirs = _union(ok, fail) or start  # O(d)
             ok = fail = None  # O(1)
+            for e in [e for e in pend if e[2]]:  # O(p)
+                pend.remove(e)  # O(p)
+                _maybe_unset(st, e[0])  # O(v)
         i = j + 1  # O(1)
+    for e in pend:  # O(p)
+        _maybe_unset(st, e[0])  # O(v)
     return None  # O(1)
 
 
