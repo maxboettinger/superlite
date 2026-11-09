@@ -6,6 +6,7 @@
     run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] --command CMD   (a full result run outside run_tests; report only, closes no incidents)
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
+A no-result stop keeps its command, exit and output in `.superlite/no-result-*.log` (newest 20) and its incident carries them as `target`, `command`, `exit`, `log`.
 An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change, a `--full` tree the task's own files.
 
 Prints `passed failed skipped seconds` (errors count as failed). Each failing
@@ -328,8 +329,9 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
     tmp.replace(p)  # O(1) rename
 
 
-def add_incidents(log, items, task=None):  # O(total c) + one locked append (no spawn in process)
-    """items: (file, line, context, kind, resolution). A --task run stamps `task` on each entry; a kind outside
+def add_incidents(log, items, task=None, extra=None):  # O(total c) + one locked append (no spawn in process)
+    """items: (file, line, context, kind, resolution). A --task run stamps `task` on each entry; `extra` (a dict) is merged
+    into every entry after `kind` and `task`; a kind outside
     incident.KINDS (`no-result`) is set after make_entry, as the hooks write theirs. Never spawns `incident add`,
     which takes neither `task` nor `no-result` (SUPERLITE_SL swaps only the launcher)."""
     # always in process, also with SUPERLITE_SL: the spawned `incident add` takes neither task nor `no-result` | O(1)
@@ -345,11 +347,41 @@ def add_incidents(log, items, task=None):  # O(total c) + one locked append (no 
             e["kind"] = kind  # O(1)
         if task:  # O(1)
             e["task"] = task  # O(1)
+        if extra:  # O(1)
+            e.update(extra)  # O(1)
         entries.append(e)  # O(1)
     try:  # O(1)
         inc.append(log, entries)  # O(total c) one locked write
     except OSError as err:  # O(1)
         print(f"warning: incidents not logged: {err}", file=sys.stderr)  # O(1)
+
+
+def no_result_log(summary, command, cwd, rc, lines):  # O(L) + file write, keeps the newest 20 logs
+    """Write `<dir of summary>/no-result-<time>-<ns>.log` (command, cwd, exit, the last 40 lines); return its absolute path, "" on OSError."""
+    try:  # O(1)
+        d = Path(summary).resolve().parent  # O(1)
+        ns = time.time_ns()  # O(1)
+        name = f"no-result-{time.strftime('%Y%m%dT%H%M%S', time.gmtime(ns // 10**9))}-{ns % 10**9:09d}.log"  # O(1)
+        path = d / name  # O(1)
+        atomic_write(path, "\n".join([f"command: {command}", f"cwd: {cwd}", f"exit: {rc}", "", *lines[-40:]]) + "\n")  # O(L)
+        for old in sorted(d.glob("no-result-*.log"))[:-20]:  # O(n log n) n = logs kept
+            old.unlink(missing_ok=True)  # O(1)
+        return str(path)  # O(1)
+    except OSError:  # O(1)
+        return ""  # O(1)
+
+
+def no_result_target(command, rc, log):  # O(1) the feedback target of a no-result stop
+    return f"exit {rc} from `{command[:200]}`; log {log or 'not written'}"  # O(1)
+
+
+def record_no_result(a, reason, command, rc, lines, tree=None):  # O(L + c) log the stop's trace, print its path, log the incident
+    log = no_result_log(a.summary, command, str(tree) if tree else str(Path.cwd()), rc, lines)  # O(L)
+    print(f"run_tests: no-result log {log}", file=sys.stderr)  # O(1)
+    extra = {"target": no_result_target(command, rc, log), "command": command[:300], "exit": rc, "log": log}  # O(1)
+    if tree:  # O(1)
+        extra["cwd"] = str(tree)  # O(1)
+    add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task, extra)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
 
 
 def resolve_passed(log, task, failures, files):  # O(B + I + k) read the log once, one append (#180)
@@ -662,7 +694,7 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
                 print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
                 write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
                 publish_summary(a)  # O(summary size)
-                add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task)  # O(c)
+                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*kept, *p["tail"]], cwd)  # O(40 + c)
                 print(f"0 0 0 {seconds:.1f}")  # O(1)
                 return 1  # O(1)
     return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
@@ -762,13 +794,13 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         parsed = collection_report(xml_path) if r.returncode == 2 and has_xml else None  # a collection error stops pytest with exit 2 (#196) | O(X + T*d)
         if parsed is None and (r.returncode not in (0, 1) or not has_xml):  # O(1)
             tail = (r.stdout + r.stderr).strip().splitlines()[-5:]  # O(O)
-            reason = "pytest produced no results: " + " | ".join(tail)  # O(1)
+            reason = f"pytest produced no results (exit {r.returncode}): " + (" | ".join(tail) or "no output")  # O(1)
             print(reason, file=sys.stderr)  # O(1)
             write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
                                              "skipped_tests": []}, [], seconds,  # O(1)
                           error=reason if r.returncode != 5 else None)  # O(1)
             publish_summary(a)  # O(summary size)
-            add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
+            record_no_result(a, reason, shlex.join(cmd), r.returncode, (r.stdout + r.stderr).splitlines())  # O(O + c)
             print(f"0 0 0 {seconds:.1f}")  # O(1)
             return 1 if r.returncode == 5 else 2  # O(1)
         counts, failures, files = parsed or parse_junit(xml_path)  # O(X + T*d)
