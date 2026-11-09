@@ -34,6 +34,7 @@ def test_decide_batch_cuts_and_names_cuts_on_stderr(bk, tmp_path, capsys):
     want = copy.deepcopy(Q)
     want["questions"][0]["header"] = "Compatibilit"
     want["questions"][0]["options"][0]["label"] = "k" * 46 + REC
+    want["questions"][0]["options"][0]["description"] = "k" * 70 + ". no break"
     want["questions"][0]["options"][1]["description"] = "y" * 200
     assert rc == 0 and json.loads(cap.out) == want
     assert cap.err == ('shortened: "Keep the v1 API?" header: 13 -> 12 characters\n'
