@@ -148,3 +148,21 @@ def test_wait_timeout_names_the_log(tmp_path):
     cp = run(RUN_TESTS, "--wait", mine, "--timeout", "0.5", cwd=tmp_path)
     assert cp.returncode == 2, cp.both
     assert f"run_tests: timed out waiting for {mine}; log {mine.with_suffix('.log')}" in cp.err
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pid probing is POSIX only")
+def test_dead_run_error_reaches_the_published_summary(tmp_path):
+    sl = tmp_path / ".superlite"
+    sl.mkdir()
+    mine = sl / "test-summary-x.json"
+    published = sl / "test-summary.json"
+    published.write_text(json.dumps({"passed": 5, "failed": 0, "skipped": 0}), encoding="utf-8")
+    (sl / "test-summary.latest").write_text(json.dumps({"id": "x", "summary": str(mine)}), encoding="utf-8")
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    mine.with_suffix(".pid").write_text(str(child.pid), encoding="utf-8")
+    cp = run(RUN_TESTS, "--wait", cwd=tmp_path)
+    assert cp.returncode == 1, cp.both
+    data = json.loads(published.read_text(encoding="utf-8"))
+    assert data["failed"] == 1
+    assert "ended without a summary" in data["error"]
