@@ -28,7 +28,9 @@ makes real commits.
 Steps: scope check (a change outside every task's Owns blocks the commit and is logged as an incident when it was dirty
 before the run (stable.json `baseline_dirty`) or the run recorded no baseline; with a baseline, any other such file is
 unrelated to the task: it is left uncommitted and listed as `left uncommitted (outside every Owns): F`; files another
-task owns are left uncommitted, silently), py_compile plus an import check on each touched .py file, commit
+task owns is left uncommitted; when its owner is committed and not running and the file changed after the newest
+checkpoint, `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` says so. Each stderr note
+prints once per call, not once per task), py_compile plus an import check on each touched .py file, commit
 with the task title, append the SHA to the progress ledger, then launch in the
 background `sl probe_run --commit SHA` and, for every seam of the task graph
 (`sl plan_tools taskgraph --format full`) that involves this task and whose both
@@ -475,6 +477,25 @@ def docs_joins(f, owns):  # O(o)
     return any(not d or o.replace("\\", "/").startswith(d + "/") for o in owns)  # O(o)
 
 
+def note_once(a, line):  # O(1)
+    """Print `line` on stderr unless this call printed it already (kept in a.noted); True when printed."""
+    if not hasattr(a, "noted"):  # O(1)
+        a.noted = set()  # O(1)
+    if line in a.noted:  # O(1)
+        return False  # O(1)
+    a.noted.add(line)  # O(1)
+    print(line, file=sys.stderr)  # O(1)
+    return True  # O(1)
+
+
+def committed_owners(path, info, call, done, running):  # O(n*f)
+    """Plan tasks outside `call` that own `path`, in plan order: [] when one of them is in `running`, else those in `done`."""
+    owners = [t for t, i in info.items() if t not in call and nt.owns_match(path, i["owns"])]  # O(n*f)
+    if any(t in running for t in owners):  # O(n)
+        return []  # O(1)
+    return [t for t in owners if t in done]  # O(n)
+
+
 def others_running(pool_path, tids):  # O(pool bytes)
     """Tasks that busy pool agents are working on, other than `tids`; [] when the pool is missing or unreadable."""
     try:  # O(1)
@@ -524,7 +545,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     other = [o for t, i in info.items() if t != tid for o in i["owns"]  # O(o)
              if o not in SHARED_OWNS]
 
-    mine, out_of_scope = [], []  # O(1)
+    mine, out_of_scope, theirs = [], [], []  # theirs: files another task owns, no ruling | O(1)
     w0, done = getattr(a, "w0", None), committed_tasks(a.ledger)  # stub record of T0, tasks already committed | O(c)
     skip = plan_folder(a.plan)  # O(1) + process spawn
     shared, cand = [], []  # modified tracked tests no task owns | O(1)
@@ -561,8 +582,10 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         elif nt.owns_match(f, other):  # O(o)
             for e, t2 in ruled.items():  # a ruling or claim made it theirs: say so | O(r)
                 if t2 != tid and hit(f, e):  # O(len f)
-                    print(f"left uncommitted (claimed by {t2}): {f}", file=sys.stderr)  # O(1)
+                    note_once(a, f"left uncommitted (claimed by {t2}): {f}")  # O(1)
                     break  # O(1)
+            else:  # no ruling or claim | O(1)
+                theirs.append(f)  # O(1)
             continue  # another task's file, built in parallel in this tree: leave it alone | O(1)
         elif tid != "T0" and shared_test(f, code):  # a fixer's edit to a shared test joins this task | O(len path)
             cand.append(f)  # O(1)
@@ -583,10 +606,16 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         shared = changed_vs_parent(cand)  # O(m) + process spawns
         mine += shared  # O(m)
 
-    running = others_running(getattr(a, "pool", None) or state.pool_path(), [tid]) if out_of_scope else []  # O(pool bytes)
+    call = getattr(a, "task", [tid])  # O(1)
+    running = others_running(getattr(a, "pool", None) or state.pool_path(), call) if out_of_scope or theirs else []  # O(pool bytes)
+    owned = {f: committed_owners(f, info, call, done, running) for f in theirs}  # O(m*n*f)
+    owned = {f: o for f, o in owned.items() if o}  # O(m)
+    if owned:  # a file changed after its committed owner's checkpoint: say so (#397) | O(1)
+        for f in changed_vs_parent(list(owned)):  # O(m) + process spawns
+            note_once(a, f"left uncommitted (owned by {', '.join(owned[f])}, changed after its checkpoint; run commit_task {owned[f][0]}): {f}")  # O(1)
     if out_of_scope and running:  # a running task's stray file is not this task's block | O(m)
         for f in out_of_scope:  # O(m) iterations
-            print(f"left uncommitted (another task is running: {', '.join(running)}): {f}", file=sys.stderr)  # O(1)
+            note_once(a, f"left uncommitted (another task is running: {', '.join(running)}): {f}")  # O(1)
         out_of_scope = []  # O(1)
     if out_of_scope:  # O(1)
         base = baseline_dirty(a.plan)  # O(b)
