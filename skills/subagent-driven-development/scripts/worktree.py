@@ -3,6 +3,7 @@
 
     worktree.py ensure TOPIC [--repo DIR]     print the absolute path of the run folder
     worktree.py inplace --reason TEXT         opt the marked inline flow out of the main-checkout write refusal
+    --plan P (anywhere): accepted and ignored (every lead brief passes it to every sl call, #336)
 
 From a linked worktree the tool returns that worktree. Otherwise it returns (or creates)
 `<main root>/.claude/worktrees/superlite-<slug>` on branch `superlite/<slug>`. The main checkout's
@@ -147,7 +148,12 @@ def inplace(reason, sd):  # O(f + r)
 
 
 def main(argv=None):  # O(w) + spawns
-    ap = argparse.ArgumentParser(prog="worktree")  # O(1)
+    import autocommit  # O(1) lazy, as trees.main
+    argv, plan = autocommit.split_plan(list(sys.argv[1:] if argv is None else argv))  # --plan P / --plan=P removed, value ignored | O(len argv)
+    if plan == "":  # O(1) --plan without a value
+        print("usage: worktree ensure TOPIC [--repo DIR] | inplace --reason TEXT [--plan P]", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    ap = argparse.ArgumentParser(prog="worktree", epilog="--plan P (anywhere): accepted and ignored; lead briefs pass it to every sl call (#336)")  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
     e = sub.add_parser("ensure")  # O(1)
     e.add_argument("topic")  # O(1)
