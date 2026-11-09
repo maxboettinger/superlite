@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Fleet worker reports: parse a worker's reply into one dict, and build the one-line brief message.
 
-    fleet_report.parse(text, label="", allow_json=True) -> {"status", "files", "tests", "findings", "summary", "valid"}
+    fleet_report.parse(text, label="", allow_json=True) -> {"status", "files", "tests", "red", "findings", "summary", "valid"}
     fleet_report.brief_message(role, path) -> one line telling a worker to read PATH and how to end its reply
 
 `parse` never raises. Only a valid last fenced json block sets `valid` True; the fallbacks (a `Verdict:` line with
 finding lines, then a `Status:` line, then a status token) keep `files` [], `tests` "" and `summary` "".
+`red` is the json block's non-empty `red` string, else the reply's last `Red run:` line, else ""; a non-string `red` breaks the block.
 """
 # Complexity notation:
 # s = characters of the reply, f = findings in it
@@ -20,9 +21,11 @@ import metrics as mx  # noqa: E402 | O(1)
 STATUSES = ("APPROVED", "CHANGES_REQUESTED", "DONE_WITH_CONCERNS", "DONE", "NEEDS_CONTEXT", "BLOCKED")  # O(1)
 BLOCK = re.compile(r"^[ \t]*```json[^\n]*\n(.*?)\n?^[ \t]*```[ \t]*$", re.DOTALL | re.M)  # a fenced json block; only a fence line closes it, so a fence inside a string does not | O(s) per opener
 VERDICT = re.compile(r"^\s*\**Verdict:\**\s*(APPROVED|CHANGES_REQUESTED)\b", re.M)  # O(1)
+RED_LINE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?([*`]*)Red run([*`]*):([*`]*)[ \t]*(\S.*?)[ \t]*\r?$", re.M)  # O(1)
 FINDING_LINE = re.compile(r"^\s*(?:[-*]\s+)?(\S+?):(\d+)\s+-\s+(.+?)\s+-\s+(.+)\s+-\s+tier\s+([123])\s*$", re.M)  # O(1)
 WORK = ("End your reply with the line `Status: <DONE|DONE_WITH_CONCERNS|NEEDS_CONTEXT|BLOCKED>`, then one fenced json block: "
         '{"status": "<that word>", "files": ["<path changed>"], "tests": "<test command and result line>", '
+        '"red": "<the summary line of the run that saw your new tests fail, or none - no test>", '
         '"findings": [{"file": "<path>", "line": <int>, "problem": "<text>", "fix": "<text>", "tier": <1|2|3>}], '
         '"summary": "<one line>"}. `findings` lists only the findings still open; `tier` is the integer 1, 2 or 3 (fixing.md).')  # O(1)
 REVIEW = ("After the `Checked:` lines (outside the 300-word cap), end with one fenced json block: "
@@ -42,6 +45,17 @@ def _finding_ok(f) -> bool:  # O(1)
             and _int(f.get("tier"), 1, 3))
 
 
+def _red_line(text: str) -> str:  # O(s)
+    """The last `Red run:` line's text, else ""."""
+    found = RED_LINE.findall(text)  # O(s)
+    if not found:  # O(1)
+        return ""  # O(1)
+    opener, _, _, value = found[-1]  # O(1)
+    if opener.startswith("**") and value.endswith("**"):  # a fully bold line closes its stars after the value
+        value = value[:-2].rstrip()  # O(1)
+    return value  # O(1)
+
+
 def _from_json(text: str) -> dict | None:  # O(s)
     """The last fenced json block as a report, or None when it is missing, broken or the wrong shape."""
     found = None  # O(1)
@@ -57,12 +71,13 @@ def _from_json(text: str) -> dict | None:  # O(s)
         return None  # O(1)
     status = obj.get("status")  # O(1)
     status = status.upper() if isinstance(status, str) else None  # O(1)
+    red = obj.get("red", "")  # O(1)
     files, tests, summary, findings = obj.get("files", []), obj.get("tests", ""), obj.get("summary", ""), obj.get("findings", [])  # O(1)
     if (status not in STATUSES or not isinstance(files, list) or not all(isinstance(x, str) for x in files)  # O(f)
-            or not isinstance(tests, str) or not isinstance(summary, str) or not isinstance(findings, list)
+            or not isinstance(tests, str) or not isinstance(red, str) or not isinstance(summary, str) or not isinstance(findings, list)
             or not all(_finding_ok(f) for f in findings)):  # one bad finding breaks the block
         return None  # O(1)
-    return {"status": status, "files": files, "tests": tests, "findings": findings, "summary": summary, "valid": True}  # O(1)
+    return {"status": status, "files": files, "tests": tests, "red": red or _red_line(text), "findings": findings, "summary": summary, "valid": True}  # O(1)
 
 
 def parse(text: str, label: str = "", allow_json: bool = True) -> dict:  # O(s)
@@ -72,7 +87,7 @@ def parse(text: str, label: str = "", allow_json: bool = True) -> dict:  # O(s)
     report = _from_json(text) if allow_json else None  # O(s)
     if report:  # O(1)
         return report  # O(1)
-    base = {"files": [], "tests": "", "findings": [], "summary": "", "valid": False}  # O(1)
+    base = {"files": [], "tests": "", "red": _red_line(text), "findings": [], "summary": "", "valid": False}  # O(1)
     m = VERDICT.search(text)  # O(s)
     if m:  # O(1)
         found = [{"file": g[0], "line": int(g[1]), "problem": g[2], "fix": g[3], "tier": int(g[4])}  # O(f)
