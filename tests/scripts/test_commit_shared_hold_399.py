@@ -185,3 +185,26 @@ def test_running_shared_examples():
     assert commit_task.running_shared(["src/a.py", "src/shared.py"], info, ["T2"]) == {"src/shared.py": ["T2"]}
     assert commit_task.running_shared(["src/shared.py"], info, ["T9", "review P1"]) == {}
     assert commit_task.running_shared(["src/a.py"], info, []) == {}
+
+
+def test_hold_in_repo_without_commits(tmp_path):
+    repo = tmp_path / "bare"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "commit.gpgsign", "false")
+    write(repo, "plan.md", PLAN)
+    write(repo, "src/a.py", "A = 1\n")
+    write(repo, "src/shared.py", "S = 1\n")
+    pool(repo, [{"busy": True, "current": "T2"}])
+    r = ck(repo, "T1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert HOLD in r.stderr
+    assert git(repo, "show", f"{r.stdout.strip()}:src/a.py") == "A = 1"
+
+
+def test_docstring_describes_hold():
+    doc = commit_task.__doc__
+    assert "shared with running" in doc
+    assert "are left uncommitted" in doc
