@@ -13,6 +13,7 @@ Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-d
 `Wn Tn[,Tm] sent` line per worker, `BLOCKED: Tn[,Tm] not sent (<reason>)` for a line that got no worker
 (the other lines still go out; exit 3); the Wave 0 line starts a haiku worker and sends it `briefs/wave0.md`.
 A start that fails with `not an available shell` (a freed pane) is retried once after SHELL_PAUSE_S.
+While the run's fleet.json says off, `spawn` (both forms) starts nothing: `BLOCKED: fleet is off in <state dir>; run sl fleet on [--plan P] first ...`, exit 3 (#355).
 """
 
 # Complexity notation:
@@ -458,6 +459,10 @@ def main(argv=None):  # O(w) plus command cost
                 tail = f" context_k={pooled[wid].get('context_k', '-')} baseline_k={'-' if bk is None else bk}"  # O(1)
             print(f"{wid} {w.get('state')} account={w.get('account')} pane={w.get('pane_id')} task={w.get('task') or '-'}" + (f" role={role}" if role and role != "implementer" else "") + tail)  # O(1)
     elif a.cmd == "spawn":  # O(1)
+        if not fs.is_on(sd):  # a worktree run keeps its own fleet.json: the main checkout's `fleet on` does not reach it (#355) | O(w)
+            hint = "sl fleet on" + (f" --plan {a.plan}" if a.plan else "")  # O(1) the same --plan resolves the same state dir
+            print(f"BLOCKED: fleet is off in {sd}; run {hint} first (a worktree run keeps its own fleet.json)")  # O(1)
+            return 3  # O(1) before dispatch: no task marked, no pane, no worker id
         if a.for_dispatch:  # O(1)
             return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent)  # O(R * (spawn + send))
         try:  # O(1)

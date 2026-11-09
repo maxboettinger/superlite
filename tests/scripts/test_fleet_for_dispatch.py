@@ -140,3 +140,31 @@ def test_real_dispatch_run_feeds_for_dispatch(world, monkeypatch, capsys):
 def test_fleet_md_names_for_dispatch():
     text = (SCRIPTS.parent / "fleet.md").read_text(encoding="utf-8")
     assert "fleet spawn --for-dispatch" in text and "one call per dispatch round" in text
+
+
+def test_for_dispatch_refuses_while_fleet_is_off(world, monkeypatch, capsys):
+    """#355: no `fleet on` in this run: no dispatch round, no worker, one BLOCKED line with the hint, exit 3. Runs in both modes."""
+    calls = []
+    monkeypatch.setattr(dispatch, "run", lambda *a, **k: calls.append(a) or ([], {}))
+    sd = world.sd.resolve()
+    assert fleet.main(["spawn", "--for-dispatch", "--plan", str(world.plan)]) == 3
+    assert capsys.readouterr().out.splitlines() == [f"BLOCKED: fleet is off in {sd}; run sl fleet on --plan {world.plan} first (a worktree run keeps its own fleet.json)"]
+    assert calls == [] and world.fh.calls == []
+    assert fleet.fs.load(sd)["workers"] == {}
+
+
+@pytest.mark.skipif(REAL, reason="scripted dispatch lines need the in-process fake")
+def test_fleet_json_on_false_refuses_until_fleet_on(dwld, capsys):
+    """#355 as seen: the worktree's fleet.json says on=false: both spawn forms refuse; after `fleet on` the same round goes out."""
+    sd = dwld.sd.resolve()
+    (sd / "fleet.json").write_text(json.dumps({"on": False, "workers": {}, "next": 1}) + "\n")
+    dwld.lines = [("T2", FRESH)]
+    assert _go(dwld) == 3
+    assert fleet.main(["spawn", "--tier", "sonnet"]) == 3
+    assert capsys.readouterr().out.splitlines() == [
+        f"BLOCKED: fleet is off in {sd}; run sl fleet on --plan {dwld.tasks_plan} first (a worktree run keeps its own fleet.json)",
+        f"BLOCKED: fleet is off in {sd}; run sl fleet on first (a worktree run keeps its own fleet.json)"]
+    assert dwld.fh.calls == [] and fleet.fs.load(sd)["workers"] == {}
+    fleet.main(["on"])
+    assert _go(dwld) == 0
+    assert capsys.readouterr().out.splitlines() == ["W1 T2 sent"]
