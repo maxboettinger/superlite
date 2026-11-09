@@ -18,9 +18,11 @@ Start one with `"$SL" fleet spawn --role R [--tier T] --plan PLAN`, then give it
 | `fixer` | `superlite:fixer-{sonnet,sonnet-high,opus}` (`--tier 1\|2\|3`, or `sonnet\|sonnet-high\|opus`) | sonnet medium, sonnet high, opus high | none; one brief, a fresh worker per fix |
 | `package-reviewer` | `superlite:package-reviewer` | sonnet, medium | none; one brief |
 | `final-reviewer` | `superlite:final-reviewer` | opus, high; a fresh worker per round | none; `.superlite/review-packet.md` |
-| `research` | `superlite:researcher` (`agents/researcher.md`) | haiku, low; read-only (Read, Grep, Glob; no shell) | none; one brief |
+| `research` | `superlite:researcher` (`agents/researcher.md`) | haiku, low (`--tier sonnet\|opus` pins another model); read-only (Read, Grep, Glob; no Write, Edit or shell) | none; one brief |
 
 The reviewers take no `--tier`; an unknown role or tier exits 2 with `error: ...`. A test layer is not an agent: `fleet run --layer headless|tui|evals` runs `scripts/test_layers.py` in a shell pane and records the role `layer`.
+
+Research worker limits: the researcher has only Read, Grep and Glob (spawn also disallows Edit, Write, NotebookEdit and Bash), so it cannot write a report file or run `git`, and it answers in at most 300 words with `file:line` references. `fleet wait` saves that reply as `<sd>/fleet/reports/<label>.md` (the `.json` next to it; the label is the brief's file name without `.md`): that file is the report. A brief that asks for a report file, or for more than 300 words, cannot be fulfilled: split it into one brief per question and one worker each. Research path: write the prompt to `<sd>/briefs/<name>.md`; `sl fleet spawn --role research --plan PLAN` prints `Wn`; `sl fleet send Wn --brief <sd>/briefs/<name>.md --plan PLAN`; `sl fleet wait Wn --plan PLAN` (Bash timeout 600000). PLAN is the plan file, or the state folder `.superlite` before a plan exists (a lead in brainstorming).
 
 - Every worker gets `--effort` from its agent file (frontmatter effort is ignored in a main-thread session), `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0` and `SUPERLITE_FLEET_ROLE=<role>`.
 - Briefs live in `.superlite/briefs/` (inside the worker's cwd; spawn adds `--add-dir` when the state dir is outside it). A brief is a file the worker reads, never pasted text.
