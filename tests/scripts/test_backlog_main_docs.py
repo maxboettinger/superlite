@@ -8,6 +8,17 @@ def row(name):
     return next(x for x in TOOLS.splitlines() if x.startswith(f"| `{name}` |"))
 
 
+def test_docs_name_the_main_side_merge():
+    ref = (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8")
+    fleet = (ROOT / "docs" / "fleet.md").read_text(encoding="utf-8")
+    assert '"$SL" backlog ship B merge --from-main' in CMD
+    assert '"$SL" backlog ship B merge --from-main' in ref
+    assert "merge denied: main runs sl backlog ship B merge --from-main" in ref
+    assert "ship B merge --from-main" in fleet
+    assert "`merge --from-main`" in row("backlog_ship") and "rebase aborted" in row("backlog_ship")
+    assert CMD.index("merge --from-main") < CMD.index("backlog ship B done")
+
+
 def test_command_names_skip_and_park_with_their_reasons():
     for s in ('"$SL" backlog skip <issue>', "waits on outside work, such as another open PR",
               '"$SL" backlog park B --reason R', "needs a human design decision"):
