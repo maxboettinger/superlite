@@ -155,3 +155,18 @@ def test_testing_doc_counts_cases():
     row = next(l for l in (ROOT / "docs/testing.md").read_text().splitlines() if l.startswith("| evals"))
     words = {7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve"}
     assert f"{words[len(CASES)]} cases" in row
+
+
+def test_one_batch_counts_only_decisions():
+    criteria = frontmatter(EVALS / "ai-asks-once" / "graders" / "one-batch.md")["criteria"]
+    for need in ("zero included", "Bash", "requests to enable a denied tool or permission are not counted"):
+        assert need in criteria, need
+    assert ": " not in criteria and " #" not in criteria
+
+
+def test_reads_coverage_matches_the_skill_file():
+    fm = frontmatter(EVALS / "brainstorm-coverage" / "graders" / "reads-coverage.md")
+    assert fm["type"] == "tool_used" and fm["tool"] == "Read" and fm["arm"] == "with-only"
+    pattern = re.compile(fm["input_match"])
+    assert pattern.search('"file_path": "/p/skills/brainstorming/coverage.md"')
+    assert not pattern.search('"file_path": "/x/docs/coverage.md"')
