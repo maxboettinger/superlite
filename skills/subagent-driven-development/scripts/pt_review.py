@@ -576,9 +576,45 @@ def _top_level_names(path: Path) -> set[str]:  # O(B) read + parse total
     return names  # O(1)
 
 
+def project_packages(root: Path, plan: Plan, tid: str) -> list[str]:  # O(T*o*d) over all tasks' owned files
+    """Top packages of the project's owned non-test .py files, task `tid` first."""  # O(1)
+    order = [tid] + [t for t in plan.tasks if t != tid]  # O(T)
+    pkgs: list[str] = []  # O(1)
+    for t in order:  # O(T) iterations
+        for o in plan.tasks[t].owns():  # O(o) iterations
+            if not o.endswith(".py") or TEST_PATH_RE.search(o):  # O(d)
+                continue  # O(1)
+            mod = module_name(root, root / o)  # O(d)
+            if "." in mod and mod.split(".")[0] not in pkgs:  # O(P)
+                pkgs.append(mod.split(".")[0])  # O(1)
+    return pkgs  # O(1)
+
+
+def _exact_case(f: Path, n: int) -> bool:  # O(n * dir size) listdirs
+    """True when the last `n` module components of `f` (plus the .py file or __init__.py) match on-disk case."""  # O(1)
+    cur = f  # O(1)
+    if f.name == "__init__.py":  # O(1)
+        cur = f.parent  # O(1)
+    for _ in range(n):  # O(n) iterations
+        try:  # O(1)
+            if cur.name not in os.listdir(cur.parent):  # O(dir size)
+                return False  # O(1)
+        except OSError:  # O(1)
+            return False  # O(1)
+        cur = cur.parent  # O(1)
+    return True  # O(1)
+
+
 def locate(root: Path, plan: Plan, p: Planned) -> tuple[str, list[str], Path | None]:  # O(d^2 + o*B) per item (re-parses owned files)
     """Return (module, attribute chain, defining file) for a planned item."""  # O(d)
     parts = p.parts  # O(d)
+    for pkg in project_packages(root, plan, p.task):  # O(P) iterations; project-package prefix before the name as written
+        if parts[0] == pkg:  # O(1)
+            continue  # O(1)
+        for k in range(len(parts) - 1, 0, -1):  # O(d) iterations
+            f = find_module_file(root, ".".join([pkg, *parts[:k]]))  # O(d) stats
+            if f and _exact_case(f, k + 1):  # O(d*dir size); exact case on case-insensitive filesystems
+                return module_name(root, f), parts[k:], f  # O(d)
     for k in range(len(parts) - 1, 0, -1):  # O(d) iterations
         f = find_module_file(root, ".".join(parts[:k]))  # O(d) stats (find_module_file)
         if f:  # O(d)
@@ -1364,8 +1400,9 @@ def plan_entries(plan: Plan) -> list[dict]:  # O(E_p*m) total
         if not parsed:  # O(1)
             continue  # O(1)
         first = parsed.get("call") or parsed.get("serve") or parsed.get("run", "")  # O(1)
-        first = re.sub(r"^(python3?|py)\s+-m\s+", "", first.split("(")[0].strip())  # O(1)
-        entry: dict = {"package": first.split(".")[0].split()[0] if first else f"p{len(entries)}"}  # O(1)
+        first = re.sub(r"^(?:\S*[/\\])?(python3?|py)\s+-m\s+", "", first.split("(")[0].strip())  # O(1)
+        word = re.split(r"[/\\]", (first.split() or [""])[0])[-1].split(".")[0]  # O(1)
+        entry: dict = {"package": word or f"p{len(entries)}"}  # O(1)
         if "call" in parsed:  # O(1)
             entry["call"] = parsed["call"]  # O(1)
         if "run" in parsed:  # O(1)

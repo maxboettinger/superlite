@@ -388,3 +388,139 @@ def test_contract_seam_logs_incident_by_default_and_verified_on_pass(proj: Path,
 def test_contract_without_seam_does_not_write_a_log(proj: Path):
     assert contract(proj) == 0
     assert not (proj / ".superlite" / "incidents.jsonl").exists()
+
+
+# ----------------------------------------------------------------------------- adapter: run= paths (#347)
+
+
+@pytest.mark.parametrize("entry, package", [
+    ("run=.venv/bin/dashmax registry sunsama-sync", "dashmax"),
+    ("run=./tool --verbose", "tool"),
+    ("run=.build/debug/MyExec", "MyExec"),
+    ("run=bin/tool", "tool"),
+    ("run=.venv/bin/python -m dashmax sync", "dashmax"),
+    ("run=python -m minisheet", "minisheet"),
+    ("call=minisheet.Workbook.set", "minisheet"),
+    ("serve=minisheet.server.create_server(Workbook())", "minisheet"),
+    ("run=./", "p0"),
+])
+def test_plan_entries_package_from_command_347(tmp_path: Path, entry: str, package: str):
+    plan = tmp_path / "plan.md"
+    plan.write_text(f"**Probe entry:** {entry}\n", encoding="utf-8")
+    assert pt_review.plan_entries(pt_review.parse_plan(plan))[0]["package"] == package
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs a POSIX shell script")
+def test_adapter_skips_package_without_probe_entry_347(tmp_path: Path):
+    tool = tmp_path / ".venv" / "bin" / "pkgtool"
+    tool.parent.mkdir(parents=True)
+    tool.write_text('#!/bin/sh\necho synced "$@"\n', encoding="utf-8")
+    tool.chmod(0o755)
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\n\n## Package lib\n**Probe entry:** call=pkg.mod.fn\n\n"
+                    "## Package cli\n**Probe entry:** run=.venv/bin/pkgtool sync\n\n"
+                    "## Package http\nNetwork-only client, no runnable entry.\n", encoding="utf-8")
+    out = tmp_path / ".superlite" / "probes" / "adapter.py"
+    assert run("adapter", "--plan", str(plan), "--root", str(tmp_path), "--out", str(out)) == 0
+    assert pt_review.plan_entries(pt_review.parse_plan(plan)) == [
+        {"package": "pkg", "call": "pkg.mod.fn"}, {"package": "pkgtool", "run": ".venv/bin/pkgtool sync"}]
+    spec = importlib.util.spec_from_file_location("probe_adapter_347", out)
+    adapter = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(adapter)
+        rc, so, _err = adapter.run(["now"], package="pkgtool")
+        assert rc == 0 and so.strip() == "synced sync now"
+    finally:
+        sys.path[:] = [p for p in sys.path if not p.startswith(str(tmp_path))]
+
+
+# ----------------------------------------------------------------------------- contract: package-relative Produces names (#348)
+
+RELATIVE_348 = "core.sunsama_api.client(token: str) -> object · registry.settings.ToolTokens(a: str)"
+
+
+def dashmax(root: Path, produces: str = RELATIVE_348) -> Path:
+    pkg = root / "src" / "dashmax"
+    for d in (pkg / "core", pkg / "registry"):
+        d.mkdir(parents=True)
+        (d / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "use.py").write_text("", encoding="utf-8")
+    (pkg / "core" / "sunsama_api.py").write_text(
+        "def client(token: str) -> object:\n    return token\n", encoding="utf-8")
+    (pkg / "registry" / "settings.py").write_text(
+        "class ToolTokens:\n    def __init__(self, a: str):\n        self.a = a\n", encoding="utf-8")
+    plan = root / "plan.md"
+    plan.write_text("\n".join([
+        "# dashmax plan", "", "```mermaid", "flowchart LR", "%% taskgraph", "T1 --> T2", "```", "",
+        "### T1 api",
+        "**Owns:** src/dashmax/core/sunsama_api.py, src/dashmax/registry/settings.py",
+        f"**Produces:** {produces}", "",
+        "### T2 use",
+        "**Owns:** src/dashmax/use.py",
+        "**Consumes:** core.sunsama_api.client (T1)", ""]), encoding="utf-8")
+    return plan
+
+
+def seam_348(plan: Path, root: Path, log: Path) -> int:
+    return run("contract", "--plan", str(plan), "--root", str(root), "--seam", "T1,T2", "--log", str(log))
+
+
+def test_contract_relative_produces_names_verified_348(tmp_path: Path, capsys):
+    log = tmp_path / "incidents.jsonl"
+    assert seam_348(dashmax(tmp_path), tmp_path, log) == 0
+    out = capsys.readouterr().out
+    assert "PASS: verified: seam T1↔T2" in out and "AttributeError" not in out
+    assert [json.loads(ln)["kind"] for ln in log.read_text(encoding="utf-8").splitlines()] == ["verified"]
+
+
+def test_contract_absolute_produces_names_still_verified_348(tmp_path: Path, capsys):
+    plan = dashmax(tmp_path, "dashmax.core.sunsama_api.client(token: str) -> object · "
+                             "dashmax.registry.settings.ToolTokens(a: str)")
+    assert seam_348(plan, tmp_path, tmp_path / "incidents.jsonl") == 0
+    assert "PASS: verified: seam T1↔T2" in capsys.readouterr().out
+
+
+def test_contract_relative_name_missing_attribute_still_reported_348(tmp_path: Path, capsys):
+    plan = dashmax(tmp_path, "core.sunsama_api.missing(token: str) -> object")
+    assert seam_348(plan, tmp_path, tmp_path / "incidents.jsonl") == 1
+    assert "AttributeError: missing not found in dashmax.core.sunsama_api" in capsys.readouterr().out
+
+
+def test_locate_tries_project_package_prefix_first_348(tmp_path: Path):
+    plan_path = dashmax(tmp_path)
+    top = tmp_path / "src" / "core"
+    top.mkdir()
+    (top / "__init__.py").write_text("", encoding="utf-8")
+    (top / "sunsama_api.py").write_text("def client(other: int) -> int:\n    return other\n", encoding="utf-8")
+    plan = pt_review.parse_plan(plan_path)
+    items = {p.qual: p for p in pt_review.planned_items(plan, ["T1"])}
+    mod, chain, f = pt_review.locate(tmp_path, plan, items["core.sunsama_api.client"])
+    assert (mod, chain) == ("dashmax.core.sunsama_api", ["client"])
+    assert f.resolve() == (tmp_path / "src" / "dashmax" / "core" / "sunsama_api.py").resolve()
+    mod, chain, _f = pt_review.locate(tmp_path, plan, items["registry.settings.ToolTokens"])
+    assert (mod, chain) == ("dashmax.registry.settings", ["ToolTokens"])
+
+
+def test_project_packages_from_owned_files_348(tmp_path: Path):
+    plan = pt_review.parse_plan(dashmax(tmp_path))
+    assert pt_review.project_packages(tmp_path, plan, "T1") == ["dashmax"]
+    assert pt_review.project_packages(tmp_path, plan, "T2") == ["dashmax"]
+
+
+def test_locate_prefix_requires_exact_case_of_every_component_348(tmp_path: Path):
+    plan_path = dashmax(tmp_path)
+    probe = tmp_path / "CaseProbe"
+    probe.mkdir()
+    if (tmp_path / "caseprobe").exists():
+        pass
+    else:
+        pytest.skip("case-sensitive filesystem")
+    plan = pt_review.parse_plan(plan_path)
+    f = tmp_path / "src" / "dashmax" / "core" / "sunsama_api.py"
+    assert pt_review._exact_case(f, 3)
+    assert not pt_review._exact_case(tmp_path / "src" / "DashMax" / "core" / "sunsama_api.py", 3)
+    assert not pt_review._exact_case(tmp_path / "src" / "dashmax" / "Core" / "sunsama_api.py", 3)
+    assert not pt_review._exact_case(tmp_path / "src" / "dashmax" / "core" / "Sunsama_api.py", 3)
+    item = next(p for p in pt_review.planned_items(plan, ["T1"]) if p.qual == "core.sunsama_api.client")
+    assert pt_review.locate(tmp_path, plan, item)[0] == "dashmax.core.sunsama_api"
