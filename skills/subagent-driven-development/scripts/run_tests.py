@@ -6,6 +6,8 @@
     run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] --command CMD   (a full result run outside run_tests; report only, closes no incidents)
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
+An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change, a `--full` tree the task's own files.
+
 Prints `passed failed skipped seconds` (errors count as failed). Each failing
 test becomes a `test-failure` incident; on a --full run each test file whose
 tests all pass becomes a `verified` incident (once per distinct entry). With `--task Tn` each
@@ -734,7 +736,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             if a.task not in info:  # O(1)
                 nt.die(f"unknown task {a.task}")  # O(1)
             ct.add_also_owns(info, a.ledger)  # --also and --claim rulings own their files too (#239) | O(c + o)
-            tree = trees.prepare(".", a.task, info[a.task]["owns"])  # O(f * o) + git checkout
+            tree = trees.prepare(".", a.task, ["**/*"] if paths else info[a.task]["owns"])  # a --fast run tests every working-tree change, a --full run the task's own files | O(f * o) + git checkout
+            announce_tree(tree, a.task, bool(paths))  # O(f)
             link_node_modules(Path.cwd(), tree, spec)  # O(d)
             tree_gone = node_install_line(tree, spec)  # a tree without node_modules fails like the root | O(m + f)
             if tree_gone:  # O(1)
@@ -770,6 +773,19 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             return 1 if r.returncode == 5 else 2  # O(1)
         counts, failures, files = parsed or parse_junit(xml_path)  # O(X + T*d)
     return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
+
+
+def announce_tree(tree, task, fast):  # O(f) name the isolated tree and how many files it overlays on stderr
+    try:  # O(1)
+        n = len(json.loads(trees.overlay_file(".", task).read_text(encoding="utf-8")))  # O(f)
+    except (OSError, ValueError, TypeError):  # an unreadable overlay counts 0 | O(1)
+        n = 0  # O(1)
+    try:  # O(1)
+        rel = Path(tree).resolve().relative_to(Path.cwd().resolve()).as_posix()  # O(1)
+    except ValueError:  # O(1)
+        rel = Path(tree).as_posix()  # O(1)
+    what = "all working-tree changes (--fast)" if fast else f"{task}'s own changes"  # O(1)
+    print(f"run_tests: tree {rel} = base + {what}: {n} file{'' if n == 1 else 's'}", file=sys.stderr)  # O(1)
 
 
 def finish_run(a, label, counts, failures, files, seconds, returncode):  # O(k + F + B) one incident append
