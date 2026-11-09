@@ -87,7 +87,7 @@ def test_outside_issues_cannot_be_smuggled_and_private_repos_trust_all(bk, capsy
 
 def test_plan_refuses_while_batches_are_open(bk, capsys):
     cli(capsys, "plan")
-    assert cli(capsys, "plan") == (2, "BLOCKED: backlog has open batches (B1 planned)\n")
+    assert cli(capsys, "plan") == (2, "BLOCKED: backlog has open batches (B1 planned); sl backlog plan --reset drops them and plans every open issue again (shipped batches stay)\n")
     assert cli(capsys, "plan", "--reset")[0] == 0
     bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "shipped"})); bk.batches = [{**BATCH, "issues": [2]}]
     assert cli(capsys, "plan")[0] == 0 and [(x["id"], x["state"]) for x in load(bk)["batches"]] == [("B1", "shipped"), ("B2", "planned")]
@@ -106,7 +106,7 @@ def test_decide_print_and_file(bk, capsys, tmp_path):
     assert cli(capsys, "decide", "--print", "--batch", "B1") == (3, "BLOCKED: B1 question.json invalid: questions: 1 to 4 entries\n")
 
 def test_status_and_router(bk, capsys, monkeypatch):
-    assert cli(capsys, "status") == (0, "backlog: 0 batches, 0 running, 0 shipped, ship not approved\n")
+    assert cli(capsys, "status") == (0, "backlog: 0 batches, 0 running, 0 shipped, ship not approved\nnext: sl backlog plan\n")
     seen = []
     monkeypatch.setitem(sys.modules, "backlog_run", types.SimpleNamespace(main=lambda argv: seen.append(argv) or 0))
     monkeypatch.setitem(sys.modules, "backlog_ship", types.SimpleNamespace(main=lambda argv: seen.append(argv) or 4))

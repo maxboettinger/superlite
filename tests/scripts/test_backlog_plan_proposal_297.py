@@ -78,7 +78,7 @@ def test_unreadable_or_shapeless_files_are_refused_before_gh(bk, capsys):
 def test_open_batches_refuse_before_the_file_is_read(bk, capsys):
     f = write(bk, {"batches": [BATCH]})
     assert cli(capsys, "plan", "--proposal", f)[0] == 0
-    assert cli(capsys, "plan", "--proposal", str(bk.root / "nope.json")) == (2, "BLOCKED: backlog has open batches (B1 planned)\n")
+    assert cli(capsys, "plan", "--proposal", str(bk.root / "nope.json")) == (2, "BLOCKED: backlog has open batches (B1 planned); sl backlog plan --reset drops them and plans every open issue again (shipped batches stay)\n")
     assert cli(capsys, "plan", "--reset", "--proposal", f)[0] == 0 and [b["id"] for b in load(bk)["batches"]] == ["B1"]
 
 
