@@ -37,6 +37,7 @@ Put --wait last or before another flag: argparse takes a following word as its P
 A green --full run (not --task, not --fast, not --record) in a git toplevel holding `scripts/test_layers.py` also stamps the
 unit layer green (`run_tests: unit layer stamped`), from digests taken before the run, so a file changed during it stays stale; a stamp
 error prints `run_tests: unit layer not stamped: <err>` and never changes the exit code. `--record` never stamps.
+A Swift `--fast` run whose template holds `{only_testing}` maps each test file to `-only-testing:<Target>/<Suite>` (target from the .xcodeproj or Package.swift); a path outside every test target runs the unfiltered `test` command instead (#398).
 Every test subprocess (pytest, a test-cmd.json command and its setup) gets the environment without `SUPERLITE_FLEET_*` variables (a fleet pane's worker, role and parent dir); a test-cmd.json `env` entry still applies on top.
 A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is refused before the run (exit 2, `test-cmd.json uses {only_testing}, the Xcode (Swift) placeholder, ...`, no incident; `--background` refuses in the parent).
 `--wait` ends with a stderr summary line (`tests (full): P passed, F failed`), looks once more at its deadline, and on a timeout names the live pid and the rerun command; a runner's output goes to temp files, so a child left running cannot hold the run.
@@ -750,7 +751,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         if a.fast:  # a missing path is refused here, not in the detached child | O(1)
             try:  # O(1)
                 fast = expand_fast_paths([p for chunk in a.fast for p in nt.csv(chunk)])  # O(p)
-                spec = testcmd.resolve(".", fast)  # O(m + f)
+                spec = fast_spec(fast, quiet=True)  # O(m + f)
             except FileNotFoundError:  # left to the child | O(1)
                 fast, spec = [], None  # O(1)
             gone = missing_line(fast, a.cwd, Path.cwd()) if spec and spec["python"] and fast else None  # O(p)
@@ -872,6 +873,90 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
     return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
 
 
+PBX_TARGET = re.compile(r"isa\s*=\s*PBXNativeTarget\s*;(.*?)\n\s*\};", re.S)  # O(1)
+PBX_TEST_TYPE = re.compile(r'productType\s*=\s*"?com\.apple\.product-type\.bundle\.(?:unit-test|ui-testing)"?\s*;')  # O(1)
+PBX_NAME = re.compile(r'(?m)^\s*name\s*=\s*(?:"([^"]*)"|([^\s;]+))\s*;')  # O(1)
+SPM_TEST_TARGET = re.compile(r'\.testTarget\(\s*name\s*:\s*"([^"]+)"')  # O(1)
+
+
+def swift_test_targets(root: Path) -> set[str]:  # test target names of Xcode projects and Swift packages | O(files)
+    out: set[str] = set()  # O(1)
+    for pat in ("*.xcodeproj/project.pbxproj", "*/*.xcodeproj/project.pbxproj"):  # O(1)
+        for f in sorted(root.glob(pat)):  # O(files)
+            try:  # O(1)
+                text = f.read_text(encoding="utf-8", errors="replace")  # O(file)
+            except OSError:  # O(1)
+                continue  # O(1)
+            for m in PBX_TARGET.finditer(text):  # O(file)
+                body = m.group(1)  # O(1)
+                nm = PBX_NAME.search(body)  # O(body)
+                if nm and PBX_TEST_TYPE.search(body) and (nm.group(1) or nm.group(2)):  # an empty name is no target | O(body)
+                    out.add(nm.group(1) or nm.group(2))  # O(1)
+    for pat in ("Package.swift", "*/Package.swift"):  # O(1)
+        for f in sorted(root.glob(pat)):  # O(files)
+            try:  # O(1)
+                text = f.read_text(encoding="utf-8", errors="replace")  # O(file)
+            except OSError:  # O(1)
+                continue  # O(1)
+            out.update(SPM_TEST_TARGET.findall(text))  # O(file)
+    return out  # O(1)
+
+
+def owning_test_target(path: str, targets: set[str]):  # test target a Swift path belongs to, else None | O(depth)
+    dirs = path.replace("\\", "/").split("/")[:-1]  # O(len)
+    if targets:  # O(1)
+        return next((d for d in reversed(dirs) if d in targets), None)  # O(depth)
+    if "Tests" in dirs:  # SwiftPM Tests/<Target>/ | O(depth)
+        i = dirs.index("Tests")  # O(depth)
+        if i + 1 < len(dirs):  # O(1)
+            return dirs[i + 1]  # O(1)
+    return next((d for d in reversed(dirs) if d.endswith("Tests") and d != "Tests"), None)  # O(depth)
+
+
+def xcode_only_testing(root: Path, paths: list[str]):  # -> (shell-quoted -only-testing ids, None) or (None, first unmapped path) | O(p + files)
+    targets = swift_test_targets(root)  # O(files)
+    ids: list[str] = []  # O(1)
+    for p in paths:  # O(p)
+        rel = p.replace("\\", "/")  # O(len)
+        if Path(rel).is_absolute():  # O(1)
+            try:  # O(1)
+                rel = Path(rel).resolve().relative_to(Path(root).resolve()).as_posix()  # O(len)
+            except ValueError:  # outside root, kept as given | O(1)
+                pass  # O(1)
+        tgt = owning_test_target(rel, targets)  # O(depth)
+        if tgt is None:  # O(1)
+            return None, rel  # O(1)
+        suites: list[str] = []  # O(1)
+        if rel.endswith(".swift"):  # O(1)
+            try:  # O(1)
+                suites = testcmd.swift_suites((Path(root) / rel).read_text(encoding="utf-8", errors="replace"))  # O(file)
+            except OSError:  # O(1)
+                suites = []  # O(1)
+        for want in ([f"{tgt}/{s}" for s in suites] or [tgt]):  # O(s)
+            one = shlex.quote(f"-only-testing:{want}")  # O(len)
+            if one not in ids:  # O(ids)
+                ids.append(one)  # O(1)
+    return " ".join(ids), None  # O(ids)
+
+
+def fast_spec(paths: list[str], quiet: bool = False):  # testcmd.resolve, but {only_testing} maps to Target/Suite or runs unfiltered | O(m + f)
+    cfg = testcmd.read_config(Path(".")) or testcmd.main_checkout_config(Path("."))  # O(file)
+    template = (cfg.get("test_file") or cfg.get("test")) if isinstance(cfg, dict) else None  # O(1)
+    if not paths or not isinstance(template, str) or "{only_testing}" not in template or not isinstance(cfg.get("test"), str):  # O(1)
+        return testcmd.resolve(".", paths)  # O(m + f)
+    spec = testcmd.resolve(".", ())  # the unfiltered test command | O(m + f)
+    if spec is None or spec.get("python"):  # O(1)
+        return spec  # O(1)
+    ids, miss = xcode_only_testing(Path("."), list(paths))  # O(p + files)
+    if miss:  # O(1)
+        if not quiet:  # O(1)
+            print(f"run_tests: {miss} is not in a test target; running the unfiltered test command", file=sys.stderr)  # O(1)
+        return spec  # O(1)
+    files = " ".join(f'"{p}"' if " " in p else p for p in paths)  # same join as testcmd.resolve | O(p)
+    spec["command"] = template.replace("{only_testing}", ids).replace("{files}", files).replace("{names}", testcmd.names_filter(paths))  # O(p)
+    return spec  # O(1)
+
+
 def expand_fast_paths(paths):  # O(p) source paths -> related tests; test paths kept
     """--fast accepts source or test paths; a source path maps via testcmd.resolve_related."""
     out = []  # O(1)
@@ -908,7 +993,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             print("0 0 0 0.0")  # O(1)
             return 1  # O(1)
     a.unit_snap = unit_snapshot(a, label)  # before the runner touches anything | O(n * size)
-    spec = testcmd.resolve(".", paths)  # .superlite/test-cmd.json, else marker files | O(m + f)
+    spec = fast_spec(paths)  # .superlite/test-cmd.json, else marker files | O(m + f)
     if spec is None:  # no test command: exit 2 with a clear summary | O(1)
         hint = getattr(testcmd, "missing_reason", None)  # T3's text when present | O(1)
         reason = hint(Path(".")) if hint else ("no test command found: add .superlite/test-cmd.json "  # O(1)
