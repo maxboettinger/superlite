@@ -6,13 +6,15 @@
     orchestrator.py status [--plan P]
     orchestrator.py bind [--plan P]
     orchestrator.py end [--plan P]
+    orchestrator.py takeover [--plan P]
 
 State: `.superlite/orchestrator.json` {mode, approved, by, time}, in the folder `state.resolve` finds: the plan's git toplevel
 with --plan (the review plan's with `approve --review` and no --plan), else $SUPERLITE_STATE_DIR, the session's binding, ./.superlite.
 `set`, `approve` and `bind` bind the session (CLAUDE_CODE_SESSION_ID) to that folder, so the hooks find the same state
 whatever directory the session was launched from. `end` closes a run: it moves the run markers (stable.json, prime.md,
 prime-haiku.md, pool.json) and the gate files (orchestrator.json, human-replies.jsonl) into `.superlite/runs/<time>/` and
-releases the session's binding, so the coordinator guard stops. In human mode `plan_tools lint --stable`, `dispatch`,
+releases the session's binding, so the coordinator guard stops. `takeover` binds this session to a run folder another
+session owns (`bind --force` plus a one-line message), so `end` and `set` act on it; `end` refuses another live session's folder and names it. In human mode `plan_tools lint --stable`, `dispatch`,
 `wave0` and `build_prime` refuse to run (exit 4, one line) until `approve` has been recorded; `schedule --insert` and
 `prune` stay allowed so the plan can be shown whole with its Gantt. In AI mode nothing is gated. With no file nothing is
 gated (existing runs behave as before). `--ruling` on `set ai` also appends a `Ruling:` line to `.superlite/progress.md`
@@ -173,42 +175,61 @@ def main(argv=None):  # O(1)
     st.add_argument("--review", help="review plan path: status says whether a reply newer than it approves")  # O(1)
     b_ = sub.add_parser("bind")  # O(1)
     e_ = sub.add_parser("end")  # O(1)
-    for p in (s, a_, st, b_, e_):  # O(1)
+    t_ = sub.add_parser("takeover")  # O(1)
+    for p in (s, a_, st, b_, e_, t_):  # O(1)
         p.add_argument("--plan", help="plan path (locates .superlite at its git toplevel); default: the session's binding, else ./.superlite")  # O(1)
     b_.add_argument("--force", action="store_true", help="take over a folder another live session owns")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     review = getattr(a, "review", None)  # O(1)
     if a.cmd == "bind" and not a.plan:  # bind without a plan targets the launch directory, never resolves | O(d)
         sd = state.launch_dir() / ".superlite"  # O(d)
-    elif a.cmd in ("end", "set") and not a.plan:  # the #199 check below words the refusal | O(d)
+    elif a.cmd in ("end", "set", "takeover") and not a.plan:  # the #199 check below words the refusal | O(d)
         sd = state.resolve(None, strict=False)  # O(d)
     elif a.cmd == "approve" and review and not a.plan:  # O(1)
         sd = state.plan_dir(review)  # O(d)
     else:  # a writer or reader following a foreign binding exits 2 inside resolve (#224) | O(d)
         sd = sl_dir(a.plan)  # O(d)
-    if a.cmd in ("end", "set") and not a.plan:  # without --plan never act on another worktree's run (#199) | O(d)
+    if a.cmd in ("end", "set", "takeover") and not a.plan:  # without --plan never act on another worktree's run (#199) | O(d)
         top = foreign_worktree(sd)  # O(d)
         if top:  # O(1)
             how = "SUPERLITE_STATE_DIR" if os.environ.get("SUPERLITE_STATE_DIR") else "session binding"  # O(1)
             print(f"orchestrator: cwd is in worktree {top}, but the run folder found is {state._abs(sd)} ({how}); "
-                  f"{'not ended' if a.cmd == 'end' else 'not set'}; pass --plan {top / '.superlite'} for this worktree's run, "
+                  f"{ {'end': 'not ended', 'set': 'not set'}.get(a.cmd, 'not taken over') }; pass --plan {top / '.superlite'} for this worktree's run, "
                   f"or --plan {state._abs(sd)}", file=sys.stderr)  # O(d)
             return 2  # O(1)
+    if a.cmd == "takeover":  # O(1)
+        if a.plan and not Path(a.plan).exists():  # O(1)
+            print(f"orchestrator: plan not found: {a.plan}", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        if not sd.is_dir():  # O(1)
+            print(f"orchestrator: no run folder {sd}; nothing to take over", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        old = state.owner(sd)  # O(1)
+        if not state.bind(sd, force=True):  # O(b + d)
+            print(NO_SESSION, file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        if old and old != state.session_id():  # O(1)
+            print(f"orchestrator: run {state._abs(sd)} taken over from session {old}; this session owns it now")  # O(d)
+        else:  # O(1)
+            print(f"orchestrator: session bound to {state._abs(sd)}; no other session owned it")  # O(d)
+        return 0  # O(1)
     if a.cmd == "end":  # O(1)
         if a.plan and not Path(a.plan).exists():  # a removed worktree's path would walk up to another checkout | O(1)
             print(f"orchestrator: plan not found: {a.plan}; end before removing the worktree", file=sys.stderr)  # O(1)
             return 2  # O(1)
         other = state.live_owner(sd)  # O(d)
         if other:  # O(1)
-            print(f"orchestrator: {sd} belongs to session {other}; not ended", file=sys.stderr)  # O(1)
+            print(f"orchestrator: {sd} belongs to session {other}; not ended; take the run over first: sl orchestrator takeover --plan {sd}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         print(end(sd))  # O(files)
         return 0  # O(1)
     if a.cmd in ("bind", "set", "approve"):  # bind first: it refuses another session's folder and brings a pending gate | O(1)
         try:  # O(1)
             bound = state.bind(sd, force=getattr(a, "force", False))  # O(b + d)
-        except state.Owned as e:  # O(1)
-            print(f"orchestrator: {e}", file=sys.stderr)  # O(1)
+        except state.Owned:  # O(1)
+            other = state.live_owner(sd) or state.owner(sd)  # O(d)
+            print(f"orchestrator: {state._abs(sd)} belongs to session {other}; pass --plan with your own worktree's plan, "
+                  f"or take the run over: sl orchestrator takeover --plan {state._abs(sd)}", file=sys.stderr)  # O(d)
             return 2  # O(1)
         if a.cmd == "bind":  # O(1)
             if not bound:  # O(1)
