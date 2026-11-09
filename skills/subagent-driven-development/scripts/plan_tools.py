@@ -1216,6 +1216,212 @@ def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
     return issues  # O(issues)
 
 
+SWIFT_SKIP = {".build", ".git", ".superlite", "node_modules"}  # O(1)
+SWIFT_CALLS = (".target(", ".executableTarget(", ".testTarget(", ".macro(")  # O(1)
+SWIFT_DECL = re.compile(r"^\s*(?:(?:public|open|internal|private|fileprivate|final|indirect)\s+)*(?:struct|class|enum|actor|protocol|typealias)\s+([A-Z]\w*)")  # O(1)
+
+
+class _Deps(set):  # O(1) a set that remembers the manifest order for messages
+    order: list[str]  # O(1)
+
+
+def _swift_uncomment(text: str) -> str:  # O(s) the manifest without // and /* */ comments (strings kept, newlines kept)
+    out: list[str] = []  # O(1)
+    i, n = 0, len(text)  # O(1)
+    while i < n:  # O(s) iterations
+        c = text[i]  # O(1)
+        if c == '"':  # O(1)
+            j = i + 1  # O(1)
+            while j < n and text[j] != '"':  # O(s) total
+                j += 2 if text[j] == "\\" else 1  # O(1)
+            out.append(text[i:j + 1])  # O(s)
+            i = j + 1  # O(1)
+        elif text.startswith("//", i):  # O(1)
+            j = text.find("\n", i)  # O(s)
+            i = n if j < 0 else j  # O(1)
+        elif text.startswith("/*", i):  # O(1)
+            j = text.find("*/", i + 2)  # O(s)
+            j = n if j < 0 else j + 2  # O(1)
+            out.append("\n" * text.count("\n", i, j))  # O(s)
+            i = j  # O(1)
+        else:  # O(1)
+            out.append(c)  # O(1)
+            i += 1  # O(1)
+    return "".join(out)  # O(s)
+
+
+def _swift_call(text: str, start: int) -> tuple[str, int]:  # O(s) the text inside the balanced parentheses opened at text[start], comments dropped
+    out: list[str] = []  # O(1)
+    depth, i, n = 0, start, len(text)  # O(1)
+    while i < n:  # O(s) iterations
+        c = text[i]  # O(1)
+        if c == '"':  # O(1)
+            j = i + 1  # O(1)
+            while j < n and text[j] != '"':  # O(s) total
+                j += 2 if text[j] == "\\" else 1  # O(1)
+            out.append(text[i:j + 1])  # O(s)
+            i = j + 1  # O(1)
+            continue  # O(1)
+        if text.startswith("//", i):  # O(1)
+            j = text.find("\n", i)  # O(s)
+            i = n if j < 0 else j  # O(1)
+            continue  # O(1)
+        if c == "(":  # O(1)
+            depth += 1  # O(1)
+        elif c == ")":  # O(1)
+            depth -= 1  # O(1)
+            if depth == 0:  # O(1)
+                return "".join(out[1:]) if out else "", i  # O(s)
+        out.append(c)  # O(1)
+        i += 1  # O(1)
+    return "".join(out[1:]), n  # O(s)
+
+
+def _swift_args(inner: str) -> list[str]:  # O(s) the top-level arguments of a call body, strings and brackets respected
+    args: list[str] = []  # O(1)
+    depth, cur, i = 0, [], 0  # O(1)
+    while i < len(inner):  # O(s) iterations
+        c = inner[i]  # O(1)
+        if c == '"':  # O(1)
+            j = i + 1  # O(1)
+            while j < len(inner) and inner[j] != '"':  # O(s) total
+                j += 2 if inner[j] == "\\" else 1  # O(1)
+            cur.append(inner[i:j + 1])  # O(s)
+            i = j + 1  # O(1)
+            continue  # O(1)
+        depth += (c in "([{") - (c in ")]}")  # O(1)
+        if c == "," and depth == 0:  # O(1)
+            args.append("".join(cur).strip())  # O(s)
+            cur = []  # O(1)
+        else:  # O(1)
+            cur.append(c)  # O(1)
+        i += 1  # O(1)
+    args.append("".join(cur).strip())  # O(s)
+    return [a for a in args if a]  # O(args)
+
+
+def swift_targets(root: Path) -> dict[str, dict]:  # O(F + M*s) F = folders walked to depth 3, M = manifests
+    """Every SwiftPM target of the Package.swift files under root: its folder, its dependencies, its manifest."""  # O(1)
+    found: dict[str, dict] = {}  # O(1)
+    base = len(root.parts)  # O(1)
+    for cur, dirs, files in os.walk(root):  # O(F) iterations
+        dirs[:] = sorted(d for d in dirs if d not in SWIFT_SKIP)  # O(d log d)
+        if len(Path(cur).parts) - base >= 3:  # O(1)
+            dirs[:] = []  # O(1)
+        if "Package.swift" not in files:  # O(1)
+            continue  # O(1)
+        manifest = Path(cur) / "Package.swift"  # O(1)
+        try:  # one unreadable manifest must not hide the others | O(1)
+            text = _swift_uncomment(manifest.read_text(encoding="utf-8", errors="replace"))  # O(s)
+        except OSError:  # O(1)
+            continue  # O(1)
+        rel = manifest.relative_to(root).as_posix()  # O(d)
+        spans = sorted((m.start(), m.group(0)) for m in re.finditer(r"\.(?:target|executableTarget|testTarget|macro)\(", text))  # O(s)
+        covered = 0  # a .target(name:) inside another target's dependencies is a reference, not a target | O(1)
+        for pos, marker in spans:  # O(targets) iterations
+            if pos < covered:  # O(1)
+                continue  # O(1)
+            if True:  # O(1)
+                inner, end = _swift_call(text, pos + len(marker) - 1)  # O(s)
+                covered = end  # O(1)
+                fields = {a.split(":", 1)[0].strip(): a.split(":", 1)[1].strip() for a in _swift_args(inner) if ":" in a}  # O(s)
+                nm = re.fullmatch(r'"([^"]*)"', fields.get("name", ""))  # O(s)
+                if nm:  # O(1)
+                    pm = re.fullmatch(r'"([^"]*)"', fields.get("path", ""))  # O(s)
+                    kind = "Tests" if marker == ".testTarget(" else "Sources"  # O(1)
+                    deps = _Deps()  # O(1)
+                    deps.order = []  # O(1)
+                    for m in re.finditer(r'(package:\s*)?"([^"]*)"', fields.get("dependencies", "")):  # O(s) iterations
+                        if not m.group(1) and m.group(2) not in deps:  # O(1)
+                            deps.add(m.group(2))  # O(1)
+                            deps.order.append(m.group(2))  # O(1)
+                    found[nm.group(1)] = {"dir": Path(cur) / (pm.group(1) if pm else f"{kind}/{nm.group(1)}"), "deps": deps, "manifest": rel}  # O(1)
+    return found  # O(1)
+
+
+def signature_types(sig: dict) -> list[str]:  # O(s) the capitalised type names in a signature's arguments and return, in order
+    seen: list[str] = []  # O(1)
+    parts = [a.split(":", 1)[1] for a in split_top_level(sig["args"]) if ":" in a]  # O(s)
+    for text in parts + [sig.get("ret") or ""]:  # O(parts) iterations
+        for name in re.findall(r"\b[A-Z]\w*", text):  # O(s) iterations
+            if name not in seen:  # O(types)
+                seen.append(name)  # O(types)
+    return seen  # O(1)
+
+
+def _target_of(path: Path, targets: dict[str, dict]) -> str | None:  # O(T*d) the target whose folder holds the path, the deepest one
+    best = None  # O(1)
+    for name, t in targets.items():  # O(T) iterations
+        if t["dir"] in path.parents and (best is None or len(t["dir"].parts) > len(targets[best]["dir"].parts)):  # O(d)
+            best = name  # O(1)
+    return best  # O(1)
+
+
+def _swift_owned(plan: Plan, t: Task, root: Path) -> list[Path]:  # O(o*s) the non-test .swift files a task owns
+    out = []  # O(1)
+    for o in t.owns:  # O(o) iterations
+        q = o.replace("\\", "/")  # O(s)
+        parts = q.split("/")  # O(s)
+        if q.endswith(".swift") and "Tests" not in parts and not parts[-1].endswith("Tests.swift"):  # O(s)
+            out.append(root / q)  # O(1)
+    return out  # O(o)
+
+
+def import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s + n*q) one WARNING per (consumer, target, type)
+    """A consumed signature names a type declared in a module the consumer's SwiftPM target does not depend on (#388)."""  # O(1)
+    targets = swift_targets(root)  # O(F + M*s)
+    if not targets:  # O(1)
+        return []  # O(1)
+    mods: dict[str, set[str]] = {}  # O(1)
+    for name, t in targets.items():  # O(T) iterations
+        if not t["dir"].is_dir():  # O(1)
+            continue  # O(1)
+        for f in sorted(t["dir"].rglob("*.swift")):  # O(files) iterations
+            for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():  # O(lines) iterations
+                m = SWIFT_DECL.match(ln)  # O(s)
+                if m and not ln.lstrip().startswith("//"):  # O(1)
+                    mods.setdefault(m.group(1), set()).add(name)  # O(1)
+    produced: dict[str, list[tuple[str, dict]]] = {}  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        owned = [_target_of(f, targets) for f in _swift_owned(plan, t, root)]  # O(o*T*d)
+        for item in t.produces:  # O(q) iterations
+            sig = parse_signature(item)  # O(s)
+            if sig:  # O(1)
+                produced.setdefault(sig_key(sig), []).append((t.id, sig))  # O(1)
+            tname = sig["cls"] if sig and sig["cls"] else (item if re.fullmatch(r"[A-Z]\w*", item) else None)  # O(1)
+            if tname:  # O(1)
+                mods.setdefault(tname, set()).update(x for x in owned if x)  # O(o)
+    warns: list[str] = []  # O(1)
+    seen: set[tuple[str, str, str]] = set()  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        files = [(f, _target_of(f, targets)) for f in _swift_owned(plan, t, root)]  # O(o*T*d)
+        for item in t.consumes:  # O(q) iterations
+            sig = parse_signature(item)  # O(s)
+            if not sig:  # O(1)
+                continue  # O(1)
+            ref = re.search(REF_TAIL, strip_ticks(item))  # O(s)
+            refs = re.findall(TASK_ID, ref.group(1)) if ref else []  # O(s)
+            cands = [c for c in produced.get(sig_key(sig), []) if not refs or c[0] in refs]  # O(cands*refs)
+            if not cands:  # O(1)
+                continue  # O(1)
+            pid, psig = cands[0]  # O(1)
+            for ty in signature_types(psig):  # O(types) iterations
+                declared = mods.get(ty)  # O(1)
+                if not declared:  # O(1)
+                    continue  # O(1)
+                for _f, tg in files:  # O(o) iterations
+                    if not tg or tg not in targets or (t.id, tg, ty) in seen:  # O(1)
+                        continue  # O(1)
+                    deps = targets[tg]["deps"]  # O(1)
+                    if declared & (set(deps) | {tg}):  # O(deps)
+                        continue  # O(deps)
+                    seen.add((t.id, tg, ty))  # O(1)
+                    order = ", ".join(getattr(deps, "order", sorted(deps)))  # O(deps)
+                    warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {ty} is declared in {', '.join(sorted(declared))}, "  # O(s)
+                                 f"which target {tg} may not import ({targets[tg]['manifest']}) dependencies: {order}")  # O(deps)
+    return warns  # O(w)
+
+
 def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e*n + C*P + n*p + merge/simulate) total
     issues: list[str] = []  # O(1)
     warnings: list[str] = []  # O(1)
@@ -1320,6 +1526,11 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
                 issues.append(Issue(f"{t.id} consumes {sig['name']}({sig['args']}) but {pid} produces "  # O(s)
                                     f"{psig['name']}({psig['args']})" + (f" -> {psig['ret']}" if psig["ret"] else ""), [t.id]))  # O(1)
 
+    try:  # a SwiftPM import gap is a warning, never an issue; a parser miss must not block a task (#388) | O(1)
+        if plan.path:  # O(1)
+            warnings.extend(import_issues(plan, stable_root(str(plan.path))))  # O(T*d + files*s)
+    except (OSError, ValueError):  # O(1)
+        pass  # O(1)
     import shape  # lazy: shape imports this module | O(1)
     try:  # O(1)
         frozen = dispatched_tasks(stable_root(str(plan.path)) / ".superlite") if plan.path else set()  # O(c)

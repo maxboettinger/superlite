@@ -621,6 +621,7 @@ def locate(root: Path, plan: Plan, p: Planned) -> tuple[str, list[str], Path | N
             return module_name(root, f), parts[k:], f  # O(d)
     owned = [root / o for o in plan.tasks[p.task].owns()  # O(o*m)
              if o.endswith(".py") and not TEST_PATH_RE.search(o)]  # O(d)
+    owned += [root / o for o in test_owns(plan, p.task) if o.endswith(".py")]  # owned test helpers after the sources | O(o*m)
     for f in owned:  # O(o) iterations; short module names (`slug.slugify` -> src/sitegen/slug.py) | O(d) per module_name
         mod = module_name(root, f)  # O(d)
         for k in range(len(parts), 0, -1):  # O(d) iterations; full dotted name, or last component for k == 1
@@ -686,17 +687,21 @@ def code_owns(plan: Plan, tid: str) -> list[str]:  # O(o*m) total
     return [o for o in source_owns(plan, tid) if Path(o).suffix in DECL_PATTERNS or o.endswith(".py")]  # O(o)
 
 
+def test_owns(plan: Plan, tid: str) -> list[str]:  # O(o*m) total
+    return [o for o in plan.tasks[tid].owns() if is_test_path(o) and (Path(o).suffix in DECL_PATTERNS or o.endswith(".py"))]  # O(o)
+
+
 def by_declaration(plan: Plan, tid: str) -> bool:  # O(o*m) total
     owned = code_owns(plan, tid)  # O(o*m)
     return bool(owned) and not any(o.endswith(".py") for o in owned)  # O(o)
 
 
-def find_declaration(root: Path, files: list[str], name: str) -> tuple[str, int] | None:  # O(F*B) total
-    """First (file, line) that declares `name`; comments, strings and test files are ignored."""  # O(1)
+def find_declaration(root: Path, files: list[str], name: str, *, tests: bool = False) -> tuple[str, int] | None:  # O(F*B) total
+    """First (file, line) that declares `name`; comments and strings are ignored, test files only with `tests`."""  # O(1)
     for rel in files:  # O(F) iterations
         pat = DECL_PATTERNS.get(Path(rel).suffix)  # O(1)
         f = root / rel  # O(1)
-        if not pat or is_test_path(rel) or not f.is_file():  # O(d)
+        if not pat or (is_test_path(rel) and not tests) or not f.is_file():  # O(d)
             continue  # O(1)
         rx = re.compile(SWIFT_INIT_RE if name == "init" and f.suffix == ".swift" else pat.replace("{name}", re.escape(name)))  # a Swift init has no keyword before its name | O(m)
         lines = f.read_text(encoding="utf-8", errors="replace").splitlines()  # O(B)
@@ -729,10 +734,11 @@ def find_declaration(root: Path, files: list[str], name: str) -> tuple[str, int]
 def check_declarations(plan: Plan, root: Path, p: Planned) -> list[Mismatch]:  # O(F*B) total
     files = code_owns(plan, p.task)  # O(o*m)
     leaf = p.parts[-1]  # O(m)
-    hit = find_declaration(root, files, leaf)  # O(F*B)
+    tfiles = test_owns(plan, p.task)  # O(o*m)
+    hit = find_declaration(root, files, leaf) or find_declaration(root, tfiles, leaf, tests=True)  # O(F*B)
     if hit:  # O(1)
         return []  # O(1)
-    shown = ", ".join(files)  # O(m)
+    shown = ", ".join(files + tfiles)  # O(m)
     return [Mismatch(1, files[0], 1, f"{p.task} Produces: `{leaf}` not declared in {shown}", p.task)]  # O(1)
 
 
@@ -2227,7 +2233,61 @@ def stale_in_run(entry: dict, summaries: list[dict]) -> bool:  # O(S*F) total
     return False  # O(1)
 
 
-def read_test_summary(path: Path) -> tuple[str, int]:  # O(file size) total
+OUTDATED_LINES = 30  # outdated lines in section 4, summary failures and incidents together | O(1)
+
+
+def _imported_names(path: Path) -> set[str]:  # O(B) read + parse total
+    """Every dotted name a module imports, with each dotted prefix (`from a.b import c` -> a, a.b, a.b.c)."""
+    names: set[str] = set()  # O(1)
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8", errors="replace"))):  # O(B)
+        if isinstance(node, ast.Import):  # O(1)
+            dotted = [a.name for a in node.names]  # O(1)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:  # O(1)
+            dotted = [node.module] + [f"{node.module}.{a.name}" for a in node.names]  # O(n)
+        else:  # O(1)
+            continue  # O(1)
+        for d in dotted:  # O(n) iterations
+            parts = d.split(".")  # O(m)
+            names.update(".".join(parts[:k]) for k in range(1, len(parts) + 1))  # O(m^2)
+    return names  # O(1)
+
+
+def test_inputs(root: Path, test_file: str, changed: set[str] | None) -> list[str]:  # O(B + F*d) total
+    """The test file, the changed `.py` files it imports, then the changed `conftest.py` files at or above its folder."""
+    out = [test_file]  # O(1)
+    f = root / test_file  # O(1)
+    if changed is None or not test_file.endswith(".py") or not f.is_file():  # O(1)
+        return out  # O(1)
+    try:  # O(B)
+        names = _imported_names(f)  # O(B)
+    except (SyntaxError, ValueError, OSError):  # O(1)
+        return out  # O(1)
+    for c in sorted(changed):  # O(F) iterations
+        if c.endswith(".py") and c != test_file and Path(c).name != "conftest.py" and (root / c).is_file() \
+                and (module_name(root, root / c) in names or Path(c).stem in names):  # O(d)
+            out.append(c)  # O(1)
+    folder = Path(test_file).parent  # O(1)
+    out += sorted(c for c in changed if Path(c).name == "conftest.py" and (Path(c).parent == folder or Path(c).parent in folder.parents))  # O(F log F)
+    return out  # O(1)
+
+
+def changed_after(root: Path, files: list[str], when: float) -> str | None:  # O(F) stat calls total
+    """The first file whose mtime is later than `when`, or that is missing; None when every file is older."""
+    for rel in files:  # O(F) iterations
+        try:  # O(1)
+            if (root / rel).stat().st_mtime > when:  # O(1)
+                return rel  # O(1)
+        except OSError:  # a missing file counts as changed | O(1)
+            return rel  # O(1)
+    return None  # O(1)
+
+
+def outdated_failure(root: Path, test_file: str, when: float, changed: set[str] | None) -> str | None:  # O(B + F*d) total
+    """The file that changed after a run at `when` (the test file, a conftest, an imported changed module), else None."""
+    return changed_after(root, test_inputs(root, test_file, changed), when)  # O(B + F*d)
+
+
+def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | None = None) -> tuple[str, int]:  # O(file size + F*(B + d)) total
     if not path.is_file():  # O(1)
         return "- no test summary recorded (`run_tests.py --full` runs alongside this review)", 0  # O(1)
     d = load_summary(path)  # O(file size)
@@ -2235,13 +2295,41 @@ def read_test_summary(path: Path) -> tuple[str, int]:  # O(file size) total
         return "- test summary unreadable", 0  # O(1)
     failed = d.get("failures") or d.get("failed_tests") or []  # O(1)
     skipped = d.get("skipped_tests") or []  # O(1)
-    nfail = int(d["failed"]) if isinstance(d.get("failed"), int) else len(failed)  # O(1)
-    rows = [f"- passed {d.get('passed', '?')} · failed {nfail} · skipped {d.get('skipped', len(skipped))}"]  # O(1)
+    started = _num(d.get("started"))  # a summary without a start time is never outdated | O(1)
+    stale: dict[str, str | None] = {}  # test file -> the file that changed after the run | O(1)
+    old: list[tuple[str, str]] = []  # O(1)
+    cur: list = []  # O(1)
+    for t in failed:  # O(F) iterations
+        tf = str(t).split("::", 1)[0] if "::" in str(t) else ""  # O(m)
+        if root is not None and started is not None and tf:  # O(1)
+            if tf not in stale:  # O(1)
+                stale[tf] = outdated_failure(root, tf, started, changed)  # O(B + F*d)
+            if stale[tf]:  # O(1)
+                old.append((str(t), stale[tf]))  # O(1)
+                continue  # O(1)
+        cur.append(t)  # O(1)
+    total = int(d["failed"]) if isinstance(d.get("failed"), int) else len(failed)  # O(1)
+    nfail = max(0, total - len(old))  # O(1)
+    rows = [f"- passed {d.get('passed', '?')} · failed {total}{f' ({len(old)} outdated)' if old else ''} · skipped {d.get('skipped', len(skipped))}"]  # O(1)
     if d.get("mode") == "fast":  # O(1)
         rows.insert(0, "- full suite not run yet (it runs alongside this review); newest fast run:")  # O(1)
-    rows += [f"- FAILING: {t}" for t in failed[:30]]  # O(min(30, failed))
+    rows += [f"- OUTDATED: {t} ({f} changed after this run; the full suite decides)" for t, f in old[:OUTDATED_LINES]]  # O(min(30, old))
+    rows += [f"- FAILING: {t}" for t in cur[:30]]  # O(min(30, cur))
     rows += [f"- SKIPPED: {t}" for t in skipped[:30]]  # O(min(30, skipped))
     return "\n".join(rows), nfail  # O(1)
+
+
+def outdated_incidents(root: Path, entries: list[dict], changed: set[str] | None) -> list[tuple[dict, str]]:  # O(K*(B + F*d)) total
+    """run_tests test-failure incidents whose test inputs changed after they were logged; agent-logged ones never."""
+    out: list[tuple[dict, str]] = []  # O(1)
+    for e in entries:  # O(K) iterations
+        epoch = e.get("epoch")  # O(1)
+        if e.get("kind") != "test-failure" or e.get("agent") != "run_tests" or _num(epoch) is None or not e.get("file"):  # O(1)
+            continue  # O(1)
+        why = outdated_failure(root, str(e["file"]), float(epoch), changed)  # O(B + F*d)
+        if why:  # O(1)
+            out.append((e, why))  # O(1)
+    return out  # O(1)
 
 
 def render_item(root: Path, it: Item, shown: set[tuple[str, int]], idx: str) -> str:  # O(B) per item (excerpt re-reads file)
@@ -2300,6 +2388,24 @@ def packet_inputs(a: argparse.Namespace) -> tuple[bool, Plan, str]:  # O(W + L*m
     return inline, parse_plan(spec if inline else a.plan), prev  # O(W + L*m + H^2)
 
 
+def cut_files(text: str) -> set[str]:  # O(len(text)) total
+    """Files a rendered excerpt section leaves out (`Left out: ...` line) or truncates (`(truncated: ...; read <file> in full)`)."""
+    out: set[str] = set()  # O(1)
+    for ln in text.splitlines():  # O(lines) iterations
+        if ln.startswith("Left out: "):  # O(1)
+            out.update(x.strip() for x in ln[len("Left out: "):].split(",") if x.strip())  # O(len(ln))
+        elif ln.startswith("(truncated: "):  # O(1)
+            m = re.search(r"; read (.+) in full\)$", ln)  # O(len(ln))
+            if m:  # O(1)
+                out.add(m.group(1))  # O(1)
+    return out  # O(1)
+
+
+def shard_path(out: Path) -> Path:  # O(1)
+    """The tests shard next to a packet: `<stem>-tests.md` (#381)."""
+    return out.with_name(out.stem + "-tests.md")  # O(1)
+
+
 def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/python subprocesses total
     inline, plan, previous = packet_inputs(a)  # O(W + L*m + H^2)
     root = Path(a.root).resolve()  # O(1)
@@ -2319,11 +2425,6 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     entries = read_incidents(log)  # O(file size)
     n_all = len(entries)  # O(1)
     runs = run_summaries(Path(a.tests) if a.tests else sl / "test-summary.json") or ([summary] if summary else [])  # O(S log S)
-    entries = [e for e in entries if not stale_in_run(e, runs)]  # O(K*S*F)
-    n_stale = n_all - len(entries)  # O(1)
-    items = incident_items(entries) + read_probe_failures(probes)  # O(K + R)
-    if not inline:  # probe coverage needs plan tasks; an inline build ran no probes (#130) | O(1)
-        items += uncovered_items(plan, root, entries)  # O(pkgs*cats*...)
     base_ok = False  # O(1)
     if a.base:  # O(1)
         try:  # O(1)
@@ -2332,6 +2433,15 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         except (OSError, subprocess.TimeoutExpired):  # git missing or hanging: treat as no base | O(1)
             base_ok = False  # O(1)
     changed = changed_since(root, a.base) if base_ok else None  # O(F)
+    entries = [e for e in entries if not stale_in_run(e, runs)]  # O(K*S*F)
+    gone = outdated_incidents(root, entries, changed)  # run_tests failures whose code changed after the run | O(K*(B + F*d))
+    gone_ids = {id(e) for e, _ in gone}  # O(K)
+    entries = [e for e in entries if id(e) not in gone_ids]  # O(K)
+    n_gone = len(gone)  # O(1)
+    n_stale = n_all - len(entries) - n_gone  # outdated ones are counted on their own line, not as stale | O(1)
+    items = incident_items(entries) + read_probe_failures(probes)  # O(K + R)
+    if not inline:  # probe coverage needs plan tasks; an inline build ran no probes (#130) | O(1)
+        items += uncovered_items(plan, root, entries)  # O(pkgs*cats*...)
     if changed is not None:  # O(1)
         items += claimed_fix_items(entries, changed, root)  # O(K + F)
     mismatches, n_checked = ([], 0) if inline else check_interfaces(plan, root, None)  # O(P) + 1 subprocess
@@ -2340,7 +2450,16 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
                           f"- {m.msg}", m.file, m.line, "pt_review contract check (tool)", True))  # O(1)
     items.sort(key=lambda i: i.rank)  # O(I log I)
     counts = {s: sum(1 for i in items if i.section == s) for s in ("incidents", "probes", "uncovered", "contract", "claimed")}  # O(5*I)
-    tests_text, nfail = read_test_summary(tests)  # O(1)
+    tests_text, nfail = read_test_summary(tests, root, changed)  # O(F*(B + d))
+    shown_old = tests_text.count("\n- OUTDATED: ") + tests_text.startswith("- OUTDATED: ")  # O(len)
+    seen_loc: set[tuple] = set()  # O(1)
+    for e, why in gone:  # O(K) iterations
+        loc = (e.get("file"), e.get("line"))  # O(1)
+        if loc in seen_loc or shown_old >= OUTDATED_LINES:  # O(1)
+            continue  # O(1)
+        seen_loc.add(loc)  # O(1)
+        shown_old += 1  # O(1)
+        tests_text += f"\n- OUTDATED incident: {e.get('file')}:{e.get('line')} {str(e.get('context', ''))[:120]} ({why} changed after it)"  # O(1)
     n_open = sum(counts.values()) + (1 if nfail else 0)  # O(1)
     fast = n_open == 0 and not inline  # an inline build had no reviewer, so nothing is verified yet (#130) | O(1)
     tool_only = not fast and not inline and not nfail and all(i.tool for i in items)  # every open item is a tool check, none an agent finding or a red test (#12) | O(I)
@@ -2358,13 +2477,33 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         rel = rel_to(root, root / it.file) if it.file else None  # O(d)
         if rel and rel not in hot:  # O(H)
             hot.append(rel)  # O(1)
-    ex_budget = max(2000, cap // 3)  # O(1)
+    ex_budget = ex_init = max(2000, cap // 3)  # O(1)
     got = changed_diffs(root, a.base, hot, ranges, extra)  # O(X) + git spawns
     if got is not None and a.max_tokens is None:  # the default scales with the changed code, up to AUTO_MAX_TOKENS (#80) | O(1)
         rest = cap - ex_budget  # O(1)
         ex_budget = min(max(ex_budget, excerpt_need(got[1])), int(AUTO_MAX_TOKENS * CHARS_PER_TOKEN) - rest)  # O(X)
         cap = rest + ex_budget  # O(1)
     raw_ex = render_excerpts(*got, budget=ex_budget, hot=hot) if got is not None else "- (not a git repository)"  # O(X)
+    shard = shard_path(out)  # O(1)
+    shard_text, shard_line = "", ""  # O(1)
+    if got is not None and any(is_test_path(f) for f in cut_files(raw_ex)):  # a changed test file would not show in full: all go to the shard (#381) | O(X)
+        t_changed = [f for f in got[0] if is_test_path(f)]  # O(F)
+        t_diffs = [(f, ln) for f, ln in got[1] if is_test_path(f)]  # O(F)
+        n_diffs = [(f, ln) for f, ln in got[1] if not is_test_path(f) or f in hot]  # hot test files stay in section 8 too (#80) | O(F*H)
+        if a.max_tokens is None:  # recompute the auto budget from the non-test files | O(X)
+            rest = cap - ex_budget  # O(1)
+            ex_budget = min(max(ex_init, excerpt_need(n_diffs)), int(AUTO_MAX_TOKENS * CHARS_PER_TOKEN) - rest)  # O(X)
+            cap = rest + ex_budget  # O(1)
+        raw_ex = render_excerpts([f for f in got[0] if not is_test_path(f) or f in hot], n_diffs, budget=ex_budget, hot=hot)  # O(X)
+        shard_cap = int((AUTO_MAX_TOKENS if a.max_tokens is None else a.max_tokens) * CHARS_PER_TOKEN)  # O(1)
+        shard_head = ("# Review packet shard: test files\n"  # O(1)
+                      f"packet: {out.absolute()}\n"  # O(1)
+                      "This file is part of the review packet: the full diffs of the changed test files.\n\n"  # O(1)
+                      "## 9. Test files (full diffs)\n")  # O(1)
+        shard_text = cap_text(shard_head + render_excerpts(t_changed, t_diffs, per_file=10**9,  # O(X)
+                                                           budget=max(0, shard_cap - len(shard_head)), hot=t_changed), shard_cap)  # O(X)
+        shard_line = (f"Tests shard: {len(t_changed)} changed test file(s) are not in section 8 "  # O(1)
+                      f"(truncated: test diffs over the size limit; read {shard.absolute()} in full)")  # O(1)
     left_line = raw_ex.split("\n", 1)[0] if raw_ex.startswith("Left out: ") else ""  # O(1)
     excerpts = cap_text(raw_ex, ex_budget)  # O(X)
 
@@ -2394,6 +2533,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
          f"Open items: {n_open} (incidents {counts['incidents']}, probe failures {counts['probes']}, "  # O(1)
          f"unverified categories {counts['uncovered']}, contract mismatches {counts['contract']}, claimed fixes {counts['claimed']}, "  # O(1)
          f"failing tests {nfail}). Excerpts are +-12 lines."),  # O(1)
+        *([shard_line] if shard_line else []),  # O(1)
         *(["Every open item comes from a tool check (its `checker:` line), none from an agent finding: "  # O(1)
            "confirm or dismiss each from its excerpt, one line why per dismissal; nothing is approved unread."] if tool_only else []),  # O(1)
         *(["Inline build: no package reviewer, probe or contract check ran, so nothing below is verified. Review the "  # O(1)
@@ -2409,7 +2549,8 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
             "## 8. Source excerpts (changed hunks of the hot-spot files)", excerpts, ""]  # O(1)
     sec_titles = {  # O(1)
         "incidents": "## 1. Open incidents (repeated file:line first, then unresolved, then low confidence)"  # O(1)
-                     + (f"\ndropped {n_stale} stale test-failure incident(s)" if n_stale else ""),  # O(1)
+                     + (f"\ndropped {n_stale} stale test-failure incident(s)" if n_stale else "")  # O(1)
+                     + (f"\nmoved {n_gone} outdated test-failure incident(s) to section 4" if n_gone else ""),  # O(1)
         "probes": "## 2. Probe results: failures still open and unverified categories",  # O(1)
         "claimed": "## 3b. Claimed fixes not on disk (a reviewer logged these fixed, the file is unchanged since base)",  # O(1)
         "contract": ("## 3. Contract check: not run (inline build)" if inline else  # O(1)
@@ -2448,6 +2589,11 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     out.write_text(text, encoding="utf-8", newline="\n")  # O(1)
     print(f"wrote {out} ({len(text)} chars, ~{int(len(text) / CHARS_PER_TOKEN)} tokens) - "  # O(1)
           f"{'FAST PATH' if fast else f'{n_open} open item(s)'}{', inline build' if inline else ''}")  # O(1)
+    if shard_text:  # O(1)
+        shard.write_text(shard_text, encoding="utf-8", newline="\n")  # O(1)
+        print(f"wrote {shard.absolute()} ({len(shard_text)} chars) - test files, full diffs")  # O(1)
+    else:  # no shard now: an earlier round's shard must not survive | O(1)
+        shard.unlink(missing_ok=True)  # O(1)
     return 0  # O(1)
 
 
