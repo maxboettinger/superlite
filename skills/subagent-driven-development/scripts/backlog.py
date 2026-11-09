@@ -193,7 +193,15 @@ def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_m
         fleet.main(["on", "--plan", str(sd)])
     w = fleet.spawn(sd, sd, tier, root, role="research")
     wid = w["id"]
-    fleet_io.send_brief(sd, wid, str(brief), "triage")
+    import herdr_client as hc  # O(1)
+    try:  # O(1)
+        fleet_io.send_brief(sd, wid, str(brief), "triage")  # O(w)
+    except hc.HerdrError as e:  # O(1)
+        try:  # O(1)
+            fleet.stop(sd, [wid])  # O(w)
+        except (Exception, SystemExit):  # O(1)
+            pass  # O(1)
+        return None, [f"BLOCKED: triage worker {wid} got no brief ({e}); worker stopped"]  # O(1)
     deadline = time.time() + timeout_min * 60
     while True:  # O(timeout)
         if fleet_io.wait(sd, [wid], 540000):
