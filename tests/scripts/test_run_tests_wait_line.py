@@ -91,3 +91,16 @@ def test_run_captured_returns_code_and_output():
 
 def test_default_wait_is_540():
     assert run_tests.DEFAULT_WAIT == 540.0
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pid probe")
+def test_timeout_does_not_claim_a_dead_pid_runs(tmp_path):
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    p = tmp_path / "s.json"
+    p.with_suffix(".pid").write_text(str(dead.pid), encoding="utf-8")
+    r = rt(tmp_path, "--wait", str(p), "--timeout", "0.5")
+    assert r.returncode == 1 and "ended without a summary" in r.stderr and "still running" not in r.stderr
+    assert run_tests.pid_alive(p) is False
+    p.with_suffix(".pid").write_text(str(os.getpid()), encoding="utf-8")
+    assert run_tests.pid_alive(p) is True
