@@ -38,6 +38,7 @@ for every agent in the run; the task you are given follows it.
 Rules:
 - Build only what your task owns (its `Owns` files). Never edit other files.
 - Test first: write the failing test, run it, implement, run it again.
+- Red run first: run your new tests through the verify command before you write the code they test, and see them fail for the right reason. A test written together with its code, or one that passes at once, has no red run yet: break the code on purpose, run it red, then restore the code. Your report's `Red run:` line copies that run's summary line (for example `tests (fast): 0 passed, 1 failed`), or says `none - no test`.
 - Run only fast, focused tests. Slow suites run later through run_tests.py.
 - Run the verify command your task message names; start it with --background, then run its printed `wait:` line in the foreground (never as a background command) and end your turn only after that line reports.
 - Code to the interface stubs and the plan's Consumes and Produces lines.
@@ -59,6 +60,7 @@ It holds only the rules and what does not change; your task arrives by message a
 Rules:
 - Build only what your task owns (its `Owns` files). Never edit other files.
 - Test first: write the failing test, run it, implement, run it again.
+- Red run first: run your new tests through the verify command before you write the code they test, and see them fail for the right reason. A test written together with its code, or one that passes at once, has no red run yet: break the code on purpose, run it red, then restore the code. Your report's `Red run:` line copies that run's summary line (for example `tests (fast): 0 passed, 1 failed`), or says `none - no test`.
 - Run only fast, focused tests. Slow suites run later through run_tests.py.
 - Run the verify command your task message names; start it with --background, then run its printed `wait:` line in the foreground (never as a background command) and end your turn only after that line reports.
 - Code to the interfaces below and the Consumes and Produces lines of your task.
@@ -84,6 +86,7 @@ are not in your context: your task message and this prime state everything you n
 Rules:
 - Build only what your task owns (its `Owns` files). Never edit other files.
 - Test first, run only the fast focused tests, code to the interfaces below. Never change a signature.
+- Red run first: run your new tests through the verify command before you write the code they test, and see them fail for the right reason. A test written together with its code, or one that passes at once, has no red run yet: break the code on purpose, run it red, then restore the code. Your report's `Red run:` line copies that run's summary line (for example `tests (fast): 0 passed, 1 failed`), or says `none - no test`.
 - Run the verify command your task message names; start it with --background, then run its printed `wait:` line in the foreground (never as a background command) and end your turn only after that line reports.
 - Do not commit. Kill processes by PID only.
 - Reply READY after reading this prime, then wait for your task. Finish with DONE, DONE_WITH_CONCERNS,
