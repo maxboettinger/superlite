@@ -6,6 +6,7 @@
     run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] --command CMD   (a full result run outside run_tests; report only, closes no incidents)
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
+Every exit path leaves a summary: a usage error, an unknown task, a missing pytest, an unprepared tree or a crash (`run_tests crashed: ...`, exit 2) writes a red zero summary; `--wait` names a background run whose process died (its pid sits in `<summary>.pid`) and the log of one that timed out.
 A no-result stop keeps its command, exit and output in `.superlite/no-result-*.log` (newest 20) and its incident carries them as `target`, `command`, `exit`, `log`.
 An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change, a `--full` tree the task's own files.
 
@@ -52,6 +53,7 @@ import subprocess  # O(1)
 import sys  # O(1)
 import tempfile  # O(1)
 import time  # O(1)
+import traceback  # O(1)
 import xml.etree.ElementTree as ET  # O(1)
 from pathlib import Path  # O(1)
 
@@ -66,6 +68,7 @@ import trees  # noqa: E402  # O(1) module load
 DEFAULT_SUMMARY = ".superlite/test-summary.json"  # O(1)
 POLL_SECONDS = 0.5  # O(1)
 DEFAULT_WAIT = 600.0  # O(1)
+WRITTEN = set()  # resolved summary paths this process wrote; main clears it | O(1)
 
 
 def project_root(start):  # O(d) stats, d = depth of start
@@ -139,7 +142,11 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
     atomic_write(pointer_path(a.summary), json.dumps({"id": run_id, "summary": str(mine),  # O(1)
                                                       "started": time.time(),  # O(1)
                                                       "mode": "fast" if "--fast" in argv else "full"}) + "\n")  # O(1)
-    pyrun.spawn_detached(child, mine.with_suffix(".log"))  # O(1) + process spawn
+    proc = pyrun.spawn_detached(child, mine.with_suffix(".log"))  # O(1) + process spawn
+    try:  # the pid lets --wait name a child that died without a summary | O(1)
+        atomic_write(mine.with_suffix(".pid"), f"{proc.pid}\n")  # O(1)
+    except OSError:  # O(1)
+        pass  # O(1)
     print(f"summary: {mine}")  # O(1)
     print(WAIT_CUE)  # O(1) the cue sits right above the wait line, which stays last (#286)
     print(wait_line(mine))  # O(1)
@@ -158,6 +165,21 @@ def wait_target(a):  # O(1)
     return Path(ptr["summary"]) if ptr else None  # O(1)
 
 
+def pid_gone(mine):  # O(1) the pid recorded for a background run, when that process no longer exists (POSIX only), else None
+    if os.name == "nt":  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        pid = int(mine.with_suffix(".pid").read_text(encoding="utf-8").strip())  # O(1)
+        if pid <= 0:  # O(1)
+            return None  # O(1)
+        os.kill(pid, 0)  # O(1)
+    except ProcessLookupError:  # O(1)
+        return pid  # O(1)
+    except (OSError, ValueError):  # no pid file, bad content or any other error: alive | O(1)
+        return None  # O(1)
+    return None  # O(1)
+
+
 def wait_background(a):  # O(timeout / POLL_SECONDS) polls
     mine = wait_target(a)  # O(1)
     if mine is None:  # O(1)
@@ -171,8 +193,15 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
                 break  # O(1)
             except (OSError, ValueError):  # O(1) half-written (non-atomic fs): retry
                 pass  # O(1)
+        dead = pid_gone(mine) if not mine.exists() else None  # O(1)
+        if dead is not None and not mine.exists():  # one more look: the child may have written it just before exiting | O(1)
+            reason = f"background run ended without a summary (pid {dead}); log {mine.with_suffix('.log')}"  # O(1)
+            print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+            write_summary(mine, "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
+            data = json.loads(mine.read_text(encoding="utf-8"))  # O(1)
+            break  # O(1)
         if time.monotonic() >= deadline:  # O(1)
-            print(f"run_tests: timed out waiting for {mine}", file=sys.stderr)  # O(1)
+            print(f"run_tests: timed out waiting for {mine}; log {mine.with_suffix('.log')}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         time.sleep(POLL_SECONDS)  # O(1)
     print(json.dumps(data, ensure_ascii=False, indent=1))  # O(summary size)
@@ -325,6 +354,7 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
     p = Path(path)  # O(1)
     p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     tmp = p.with_name(p.name + ".tmp")  # O(1)
+    WRITTEN.add(p.resolve())  # O(1)
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")  # O(k + sk) dumps + write
     tmp.replace(p)  # O(1) rename
 
@@ -570,6 +600,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
     a = ap.parse_args(argv)  # O(1)
+    WRITTEN.clear()  # O(1)
     a.started = time.time()  # before the runner reads any code: the summary's `started` (#101) | O(1)
     cwd = Path.cwd().resolve()  # O(1)
     a.cwd = cwd  # for the missing-path message, before to_root moves us | O(1)
@@ -601,17 +632,22 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                 print(f"run_tests: {gone}", file=sys.stderr)  # O(1)
                 return 2  # O(1)
         return start_background(a, argv)  # O(len argv) + spawn
-    if a.run_id:  # O(1) detached child: a crash still leaves a (red) summary for --wait
-        try:  # O(1)
-            return run(a)  # see run
-        except BaseException as e:  # O(1)
-            if not Path(a.summary).exists():  # O(1)
-                write_summary(a.summary, "full", {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
-                                                  "skipped_tests": []}, [], 0.0,  # O(1)
-                              error=f"run_tests crashed: {e!r}")  # O(1)
-                publish_summary(a)  # O(summary size)
+    try:  # O(1)
+        return run(a)  # see run
+    except BaseException as e:  # a crash still leaves a (red) summary and the zero line | O(1)
+        if isinstance(e, SystemExit) and e.code in (0, None):  # O(1)
             raise  # O(1)
-    return run(a)  # see run
+        if Path(a.summary).resolve() not in WRITTEN:  # a result already written stays | O(1)
+            write_summary(a.summary, "fast" if a.fast else "full", {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
+                                                                    "skipped_tests": []}, [], 0.0,  # O(1)
+                          error=f"run_tests crashed: {e!r}"[:200])  # O(1)
+            publish_summary(a)  # O(summary size)
+            print("0 0 0 0.0")  # O(1)
+        if not isinstance(e, Exception):  # O(1)
+            raise  # O(1)
+        traceback.print_exc()  # O(depth)
+        print(f"run_tests: crashed: {e!r}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
 
 
 def record_run(a):  # a full result the agent ran outside run_tests: reports only, closes no incidents | O(1)
@@ -766,9 +802,12 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                 return usage_error(a, label, reason)  # O(summary size)
             info = nt.parse_plan(plan)  # O(L)
             if a.task not in info:  # O(1)
-                nt.die(f"unknown task {a.task}")  # O(1)
+                return usage_error(a, label, f"unknown task {a.task} in {plan}")  # O(summary size)
             ct.add_also_owns(info, a.ledger)  # --also and --claim rulings own their files too (#239) | O(c + o)
-            tree = trees.prepare(".", a.task, ["**/*"] if paths else info[a.task]["owns"])  # a --fast run tests every working-tree change, a --full run the task's own files | O(f * o) + git checkout
+            try:  # O(1)
+                tree = trees.prepare(".", a.task, ["**/*"] if paths else info[a.task]["owns"])  # a --fast run tests every working-tree change, a --full run the task's own files | O(f * o) + git checkout
+            except (RuntimeError, OSError) as err:  # O(1)
+                return usage_error(a, label, f"isolated tree for {a.task} not prepared: {err}")  # O(summary size)
             announce_tree(tree, a.task, bool(paths))  # O(f)
             link_node_modules(Path.cwd(), tree, spec)  # O(d)
             tree_gone = node_install_line(tree, spec)  # a tree without node_modules fails like the root | O(m + f)
@@ -781,9 +820,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         try:  # O(1)
             base = pyrun.pytest_cmd()  # O(1) + at most one probe spawn
         except pyrun.PytestUnavailable as e:  # O(1)
-            print(f"run_tests: {e}", file=sys.stderr)  # O(1)
-            print("0 0 0 0.0")  # O(1)
-            return 2  # O(1)
+            return usage_error(a, label, str(e))  # the summary is written too | O(summary size)
         cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), "-q", "-p", "no:cacheprovider",  # O(p)
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
         t0 = time.monotonic()  # O(1)
