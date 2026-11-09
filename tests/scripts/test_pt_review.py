@@ -388,3 +388,47 @@ def test_contract_seam_logs_incident_by_default_and_verified_on_pass(proj: Path,
 def test_contract_without_seam_does_not_write_a_log(proj: Path):
     assert contract(proj) == 0
     assert not (proj / ".superlite" / "incidents.jsonl").exists()
+
+
+# ----------------------------------------------------------------------------- adapter: run= paths (#347)
+
+
+@pytest.mark.parametrize("entry, package", [
+    ("run=.venv/bin/dashmax registry sunsama-sync", "dashmax"),
+    ("run=./tool --verbose", "tool"),
+    ("run=.build/debug/MyExec", "MyExec"),
+    ("run=bin/tool", "tool"),
+    ("run=.venv/bin/python -m dashmax sync", "dashmax"),
+    ("run=python -m minisheet", "minisheet"),
+    ("call=minisheet.Workbook.set", "minisheet"),
+    ("serve=minisheet.server.create_server(Workbook())", "minisheet"),
+    ("run=./", "p0"),
+])
+def test_plan_entries_package_from_command_347(tmp_path: Path, entry: str, package: str):
+    plan = tmp_path / "plan.md"
+    plan.write_text(f"**Probe entry:** {entry}\n", encoding="utf-8")
+    assert pt_review.plan_entries(pt_review.parse_plan(plan))[0]["package"] == package
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs a POSIX shell script")
+def test_adapter_skips_package_without_probe_entry_347(tmp_path: Path):
+    tool = tmp_path / ".venv" / "bin" / "pkgtool"
+    tool.parent.mkdir(parents=True)
+    tool.write_text('#!/bin/sh\necho synced "$@"\n', encoding="utf-8")
+    tool.chmod(0o755)
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\n\n## Package lib\n**Probe entry:** call=pkg.mod.fn\n\n"
+                    "## Package cli\n**Probe entry:** run=.venv/bin/pkgtool sync\n\n"
+                    "## Package http\nNetwork-only client, no runnable entry.\n", encoding="utf-8")
+    out = tmp_path / ".superlite" / "probes" / "adapter.py"
+    assert run("adapter", "--plan", str(plan), "--root", str(tmp_path), "--out", str(out)) == 0
+    assert pt_review.plan_entries(pt_review.parse_plan(plan)) == [
+        {"package": "pkg", "call": "pkg.mod.fn"}, {"package": "pkgtool", "run": ".venv/bin/pkgtool sync"}]
+    spec = importlib.util.spec_from_file_location("probe_adapter_347", out)
+    adapter = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(adapter)
+        rc, so, _err = adapter.run(["now"], package="pkgtool")
+        assert rc == 0 and so.strip() == "synced sync now"
+    finally:
+        sys.path[:] = [p for p in sys.path if not p.startswith(str(tmp_path))]
