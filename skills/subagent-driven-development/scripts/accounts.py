@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Account choice for fleet workers from `claude-profile usage --json` and `list --json`."""
+"""Account choice for fleet workers from `claude-profile usage --json` and `list --json`.
+
+CLI: `sl accounts [--tier MODEL]` prints one headroom line per account of `claude-profile usage --json`."""
 
 # Complexity notation:
 # a = accounts in the usage report, l = limits per account, e = entries of the allowed list
+import argparse  # O(1)
 import json  # O(1)
 import os  # O(1)
 import subprocess  # O(1)
+import sys  # O(1)
 
 FIVE_HOUR_MAX = 90  # O(1) 5-hour (`session`) percent at or above this skips the account
 WEEKLY_MAX = 100  # O(1) weekly percent at or above this skips the account
@@ -161,3 +165,25 @@ def aliases(listing, entries, env=None):  # O(a*e)
         if d and _norm(d) in dirs:  # O(len d)
             out[entry_name(entry)] = dirs[_norm(d)]  # O(1)
     return out  # O(e)
+
+
+def main(argv=None):  # O(a*l)
+    """`sl accounts`: one line per account, `<name> ok 5h=..% weekly=..%` or `<name> skip <reason>`; 3 without usage data."""
+    ap = argparse.ArgumentParser(prog="sl accounts")  # O(1)
+    ap.add_argument("--tier", metavar="MODEL", default=None)  # O(1) adds that model's scoped weekly cap
+    args = ap.parse_args(argv)  # O(a)
+    usage = read_usage()  # O(1) plus subprocess time
+    accts = usage.get("accounts") if isinstance(usage, dict) else None  # O(1)
+    accts = [a for a in accts if isinstance(a, dict)] if isinstance(accts, list) else None  # O(a) an entry that is no object has no headroom to show
+    if not accts:  # O(1)
+        print("accounts: no usage data from claude-profile usage --json", file=sys.stderr)  # O(1)
+        print("usage: sl accounts [--tier MODEL]", file=sys.stderr)  # O(1)
+        return 3  # O(1)
+    for a in accts:  # O(a)
+        name, why = a.get("name") or "?", _skip(a, args.tier)  # O(l) an account without a name prints `?`
+        print("%s skip %s" % (name, why) if why else "%s ok 5h=%g%% weekly=%g%%" % (name, _five(a), _pct(a, "weekly_all")))  # O(l)
+    return 0  # O(1)
+
+
+if __name__ == "__main__":  # O(1)
+    sys.exit(main())  # O(1)
