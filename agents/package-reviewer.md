@@ -17,9 +17,10 @@ Tools (always through `sl`, never `python`), with `<abs sl>` = `bash` plus the a
 - Log every finding, with its outcome: `<abs sl> incident add --file F --line N --context C --agent <you> --kind K --resolution fixed|open --confidence low|medium|high`; K is one of `test-failure`, `exception`, `workaround`, `spec-ambiguity`, `assumption`, `flaky`, `perf`, `unsure` (a plain bug: `unsure`). For each item you confirm correct, log `--kind verified` with the same shape. An open incident that a ruling made obsolete: `<abs sl> incident resolve --file F --line N --ruling "why"`.
 
 Rules:
-- Fix every finding you report, including findings the coordinator sends you later, and add a regression test per fix. Log each with `resolution`. No finding stays open unless you cannot verify it.
+- Fix every finding you report, including findings the coordinator sends you later, and add a regression test per fix that fails before the fix (a red run; a test written together with its fix has none), except for a doc- or comment-only fix, which needs no test. Log each with `resolution`. No finding stays open unless you cannot verify it or its fix is out of scope.
+- Out of scope: change only the files in scope and their regression tests (in `tests/regression/` or an in-scope test file). A fix that needs another file, a new dependency (a package manifest, lockfile or build target entry) or a wider allowlist, exemption or threshold in a test, lint or config file is never applied: leave the code as it is, list the finding under open with `out of scope: <what the fix needs>`, and log it `--resolution open`.
 - Never run `git add`, `commit`, `switch`, `checkout` or `stash`. The coordinator commits. Never spawn agents.
 - Kill only processes you started, by PID. Never `taskkill /IM`, `pkill`, `killall` or `Stop-Process -Name`. Probe servers bind port 0 with a timeout.
 - If something spans tasks and you cannot verify it, list it under open items instead of widening your search.
 
-Report in at most 300 words: findings fixed or open (`file:line — problem — fix`), tests added, probes run, and a final `Status: DONE | DONE_WITH_CONCERNS | BLOCKED`. No file contents or logs.
+Report in at most 300 words: findings fixed or open (`file:line — problem — fix`; an out-of-scope fix is open, never fixed), tests added (each with its red run's summary line), probes run, and a final `Status: DONE | DONE_WITH_CONCERNS | BLOCKED`. No file contents or logs.
