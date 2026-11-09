@@ -20,6 +20,7 @@ also runs standalone. Stdlib only. Incidents are read straight from the JSONL fo
 Plan conventions read here (per task section `### Tn ...`):
   **Owns:** a.py, tests/test_a.py          **Consumes:** f(x) -> y (T1)
   **Produces:** pkg.mod.f(a: int, b=1) -> str  ·  Class.method(ref: str) -> list[str]
+      a default naming a constant (`tid=TID`) matches the code's default by name; any other non-literal default is not compared
   **Probe entry:** call=pkg.mod.fn · run=python -m pkg · serve=pkg.server.create_server(Workbook())
   Data contract lines (any line, anchored at the start, bullets allowed):
       POST /api/cells {"ref":"A1"} -> 200 {cells: dict, note?: str}
@@ -462,8 +463,9 @@ def compare_sig(p: Planned, real: dict) -> list[str]:  # O(p^2 + p*m) total
                 if w["default"] is not None:  # O(m)
                     if not h["has_default"]:  # O(m)
                         msgs.append(f"{p.qual}: parameter '{w['name']}' lost its default {w['default']}")  # O(m)
-                    elif not _same_default(w["default"], h["default"]):  # O(m)
-                        msgs.append(f"{p.qual}: parameter '{w['name']}' default is {h['default']}, planned {w['default']}")  # O(m)
+                    elif not _same_default(w["default"], h["default"], h.get("default_src")):  # O(m)
+                        shown = (h.get("default_src") or h["default"]) if _dotted(w["default"]) else h["default"]  # O(m)
+                        msgs.append(f"{p.qual}: parameter '{w['name']}' default is {shown}, planned {w['default']}")  # O(m)
                 wa, ha = norm_ann(w["ann"]), norm_ann(h["ann"])  # O(m)
                 if wa and ha and wa != ha:  # O(m)
                     msgs.append(f"{p.qual}: parameter '{w['name']}' annotated {ha}, planned {wa}")  # O(m)
@@ -473,15 +475,58 @@ def compare_sig(p: Planned, real: dict) -> list[str]:  # O(p^2 + p*m) total
     return msgs  # O(m)
 
 
-def _same_default(planned: str, real_repr: str | None) -> bool:  # O(m) total
+def _dotted(expr: str | None) -> list[str] | None:  # O(m) total
+    """Parts of a plain or dotted name (`metrics.TID` -> ['metrics', 'TID']); None for anything else."""  # O(m)
+    if not expr or not expr.strip():  # O(1)
+        return None  # O(1)
     try:  # O(m)
-        return repr(ast.literal_eval(planned)) == real_repr  # O(m)
+        node = ast.parse(expr.strip(), mode="eval").body  # O(m)
+    except SyntaxError:  # O(m)
+        return None  # O(m)
+    parts: list[str] = []  # O(1)
+    while isinstance(node, ast.Attribute):  # O(m) iterations
+        parts.append(node.attr)  # O(1)
+        node = node.value  # O(1)
+    if not isinstance(node, ast.Name):  # O(1)
+        return None  # O(1)
+    parts.append(node.id)  # O(1)
+    return parts[::-1]  # O(m)
+
+
+def _same_default(planned: str, real_repr: str | None, real_src: str | None = None) -> bool:  # O(m) total
+    try:  # O(m)
+        return repr(ast.literal_eval(planned)) == real_repr  # literal: compare values | O(m)
     except (ValueError, SyntaxError):  # O(m)
-        return planned.strip() == (real_repr or "").strip()  # O(m)
+        pass  # O(1)
+    pn, rn = _dotted(planned), _dotted(real_src)  # O(m)
+    if pn and rn:  # a name against a name: compare by the last component | O(1)
+        return pn[-1] == rn[-1]  # O(1)
+    return True  # not comparable: skipped | O(1)
 
 
 _INTROSPECT = r'''
-import sys, json, importlib, inspect
+import sys, json, importlib, inspect, ast, textwrap
+def default_srcs(obj):
+    try:
+        fn = obj.__init__ if inspect.isclass(obj) else obj
+        fn = inspect.unwrap(fn)
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        nodes = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))]
+        nodes = [n for n in nodes if getattr(n, "name", "<lambda>") == fn.__name__]
+        if len(nodes) != 1 and not (nodes and not isinstance(nodes[0], ast.Lambda)):
+            return {}
+        a = nodes[0].args
+        pos = list(a.posonlyargs) + list(a.args)
+        srcs = {}
+        if a.defaults:
+            for arg, d in zip(pos[len(pos) - len(a.defaults):], a.defaults):
+                srcs[arg.arg] = ast.unparse(d)
+        for arg, d in zip(a.kwonlyargs, a.kw_defaults):
+            if d is not None:
+                srcs[arg.arg] = ast.unparse(d)
+        return srcs
+    except Exception:
+        return {}
 def ann(a):
     if a is inspect.Parameter.empty:
         return None
@@ -504,12 +549,14 @@ for mod_name, chain in json.loads(sys.argv[1]):
                 raise AttributeError("%s not found in %s" % (".".join(chain[:i + 1]), mod_name))
         sig = inspect.signature(obj)
         params = list(sig.parameters.values())
+        srcs = default_srcs(obj)
         if inspect.isclass(parent) and params and params[0].name in ("self", "cls"):
             if not isinstance(inspect.getattr_static(parent, chain[-1]), staticmethod):
                 params = params[1:]
         r = {"ok": True, "params": [
             {"name": p.name, "kind": p.kind.name, "has_default": p.default is not p.empty,
-             "default": repr(p.default) if p.default is not p.empty else None, "ann": ann(p.annotation)}
+             "default": repr(p.default) if p.default is not p.empty else None, "ann": ann(p.annotation),
+             "default_src": srcs.get(p.name) if p.default is not p.empty else None}
             for p in params], "returns": ann(sig.return_annotation), "file": None, "line": 0}
         try:
             r["file"] = inspect.getsourcefile(obj)
