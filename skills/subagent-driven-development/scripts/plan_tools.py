@@ -83,10 +83,11 @@ TASK_FIELDS = frozenset({  # O(1)
 CAND_RE = re.compile(r"^#{2,3}\s+(.+?)\s*#*\s*$")  # O(1)
 
 
-def heading_phrase(title: str) -> str:  # O(s)
+def heading_phrase(title: str, *, lower: bool = True) -> str:  # O(s)
     t = re.sub(r"[`*]", "", title).strip()  # O(s)
     t = re.sub(r"^\d+(?:\.\d+)*\.?\s+", "", t)  # O(s)
-    return " ".join(t.rstrip(":").split()).lower()  # O(s)
+    out = " ".join(t.rstrip(":").split())  # O(s)
+    return out.lower() if lower else out  # O(s)
 
 
 def ref_headings(lines: list[str], fenced: list[bool]) -> set[int]:  # O(L * r) worst, r = repeated candidates

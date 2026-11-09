@@ -7,7 +7,8 @@ The lookup agents use to read their own task and their neighbours instead of ask
 the plan file on every call, so it is never stale. Output: the task block verbatim, then `## Consumed
 interfaces`: for each producer of an item Tn consumes, its title, Produces lines and `e.g.` examples; then
 `## Plan sections this task names`: the text of each `##`/`###` plan section whose heading phrase the task
-block mentions (a one-word heading only in an explicit form such as `Design section`), when there is any; last
+block mentions (a one-word heading in an explicit form such as `Design section`, or, with an uppercase letter,
+by its own case outside field labels and inline code), when there is any; last
 `## Global constraints`: the plan's constraint, Tech stack and Architecture lines (`wave0.constraint_lines`).
 Exit 2 for an unknown task or a missing plan. Language-neutral. Stdlib only.
 """
@@ -53,14 +54,20 @@ SKELETON = {"coverage", "task graph", "predicted schedule", "review focus", "sel
 SEC_HEAD = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")  # O(1)
 
 
-def _names(phrase: str, text: str) -> bool:  # O(L)
-    """True when `text` names the section phrase: two or more words anywhere, one word only in explicit forms."""
+def _names(phrase: str, text: str, word: str = "", cased: str = "") -> bool:  # O(L)
+    """True when `text` names the section phrase: two or more words anywhere, one word only in explicit forms or, with an uppercase letter, by its own case in `cased`."""
     words = phrase.split()  # O(s)
     if not words:  # O(1)
         return False  # O(1)
     if len(words) == 1:  # O(1)
         w = re.escape(phrase)  # O(s)
-        pat = rf"(?<![\w-])(?:{w}\s+section|section\s+{w}|§\s*{w}|##\s*{w})(?![\w-])"  # O(1)
+        pat = rf"(?<![\w-])(?:{w}\s+sections?|sections?\s+{w}|§\s*{w}|##\s*{w})(?![\w-])"  # O(1)
+        if re.search(pat, text):  # O(L)
+            return True  # O(1)
+        if word != word.lower():  # uppercase letter | O(s)
+            b = word[:-1] if word.endswith("s") else word  # O(1)
+            return re.search(rf"(?<![\w-]){re.escape(b)}s?(?![\w-])", cased) is not None  # O(L)
+        return False  # O(1)
     else:  # O(1)
         base = phrase[:-1] if phrase.endswith("s") else phrase  # O(1)
         pat = rf"(?<![\w-]){re.escape(base)}s?(?![\w-])"  # O(1)
@@ -74,6 +81,13 @@ def referenced_sections(plan, task) -> list:  # O(L + sections*L)
     n = len(task.text.split("\n"))  # O(block)
     mine = [ln for i, ln in enumerate(lines[task.line:task.line + n], task.line) if not plan.fenced[i]]  # O(block)
     text = " ".join(" ".join(re.sub(r"[`*]", "", "\n".join(mine)).lower().split()).split())  # O(block)
+    cl = []  # case-kept view: field values only, code spans and asterisks dropped | O(1)
+    for ln in mine:  # O(block) iterations
+        ln = ln.strip()  # O(s)
+        fm = pt.FIELD_RE.match(ln)  # O(s)
+        ln = fm.group(2) if fm else ln  # O(1)
+        cl.append(re.sub(r"`[^`]*`", " ", ln).replace("*", ""))  # O(s)
+    cased = " ".join(" ".join(cl).split())  # O(block)
     heads = []  # (index, level) of unfenced headings | O(1)
     for i, ln in enumerate(lines):  # O(L) iterations
         m = None if plan.fenced[i] else SEC_HEAD.match(ln)  # O(s)
@@ -90,7 +104,7 @@ def referenced_sections(plan, task) -> list:  # O(L + sections*L)
                 break  # O(1)
         body = lines[i + 1:end]  # O(section)
         phrase = pt.heading_phrase(title)  # O(s)
-        if not any(b.strip() for b in body) or phrase in SKELETON or phrase == "global constraints" or not _names(phrase, text):  # O(L)
+        if not any(b.strip() for b in body) or phrase in SKELETON or phrase == "global constraints" or not _names(phrase, text, pt.heading_phrase(title, lower=False), cased):  # O(L)
             continue  # O(1)
         while body and not body[-1].strip():  # O(blank)
             body = body[:-1]  # O(section)
