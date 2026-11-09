@@ -57,6 +57,7 @@ def test_no_ready_names_missing_prime(world, capsys):
 
 
 def test_for_dispatch_passes_no_cap(dwld, monkeypatch):
+    fleet.main(["on"])
     seen = {}
     def run(*a, **k):
         seen.update(k); return [], {}
