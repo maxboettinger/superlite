@@ -28,7 +28,7 @@ Run `"$SL" fleet wait --any --timeout 540000 --plan $PLAN` as a background comma
   - Task labels (`DONE`, `DONE_WITH_CONCERNS`): `commit_task` as usual.
   - `findings=` above 0 or `CHANGES_REQUESTED`: `findings route` with the JSON paths, then the fixer lines above.
   - `BLOCKED`: treat the task as BLOCKED.
-  - `UNKNOWN` (no parsable report): read `.superlite/fleet/reports/<id>.md` once, then decide.
+  - `UNKNOWN` (no parsable report): `"$SL" fleet report Wn --plan $PLAN` prints the saved `.superlite/fleet/reports/<id>.md` (read-only; a busy worker or one with no collected report exits 1); read it once, then decide.
   - `NEEDS_CONTEXT`: answer with `"$SL" fleet send Wn --text "..."`, then wait again.
 - `Wn layer-L GREEN|RED exit=<n> <log path>` plus `  <last line>`: a layer result; read the log on RED.
 - `Wn Tn BLOCKED-UI <screen path>`: read the screen file; answer with `"$SL" fleet keys Wn KEY...` or `fleet send Wn --text "..."`, or treat the task as BLOCKED.
