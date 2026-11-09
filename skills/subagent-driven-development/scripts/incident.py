@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Append-only incident log: add, hotspots, summary. Stdlib only."""
+"""Append-only incident log: add, hotspots, summary. Stdlib only.
+--plan P (anywhere): accepted and ignored; lead briefs pass it to every sl call (#336)."""
 # Complexity notation:
 #   i = entries in the log, B = bytes of the log, f = distinct files in the log, d = distinct values of one field,
 #   k = entries printed (--max), c = length of the context text, w = width of one log line, a = length of --files
@@ -199,9 +200,15 @@ def cmd_summary(a):  # O(B + i + d log d + f)
 
 
 def main(argv=None):  # O(1) parser setup + command cost
-    p = argparse.ArgumentParser(prog="incident.py")  # O(1)
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+    import autocommit  # O(1)
     import state  # O(1)
+    argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
+    argv, plan = autocommit.split_plan(argv)  # --plan P is accepted and ignored (#336) | O(len argv)
+    if plan == "":  # O(1) --plan without a value
+        print("usage: incident.py add|resolve|hotspots|summary ... [--plan P]", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    p = argparse.ArgumentParser(prog="incident.py", epilog="--plan P (anywhere): accepted and ignored; lead briefs pass it to every sl call (#336)")  # O(1)
     log = state.incident_log()  # the session's run, else ./.superlite (#87) | O(d)
     sub = p.add_subparsers(dest="cmd", required=True)  # O(1)
     s = sub.add_parser("add")  # O(1)
