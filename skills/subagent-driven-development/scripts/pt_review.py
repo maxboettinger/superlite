@@ -2388,6 +2388,24 @@ def packet_inputs(a: argparse.Namespace) -> tuple[bool, Plan, str]:  # O(W + L*m
     return inline, parse_plan(spec if inline else a.plan), prev  # O(W + L*m + H^2)
 
 
+def cut_files(text: str) -> set[str]:  # O(len(text)) total
+    """Files a rendered excerpt section leaves out (`Left out: ...` line) or truncates (`(truncated: ...; read <file> in full)`)."""
+    out: set[str] = set()  # O(1)
+    for ln in text.splitlines():  # O(lines) iterations
+        if ln.startswith("Left out: "):  # O(1)
+            out.update(x.strip() for x in ln[len("Left out: "):].split(",") if x.strip())  # O(len(ln))
+        elif ln.startswith("(truncated: "):  # O(1)
+            m = re.search(r"; read (.+) in full\)$", ln)  # O(len(ln))
+            if m:  # O(1)
+                out.add(m.group(1))  # O(1)
+    return out  # O(1)
+
+
+def shard_path(out: Path) -> Path:  # O(1)
+    """The tests shard next to a packet: `<stem>-tests.md` (#381)."""
+    return out.with_name(out.stem + "-tests.md")  # O(1)
+
+
 def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/python subprocesses total
     inline, plan, previous = packet_inputs(a)  # O(W + L*m + H^2)
     root = Path(a.root).resolve()  # O(1)
@@ -2459,13 +2477,33 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         rel = rel_to(root, root / it.file) if it.file else None  # O(d)
         if rel and rel not in hot:  # O(H)
             hot.append(rel)  # O(1)
-    ex_budget = max(2000, cap // 3)  # O(1)
+    ex_budget = ex_init = max(2000, cap // 3)  # O(1)
     got = changed_diffs(root, a.base, hot, ranges, extra)  # O(X) + git spawns
     if got is not None and a.max_tokens is None:  # the default scales with the changed code, up to AUTO_MAX_TOKENS (#80) | O(1)
         rest = cap - ex_budget  # O(1)
         ex_budget = min(max(ex_budget, excerpt_need(got[1])), int(AUTO_MAX_TOKENS * CHARS_PER_TOKEN) - rest)  # O(X)
         cap = rest + ex_budget  # O(1)
     raw_ex = render_excerpts(*got, budget=ex_budget, hot=hot) if got is not None else "- (not a git repository)"  # O(X)
+    shard = shard_path(out)  # O(1)
+    shard_text, shard_line = "", ""  # O(1)
+    if got is not None and any(is_test_path(f) for f in cut_files(raw_ex)):  # a changed test file would not show in full: all go to the shard (#381) | O(X)
+        t_changed = [f for f in got[0] if is_test_path(f)]  # O(F)
+        t_diffs = [(f, ln) for f, ln in got[1] if is_test_path(f)]  # O(F)
+        n_diffs = [(f, ln) for f, ln in got[1] if not is_test_path(f) or f in hot]  # hot test files stay in section 8 too (#80) | O(F*H)
+        if a.max_tokens is None:  # recompute the auto budget from the non-test files | O(X)
+            rest = cap - ex_budget  # O(1)
+            ex_budget = min(max(ex_init, excerpt_need(n_diffs)), int(AUTO_MAX_TOKENS * CHARS_PER_TOKEN) - rest)  # O(X)
+            cap = rest + ex_budget  # O(1)
+        raw_ex = render_excerpts([f for f in got[0] if not is_test_path(f) or f in hot], n_diffs, budget=ex_budget, hot=hot)  # O(X)
+        shard_cap = int((AUTO_MAX_TOKENS if a.max_tokens is None else a.max_tokens) * CHARS_PER_TOKEN)  # O(1)
+        shard_head = ("# Review packet shard: test files\n"  # O(1)
+                      f"packet: {out.absolute()}\n"  # O(1)
+                      "This file is part of the review packet: the full diffs of the changed test files.\n\n"  # O(1)
+                      "## 9. Test files (full diffs)\n")  # O(1)
+        shard_text = cap_text(shard_head + render_excerpts(t_changed, t_diffs, per_file=10**9,  # O(X)
+                                                           budget=max(0, shard_cap - len(shard_head)), hot=t_changed), shard_cap)  # O(X)
+        shard_line = (f"Tests shard: {len(t_changed)} changed test file(s) are not in section 8 "  # O(1)
+                      f"(truncated: test diffs over the size limit; read {shard.absolute()} in full)")  # O(1)
     left_line = raw_ex.split("\n", 1)[0] if raw_ex.startswith("Left out: ") else ""  # O(1)
     excerpts = cap_text(raw_ex, ex_budget)  # O(X)
 
@@ -2495,6 +2533,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
          f"Open items: {n_open} (incidents {counts['incidents']}, probe failures {counts['probes']}, "  # O(1)
          f"unverified categories {counts['uncovered']}, contract mismatches {counts['contract']}, claimed fixes {counts['claimed']}, "  # O(1)
          f"failing tests {nfail}). Excerpts are +-12 lines."),  # O(1)
+        *([shard_line] if shard_line else []),  # O(1)
         *(["Every open item comes from a tool check (its `checker:` line), none from an agent finding: "  # O(1)
            "confirm or dismiss each from its excerpt, one line why per dismissal; nothing is approved unread."] if tool_only else []),  # O(1)
         *(["Inline build: no package reviewer, probe or contract check ran, so nothing below is verified. Review the "  # O(1)
@@ -2550,6 +2589,11 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     out.write_text(text, encoding="utf-8", newline="\n")  # O(1)
     print(f"wrote {out} ({len(text)} chars, ~{int(len(text) / CHARS_PER_TOKEN)} tokens) - "  # O(1)
           f"{'FAST PATH' if fast else f'{n_open} open item(s)'}{', inline build' if inline else ''}")  # O(1)
+    if shard_text:  # O(1)
+        shard.write_text(shard_text, encoding="utf-8", newline="\n")  # O(1)
+        print(f"wrote {shard.absolute()} ({len(shard_text)} chars) - test files, full diffs")  # O(1)
+    else:  # no shard now: an earlier round's shard must not survive | O(1)
+        shard.unlink(missing_ok=True)  # O(1)
     return 0  # O(1)
 
 
