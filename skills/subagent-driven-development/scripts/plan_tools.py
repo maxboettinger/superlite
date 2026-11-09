@@ -1567,7 +1567,7 @@ def external_brief(plan_path: str | None, task: Task, sl: str = "sl") -> list[st
     if not repo:  # O(1)
         return []  # O(1)
     root = str(repo_root(plan_path, repo["root"])) if plan_path else repo["root"]  # O(d)
-    plan = plan_path or "$PLAN"  # O(1)
+    plan = shlex.quote(plan_path) if plan_path else "$PLAN"  # O(1)
     return [  # O(1)
         "## External repository",
         f"This task changes another repository: {root} (**Repo:** {repo['root']}). Owns paths are relative to its tree.",
@@ -1624,6 +1624,7 @@ def ensure_tree(plan_path: str, task: Task) -> dict:  # O(git) make or reuse the
     if tree.exists() and any(tree.iterdir()):  # O(f)
         raise PlanError(f"{task.id}: {tree} exists but is no worktree; remove it")  # O(f)
     tree.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+    _git(root, "worktree", "prune")  # a deleted tree stays registered and blocks worktree add | O(git)
     head = _git(root, "rev-parse", "HEAD").stdout.strip()  # O(git)
     if _git(root, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}").returncode == 0:  # O(git)
         cp = _git(root, "worktree", "add", tree, branch)  # O(git)
@@ -1665,13 +1666,13 @@ def _ext_commit(plan_path: str, task: Task, info: dict, rec_path: Path) -> int: 
     import next_tasks  # O(1)
     tree = Path(info["tree"])  # O(1)
     if not (tree / ".git").exists():  # O(1)
-        raise PlanError(f"{task.id}: no tree at {tree}; run plan_tools external {task.id} --plan {plan_path} first")  # O(1)
+        raise PlanError(f"{task.id}: no tree at {tree}; run plan_tools external {task.id} --plan {shlex.quote(plan_path)} first")  # O(1)
     _git(tree, "add", "-A")  # O(git)
     staged = [f for f in _git(tree, "diff", "--cached", "--name-only", "-z").stdout.split("\0") if f]  # -z: no quoting of non-ASCII paths | O(f)
     owns = task.written_owns  # O(k*s*A)
     outside = [f for f in staged if not next_tasks.owns_match(f, owns)]  # O(f*o)
     for f in outside:  # O(f) iterations
-        _git(tree, "reset", "-q", "--", f)  # O(git)
+        _git(tree, "reset", "-q", "--", f":(literal){f}")  # O(git)
     if outside:  # O(1)
         print(f"left uncommitted (outside Owns): {', '.join(outside)}", file=sys.stderr)  # O(f)
     if len(outside) < len(staged):  # O(1)
@@ -1685,7 +1686,7 @@ def _ext_commit(plan_path: str, task: Task, info: dict, rec_path: Path) -> int: 
     rec_path.write_text(json.dumps({**_ext_record(rec_path), **info, "sha": sha}, indent=1) + "\n", encoding="utf-8")  # O(1)
     print(f"{task.id} {sha[:10]}")  # O(1)
     print(f"ship: {_ext_expand(task.repo['ship'], Path(info['root']), tree)}")  # O(s)
-    print(f"then: plan_tools external {task.id} --plan {plan_path} --done")  # O(s)
+    print(f"then: plan_tools external {task.id} --plan {shlex.quote(plan_path)} --done")  # O(s)
     return 0  # O(1)
 
 
@@ -1716,7 +1717,7 @@ def cmd_external(args) -> int:  # O(git + test run) the tree, test, commit and d
         return _ext_done(args, args.plan, task, _ext_record(rec_path), root)  # O(ledger + pool)
     if args.commit:  # O(1)
         if not (tree / ".git").exists():  # O(1)
-            raise PlanError(f"{task.id}: no tree at {tree}; run plan_tools external {task.id} --plan {args.plan} first")  # O(1)
+            raise PlanError(f"{task.id}: no tree at {tree}; run plan_tools external {task.id} --plan {shlex.quote(args.plan)} first")  # O(1)
         return _ext_commit(args.plan, task, ensure_tree(args.plan, task), rec_path)  # O(git)
     info = ensure_tree(args.plan, task)  # O(git)
     if args.test:  # O(1)
