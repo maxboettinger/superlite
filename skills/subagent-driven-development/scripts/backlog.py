@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, park <batch> --reason R; start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, park <batch> --reason R; start|wait|answer and ship are routed."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -16,6 +16,10 @@ TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")  # O(1)
 MAX_BATCHES = 7  # O(1)
 ISSUE_LIMIT = 200  # O(1)
 ROUTED = ("start", "wait", "answer")  # O(1)
+KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-[1-9][0-9]*$")  # O(1)
+ACLI_TIMEOUT = 300  # O(1)
+BLOCKS = ("paragraph", "heading", "codeBlock", "blockquote", "listItem", "tableRow", "panel", "rule")  # O(1)
+MAX_DEPTH = 100  # O(1)
 
 
 def _root() -> Path:
@@ -43,6 +47,115 @@ def _gh(args: list):
         return json.loads(r.stdout)  # O(size)
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:  # O(1)
         raise RuntimeError(f"gh {' '.join(args[:2])} failed: {e}") from None  # O(1)
+
+
+def _acli(args: list):
+    name = " ".join(args[:3])  # O(1)
+    try:  # O(1)
+        r = subprocess.run(["acli", *args], capture_output=True, text=True, timeout=ACLI_TIMEOUT)  # O(network)
+    except FileNotFoundError:  # O(1)
+        raise RuntimeError("acli not found: install the Atlassian CLI and run `acli jira auth login`") from None  # O(1)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:  # O(1) ValueError: output not decodable
+        raise RuntimeError(f"acli {name} failed: {e}") from None  # O(1)
+    if r.returncode:  # O(1)
+        msg = " ".join(re.sub(r"^[✗\s]+", "", (r.stderr or r.stdout or "").strip()).split())[:200]  # O(len)
+        raise RuntimeError(f"acli {name} failed: {msg}")  # O(1)
+    try:  # O(1)
+        return json.loads(r.stdout)  # O(size)
+    except (ValueError, RecursionError):  # O(1)
+        raise RuntimeError(f"acli {name} gave no JSON") from None  # O(1)
+
+
+def adf_text(node) -> str:
+    """Plain text of an Atlassian Document Format value; iterative, nodes deeper than MAX_DEPTH are dropped."""
+    out: list = []  # O(1)
+    stack: list = [(node, 0)]  # O(1)
+    while stack:  # O(nodes)
+        n, depth = stack.pop()  # O(1)
+        if isinstance(n, str):  # O(1)
+            out.append(n)  # O(1)
+            continue  # O(1)
+        if not isinstance(n, dict) or depth > MAX_DEPTH:  # O(1)
+            continue  # O(1)
+        t, at = n.get("type"), n.get("attrs")  # O(1)
+        at = at if isinstance(at, dict) else {}  # O(1)
+        if t == "text":  # O(1)
+            out.append(n.get("text") if isinstance(n.get("text"), str) else "")  # O(1)
+        elif t == "hardBreak":  # O(1)
+            out.append("\n")  # O(1)
+        elif t == "mention":  # O(1)
+            out.append(str(at.get("text") or ""))  # O(1)
+        elif t == "emoji":  # O(1)
+            out.append(str(at.get("text") or at.get("shortName") or ""))  # O(1)
+        elif t in ("inlineCard", "blockCard"):  # O(1)
+            out.append(str(at.get("url") or ""))  # O(1)
+        else:  # O(1)
+            kids = n.get("content") if isinstance(n.get("content"), list) else []  # O(1)
+            if t in BLOCKS:  # O(1)
+                stack.append(("\n", depth))  # O(1)
+            stack.extend((k, depth + 1) for k in reversed(kids))  # O(kids)
+            if t == "listItem":  # O(1)
+                stack.append(("- ", depth))  # O(1)
+    return re.sub(r"\n{3,}", "\n\n", "".join(out)).strip()  # O(len)
+
+
+def jira_keys(text: str) -> list:
+    keys: list = []  # O(1)
+    for item in re.split(r"[,\s]+", text or ""):  # O(len)
+        if not item:  # O(1)
+            continue  # O(1)
+        if not KEY_RE.fullmatch(item.upper()):  # O(1)
+            raise ValueError(f"not a Jira key: {item}")  # O(1)
+        if item.upper() not in keys:  # O(keys)
+            keys.append(item.upper())  # O(1)
+    return keys  # O(1)
+
+
+def jira_issues(jql, keys) -> list:
+    if keys:  # O(1)
+        jql = "key in (" + ", ".join(keys) + ")"  # O(keys)
+    res = _acli(["jira", "workitem", "search", "--jql", jql, "--fields", "key,summary,description", "--paginate", "--json"])  # O(network)
+    if not isinstance(res, list):  # O(1)
+        raise RuntimeError("acli search gave no issue list")  # O(1)
+    found: list = []  # O(1)
+    for it in res:  # O(i)
+        key = it.get("key") if isinstance(it, dict) else None  # O(1)
+        if not isinstance(key, str) or not KEY_RE.fullmatch(key):  # O(1)
+            continue  # O(1)
+        f = it.get("fields") if isinstance(it.get("fields"), dict) else {}  # O(1)
+        found.append({"number": key, "title": str(f.get("summary") or ""), "body": _body(adf_text(f.get("description")))})  # O(body)
+    if not keys:  # O(1)
+        return found  # O(1)
+    by = {x["number"]: x for x in found}  # O(i)
+    for k in keys:  # O(keys)
+        if k not in by:  # O(1)
+            raise RuntimeError(f"Jira issue {k} not found")  # O(1)
+    return [by[k] for k in keys]  # O(keys)
+
+
+def _key_proposal(prop, keys: list):
+    """Copy of prop whose batch issues hold stand-in numbers: trusted key i -> i, any other item -> a number above; returns (copy, back)."""
+    pos = {k: n for n, k in enumerate(keys, 1)}  # O(i)
+    back = {n: k for k, n in pos.items()}  # O(i)
+    odd: dict = {}  # O(1)
+    cp = copy.deepcopy(prop)  # O(size)
+    bl = cp.get("batches") if isinstance(cp, dict) else None  # O(1)
+    for b in bl if isinstance(bl, list) else []:  # O(b * issues)
+        its = b.get("issues") if isinstance(b, dict) else None  # O(1)
+        if not isinstance(its, list):  # O(1)
+            continue  # O(1)
+        new = []  # O(1)
+        for it in its:  # O(issues)
+            k = it.upper() if isinstance(it, str) else None  # O(1)
+            if k in pos:  # O(1)
+                new.append(pos[k])  # O(1)
+                continue  # O(1)
+            t = str(it)  # O(1)
+            n = odd.setdefault(t, len(keys) + len(odd) + 1)  # O(1)
+            back[n] = t  # O(1)
+            new.append(n)  # O(1)
+        b["issues"] = new  # O(1)
+    return cp, back  # O(1)
 
 
 def _now() -> str:
@@ -131,12 +244,29 @@ def cmd_plan(a) -> int:
         if perr:
             print(perr)
             return 2
+    jql, keys = getattr(a, "jql", None), None
+    if getattr(a, "issues", None) is not None:
+        try:
+            keys = jira_keys(a.issues)
+        except ValueError as e:
+            print(f"BLOCKED: --issues: {e}")
+            return 2
+        if not keys:
+            print("BLOCKED: --issues is empty")
+            return 2
+    if jql is not None and not jql.strip():
+        print("BLOCKED: --jql is empty")
+        return 2
+    jira = jql is not None or keys is not None
     info = _gh(["repo", "view", "--json", "nameWithOwner,visibility"])
-    issues = _gh(["api", "--paginate", "repos/{owner}/{repo}/issues?state=open&per_page=100", "--jq", ISSUES_JQ])
+    if jira:
+        issues = jira_issues(jql, keys)
+    else:
+        issues = _gh(["api", "--paginate", "repos/{owner}/{repo}/issues?state=open&per_page=100", "--jq", ISSUES_JQ])
     rest = issues[ISSUE_LIMIT:]
     issues = issues[:ISSUE_LIMIT]
     admitted, skipped = set(d["admitted"]), set(d["skipped"])
-    public = info.get("visibility") == "PUBLIC"
+    public = not jira and info.get("visibility") == "PUBLIC"
     trusted, outside = [], []
     for i in issues:  # O(i)
         n = i["number"]
@@ -152,7 +282,12 @@ def cmd_plan(a) -> int:
             print("\n".join(err))
             return 3
     cuts = bc.cut_lines(bc.fit_proposal(prop))  # O(q)
-    batches, errs = bc.check_proposal(prop, {t["number"] for t in trusted})
+    if jira:
+        cp, back = _key_proposal(prop, [t["number"] for t in trusted])
+        batches, errs = bc.check_proposal(cp, set(range(1, len(trusted) + 1)))
+        errs = [re.sub(r"(?:(?<=unknown issue )|^)#(\d+)(?= is in |$)", lambda m: back.get(int(m.group(1)), m.group(0)), e).replace("list of numbers", "list of Jira keys") for e in errs]  # O(errs)
+    else:
+        batches, errs = bc.check_proposal(prop, {t["number"] for t in trusted})
     if errs:
         why = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(prop.get("summary", ""))).split())[:300]
         kept = sd / "backlog-proposal.json"
@@ -166,6 +301,9 @@ def cmd_plan(a) -> int:
             print("\n".join(cuts))
         return 3
     batches = bc.separate(batches)
+    if jira:
+        for b in batches:
+            b["issues"] = [back[n] for n in b["issues"]]
     planned = {n for b in batches for n in b["issues"]}
     why_out = "not planned (cap)" if len(prop["batches"]) >= MAX_BATCHES else "not planned (triage)"
     outside += [{"number": t["number"], "title": t["title"], "reason": why_out} for t in trusted if t["number"] not in planned]  # O(i)
@@ -273,6 +411,14 @@ def cmd_status(a) -> int:
     return 0
 
 
+def _issue_arg(s: str):
+    if s.isdigit():  # O(1)
+        return int(s)  # O(1)
+    if KEY_RE.fullmatch(s.upper()):  # O(1)
+        return s.upper()  # O(1)
+    raise argparse.ArgumentTypeError(f"not an issue number or Jira key: {s}")  # O(1)
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in ROUTED:
@@ -289,6 +435,9 @@ def main(argv=None) -> int:
     pl.add_argument("--timeout-min", type=int, default=60)
     pl.add_argument("--reset", action="store_true")
     pl.add_argument("--proposal", metavar="FILE")
+    src = pl.add_mutually_exclusive_group()
+    src.add_argument("--jql", metavar="QUERY")
+    src.add_argument("--issues", metavar="KEYS")
     pl.set_defaults(fn=cmd_plan)
     de = sub.add_parser("decide")
     de.add_argument("--print", action="store_true")
@@ -296,7 +445,7 @@ def main(argv=None) -> int:
     de.add_argument("--file")
     de.set_defaults(fn=cmd_decide)
     sk = sub.add_parser("skip")
-    sk.add_argument("issue", type=int)
+    sk.add_argument("issue", type=_issue_arg)
     sk.set_defaults(fn=cmd_skip)
     pk = sub.add_parser("park")
     pk.add_argument("batch")
