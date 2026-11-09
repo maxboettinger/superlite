@@ -9,7 +9,7 @@ Hook lines (one JSON object per line, `t` in epoch ms):
 Launch and stop are joined by agent_id. The agent's own transcript (JSONL, `agent_transcript_path`) gives
 usage per assistant message (deduplicated by message id), tool calls and timestamps; prices come from
 config/models.json. An agent is mapped to its task through `.superlite/pool.json` (agent id -> tasks) or the
-`Tn` in its launch description; an agent reused for several tasks is split at the user messages that hand over a
+`Tn` (or the plan's own task id: D1, P2, UI3a) in its launch description; an agent reused for several tasks is split at the user messages that hand over a
 task (`Task Tn`, `Next: … Tn`, a batch's `Tasks`/`Batch` heading). A batch splits evenly over its tasks, in order;
 the final build is the latest by time; reviewers count neither as builds nor as rework. Output fields reuse the
 names of bench/mechanical.py: task, kind, model, tier_planned, agent, agent_model_used, dispatches, start_s, end_s, duration_s, tokens {in,out,cache_read,cache_write,...},
@@ -28,7 +28,16 @@ from pathlib import Path  # O(1)
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"  # O(1)
 FAMILIES = ("fable", "mythos", "haiku", "sonnet", "opus")  # O(1)
-TID = re.compile(r"\bT(\d+[a-z]?)\b")  # O(1)
+T_ID = r"T\d+[a-z]?"  # O(1)
+
+
+def id_re(known=None) -> "re.Pattern":  # O(k log k)
+    """Pattern for task ids: `T<n>` always, plus each id in `known` (the plan's own: D1, P2, UI3a); group 1 is the whole id."""
+    extra = sorted({k for k in known or () if not re.fullmatch(T_ID, k)}, key=lambda k: (-len(k), k))  # longest first | O(k log k)
+    return re.compile(r"\b(" + "|".join([T_ID] + [re.escape(k) for k in extra]) + r")\b")  # O(k)
+
+
+TID = id_re()  # O(1)
 STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b", re.I)  # O(1)
 RED = re.compile(r"\b(?:tests?|suite)\b[^\n]{0,40}\b(?:red|failing|failed)\b|\b\d+\s+failed\b", re.I)  # O(1)
 LEAD = re.compile(r"\A\s*[^\n]{0,80}?\b(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b")  # unlabelled first line: `T4 gallery: DONE` | O(1)
@@ -38,8 +47,8 @@ CUE = re.compile(r"(?:^[\s#>*_-]*|[.!?;]\s+)(?:(tasks|batch)|task|next)\b", re.I
 POLL = re.compile(r"\bRelevance\s+0-10\s+for\b", re.I)  # dispatch's relevance poll: names a task it does not hand over | O(1)
 
 
-def handover(text) -> list | None:  # O(400)
-    """Task ids a user message hands over, in order, read from its first line that names a Tn (first 400 characters).
+def handover(text, tid=TID) -> list | None:  # O(400)
+    """Task ids (`tid` matches them: `T<n>` or the plan's own) a user message hands over, in order, read from its first line that names a Tn (first 400 characters).
     A cue counts at the start of the line or of a sentence: every id after `Tasks`/`Batch` (a batch; ids in a `(…)`
     aside or possessive `T4's` are dependencies, not members), else the first id after `Task`/`Next` (`T1 recorded.
     Next: Task T2` -> T2); no cue: the line's first id (`T6 retry: … task T9` -> T6). [] for a relevance poll; None
@@ -48,15 +57,15 @@ def handover(text) -> list | None:  # O(400)
     if POLL.search(head):  # O(400)
         return []  # O(1)
     for line in head.splitlines():  # O(400)
-        ids = TID.findall(line)  # O(len)
+        ids = tid.findall(line)  # O(len)
         if not ids:  # O(1)
             continue  # O(1)
         for c in CUE.finditer(line):  # O(len)
             rest = re.sub(r"\([^)]*\)", " ", line[c.end():]) if c.group(1) else line[c.end():]  # a batch: no (…) asides | O(len)
-            after = [m.group(1) for m in TID.finditer(rest) if not c.group(1) or not rest.startswith(("'s", "’s"), m.end())]  # nor T4's | O(len)
+            after = [m.group(1) for m in tid.finditer(rest) if not c.group(1) or not rest.startswith(("'s", "’s"), m.end())]  # nor T4's | O(len)
             if after:  # O(1)
-                return list(dict.fromkeys("T" + x for x in (after if c.group(1) else after[:1])))  # O(ids)
-        return ["T" + ids[0]]  # O(1)
+                return list(dict.fromkeys(x for x in (after if c.group(1) else after[:1])))  # O(ids)
+        return [ids[0]]  # O(1)
     return None  # O(1)
 
 
@@ -186,7 +195,7 @@ def _segment(tids, t, **flags) -> dict:  # O(1)
     return {"tids": tids, "tok": _empty(), "calls": set(), "first": t, "last": t, "model": "", "text": "", "reports": [], **flags}  # O(1)
 
 
-def transcript_segments(path, tasks_hint: list) -> list:  # O(bytes of one transcript)
+def transcript_segments(path, tasks_hint: list, tid=TID) -> list:  # O(bytes of one transcript)
     """[{tids, tokens, tool_calls, first, last, model, text, reports}] split at user messages that hand over a task
     (`handover`): a message whose tasks are all in the current segment's continues it; a batch gives one segment with
     several tids. The prime (work before the first handover, on tasks_hint[0] until then) takes the first tasks handed
@@ -201,7 +210,7 @@ def transcript_segments(path, tasks_hint: list) -> list:  # O(bytes of one trans
         t = _ts(e)  # O(1)
         if e.get("type") == "user" and not any(isinstance(b, dict) and b.get("type") == "tool_result"  # O(content)
                                                 for b in (msg.get("content") if isinstance(msg.get("content"), list) else [])):
-            ids = handover(_text_of(msg.get("content")))  # O(400)
+            ids = handover(_text_of(msg.get("content")), tid)  # O(400)
             base = cur.get("prev") if cur is not None and cur.get("poll") else cur  # a poll pauses the segment before it | O(1)
             if ids == []:  # a relevance poll: its own segment, no task's | O(1)
                 if not (cur is not None and cur.get("poll")):  # O(1)
@@ -262,8 +271,9 @@ def transcript_segments(path, tasks_hint: list) -> list:  # O(bytes of one trans
     return segs  # O(1)
 
 
-def agent_records(sl_dir: Path) -> list:  # O(M + B)
+def agent_records(sl_dir: Path, known=None) -> list:  # O(M + B)
     """One record per agent: launch/stop joined, its transcript segments."""
+    tid = id_re(known)  # O(k)
     launches: dict[str, dict] = {}  # O(1)
     stops: dict[str, list] = {}  # O(1)
     for e in read_jsonl(sl_dir / "metrics.jsonl"):  # O(M)
@@ -286,11 +296,11 @@ def agent_records(sl_dir: Path) -> list:  # O(M + B)
             continue  # O(1)
         la, sts = launches.get(aid, {}), stops.get(aid, [])  # O(1)
         desc = la.get("desc") or ""  # O(1)
-        hint = pool.get(aid) or ([ "T" + TID.search(desc).group(1)] if TID.search(desc) else [])  # O(1)
+        hint = pool.get(aid) or ([tid.search(desc).group(1)] if tid.search(desc) else [])  # O(1)
         segs = []  # O(1)
         for s in sts:  # O(stops)
             if s.get("transcript"):  # O(1)
-                segs = transcript_segments(s["transcript"], hint)  # O(B)
+                segs = transcript_segments(s["transcript"], hint, tid)  # O(B)
                 break  # O(1)
         out.append({"agent": aid, "type": la.get("type") or (sts[0].get("type") if sts else ""), "model": la.get("model") or "",
                     "desc": desc, "start_ms": la.get("t"), "stop_ms": max((s.get("t") or 0 for s in sts), default=None) if sts else None,
@@ -429,12 +439,12 @@ def reconcile(sl_dir, stream_log, prices=None) -> dict:  # O(M + B + log)
 def task_records(sl_dir, plan_path=None, prices=None) -> list:  # O(M + B + n*(n + e))
     sl_dir = Path(sl_dir)  # O(1)
     prices = prices or load_prices()  # O(file)
-    agents = agent_records(sl_dir)  # O(M + B)
     plan = None  # O(1)
     if plan_path:  # O(1)
         sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
         import plan_tools as pt  # O(1)
         plan = pt.Plan.load(str(plan_path))  # O(L)
+    agents = agent_records(sl_dir, {t.id for t in plan.tasks} if plan else None)  # O(M + B)
     recs: dict[str, dict] = {}  # O(1)
 
     def rec(tid):  # O(1)
