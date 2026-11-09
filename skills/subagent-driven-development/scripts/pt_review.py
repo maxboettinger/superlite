@@ -2233,7 +2233,61 @@ def stale_in_run(entry: dict, summaries: list[dict]) -> bool:  # O(S*F) total
     return False  # O(1)
 
 
-def read_test_summary(path: Path) -> tuple[str, int]:  # O(file size) total
+OUTDATED_LINES = 30  # outdated lines in section 4, summary failures and incidents together | O(1)
+
+
+def _imported_names(path: Path) -> set[str]:  # O(B) read + parse total
+    """Every dotted name a module imports, with each dotted prefix (`from a.b import c` -> a, a.b, a.b.c)."""
+    names: set[str] = set()  # O(1)
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8", errors="replace"))):  # O(B)
+        if isinstance(node, ast.Import):  # O(1)
+            dotted = [a.name for a in node.names]  # O(1)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:  # O(1)
+            dotted = [node.module] + [f"{node.module}.{a.name}" for a in node.names]  # O(n)
+        else:  # O(1)
+            continue  # O(1)
+        for d in dotted:  # O(n) iterations
+            parts = d.split(".")  # O(m)
+            names.update(".".join(parts[:k]) for k in range(1, len(parts) + 1))  # O(m^2)
+    return names  # O(1)
+
+
+def test_inputs(root: Path, test_file: str, changed: set[str] | None) -> list[str]:  # O(B + F*d) total
+    """The test file, the changed `.py` files it imports, then the changed `conftest.py` files at or above its folder."""
+    out = [test_file]  # O(1)
+    f = root / test_file  # O(1)
+    if changed is None or not test_file.endswith(".py") or not f.is_file():  # O(1)
+        return out  # O(1)
+    try:  # O(B)
+        names = _imported_names(f)  # O(B)
+    except (SyntaxError, ValueError, OSError):  # O(1)
+        return out  # O(1)
+    for c in sorted(changed):  # O(F) iterations
+        if c.endswith(".py") and c != test_file and Path(c).name != "conftest.py" and (root / c).is_file() \
+                and (module_name(root, root / c) in names or Path(c).stem in names):  # O(d)
+            out.append(c)  # O(1)
+    folder = Path(test_file).parent  # O(1)
+    out += sorted(c for c in changed if Path(c).name == "conftest.py" and (Path(c).parent == folder or Path(c).parent in folder.parents))  # O(F log F)
+    return out  # O(1)
+
+
+def changed_after(root: Path, files: list[str], when: float) -> str | None:  # O(F) stat calls total
+    """The first file whose mtime is later than `when`, or that is missing; None when every file is older."""
+    for rel in files:  # O(F) iterations
+        try:  # O(1)
+            if (root / rel).stat().st_mtime > when:  # O(1)
+                return rel  # O(1)
+        except OSError:  # a missing file counts as changed | O(1)
+            return rel  # O(1)
+    return None  # O(1)
+
+
+def outdated_failure(root: Path, test_file: str, when: float, changed: set[str] | None) -> str | None:  # O(B + F*d) total
+    """The file that changed after a run at `when` (the test file, a conftest, an imported changed module), else None."""
+    return changed_after(root, test_inputs(root, test_file, changed), when)  # O(B + F*d)
+
+
+def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | None = None) -> tuple[str, int]:  # O(file size + F*(B + d)) total
     if not path.is_file():  # O(1)
         return "- no test summary recorded (`run_tests.py --full` runs alongside this review)", 0  # O(1)
     d = load_summary(path)  # O(file size)
@@ -2241,13 +2295,41 @@ def read_test_summary(path: Path) -> tuple[str, int]:  # O(file size) total
         return "- test summary unreadable", 0  # O(1)
     failed = d.get("failures") or d.get("failed_tests") or []  # O(1)
     skipped = d.get("skipped_tests") or []  # O(1)
-    nfail = int(d["failed"]) if isinstance(d.get("failed"), int) else len(failed)  # O(1)
-    rows = [f"- passed {d.get('passed', '?')} · failed {nfail} · skipped {d.get('skipped', len(skipped))}"]  # O(1)
+    started = _num(d.get("started"))  # a summary without a start time is never outdated | O(1)
+    stale: dict[str, str | None] = {}  # test file -> the file that changed after the run | O(1)
+    old: list[tuple[str, str]] = []  # O(1)
+    cur: list = []  # O(1)
+    for t in failed:  # O(F) iterations
+        tf = str(t).split("::", 1)[0] if "::" in str(t) else ""  # O(m)
+        if root is not None and started is not None and tf:  # O(1)
+            if tf not in stale:  # O(1)
+                stale[tf] = outdated_failure(root, tf, started, changed)  # O(B + F*d)
+            if stale[tf]:  # O(1)
+                old.append((str(t), stale[tf]))  # O(1)
+                continue  # O(1)
+        cur.append(t)  # O(1)
+    total = int(d["failed"]) if isinstance(d.get("failed"), int) else len(failed)  # O(1)
+    nfail = max(0, total - len(old))  # O(1)
+    rows = [f"- passed {d.get('passed', '?')} · failed {total}{f' ({len(old)} outdated)' if old else ''} · skipped {d.get('skipped', len(skipped))}"]  # O(1)
     if d.get("mode") == "fast":  # O(1)
         rows.insert(0, "- full suite not run yet (it runs alongside this review); newest fast run:")  # O(1)
-    rows += [f"- FAILING: {t}" for t in failed[:30]]  # O(min(30, failed))
+    rows += [f"- OUTDATED: {t} ({f} changed after this run; the full suite decides)" for t, f in old[:OUTDATED_LINES]]  # O(min(30, old))
+    rows += [f"- FAILING: {t}" for t in cur[:30]]  # O(min(30, cur))
     rows += [f"- SKIPPED: {t}" for t in skipped[:30]]  # O(min(30, skipped))
     return "\n".join(rows), nfail  # O(1)
+
+
+def outdated_incidents(root: Path, entries: list[dict], changed: set[str] | None) -> list[tuple[dict, str]]:  # O(K*(B + F*d)) total
+    """run_tests test-failure incidents whose test inputs changed after they were logged; agent-logged ones never."""
+    out: list[tuple[dict, str]] = []  # O(1)
+    for e in entries:  # O(K) iterations
+        epoch = e.get("epoch")  # O(1)
+        if e.get("kind") != "test-failure" or e.get("agent") != "run_tests" or _num(epoch) is None or not e.get("file"):  # O(1)
+            continue  # O(1)
+        why = outdated_failure(root, str(e["file"]), float(epoch), changed)  # O(B + F*d)
+        if why:  # O(1)
+            out.append((e, why))  # O(1)
+    return out  # O(1)
 
 
 def render_item(root: Path, it: Item, shown: set[tuple[str, int]], idx: str) -> str:  # O(B) per item (excerpt re-reads file)
@@ -2325,11 +2407,6 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     entries = read_incidents(log)  # O(file size)
     n_all = len(entries)  # O(1)
     runs = run_summaries(Path(a.tests) if a.tests else sl / "test-summary.json") or ([summary] if summary else [])  # O(S log S)
-    entries = [e for e in entries if not stale_in_run(e, runs)]  # O(K*S*F)
-    n_stale = n_all - len(entries)  # O(1)
-    items = incident_items(entries) + read_probe_failures(probes)  # O(K + R)
-    if not inline:  # probe coverage needs plan tasks; an inline build ran no probes (#130) | O(1)
-        items += uncovered_items(plan, root, entries)  # O(pkgs*cats*...)
     base_ok = False  # O(1)
     if a.base:  # O(1)
         try:  # O(1)
@@ -2338,6 +2415,15 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         except (OSError, subprocess.TimeoutExpired):  # git missing or hanging: treat as no base | O(1)
             base_ok = False  # O(1)
     changed = changed_since(root, a.base) if base_ok else None  # O(F)
+    entries = [e for e in entries if not stale_in_run(e, runs)]  # O(K*S*F)
+    gone = outdated_incidents(root, entries, changed)  # run_tests failures whose code changed after the run | O(K*(B + F*d))
+    gone_ids = {id(e) for e, _ in gone}  # O(K)
+    entries = [e for e in entries if id(e) not in gone_ids]  # O(K)
+    n_gone = len(gone)  # O(1)
+    n_stale = n_all - len(entries)  # O(1)
+    items = incident_items(entries) + read_probe_failures(probes)  # O(K + R)
+    if not inline:  # probe coverage needs plan tasks; an inline build ran no probes (#130) | O(1)
+        items += uncovered_items(plan, root, entries)  # O(pkgs*cats*...)
     if changed is not None:  # O(1)
         items += claimed_fix_items(entries, changed, root)  # O(K + F)
     mismatches, n_checked = ([], 0) if inline else check_interfaces(plan, root, None)  # O(P) + 1 subprocess
@@ -2346,7 +2432,16 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
                           f"- {m.msg}", m.file, m.line, "pt_review contract check (tool)", True))  # O(1)
     items.sort(key=lambda i: i.rank)  # O(I log I)
     counts = {s: sum(1 for i in items if i.section == s) for s in ("incidents", "probes", "uncovered", "contract", "claimed")}  # O(5*I)
-    tests_text, nfail = read_test_summary(tests)  # O(1)
+    tests_text, nfail = read_test_summary(tests, root, changed)  # O(F*(B + d))
+    shown_old = tests_text.count("\n- OUTDATED: ") + tests_text.startswith("- OUTDATED: ")  # O(len)
+    seen_loc: set[tuple] = set()  # O(1)
+    for e, why in gone:  # O(K) iterations
+        loc = (e.get("file"), e.get("line"))  # O(1)
+        if loc in seen_loc or shown_old >= OUTDATED_LINES:  # O(1)
+            continue  # O(1)
+        seen_loc.add(loc)  # O(1)
+        shown_old += 1  # O(1)
+        tests_text += f"\n- OUTDATED incident: {e.get('file')}:{e.get('line')} {str(e.get('context', ''))[:120]} ({why} changed after it)"  # O(1)
     n_open = sum(counts.values()) + (1 if nfail else 0)  # O(1)
     fast = n_open == 0 and not inline  # an inline build had no reviewer, so nothing is verified yet (#130) | O(1)
     tool_only = not fast and not inline and not nfail and all(i.tool for i in items)  # every open item is a tool check, none an agent finding or a red test (#12) | O(I)
@@ -2415,7 +2510,8 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
             "## 8. Source excerpts (changed hunks of the hot-spot files)", excerpts, ""]  # O(1)
     sec_titles = {  # O(1)
         "incidents": "## 1. Open incidents (repeated file:line first, then unresolved, then low confidence)"  # O(1)
-                     + (f"\ndropped {n_stale} stale test-failure incident(s)" if n_stale else ""),  # O(1)
+                     + (f"\ndropped {n_stale} stale test-failure incident(s)" if n_stale else "")  # O(1)
+                     + (f"\nmoved {n_gone} outdated test-failure incident(s) to section 4" if n_gone else ""),  # O(1)
         "probes": "## 2. Probe results: failures still open and unverified categories",  # O(1)
         "claimed": "## 3b. Claimed fixes not on disk (a reviewer logged these fixed, the file is unchanged since base)",  # O(1)
         "contract": ("## 3. Contract check: not run (inline build)" if inline else  # O(1)
