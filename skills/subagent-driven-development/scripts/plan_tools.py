@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """plan_tools: mechanical tooling for superlite plans (D17).
 
-Subcommands implemented here: taskgraph, stubs, schedule, lint.
+Subcommands implemented here: taskgraph, stubs, schedule, lint, external.
 Subcommands adapter, packet and contract live in pt_review.py (lazy import).
 
 Exit codes: 0 ok, 1 findings (stubs import failure, lint issues), 2 bad plan or usage.
@@ -24,6 +24,8 @@ import importlib.util  # O(1)
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
+import shlex  # O(1)
+import signal  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
 from dataclasses import dataclass, field  # O(1)
@@ -1279,7 +1281,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         for a_i, a in enumerate(plan.tasks):  # O(n) iterations
             for b in plan.tasks[a_i + 1:]:  # O(n) iterations; n^2 pairs total
                 if a.id in graph and b.id in graph and a.id not in anc[b.id] and b.id not in anc[a.id]:  # O(1)
-                    shared = sorted({o for r, o in {((a.repo or {}).get("root", ""), o) for o in a.written_owns} & {((b.repo or {}).get("root", ""), o) for o in b.written_owns}})  # O(k*s*A) re-parses owns per pair; hotspot
+                    shared = sorted({o for r, o in {(_repo_key(plan, a), o) for o in a.written_owns} & {(_repo_key(plan, b), o) for o in b.written_owns}})  # O(k*s*A) re-parses owns per pair; hotspot
                     if shared:  # O(1)
                         issues.append(Issue(f"{a.id} and {b.id} can run in parallel but both own {', '.join(shared)}", [a.id, b.id]))  # O(1)
 
@@ -1518,6 +1520,15 @@ def repo_root(plan_path: str, written: str) -> Path:  # O(d) the external reposi
     return (p if p.is_absolute() else stable_root(plan_path) / p).resolve()  # O(d)
 
 
+def _repo_key(plan: Plan, t: Task) -> str:  # O(d) the resolved external root of a task, "" for a local one
+    if not t.repo:  # O(1)
+        return ""  # O(1)
+    try:  # O(1)
+        return str(repo_root(str(plan.path), t.repo["root"])) if plan.path else t.repo["root"]  # O(d)
+    except (OSError, ValueError):  # O(1)
+        return t.repo["root"]  # O(1)
+
+
 def repo_issues(plan: Plan) -> list:  # O(n*k*s) lint the **Repo:** fields of every task
     out: list = []  # O(1)
     for t in plan.tasks:  # O(n) iterations
@@ -1525,6 +1536,9 @@ def repo_issues(plan: Plan) -> list:  # O(n*k*s) lint the **Repo:** fields of ev
         if repo is None:  # O(1)
             if t.fields.get("repo test") or t.fields.get("repo ship"):  # O(1)
                 out.append(Issue(f"{t.id}: **Repo test:** or **Repo ship:** without a **Repo:** line (the other repository's root)", [t.id]))  # O(1)
+            continue  # O(1)
+        if not repo["root"]:  # O(1)
+            out.append(Issue(f"{t.id}: **Repo:** line is empty; name the other repository's root", [t.id]))  # O(1)
             continue  # O(1)
         if not repo["test"]:  # O(1)
             out.append(Issue(f"{t.id}: external repo task has no **Repo test:** line (the test command run in its tree)", [t.id]))  # O(1)
@@ -1586,7 +1600,11 @@ def _ext_paths(plan_path: str, task: Task) -> tuple[Path, Path, Path, str]:  # O
 
 
 def _ext_expand(text: str, root: Path, tree: Path) -> str:  # O(s)
-    return text.replace("{tree}", str(tree)).replace("{root}", str(root))  # O(s)
+    def sub(m):  # a path is shell-quoted unless the command already wraps the placeholder in quotes | O(1)
+        before, after = text[:m.start()][-1:], text[m.end():][:1]  # O(1)
+        val = str(tree if m.group(0) == "{tree}" else root)  # O(1)
+        return val if before in "'\"" and before and before == after else shlex.quote(val)  # O(s)
+    return re.sub(r"\{tree\}|\{root\}", sub, text)  # O(s)
 
 
 def _ext_record(rec_path: Path) -> dict:  # O(r) the saved tree record, {} when absent
@@ -1621,13 +1639,22 @@ def ensure_tree(plan_path: str, task: Task) -> dict:  # O(git) make or reuse the
 def _ext_test(task: Task, info: dict, timeout: float) -> int:  # O(test run) run the task's test command in its tree
     env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_FLEET_")}  # O(env)
     cmd = _ext_expand(task.repo["test"], Path(info["root"]), Path(info["tree"]))  # O(s)
+    posix = os.name == "posix"  # O(1)
+    proc = subprocess.Popen(cmd, shell=True, cwd=info["tree"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", start_new_session=posix)  # own process group so a timeout reaches children | O(1)
     try:  # O(1)
-        cp = subprocess.run(cmd, shell=True, cwd=info["tree"], env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)  # O(run)
-        out, code, verdict = (cp.stdout or "") + (cp.stderr or ""), cp.returncode, "PASS" if cp.returncode == 0 else f"FAIL (exit {cp.returncode})"  # O(out)
-    except subprocess.TimeoutExpired as exc:  # O(1)
-        raw = [x for x in (exc.stdout, exc.stderr) if x]  # O(1)
-        out = "".join(x if isinstance(x, str) else x.decode("utf-8", "replace") for x in raw)  # O(out)
+        out, _ = proc.communicate(timeout=timeout)  # O(run)
+        code, verdict = proc.returncode, "PASS" if proc.returncode == 0 else f"FAIL (exit {proc.returncode})"  # O(1)
+    except subprocess.TimeoutExpired:  # O(1)
+        try:  # O(1)
+            os.killpg(proc.pid, signal.SIGKILL) if posix else proc.kill()  # O(1)
+        except OSError:  # O(1)
+            pass  # O(1)
+        try:  # O(1)
+            out, _ = proc.communicate(timeout=5)  # O(out)
+        except subprocess.TimeoutExpired:  # a child escaped the group and holds the pipe | O(1)
+            out = ""  # O(1)
         code, verdict = 1, f"FAIL (timeout after {timeout:g}s)"  # O(1)
+    out = out or ""  # O(1)
     for ln in out.splitlines()[-40:]:  # O(40) iterations
         print(ln)  # O(s)
     print(f"external {task.id} test: {verdict}")  # O(1)
@@ -1640,7 +1667,7 @@ def _ext_commit(plan_path: str, task: Task, info: dict, rec_path: Path) -> int: 
     if not (tree / ".git").exists():  # O(1)
         raise PlanError(f"{task.id}: no tree at {tree}; run plan_tools external {task.id} --plan {plan_path} first")  # O(1)
     _git(tree, "add", "-A")  # O(git)
-    staged = [f for f in _git(tree, "diff", "--cached", "--name-only").stdout.splitlines() if f]  # O(f)
+    staged = [f for f in _git(tree, "diff", "--cached", "--name-only", "-z").stdout.split("\0") if f]  # -z: no quoting of non-ASCII paths | O(f)
     owns = task.written_owns  # O(k*s*A)
     outside = [f for f in staged if not next_tasks.owns_match(f, owns)]  # O(f*o)
     for f in outside:  # O(f) iterations
