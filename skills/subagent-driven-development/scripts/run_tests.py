@@ -199,6 +199,9 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
             print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
             write_summary(mine, "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
             data = json.loads(mine.read_text(encoding="utf-8"))  # O(1)
+            ptr = read_pointer(a.summary)  # O(1) the published summary the packet reads must carry the error too
+            if ptr and Path(ptr["summary"]).resolve() == Path(mine).resolve():  # O(1)
+                atomic_write(a.summary, mine.read_text(encoding="utf-8"))  # O(summary size)
             break  # O(1)
         if time.monotonic() >= deadline:  # O(1)
             print(f"run_tests: timed out waiting for {mine}; log {mine.with_suffix('.log')}", file=sys.stderr)  # O(1)
@@ -807,8 +810,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             held = {}  # O(1)
             try:  # O(1)
                 if paths:  # a --fast run tests every working-tree change except the files of unfinished siblings | O(1)
-                    overlay, kept = fast_overlay(".", a.task, info, a.ledger)  # O(f * T * o)
-                    held = {p: unfinished_owners(p, a.task, info, a.ledger) for p in kept}  # O(f * T * o)
+                    overlay, kept = fast_overlay(".", a.task, info, a.ledger)  # O(c + f * T * o)
+                    held = kept  # {path: sorted owner ids}
                 tree = trees.prepare(".", a.task, overlay if paths else info[a.task]["owns"])  # a --full run tests the task's own files | O(f * o) + git checkout
             except (RuntimeError, OSError) as err:  # O(1)
                 return usage_error(a, label, f"isolated tree for {a.task} not prepared: {err}")  # O(summary size)
@@ -848,18 +851,22 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
 
 
-def unfinished_owners(path, task, info, ledger):  # O(T * o) the other uncommitted plan tasks owning path; [] when task owns it too
+def unfinished_owners(path, task, info, done):  # O(T * o) the other uncommitted plan tasks owning path; [] when task owns it too (done: committed task ids)
     if nt.owns_match(path, info[task]["owns"]):  # O(o)
         return []  # O(1)
-    done = ct.committed_tasks(ledger)  # O(c)
     return sorted(t for t in info if t != task and t not in done and nt.owns_match(path, info[t]["owns"]))  # O(T * o)
 
 
 def fast_overlay(root, task, info, ledger):  # O(f * T * o) + two spawns: (paths to overlay, paths kept at base), both sorted
     copy, delete = trees.own_changes(root, trees.base_commit(root), ["**/*"])  # O(f)
-    overlay, held = [], []  # O(1)
+    done = ct.committed_tasks(ledger)  # one ledger read per run | O(c)
+    overlay, held = [], {}  # O(1)
     for p in sorted(set(copy) | set(delete)):  # O(f log f)
-        (held if unfinished_owners(p, task, info, ledger) else overlay).append(p)  # O(T * o)
+        owners = unfinished_owners(p, task, info, done)  # O(T * o)
+        if owners:  # O(1)
+            held[p] = owners  # O(1)
+        else:  # O(1)
+            overlay.append(p)  # O(1)
     return overlay, held  # O(1)
 
 
