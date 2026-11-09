@@ -1476,6 +1476,12 @@ def _checker(agents: list[str]) -> tuple[str, bool]:  # O(a log a) total
     return label + (f", +{len(names) - 3} more" if len(names) > 3 else ""), all(a in TOOL_AGENTS for a in names)  # O(a)
 
 
+def is_ruling(entry: dict) -> bool:  # O(1)
+    """True for the record `sl incident resolve` writes: a resolved resolution whose context starts with it."""
+    res = str(entry.get("resolution", "")).lower()  # O(1)
+    return res in RESOLVED and str(entry.get("context", "")).lower().startswith(res + ": ")  # O(1)
+
+
 def superseded(entries: list[dict]) -> set[tuple[str, int]]:  # O(K) total
     """Locations whose newest non-verified entry (the log is append-only) is resolved."""
     newest: dict[tuple[str, int], bool] = {}  # O(1)
@@ -1540,6 +1546,9 @@ def incident_items(entries: list[dict]) -> list[Item]:  # O(K) total
             groups.setdefault((e["file"], e["line"]), []).append(e)  # O(1)
     items: list[Item] = []  # O(1)
     for (file, line), es in groups.items():  # O(groups) iterations
+        newest = es[-1]  # the newest entry, taken before the dedupe | O(1)
+        if (file, line) in done and is_ruling(newest):  # an `incident resolve` record closes the location, also when repeated | O(1)
+            continue  # O(1)
         seen: set[tuple] = set()  # identical entries (same kind, context, resolution, agent) count once | O(1)
         es = [e for e in es if not ((k := tuple(str(e.get(f, "")) for f in ("kind", "context", "resolution", "agent"))) in seen or seen.add(k))]  # O(entries)
         repeated = len(es) >= 2  # O(1)
