@@ -14,7 +14,7 @@ class Herdr(Exception):
 @pytest.fixture
 def bk(tmp_path, monkeypatch):
     root = tmp_path / "main"; (root / ".superlite").mkdir(parents=True)
-    ns = types.SimpleNamespace(root=root, sd=root / ".superlite", calls=[], stops={}, states={}, down=False, n=[0])
+    ns = types.SimpleNamespace(root=root, sd=root / ".superlite", calls=[], stops={}, states={}, down=False, n=[0], fleets={})
     log = lambda *a: ns.calls.append(a)
     def states():
         if ns.down:
@@ -27,7 +27,7 @@ def bk(tmp_path, monkeypatch):
         wt = root / "wts" / f"superlite-{topic}"; (wt / ".superlite").mkdir(parents=True, exist_ok=True); return wt, "created"
     fakes = {"fleet": types.SimpleNamespace(hc=types.SimpleNamespace(agent_states=states, HerdrError=Herdr), main=lambda argv: log("fleet", argv) or 0,
                                             stop=lambda sd, ids=None, all_=False: log("stop", ids)),
-             "fleet_state": types.SimpleNamespace(is_on=lambda sd: False),
+             "fleet_state": types.SimpleNamespace(is_on=lambda sd: False, load=lambda sd: ns.fleets.get(str(sd), {"workers": {}}), name_of=lambda sd, wid, w: w.get("name") or wid),
              "fleet_io": types.SimpleNamespace(send_brief=lambda sd, wid, brief, label="": log("send", wid, Path(brief).name, label) or label,
                                                latest_stop=lambda sd, wid, after: ns.stops.get(wid) if ns.stops.get(wid, {}).get("t", -1) >= after else None,
                                                main=lambda argv: log("text", argv) or 0),
@@ -161,3 +161,104 @@ def test_a_batch_main_parked_starts_only_by_name_and_fresh(bk, capsys):
 def test_wait_names_issues_the_merge_left_open(bk, capsys):
     running(bk, merged=True, pr=201, version="1.5.8", open_issues=[1, 9]); bk.stops["W1"] = {"t": 2000, "last": "Status: DONE"}
     assert run(capsys, "wait", "--timeout", "0")[1] == f"B1 shipped PR #201 1.5.8 summary={bk.sd / 'backlog' / 'B1.md'}\nB1 OPEN #1 #9\n"
+
+def git(replies):
+    return lambda cmd, cwd: next((r for p, r in replies.items() if " ".join(cmd).startswith(p)), (0, ""))
+
+GIT = {"git symbolic-ref": (0, "origin/main"), "git log": (0, "abc1234 T1 ship guard\ndef5678 T0 stubs"), "git status": (0, "M skills/x.py\n?? tests/y.py")}
+
+def parked(bk, **kw):
+    wt = bk.root / "wts" / "superlite-b1-t"; (wt / ".superlite").mkdir(parents=True, exist_ok=True)
+    put(bk, b("B1", ["a.py"], "parked", reason="lead pane gone", lead="W7", agent="sl-m-W7", worktree=str(wt), **kw))
+    return wt
+
+def brief_of(wt):
+    return (wt / ".superlite" / "briefs" / "lead.md").read_text()
+
+def test_start_after_a_crash_briefs_the_worktree_state_and_the_answers(bk, capsys, monkeypatch):
+    wt = parked(bk, questions=1, answers={"Keep the v1 API?": "Drop"}); (wt / ".superlite" / "answer-1.json").write_text("{}")
+    calls = []
+    monkeypatch.setattr(br, "_run", lambda cmd, cwd: calls.append((cmd[0], Path(cwd))) or git(GIT)(cmd, cwd))
+    assert run(capsys, "start", "B1")[0] == 0
+    text = brief_of(wt)
+    assert ("Previous lead W7: parked (lead pane gone); its work stays in this worktree. Read it before you plan; "
+            "keep, finish or drop each part on purpose:\n") in text
+    assert "- Commits on superlite/b1-t not on origin/main: 2: abc1234 T1 ship guard; def5678 T0 stubs\n" in text
+    assert "- Uncommitted files: 2: M skills/x.py, ?? tests/y.py\n" in text
+    assert "- Answers Max gave mid-run: answer-1.json in .superlite/ (also under Max's decisions above; never ask them again)\n" in text
+    assert calls and all(cwd == wt for c, cwd in calls if c == "git")
+
+def test_start_after_a_crash_caps_the_lists_and_names_git_failures(bk, capsys, monkeypatch):
+    wt = parked(bk)
+    log = "\n".join(f"c{i:06d} subject {i}" for i in range(7)); st = "\n".join(f"?? f{i}.py" for i in range(12))
+    monkeypatch.setattr(br, "_run", git({"git symbolic-ref": (128, "fatal: no ref"), "git log": (0, log), "git status": (0, st)}))
+    assert run(capsys, "start", "B1")[0] == 0
+    text = brief_of(wt)
+    assert ("- Commits on superlite/b1-t not on origin/main: 7: c000000 subject 0; c000001 subject 1; c000002 subject 2; "
+            "c000003 subject 3; c000004 subject 4 (+2 more)\n") in text
+    assert "- Uncommitted files: 12: " + ", ".join(f"?? f{i}.py" for i in range(10)) + " (+2 more)\n" in text
+    assert "Answers Max gave" not in text
+    parked(bk); monkeypatch.setattr(br, "_run", git({"git log": (128, "fatal: bad revision"), "git status": (0, "")}))
+    assert run(capsys, "start", "B1")[0] == 0
+    text = brief_of(wt)
+    assert "- Commits on superlite/b1-t not on origin/main: unknown (git log failed)\n" in text and "- Uncommitted files: 0\n" in text
+
+def test_start_after_a_crash_strips_control_characters(bk, capsys, monkeypatch):
+    wt = parked(bk)
+    monkeypatch.setattr(br, "_run", git({"git log": (0, "abc1234 evil\x1b[2J subject"), "git status": (0, "?? a\x07.py")}))
+    assert run(capsys, "start", "B1")[0] == 0
+    text = brief_of(wt)
+    assert "\x1b" not in text and "\x07" not in text and "abc1234 evil?[2J subject" in text and "?? a?.py" in text
+
+def test_a_fresh_start_gets_no_worktree_state(bk, capsys, monkeypatch):
+    put(bk, b("B1", ["a.py"])); monkeypatch.setattr(br, "_run", git(GIT))
+    assert run(capsys, "start", "B1")[0] == 0
+    assert "Previous lead" not in brief_of(bk.root / "wts" / "superlite-b1-t")
+
+def fleet_of(bk, wt, **workers):
+    bk.fleets[str(wt / ".superlite")] = {"workers": workers}
+
+def test_wait_flags_vanished_worker_panes_of_a_live_lead_once(bk, capsys, monkeypatch):
+    wt = running(bk); bk.states.update({"sl-m-W1": "working", "sl-l-w3": "working"})
+    fleet_of(bk, wt, W2={"name": "sl-l-w2", "state": "busy"}, W3={"name": "sl-l-w3", "state": "busy"},
+             W4={"name": "sl-l-w4", "state": "stopped"}, W5={"name": "sl-l-w5", "state": "busy", "role": "layer"},
+             W6={"name": "sl-l-w6", "state": "starting"}, W7={"name": "sl-l-w7", "state": "ready"})
+    assert run(capsys, "wait", "--timeout", "0") == (0, "TIMEOUT\n")
+    assert get(bk, "B1")["gone_seen"] == {"W2": 5000, "W7": 5000} and not any(c[0] == "text" for c in bk.calls)
+    monkeypatch.setattr(br, "_now_ms", lambda: 5000 + br.GONE_MS)
+    assert run(capsys, "wait", "--timeout", "0") == (0, "B1 worker panes gone: W2 W7; lead W1 told\n")
+    text = next(c[1] for c in bk.calls if c[0] == "text")
+    assert text[:3] == ["send", "W1", "--text"] and "fleet stop W2 W7 --plan .superlite" in text[3] and text[4:] == ["--plan", str(bk.sd)]
+    x = get(bk, "B1")
+    assert (x["gone_workers"], x["gone_seen"], x["state"]) == (["W2", "W7"], {}, "running")
+    bk.calls.clear()
+    assert run(capsys, "wait", "--timeout", "0") == (0, "TIMEOUT\n") and not any(c[0] == "text" for c in bk.calls)
+
+def test_wait_forgets_a_worker_pane_that_comes_back_and_skips_herdr_outages(bk, capsys, monkeypatch):
+    wt = running(bk); bk.states["sl-m-W1"] = "working"
+    fleet_of(bk, wt, W2={"name": "sl-l-w2", "state": "busy"})
+    assert run(capsys, "wait", "--timeout", "0") == (0, "TIMEOUT\n") and get(bk, "B1")["gone_seen"] == {"W2": 5000}
+    bk.states["sl-l-w2"] = "working"; monkeypatch.setattr(br, "_now_ms", lambda: 5000 + br.GONE_MS)
+    assert run(capsys, "wait", "--timeout", "0") == (0, "TIMEOUT\n") and get(bk, "B1")["gone_seen"] == {}
+    del bk.states["sl-l-w2"]; bk.down = True
+    assert run(capsys, "wait", "--timeout", "0") == (0, "TIMEOUT\n") and get(bk, "B1")["gone_seen"] == {}
+
+def test_wait_names_a_lead_it_could_not_tell(bk, capsys, monkeypatch):
+    wt = running(bk, gone_seen={"W2": 0}); bk.states["sl-m-W1"] = "working"
+    fleet_of(bk, wt, W2={"name": "sl-l-w2", "state": "busy"})
+    monkeypatch.setattr(br, "_now_ms", lambda: br.GONE_MS); monkeypatch.setattr(sys.modules["fleet_io"], "main", lambda argv: 1)
+    assert run(capsys, "wait", "--timeout", "0") == (0, "B1 worker panes gone: W2; lead W1 not told (send failed)\n")
+    assert get(bk, "B1")["gone_workers"] == ["W2"]
+
+def test_start_clears_the_gone_worker_marks(bk, capsys):
+    parked(bk, gone_seen={"W2": 1}, gone_workers=["W3"])
+    assert run(capsys, "start", "B1")[0] == 0
+    x = get(bk, "B1"); assert (x["gone_seen"], x["gone_workers"]) == ({}, [])
+
+
+def test_start_after_a_crash_cleans_the_park_reason_in_the_header(bk, capsys, monkeypatch):
+    wt = parked(bk); put(bk, b("B1", ["a.py"], "parked", reason="lead\x1b[2J pane\ngone", lead="W7", agent="sl-m-W7", worktree=str(wt)))
+    monkeypatch.setattr(br, "_run", git(GIT))
+    assert run(capsys, "start", "B1")[0] == 0
+    text = brief_of(wt)
+    assert "\x1b" not in text and "Previous lead W7: parked (lead?[2J pane gone);" in text
