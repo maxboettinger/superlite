@@ -43,7 +43,8 @@ def test_conditional_pwd_keeps_the_directory(P, cmd):
     "false && X=.superlite/a; echo hi > $X",
     "if [ -e z ]; then X=.superlite/a; fi; echo hi > $X",
 ])
-def test_conditional_env_name_is_unknown(P, cmd):
+def test_conditional_env_name_is_unknown(P, cmd, monkeypatch):
+    monkeypatch.setenv("X", "/elsewhere")
     v = run(cmd, P)
     assert v == UNK and v.word == "$X"
 

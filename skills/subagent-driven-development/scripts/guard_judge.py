@@ -20,7 +20,9 @@ A variable's value is used only when bash would not split it (default IFS or the
 glob is judged as a glob in every mode; `~+`, `~-` and `~` follow PWD, OLDPWD and HOME, `~user` is unknown, and PWD is the
 directory the current command runs in.
 A loop is walked again while its variables change (still changing after MAX_DIRS rounds: those variables are unknown), and
-a name first assigned in a block or after `&&`/`||` is one possible value, not the value, once that block or chain ends.
+a name first assigned in a block or after `&&`/`||` is one possible value, not the value, once that block or chain ends;
+the other possible value is the value before the command (unset, so empty, unless the environment holds the name).
+`$TMPDIR` reads the hook's environment.
 """
 # Complexity notation:
 #   n = characters of the command text, s = segments, d = directories the shell may sit in (<= MAX_DIRS),
@@ -69,7 +71,7 @@ WRITE_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>", ">&"})  # O(1)
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")  # O(1)
 DEFAULT_IFS = " \t\n"  # the characters bash splits an unquoted expansion on unless IFS is set | O(1)
 TILDE_FORM = {"HOME": "~", "PWD": "~+", "OLDPWD": "~-"}  # variable -> the tilde that reads it | O(1)
-KNOWN = frozenset({"PWD", "CLAUDE_PROJECT_DIR", "HOME", "IFS"})  # names whose value before the command the guard reads itself | O(1)
+KNOWN = frozenset({"PWD", "CLAUDE_PROJECT_DIR", "HOME", "IFS", "TMPDIR"})  # names whose value before the command the guard reads itself | O(1)
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")  # O(1)
 VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")  # O(1)
 FUNC = re.compile(r"(^|[;&|{}\s])(function\s+\S+|[A-Za-z_][\w.:-]*\s*\(\s*\)\s*\{)")  # a function definition: its body runs later | O(1)
@@ -110,6 +112,8 @@ class _Ctx:  # O(p)
         self.mentions = any(x in low for x in NAMES)  # a protected name in the text | O(n)
         self.kind = "human" if mode == "human" else "code"  # O(1)
         self.home = os.environ.get("HOME") or os.path.expanduser("~")  # O(1)
+        tmp = os.environ.get("TMPDIR") or ""  # O(1)
+        self.tmpdir = _winpath(tmp) if tmp.startswith("/") and "\0" not in tmp else None  # only an absolute folder is a place | O(p)
         self.cdpath = bool(os.environ.get("CDPATH")) or "cdpath" in low  # CDPATH may send a relative cd elsewhere | O(n)
         self.steps = 0  # O(1)
         self.ifs = re.search(r"\bIFS\b", command) is not None  # IFS (case-sensitive) may split a loop list's expanded words | O(1)
@@ -348,7 +352,7 @@ def _expand(text, st, ctx, split=True):  # O(p + v) | ~ and the variables the gu
             if split and _is_glob(val):  # O(p)
                 globbed.append(val)  # O(1)
             return val  # O(1)
-        val = ctx.projn if name == "CLAUDE_PROJECT_DIR" else st.here[0] if (name == "PWD" and len(st.here) == 1 and st.here[0]) else None  # O(1)
+        val = ctx.projn if name == "CLAUDE_PROJECT_DIR" else st.here[0] if (name == "PWD" and len(st.here) == 1 and st.here[0]) else ctx.tmpdir if name == "TMPDIR" else None  # O(1)
         if val is None:  # O(1)
             return m.group(0)  # O(1)
         if split and ifs != DEFAULT_IFS and (ifs is None or any(ch in val for ch in ifs)):  # O(p)
@@ -796,7 +800,7 @@ def _cd(base, words, c, st, ctx):  # O(d * p) | the directories after cd, pushd,
 
 def _mkdir(words, c, st, ctx):  # O(t) | `mkdir -p X && cd X`: the folder exists after mkdir succeeds
     flags = [w for w in words[1:] if w.startswith("-")]  # O(w)
-    if not c.persist or c.seg.sep != "&&" or not any(f == "--parents" or (not f.startswith("--") and "p" in f) for f in flags):  # O(w)
+    if not c.persist or c.seg.sep not in ("&&", ";", "\n") or not any(f == "--parents" or (not f.startswith("--") and "p" in f) for f in flags):  # O(w)
         return  # O(1)
     if any(f.startswith(("-m", "--mode")) or (not f.startswith("--") and "m" in f) for f in flags):  # a mode may lock it | O(w)
         return  # O(1)
@@ -1195,7 +1199,10 @@ def _maybe_unset(st, name):  # O(v) | past a block or chain that may not have ru
         if name not in KNOWN:  # O(1)
             del st.vars[name]  # O(1)
         return  # O(1)
-    del st.vars[name]  # O(1)
+    if name in KNOWN or name in os.environ:  # the hook's environment may hold it: the value before the command is unknown | O(1)
+        del st.vars[name]  # O(1)
+    else:  # bash starts with it unset: empty, beside the literal | O(1)
+        st.vars[name] = ""  # O(1)
     have = st.multi.setdefault(name, [])  # O(1)
     if val not in have:  # O(v)
         have.append(val)  # O(1)

@@ -213,8 +213,8 @@ def _patch(words):  # O(n*m) | -o FILE, else the file operand, else "?" (the fil
 
 _SED_W = re.compile(r"(?:^|[;{}\n])[ \t]*(?:\d+|\$|/(?:[^/\\\n]|\\.)*/)?(?:[ \t]*,[ \t]*(?:\d+|\$|/(?:[^/\\\n]|\\.)*/))?"
                     r"[ \t]*!?[ \t]*[wW][ \t]*([^\n]+)")  # O(1) | the w and W commands write the file named to the end of the line
-_SED_SW = re.compile(r"(?:^|[;{}\n])[^;\n]*?\bs([^\w\s\\])(?:[^\\\n]|\\.)*?\1(?:[^\\\n]|\\.)*?\1[a-zA-Z0-9]*w[ \t]*([^\n]+)")  # O(1)
-_SED_E = re.compile(r"(?:^|[;{}\n])[ \t]*(?:\d+|\$|/(?:[^/\\\n]|\\.)*/)?[ \t]*!?[ \t]*e[ \t]+\S|\bs([^\w\s\\])(?:[^\\\n]|\\.)*?\1(?:[^\\\n]|\\.)*?\1[a-zA-Z0-9]*e")  # O(1)
+_SED_SW = re.compile(r"(?:^|[;{}\n])[^;\n]*?\bs([^\w\s\\])(?:\[[^\]\n]*\]|(?!\1)[^\\\n]|\\.)*\1(?:\[[^\]\n]*\]|(?!\1)[^\\\n]|\\.)*\1[a-zA-Z0-9]*w[ \t]*([^\n]+)")  # O(1)
+_SED_E = re.compile(r"(?:^|[;{}\n])[ \t]*(?:\d+|\$|/(?:[^/\\\n]|\\.)*/)?[ \t]*!?[ \t]*e[ \t]+\S|\bs([^\w\s\\])(?:\[[^\]\n]*\]|(?!\1)[^\\\n]|\\.)*\1(?:\[[^\]\n]*\]|(?!\1)[^\\\n]|\\.)*\1[a-zA-Z0-9]*e")  # O(1)
 
 
 def _sed_scripts(opts, ops):  # O(n*m) | the script texts: every -e / --expression value, else the first operand
