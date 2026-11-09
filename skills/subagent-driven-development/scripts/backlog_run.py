@@ -5,7 +5,8 @@
     backlog_run.py wait [--timeout 21600] [--poll 10]
     backlog_run.py answer B --file F        (F = {"answers": {question: answer}})
 
-`start` takes several ids: each refusal prints BLOCKED, the others start. A lead whose stop text holds no
+`start` takes several ids: each refusal prints BLOCKED, the others start. Each lead worktree gets a copy of the main
+checkout's `.superlite/test-cmd.json` before its brief, unless it already has one (#334). A lead whose stop text holds no
 Status line is re-prompted once (`reprompted`), then parked. A question.json is cut to the limits (header, label,
 description; each cut is reported as `shortened:`); one still invalid is sent back to the lead once
 (`question_reprompted`), then parked. A stop record whose transcript lags (blank, or
@@ -117,6 +118,7 @@ def cmd_start(a) -> int:
     import fleet_lead
     import fleet_state
     import worktree
+    import backlog
     import backlog_brief
     if os.environ.get("SUPERLITE_FLEET_WORKER"):  # only Max's session runs this; never a lead or worker
         return _refuse("sl backlog_run start runs only in the main session")  # O(1)
@@ -146,7 +148,8 @@ def cmd_start(a) -> int:
         batch = bs.batch(data, bid)  # O(b)
         wt, _ = worktree.ensure(f"{bid.lower()}-{batch['topic']}", root)  # O(w) + spawns
         wt = Path(wt)  # O(1)
-        branch = "superlite/" + wt.name.replace("superlite-", "", 1)  # O(1)
+        backlog.seed_test_cmd(root, wt)  # main's .superlite/test-cmd.json before the brief (#334) | O(size)
+        branch ="superlite/" + wt.name.replace("superlite-", "", 1)  # O(1)
         ctx = {"sl": str(HERE / "sl"), "backlog_md": str(HERE.parent / "backlog.md"), "repo": data.get("repo", ""),
                "approved": data.get("approved_ship"), "titles": data.get("titles", {}), "summaries": summaries,
                "resume": batch["state"] == "parked" and bool(batch.get("worktree"))}  # O(1)

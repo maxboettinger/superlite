@@ -6,6 +6,7 @@ import copy  # O(1)
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
+import shutil  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
 import time  # O(1)
@@ -27,7 +28,27 @@ def _root() -> Path:
     return bs.main_root(Path.cwd())  # O(1)
 
 
-ISSUES_JQ = (".[] | select(has(\"pull_request\") | not) | {number, title, body, author: {login: .user.login}, "
+TEST_CMD = Path(".superlite") / "test-cmd.json"  # O(1)
+
+
+def seed_test_cmd(root: Path, wt: Path) -> bool:
+    """Copy the main checkout's .superlite/test-cmd.json into a new lead worktree (#334).
+
+    Only when the main checkout has the file and the worktree has none (a lead's own file is kept).
+    A failed copy prints one stderr line and returns False; `backlog start` goes on."""
+    src, dst = Path(root) / TEST_CMD, Path(wt) / TEST_CMD  # O(1)
+    if not src.is_file() or os.path.lexists(dst):  # O(1)
+        return False  # O(1)
+    try:  # O(1)
+        dst.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+        shutil.copyfile(src, dst)  # O(size)
+    except OSError as e:  # O(1)
+        print(f"test-cmd.json not seeded into {wt}: {e}", file=sys.stderr)  # O(1)
+        return False  # O(1)
+    return True  # O(1)
+
+
+ISSUES_JQ =(".[] | select(has(\"pull_request\") | not) | {number, title, body, author: {login: .user.login}, "
              "authorAssociation: .author_association}")
 BODY_LIMIT = 4000  # characters of one issue body kept in the triage brief
 
