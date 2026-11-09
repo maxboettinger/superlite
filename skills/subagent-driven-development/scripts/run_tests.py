@@ -37,6 +37,7 @@ Put --wait last or before another flag: argparse takes a following word as its P
 A green --full run (not --task, not --fast, not --record) in a git toplevel holding `scripts/test_layers.py` also stamps the
 unit layer green (`run_tests: unit layer stamped`), from digests taken before the run, so a file changed during it stays stale; a stamp
 error prints `run_tests: unit layer not stamped: <err>` and never changes the exit code. `--record` never stamps.
+Every test subprocess (pytest, a test-cmd.json command and its setup) gets the environment without `SUPERLITE_FLEET_*` variables (a fleet pane's worker, role and parent dir); a test-cmd.json `env` entry still applies on top.
 Stdlib only.
 """
 # Complexity notation:
@@ -672,6 +673,15 @@ def record_run(a):  # a full result the agent ran outside run_tests: reports onl
     return 0  # O(1)
 
 
+FLEET_PREFIX = "SUPERLITE_FLEET_"  # O(1) a fleet pane (lead, worker) exports these; no test subprocess inherits them (#219)
+
+
+def child_env(extra=None):  # O(env) the test subprocess environment: os.environ without SUPERLITE_FLEET_*, then extra on top (test-cmd.json env wins)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(FLEET_PREFIX)}  # O(env)
+    env.update(extra or {})  # O(e)
+    return env  # O(1)
+
+
 def root_superlite(s, root, raw=False):  # O(len s) a tree has no .superlite/ (git-ignored): point its word-initial uses at the project root
     def at(m):  # O(1) raw root for env values and inside quotes, shell-quoted otherwise
         quoted = m.start() > 0 and s[m.start() - 1] in "\"'"  # O(1)
@@ -687,7 +697,7 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
         sub = lambda s: root_superlite(s, root) if cwd else s  # noqa: E731 | O(len)
         sub = (lambda f: lambda s: f(s).replace("{junit}", str(xml_path)))(sub)  # noqa: E731 | O(len)
         subenv = lambda s: (root_superlite(s, root, raw=True) if cwd else s).replace("{junit}", str(xml_path))  # noqa: E731 | env is never shell-parsed | O(len)
-        env = {**os.environ, **{k: subenv(str(v)) for k, v in (spec.get("env") or {}).items()}}  # O(env)
+        env = child_env({k: subenv(str(v)) for k, v in (spec.get("env") or {}).items()})  # setup and command, no SUPERLITE_FLEET_* (#219) | O(env)
         literal = Path(spec["junit"]) if spec["junit"] and "{junit}" not in spec["junit"] else None  # a path the runner always writes | O(1)
         alt = None  # the tree copy of a .superlite/ report, used when the root has none | O(1)
         if literal and cwd and not literal.is_absolute():  # the runner writes it inside its tree, .superlite/ at the root | O(1)
@@ -832,7 +842,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
         t0 = time.monotonic()  # O(1)
         r = pyrun.run_tree(cmd, capture_output=True, text=True, encoding="utf-8",  # O(O) + process spawn (pytest run time dominates)
-                           errors="replace")  # O(1)
+                           errors="replace", env=child_env())  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
         seconds = time.monotonic() - t0  # O(1)
         has_xml = xml_path.exists() and xml_path.stat().st_size > 0  # O(1)
         parsed = collection_report(xml_path) if r.returncode == 2 and has_xml else None  # a collection error stops pytest with exit 2 (#196) | O(X + T*d)
