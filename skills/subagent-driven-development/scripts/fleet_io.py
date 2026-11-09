@@ -13,6 +13,7 @@ GREEN exit=0 <log>` plus its last log line), `BLOCKED-UI` plus the screen for a 
 rest. A stop record ends the wait in any Herdr state when it holds a status; one without a status on a done or idle
 pane is UNKNOWN plus the last pane lines. A stop record whose transcript reads empty, or without the status its cut `last` line holds, is re-read for READ_MS (10 s), then reported UNKNOWN (transcript unread); the cut line is never the report. Its exit code is always 0. A report is written as `<id>.md` (the text) and `<id>.json` (`fleet_report.parse`);
 a one-turn worker (fixer, reviewer, research, layer) is stopped once its status is final.
+`send --brief` resends the brief once when Herdr reports agent_prompt_stalled; a second stall is the error.
 """
 # Complexity notation:
 # n = tasks in the plan, k = tasks in a message, w = workers, m = lines of metrics.jsonl, T = transcript lines, s = screen bytes
@@ -36,6 +37,7 @@ import state  # noqa: E402 | O(1)
 import task as taskmod  # noqa: E402 | O(1)
 import testcmd  # noqa: E402 | O(1)
 
+STALLED = "agent_prompt_stalled"  # the one Herdr prompt error a second send can fix | O(1)
 STATUS_LINE = "Status: DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED"  # O(1)
 FINAL = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "APPROVED", "CHANGES_REQUESTED")  # a one-turn worker with one of these is stopped | O(1)
 SETTLE_MS = 10000  # a stop record must appear within this long after the state change | O(1)
@@ -266,7 +268,13 @@ def send_brief(sd, wid, brief, label=""):  # O(w + len brief path + pool bytes)
     msg = fleet_report.brief_message(w.get("role") or "implementer", str(path))  # O(1)
     label = label or path.stem  # O(1)
     sent = now_ms()  # O(1)
-    hc.prompt(fs.name_of(sd, wid, w), msg, ["working"], 15000)  # O(len msg)
+    name = fs.name_of(sd, wid, w)  # O(w)
+    try:  # O(1)
+        hc.prompt(name, msg, ["working"], 15000)  # O(len msg)
+    except hc.HerdrError as e:  # O(1)
+        if getattr(e, "code", "") != STALLED:  # a stall is the one error a second send can fix | O(1)
+            raise  # O(1)
+        hc.prompt(name, msg, ["working"], 15000)  # resent once; a second stall propagates, the worker stays ready | O(len msg)
     _busy(sd, wid, label, sent)  # O(w + pool bytes)
     pane_label(sd, wid, f"{wid} {label}")  # O(w)
     print(f"{wid} {label} sent")  # O(1)
