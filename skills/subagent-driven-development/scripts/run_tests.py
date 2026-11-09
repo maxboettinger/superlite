@@ -14,7 +14,7 @@ Prints `passed failed skipped seconds` (errors count as failed). Each failing
 test becomes a `test-failure` incident; on a --full run each test file whose
 tests all pass becomes a `verified` incident (once per distinct entry). With `--task Tn` each
 `test-failure` incident carries `task`, and a later run closes that task's open ones whose test
-now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a pytest run that produces
+now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a green `--task` run closes that task's `-` failures and re-logs other tasks' open ones there, and a green `--full` run without `--task` closes every run_tests failure (#380); a pytest run that produces
 no results logs one `no-result` incident (so does a non-Python run that prints no test count: `no tests ran:`). A `--fast` path that does not exist (node suffix `::` ignored) is a usage error: exit 2, `test path not found`, no incident. A Node project without `node_modules` is refused the same way
 (exit 2, `node_modules missing in <dir>: run <install> first`, no incident); in an isolated `--task` tree the root's and each workspace package's `node_modules` are symlinked in first (relative link, no setup command), and the guard checks the tree. Appends
 a `tests` line to the progress ledger. On every run it also writes
@@ -38,6 +38,8 @@ A green --full run (not --task, not --fast, not --record) in a git toplevel hold
 unit layer green (`run_tests: unit layer stamped`), from digests taken before the run, so a file changed during it stays stale; a stamp
 error prints `run_tests: unit layer not stamped: <err>` and never changes the exit code. `--record` never stamps.
 Every test subprocess (pytest, a test-cmd.json command and its setup) gets the environment without `SUPERLITE_FLEET_*` variables (a fleet pane's worker, role and parent dir); a test-cmd.json `env` entry still applies on top.
+A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is refused before the run (exit 2, `test-cmd.json uses {only_testing}, the Xcode (Swift) placeholder, ...`, no incident; `--background` refuses in the parent).
+`--wait` ends with a stderr summary line (`tests (full): P passed, F failed`), looks once more at its deadline, and on a timeout names the live pid and the rerun command; a runner's output goes to temp files, so a child left running cannot hold the run.
 Stdlib only.
 """
 # Complexity notation:
@@ -68,7 +70,7 @@ import trees  # noqa: E402  # O(1) module load
 
 DEFAULT_SUMMARY = ".superlite/test-summary.json"  # O(1)
 POLL_SECONDS = 0.5  # O(1)
-DEFAULT_WAIT = 600.0  # O(1)
+DEFAULT_WAIT = 540.0  # O(1)
 WRITTEN = set()  # resolved summary paths this process wrote; main clears it | O(1)
 
 
@@ -154,6 +156,21 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
     return 0  # O(1)
 
 
+def pid_alive(mine):  # O(1) True when the pid recorded for a background run is a live process, False when gone or unknown (never claim a dead pid runs)
+    if os.name == "nt":  # O(1) no cheap liveness probe: say nothing
+        return False  # O(1)
+    try:  # O(1)
+        pid = int(mine.with_suffix(".pid").read_text(encoding="utf-8").strip())  # O(1)
+        if pid <= 0:  # O(1)
+            return False  # O(1)
+        os.kill(pid, 0)  # O(1)
+    except PermissionError:  # exists, owned by another user | O(1)
+        return True  # O(1)
+    except (OSError, ValueError):  # O(1)
+        return False  # O(1)
+    return True  # O(1)
+
+
 def wait_line(path):  # O(1)
     sl = str(Path(__file__).resolve().with_name("sl"))  # O(1) absolute: shell variables do not persist between calls
     return f'wait: {json.dumps(sl) if " " in sl else sl} run_tests --wait {path}'  # O(1)
@@ -181,20 +198,35 @@ def pid_gone(mine):  # O(1) the pid recorded for a background run, when that pro
     return None  # O(1)
 
 
+def summary_line(data):  # the last line of --wait: counts, mode and error | O(1)
+    head = f"tests ({data['mode']})" if data.get("mode") else "tests"  # O(1)
+    out = f"{head}: {data.get('passed', 0)} passed, {data.get('failed', 0)} failed"  # O(1)
+    if data.get("skipped", 0) > 0:  # O(1)
+        out += f", {data['skipped']} skipped"  # O(1)
+    if data.get("error"):  # O(1)
+        out += f"; error: {str(data['error'])[:150]}"  # O(1)
+    return out  # O(1)
+
+
+def read_summary(mine):  # the summary, or None when missing or half-written | O(summary size)
+    try:  # O(1)
+        return json.loads(mine.read_text(encoding="utf-8"))  # O(summary size)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+
+
 def wait_background(a):  # O(timeout / POLL_SECONDS) polls
     mine = wait_target(a)  # O(1)
     if mine is None:  # O(1)
         print("run_tests: no background run to wait for", file=sys.stderr)  # O(1)
         return 2  # O(1)
-    deadline = time.monotonic() + (a.timeout if a.timeout is not None else DEFAULT_WAIT)  # O(1)
+    limit = a.timeout if a.timeout is not None else DEFAULT_WAIT  # O(1)
+    deadline = time.monotonic() + limit  # O(1)
     while True:  # O(timeout / POLL_SECONDS) iterations
-        if mine.exists():  # O(1)
-            try:  # O(1)
-                data = json.loads(mine.read_text(encoding="utf-8"))  # O(summary size)
-                break  # O(1)
-            except (OSError, ValueError):  # O(1) half-written (non-atomic fs): retry
-                pass  # O(1)
-        dead = pid_gone(mine) if not mine.exists() else None  # O(1)
+        data = read_summary(mine)  # missing or half-written (non-atomic fs): not yet | O(summary size)
+        if data is not None:  # O(1)
+            break  # O(1)
+        dead = pid_gone(mine)  # O(1)
         if dead is not None and not mine.exists():  # one more look: the child may have written it just before exiting | O(1)
             reason = f"background run ended without a summary (pid {dead}); log {mine.with_suffix('.log')}"  # O(1)
             print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
@@ -205,10 +237,22 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
                 atomic_write(a.summary, mine.read_text(encoding="utf-8"))  # O(summary size)
             break  # O(1)
         if time.monotonic() >= deadline:  # O(1)
+            data = read_summary(mine)  # a last look: the run may have finished during the final poll | O(summary size)
+            if data is not None:  # O(1)
+                break  # O(1)
             print(f"run_tests: timed out waiting for {mine}; log {mine.with_suffix('.log')}", file=sys.stderr)  # O(1)
+            pid = None  # O(1)
+            try:  # a live pid recorded for the run | O(1)
+                pid = int(mine.with_suffix(".pid").read_text(encoding="utf-8").strip())  # O(1)
+            except (OSError, ValueError):  # O(1)
+                pass  # O(1)
+            alive = f" (pid {pid} still running)" if pid and pid > 0 and pid_alive(mine) else ""  # O(1)
+            print(f"tests: no result yet after {limit:g} s{alive}; run again: {wait_line(mine)[len('wait: '):]}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         time.sleep(POLL_SECONDS)  # O(1)
     print(json.dumps(data, ensure_ascii=False, indent=1))  # O(summary size)
+    sys.stdout.flush()  # O(1)
+    print(summary_line(data), file=sys.stderr)  # O(1)
     green = not data.get("failed") and bool(data.get("passed") or data.get("skipped"))  # O(1)
     return 0 if green else 1  # O(1)
 
@@ -352,7 +396,7 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
             "skipped_tests": counts["skipped_tests"],  # O(1)
             "files": {k: list(v) for k, v in (files or {}).items()}}  # O(F)
     if error:  # a crashed run says so, so the packet never reads it as a test run (#81) | O(1)
-        data["error"] = error[:200]  # O(1)
+        data["error"] = error[:400]  # the placeholder refusal is longer than 200 chars | O(1)
     if started is not None:  # the packet closes only incidents logged before this run started (#101) | O(1)
         data["started"] = started  # O(1)
     p = Path(path)  # O(1)
@@ -363,11 +407,12 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
     tmp.replace(p)  # O(1) rename
 
 
-def add_incidents(log, items, task=None, extra=None):  # O(total c) + one locked append (no spawn in process)
+def add_incidents(log, items, task=None, extra=None, raw=None):  # O(total c) + one locked append (no spawn in process)
     """items: (file, line, context, kind, resolution). A --task run stamps `task` on each entry; `extra` (a dict) is merged
     into every entry after `kind` and `task`; a kind outside
     incident.KINDS (`no-result`) is set after make_entry, as the hooks write theirs. Never spawns `incident add`,
-    which takes neither `task` nor `no-result` (SUPERLITE_SL swaps only the launcher)."""
+    which takes neither `task` nor `no-result` (SUPERLITE_SL swaps only the launcher). `raw`: dicts appended unchanged after the built
+    entries in the same append."""
     # always in process, also with SUPERLITE_SL: the spawned `incident add` takes neither task nor `no-result` | O(1)
     inc = nt.sibling("incident")  # O(1)
     entries = []  # O(1)
@@ -384,6 +429,7 @@ def add_incidents(log, items, task=None, extra=None):  # O(total c) + one locked
         if extra:  # O(1)
             e.update(extra)  # O(1)
         entries.append(e)  # O(1)
+    entries.extend(raw or [])  # O(r)
     try:  # O(1)
         inc.append(log, entries)  # O(total c) one locked write
     except OSError as err:  # O(1)
@@ -418,14 +464,16 @@ def record_no_result(a, reason, command, rc, lines, tree=None):  # O(L + c) log 
     add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task, extra)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
 
 
-def resolve_passed(log, task, failures, files):  # O(B + I + k) read the log once, one append (#180)
-    """Close `task`'s open test-failure incidents whose file ran in this run and whose test no longer fails:
-    the entry `sl incident resolve` writes (kind of the open entry, resolution `fixed`, ruling as context)."""
+def resolve_passed(log, task, failures, files, green=False, full=False, started=None):  # O(B + I + k) read the log once, one append (#180, #380)
+    """Close open test-failure incidents logged before this run: a --task run closes its tests that pass now (`fixed: passed on a later run`);
+    a green --task run also closes that task's `-` failures (`fixed: a green <task> run`) and re-logs other tasks' open ones there, so a sibling's red stays open; a green --full run without --task closes every
+    run_tests failure (`fixed: the full suite passed`). The entry is what `sl incident resolve` writes (kind of the open entry, resolution `fixed`)."""
     p = Path(log)  # O(1)
-    if not task or not files or not p.exists():  # O(1)
+    if not p.exists() or not (task and files or green and (task or full)):  # O(1)
         return  # O(1)
     resolved = nt.sibling("pt_review").RESOLVED  # the resolutions the packet counts as closed; lazy | O(module)
     newest = {}  # location -> its newest non-verified entry, as the packet and `finish` count open | O(1)
+    stretch = {}  # `-` location -> its non-verified entries after its last resolved one, in log order | O(1)
     for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():  # O(I) iterations; read O(B)
         try:  # O(1)
             e = json.loads(ln)  # O(w)
@@ -433,15 +481,42 @@ def resolve_passed(log, task, failures, files):  # O(B + I + k) read the log onc
             continue  # O(1)
         if isinstance(e, dict) and "file" in e and "line" in e and e.get("kind") != "verified":  # O(1)
             newest[(e["file"], e["line"])] = e  # O(1)
+            if e["file"] == "-":  # O(1)
+                if str(e.get("resolution", "")).lower() in resolved:  # O(1)
+                    stretch.pop((e["file"], e["line"]), None)  # O(1)
+                else:  # O(1)
+                    stretch.setdefault((e["file"], e["line"]), []).append(e)  # O(1)
     norm = lambda x: str(x).replace("\\", "/")  # noqa: E731 | O(len)
     ran = {norm(f) for f, (ok, _bad) in files.items() if ok}  # a file with no passing test (a collection error) closes nothing (#196) | O(F)
     failing = {(norm(f), ctx.split(": ", 1)[0]) for f, _line, ctx in failures}  # (file, test name) still red | O(k)
-    items = [(f, line, "fixed: passed on a later run", "test-failure", "fixed")  # O(1) each
-             for (f, line), e in newest.items()  # O(I) iterations
-             if e.get("kind") == "test-failure" and e.get("task") == task  # O(1)
-             and str(e.get("resolution", "")).lower() not in resolved  # O(1)
-             and norm(f) in ran and (norm(f), str(e.get("context", "")).split(": ", 1)[0]) not in failing]  # O(len)
-    add_incidents(log, items, task)  # O(total c) one append
+
+    def before(e):  # O(1) logged before this run started
+        ep = e.get("epoch")  # O(1)
+        return started is None or isinstance(ep, bool) or not isinstance(ep, (int, float)) or ep < started  # O(1)
+
+    def context(f, e):  # O(len) the closing context for the entry, or None to keep it open
+        if e.get("kind") != "test-failure" or str(e.get("resolution", "")).lower() in resolved or not before(e):  # no rule closes an entry logged at or after this run's start | O(1)
+            return None  # O(1)
+        if task and e.get("task") == task and norm(f) in ran and (norm(f), str(e.get("context", "")).split(": ", 1)[0]) not in failing:  # O(len)
+            return "fixed: passed on a later run"  # O(1)
+        if not task and green and full and e.get("agent") == "run_tests":  # O(1)
+            return "fixed: the full suite passed"  # O(1)
+        return None  # O(1)
+
+    items = [(f, line, c, "test-failure", "fixed") for (f, line), e in newest.items() if (c := context(f, e))]  # O(I)
+    raw = []  # O(1)
+    if task and green:  # O(1)
+        for (f, line), ents in stretch.items():  # O(I)
+            closable = [e for e in ents if e.get("kind") == "test-failure" and e.get("task") == task and before(e)]  # O(len)
+            keep = [e for e in ents if not (e.get("kind") == "test-failure" and e.get("task") == task and before(e))]  # O(len)
+            if not closable or any(e.get("kind") != "test-failure" for e in keep):  # a re-logged stop would be counted twice | O(len)
+                continue  # O(1)
+            items.append((f, line, f"fixed: a green {task} run", "test-failure", "fixed"))  # O(1)
+            last = {}  # (task, context) -> index of its newest kept entry | O(1)
+            for i, e in enumerate(keep):  # O(len)
+                last[(e.get("task"), e.get("context"))] = i  # O(1)
+            raw.extend(keep[i] for i in sorted(last.values()))  # exact copies, log order | O(len log len)
+    add_incidents(log, items, task, raw=raw)  # O(total c) one append
 
 
 def missing_fast_paths(paths):  # O(p) the --fast paths that do not exist (a `::node` suffix is dropped)
@@ -534,6 +609,47 @@ def link_node_modules(root, tree, spec):  # O(F log F) link the root's and each 
     return changed  # O(1)
 
 
+def has_swift(root):  # does the git tree (tracked or untracked, not ignored) hold Swift sources or an Xcode project; None when git cannot say | O(files)
+    try:  # O(1)
+        r = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=off", "ls-files", "-co", "--exclude-standard", "--",  # O(files)
+                            "*.swift", "*.xcodeproj/*", "*.xcworkspace/*"], capture_output=True, text=True, timeout=30)  # O(1)
+    except (OSError, subprocess.SubprocessError):  # O(1)
+        return None  # O(1)
+    if r.returncode != 0:  # O(1)
+        return None  # O(1)
+    return bool(r.stdout.strip())  # O(1)
+
+
+def placeholder_line(root, spec):  # the refusal text for a test-cmd.json {only_testing} placeholder in a project without Swift files, else None | O(m + f)
+    if not spec or spec.get("python") or spec.get("source") != "test-cmd.json":  # O(1)
+        return None  # O(1)
+    root = Path(root)  # O(1)
+    cfg = testcmd.read_config(root) or testcmd.main_checkout_config(root)  # O(file)
+    if not isinstance(cfg, dict) or not any(isinstance(cfg.get(k), str) and "{only_testing}" in cfg[k] for k in ("test", "test_file")):  # O(1)
+        return None  # O(1)
+    if has_swift(root) is not False:  # O(files)
+        return None  # O(1)
+    where = ".superlite/test-cmd.json" if (root / ".superlite" / "test-cmd.json").is_file() else "the main checkout's .superlite/test-cmd.json"  # O(1)
+    det = testcmd.detect(root)  # O(m + f)
+    head = "test-cmd.json uses {only_testing}, the Xcode (Swift) placeholder, but this"  # O(1)
+    if not det:  # O(1)
+        return f"{head} project has no Swift files: in {where} use {{files}}"  # O(1)
+    lang = det["language"]  # O(1)
+    if lang == "python":  # O(1)
+        return (f"{head} python project has no Swift files: in {where} write the python form {{files}} "  # O(1)
+                '(e.g. "test_file": "python -m pytest {files}"), or delete that file so run_tests runs pytest itself')
+    return f'{head} {lang} project has no Swift files: in {where} write the {lang} form {{files}} (e.g. "test_file": "{det["test_file"]}")'  # O(1)
+
+
+def run_captured(cmd, **kw):  # run_tree with both outputs in temp files, so a leftover child holding a pipe cannot block the run | O(o) + the run
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:  # O(1)
+        r = pyrun.run_tree(cmd, stdout=out, stderr=err, **kw)  # O(1) + the run
+        out.seek(0)  # O(1)
+        err.seek(0)  # O(1)
+        return subprocess.CompletedProcess(cmd, r.returncode, out.read().decode("utf-8", errors="replace"),  # O(o)
+                                           err.read().decode("utf-8", errors="replace"))  # O(o)
+
+
 def usage_error(a, label, reason):  # O(summary size) a usage error: stderr, zero summary, exit 2
     print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
     write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
@@ -616,6 +732,13 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     if a.wait_path is not None:  # O(1)
         return wait_background(a)  # O(timeout / POLL_SECONDS)
     if a.background:  # O(1)
+        try:  # a crash in resolve never breaks today's background start | O(1)
+            gate = placeholder_line(Path.cwd(), testcmd.resolve(".", ()))  # O(m + f)
+        except Exception:  # O(1)
+            gate = None  # O(1)
+        if gate:  # refused in the parent: nothing spawned, no summary | O(1)
+            print(f"run_tests: {gate}", file=sys.stderr)  # O(1)
+            return 2  # O(1)
         if not a.fast:  # a Node project without node_modules is refused here too | O(m + f)
             try:  # a crash in resolve never breaks today's background start | O(1)
                 node_gone = node_install_line(Path.cwd(), testcmd.resolve(".", ()))  # O(m + f)
@@ -710,11 +833,11 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
                 stale.unlink()  # O(1)
         marker = Path(cwd) / ".superlite-setup.done" if cwd else Path(".superlite") / "setup.done"  # setup runs once per run directory (per tree) | O(1)
         if spec["setup"] and not marker.exists():  # O(1)
-            pyrun.run_tree(sub(spec["setup"]), shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=cwd)  # O(o)
+            run_captured(sub(spec["setup"]), shell=True, env=env, cwd=cwd)  # O(o)
             marker.parent.mkdir(parents=True, exist_ok=True)  # O(1)
             marker.write_text("ok\n", encoding="utf-8")  # O(1)
         t0 = time.monotonic()  # O(1)
-        r = pyrun.run_tree(sub(spec["command"]), shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=cwd)  # O(o) + the run
+        r = run_captured(sub(spec["command"]), shell=True, env=env, cwd=cwd)  # O(o) + the run
         seconds = time.monotonic() - t0  # O(1)
         text = (r.stdout or "") + (r.stderr or "")  # O(o)
         if alt and not literal.exists():  # O(1)
@@ -795,6 +918,9 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         publish_summary(a)  # O(summary size)
         print("0 0 0 0.0")  # O(1)
         return 2  # O(1)
+    gate = placeholder_line(Path("."), spec)  # O(m + f)
+    if gate:  # a Swift placeholder in a project without Swift files: exit 2, no incident | O(1)
+        return usage_error(a, label, gate)  # O(summary size)
     if not spec["python"]:  # a configured `test` command may narrow the suite: it never stamps the unit layer | O(1)
         a.unit_snap = None  # O(1)
     node_gone = node_install_line(Path.cwd(), spec)  # O(m + f)
@@ -841,8 +967,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), "-q", "-p", "no:cacheprovider",  # O(p)
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
         t0 = time.monotonic()  # O(1)
-        r = pyrun.run_tree(cmd, capture_output=True, text=True, encoding="utf-8",  # O(O) + process spawn (pytest run time dominates)
-                           errors="replace", env=child_env())  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
+        r = run_captured(cmd, env=child_env())  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
         seconds = time.monotonic() - t0  # O(1)
         has_xml = xml_path.exists() and xml_path.stat().st_size > 0  # O(1)
         parsed = collection_report(xml_path) if r.returncode == 2 and has_xml else None  # a collection error stops pytest with exit 2 (#196) | O(X + T*d)
@@ -908,7 +1033,7 @@ def finish_run(a, label, counts, failures, files, seconds, returncode):  # O(k +
             if ok and not bad and (f, ctx) not in seen:  # O(1) set lookup
                 items.append((f, 0, ctx, "verified", None))  # O(1)
     add_incidents(a.log, items, a.task)  # O(k + F) one append
-    resolve_passed(a.log, a.task, failures, files)  # O(B + I + k) a --task run closes its tests that pass now (#180)
+    resolve_passed(a.log, a.task, failures, files, green=not (counts["failed"] or not (counts["passed"] or counts["skipped"])), full=label == "full", started=getattr(a, "started", None))  # O(B + I + k) a green run closes stale failures (#180, #380)
 
     summary = (f"{counts['passed']} {counts['failed']} {counts['skipped']} "  # O(1)
                f"{seconds:.1f}")  # O(1)
