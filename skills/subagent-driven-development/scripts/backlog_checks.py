@@ -33,10 +33,23 @@ def as_batch(q):
     return q
 
 
-def _cut(v: str, hi: int) -> str:
+def _word(v: str, hi: int) -> str:
+    """v cut to at most hi characters at its last blank, trailing blanks and ,;:- dropped (#370).
+
+    A first word longer than hi, or a cut that would leave only those characters, falls back to the plain cut."""
+    head = v[:hi]  # O(hi)
+    if len(v) > hi and not v[hi].isspace():  # O(1) the cut falls inside a word
+        m = re.search(r"\s\S*\Z", head)  # O(hi) the last blank
+        if m and head[:m.start()].strip():  # O(hi)
+            head = head[:m.start()]  # O(hi)
+    return head.rstrip(" \t\n,;:-") or v[:hi].rstrip()  # O(hi)
+
+
+def _cut(v: str, hi: int, word: bool = False) -> str:
+    cut = _word if word else (lambda s, n: s[:n].rstrip())  # O(1)
     if v.endswith(REC) and hi > len(REC):  # O(len)
-        return v[:len(v) - len(REC)][:hi - len(REC)].rstrip() + REC
-    return v[:hi].rstrip()
+        return cut(v[:len(v) - len(REC)], hi - len(REC)) + REC  # O(hi)
+    return cut(v, hi)  # O(hi)
 
 
 def _fit(holder: dict, key: str, hi: int, name: str, what: str, notes: list) -> None:
@@ -49,11 +62,27 @@ def _fit(holder: dict, key: str, hi: int, name: str, what: str, notes: list) -> 
         notes.append(f'"{name}" {what}: {len(v)} -> {len(c)} characters')
 
 
+def _fit_label(o: dict, name: str, what: str, notes: list) -> None:
+    """Cut an over-long option label (60) at its last whole word; its full text, without the ` (Recommended)` suffix, goes in front of the description (#370)."""
+    v = o.get("label")
+    if not isinstance(v, str) or len(v) <= 60:  # O(1)
+        return
+    c = _cut(v, 60, word=True)  # O(len)
+    if not c.strip():  # O(len)
+        return
+    o["label"] = c
+    full = (v[:len(v) - len(REC)] if v.endswith(REC) else v).strip()  # O(len)
+    d = o.get("description")
+    if full and (d is None or isinstance(d, str)):  # O(1) a non-string description stays for check_question to refuse
+        rest = (d or "").lstrip()  # O(len)
+        o["description"] = full + (("" if full[-1] in ".!?:" else ".") + " " + rest if rest.strip() else "")  # O(len)
+    notes.append(f'"{name}" {what}: {len(v)} -> {len(c)} characters')
+
+
 def fit_question(q: object, question: bool = False) -> list[str]:
     """Cut an over-long question (300, only with question=True), header (12), option label (60) and option description (200) of a question batch in place.
 
-    q is {"questions": [...]} or a bare question object (cut in the caller's dict). Returns one note per cut. A label
-    ending in " (Recommended)" keeps that suffix. A cut that would leave only blanks is not made. The question text is
+    q is {"questions": [...]} or a bare question object (cut in the caller's dict). Returns one note per cut. An over-long label is cut at its last whole word (a " (Recommended)" suffix kept) and its full text goes in front of its description, which is then cut to 200. A cut that would leave only blanks is not made. The question text is
     cut only with question=True, which plan uses; a lead's question keeps its text because main answers it by that
     text. Every other error, and every unknown key, is left alone for check_question."""
     notes: list[str] = []
@@ -69,7 +98,7 @@ def fit_question(q: object, question: bool = False) -> list[str]:
         opts = e.get("options")
         for n, o in enumerate(opts if isinstance(opts, list) else [], 1):
             if isinstance(o, dict):
-                _fit(o, "label", 60, name, f"option {n} label", notes)
+                _fit_label(o, name, f"option {n} label", notes)
                 _fit(o, "description", 200, name, f"option {n} description", notes)
     return notes
 
@@ -85,7 +114,7 @@ def cut_lines(notes: list[str], prefix: str = "") -> list[str]:
 def fit_proposal(obj: object) -> list[str]:
     """Cut an over-long question (300), header (12), option label (60) and option description (200) in place; return one note per cut.
 
-    Uses fit_question(question=True) for every decision. A label ending in " (Recommended)" keeps that suffix. A cut that would leave
+    Uses fit_question(question=True) for every decision. An over-long label is cut at its last whole word (a " (Recommended)" suffix kept) and its full text goes in front of its description, which is then cut to 200. A cut that would leave
     only blanks is not made. Every other error, and every unknown key, is left alone for check_proposal."""
     notes: list[str] = []
     batches = obj.get("batches") if isinstance(obj, dict) else None

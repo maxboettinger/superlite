@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, park <batch> --reason R; start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); start|wait|answer and ship are routed."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -256,6 +256,16 @@ def _read_proposal(f: str):
     return o, None
 
 
+RESET_HINT = "; sl backlog plan --reset drops them and plans every open issue again (shipped batches stay)"  # O(1) #369
+BUSY_HINT = "; --reset is refused too while a batch is running or needs_decision"  # O(1) #369
+
+
+def open_refusal(open_: list, busy: list) -> str:
+    """The plan refusal while batches are open; it names --reset only when only planned or parked batches block (#369)."""
+    head = "BLOCKED: backlog has open batches (" + ", ".join(f"{b['id']} {b['state']}" for b in open_) + ")"  # O(b)
+    return head + (BUSY_HINT if busy else RESET_HINT)  # O(1)
+
+
 def cmd_plan(a) -> int:
     import backlog_checks as bc  # O(1)
     import backlog_state as bs  # O(1)
@@ -264,8 +274,9 @@ def cmd_plan(a) -> int:
     sd, p = root / ".superlite", bs.path(root)
     d = bs.load(p)
     open_ = [b for b in d["batches"] if b["state"] != "shipped"]
-    if open_ and (not a.reset or any(b["state"] in ("running", "needs_decision") for b in open_)):
-        print("BLOCKED: backlog has open batches (" + ", ".join(f"{b['id']} {b['state']}" for b in open_) + ")")
+    busy = [b for b in open_ if b["state"] in ("running", "needs_decision")]  # O(b) --reset never drops these
+    if open_ and (not a.reset or busy):  # O(1)
+        print(open_refusal(open_, busy))  # O(b)
         return 2
     prop = None
     if proposal is not None:
@@ -436,8 +447,12 @@ def cmd_park(a) -> int:
 
 def cmd_status(a) -> int:
     import backlog_state as bs  # O(1)
-    print("\n".join(bs.status_lines(bs.load(bs.path(_root())))))
-    return 0
+    d = bs.load(bs.path(_root()))  # O(size)
+    lines = bs.status_lines(d)  # O(b)
+    if all(b["state"] == "shipped" for b in d["batches"]):  # O(b) no batch yet, or every batch shipped (#369)
+        lines.append("next: sl backlog plan")  # O(1)
+    print("\n".join(lines))  # O(lines)
+    return 0  # O(1)
 
 
 def _issue_arg(s: str):
@@ -462,7 +477,8 @@ def main(argv=None) -> int:
     pl = sub.add_parser("plan")
     pl.add_argument("--tier", default="sonnet")
     pl.add_argument("--timeout-min", type=int, default=60)
-    pl.add_argument("--reset", action="store_true")
+    pl.add_argument("--reset", action="store_true", help="drop the planned and parked batches and plan every open issue again; "
+                    "shipped batches stay; refused while a batch is running or needs_decision")  # O(1) #369
     pl.add_argument("--proposal", metavar="FILE")
     src = pl.add_mutually_exclusive_group()
     src.add_argument("--jql", metavar="QUERY")

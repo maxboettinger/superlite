@@ -105,8 +105,10 @@ def triage_brief(issues, ctx):  # O(i)
     out.append("Rules: no two batches share a file unless one depends on the other; list every repo-relative file a batch "
                "touches (at least one file per batch); depends names batches that must ship first; decisions lists each batch's major decisions, one "
                "AskUserQuestion call object {\"questions\": [...]} per decision (1 to 4 distinct questions per decision, question at most 300 characters, "
-               "header at most 12 characters, 2 to 4 options with distinct labels, option label at most 60 characters, "
-               "description at most 200 characters; an over-long header, label or description is cut to its limit, "
+               "header at most 12 characters, 2 to 4 options with distinct labels, option label at most 60 characters "
+               "including a ` (Recommended)` suffix, description at most 200 characters; an over-long header, label or "
+               "description is cut to its limit (a label at its last whole word, its full text moved to the front of its "
+               "description), "
                "any other violation rejects the whole proposal), "
                "recommended option first. Leave umbrella and tracking issues (whose acceptance is the run itself or other issues) "
                "out of every batch.")  # O(1)
