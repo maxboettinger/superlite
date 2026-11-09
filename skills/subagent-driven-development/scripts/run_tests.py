@@ -8,7 +8,7 @@
 
 Every exit path leaves a summary: a usage error, an unknown task, a missing pytest, an unprepared tree or a crash (`run_tests crashed: ...`, exit 2) writes a red zero summary; `--wait` names a background run whose process died (its pid sits in `<summary>.pid`) and the log of one that timed out.
 A no-result stop keeps its command, exit and output in `.superlite/no-result-*.log` (newest 20) and its incident carries them as `target`, `command`, `exit`, `log`.
-An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change, a `--full` tree the task's own files.
+An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change except files owned by unfinished sibling tasks (kept at base, named on the line), a `--full` tree the task's own files.
 
 Prints `passed failed skipped seconds` (errors count as failed). Each failing
 test becomes a `test-failure` incident; on a --full run each test file whose
@@ -804,11 +804,15 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             if a.task not in info:  # O(1)
                 return usage_error(a, label, f"unknown task {a.task} in {plan}")  # O(summary size)
             ct.add_also_owns(info, a.ledger)  # --also and --claim rulings own their files too (#239) | O(c + o)
+            held = {}  # O(1)
             try:  # O(1)
-                tree = trees.prepare(".", a.task, ["**/*"] if paths else info[a.task]["owns"])  # a --fast run tests every working-tree change, a --full run the task's own files | O(f * o) + git checkout
+                if paths:  # a --fast run tests every working-tree change except the files of unfinished siblings | O(1)
+                    overlay, kept = fast_overlay(".", a.task, info, a.ledger)  # O(f * T * o)
+                    held = {p: unfinished_owners(p, a.task, info, a.ledger) for p in kept}  # O(f * T * o)
+                tree = trees.prepare(".", a.task, overlay if paths else info[a.task]["owns"])  # a --full run tests the task's own files | O(f * o) + git checkout
             except (RuntimeError, OSError) as err:  # O(1)
                 return usage_error(a, label, f"isolated tree for {a.task} not prepared: {err}")  # O(summary size)
-            announce_tree(tree, a.task, bool(paths))  # O(f)
+            announce_tree(tree, a.task, bool(paths), held)  # O(f)
             link_node_modules(Path.cwd(), tree, spec)  # O(d)
             tree_gone = node_install_line(tree, spec)  # a tree without node_modules fails like the root | O(m + f)
             if tree_gone:  # O(1)
@@ -844,7 +848,22 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
 
 
-def announce_tree(tree, task, fast):  # O(f) name the isolated tree and how many files it overlays on stderr
+def unfinished_owners(path, task, info, ledger):  # O(T * o) the other uncommitted plan tasks owning path; [] when task owns it too
+    if nt.owns_match(path, info[task]["owns"]):  # O(o)
+        return []  # O(1)
+    done = ct.committed_tasks(ledger)  # O(c)
+    return sorted(t for t in info if t != task and t not in done and nt.owns_match(path, info[t]["owns"]))  # O(T * o)
+
+
+def fast_overlay(root, task, info, ledger):  # O(f * T * o) + two spawns: (paths to overlay, paths kept at base), both sorted
+    copy, delete = trees.own_changes(root, trees.base_commit(root), ["**/*"])  # O(f)
+    overlay, held = [], []  # O(1)
+    for p in sorted(set(copy) | set(delete)):  # O(f log f)
+        (held if unfinished_owners(p, task, info, ledger) else overlay).append(p)  # O(T * o)
+    return overlay, held  # O(1)
+
+
+def announce_tree(tree, task, fast, held=None):  # O(f) name the isolated tree and how many files it overlays on stderr
     try:  # O(1)
         n = len(json.loads(trees.overlay_file(".", task).read_text(encoding="utf-8")))  # O(f)
     except (OSError, ValueError, TypeError):  # an unreadable overlay counts 0 | O(1)
@@ -854,7 +873,11 @@ def announce_tree(tree, task, fast):  # O(f) name the isolated tree and how many
     except ValueError:  # O(1)
         rel = Path(tree).as_posix()  # O(1)
     what = "all working-tree changes (--fast)" if fast else f"{task}'s own changes"  # O(1)
-    print(f"run_tests: tree {rel} = base + {what}: {n} file{'' if n == 1 else 's'}", file=sys.stderr)  # O(1)
+    kept = ""  # O(1)
+    if held:  # O(1)
+        ids = sorted({t for owners in held.values() for t in owners})  # O(f)
+        kept = f"; kept at base: {len(held)} file{'' if len(held) == 1 else 's'} of unfinished {' '.join(ids)}"  # O(1)
+    print(f"run_tests: tree {rel} = base + {what}: {n} file{'' if n == 1 else 's'}{kept}", file=sys.stderr)  # O(1)
 
 
 def finish_run(a, label, counts, failures, files, seconds, returncode):  # O(k + F + B) one incident append
