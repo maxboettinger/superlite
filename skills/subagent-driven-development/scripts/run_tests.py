@@ -14,7 +14,7 @@ Prints `passed failed skipped seconds` (errors count as failed). Each failing
 test becomes a `test-failure` incident; on a --full run each test file whose
 tests all pass becomes a `verified` incident (once per distinct entry). With `--task Tn` each
 `test-failure` incident carries `task`, and a later run closes that task's open ones whose test
-now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a pytest run that produces
+now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a green `--task` run also closes that task's `-` failures and a green `--full` run without `--task` closes every run_tests failure (#380); a pytest run that produces
 no results logs one `no-result` incident (so does a non-Python run that prints no test count: `no tests ran:`). A `--fast` path that does not exist (node suffix `::` ignored) is a usage error: exit 2, `test path not found`, no incident. A Node project without `node_modules` is refused the same way
 (exit 2, `node_modules missing in <dir>: run <install> first`, no incident); in an isolated `--task` tree the root's and each workspace package's `node_modules` are symlinked in first (relative link, no setup command), and the guard checks the tree. Appends
 a `tests` line to the progress ledger. On every run it also writes
@@ -447,11 +447,12 @@ def record_no_result(a, reason, command, rc, lines, tree=None):  # O(L + c) log 
     add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task, extra)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
 
 
-def resolve_passed(log, task, failures, files):  # O(B + I + k) read the log once, one append (#180)
-    """Close `task`'s open test-failure incidents whose file ran in this run and whose test no longer fails:
-    the entry `sl incident resolve` writes (kind of the open entry, resolution `fixed`, ruling as context)."""
+def resolve_passed(log, task, failures, files, green=False, full=False, started=None):  # O(B + I + k) read the log once, one append (#180, #380)
+    """Close open test-failure incidents logged before this run: a --task run closes its tests that pass now (`fixed: passed on a later run`);
+    a green --task run also closes that task's `-` failures (`fixed: a green <task> run`); a green --full run without --task closes every
+    run_tests failure (`fixed: the full suite passed`). The entry is what `sl incident resolve` writes (kind of the open entry, resolution `fixed`)."""
     p = Path(log)  # O(1)
-    if not task or not files or not p.exists():  # O(1)
+    if not p.exists() or not (task and files or green and (task or full)):  # O(1)
         return  # O(1)
     resolved = nt.sibling("pt_review").RESOLVED  # the resolutions the packet counts as closed; lazy | O(module)
     newest = {}  # location -> its newest non-verified entry, as the packet and `finish` count open | O(1)
@@ -465,11 +466,23 @@ def resolve_passed(log, task, failures, files):  # O(B + I + k) read the log onc
     norm = lambda x: str(x).replace("\\", "/")  # noqa: E731 | O(len)
     ran = {norm(f) for f, (ok, _bad) in files.items() if ok}  # a file with no passing test (a collection error) closes nothing (#196) | O(F)
     failing = {(norm(f), ctx.split(": ", 1)[0]) for f, _line, ctx in failures}  # (file, test name) still red | O(k)
-    items = [(f, line, "fixed: passed on a later run", "test-failure", "fixed")  # O(1) each
-             for (f, line), e in newest.items()  # O(I) iterations
-             if e.get("kind") == "test-failure" and e.get("task") == task  # O(1)
-             and str(e.get("resolution", "")).lower() not in resolved  # O(1)
-             and norm(f) in ran and (norm(f), str(e.get("context", "")).split(": ", 1)[0]) not in failing]  # O(len)
+
+    def before(e):  # O(1) logged before this run started
+        ep = e.get("epoch")  # O(1)
+        return started is None or isinstance(ep, bool) or not isinstance(ep, (int, float)) or ep < started  # O(1)
+
+    def context(f, e):  # O(len) the closing context for the entry, or None to keep it open
+        if e.get("kind") != "test-failure" or str(e.get("resolution", "")).lower() in resolved or not before(e):  # O(1)
+            return None  # O(1)
+        if task and e.get("task") == task and norm(f) in ran and (norm(f), str(e.get("context", "")).split(": ", 1)[0]) not in failing:  # O(len)
+            return "fixed: passed on a later run"  # O(1)
+        if task and green and e.get("task") == task and f == "-":  # O(1)
+            return f"fixed: a green {task} run"  # O(1)
+        if not task and green and full and e.get("agent") == "run_tests":  # O(1)
+            return "fixed: the full suite passed"  # O(1)
+        return None  # O(1)
+
+    items = [(f, line, c, "test-failure", "fixed") for (f, line), e in newest.items() if (c := context(f, e))]  # O(I)
     add_incidents(log, items, task)  # O(total c) one append
 
 
@@ -987,7 +1000,7 @@ def finish_run(a, label, counts, failures, files, seconds, returncode):  # O(k +
             if ok and not bad and (f, ctx) not in seen:  # O(1) set lookup
                 items.append((f, 0, ctx, "verified", None))  # O(1)
     add_incidents(a.log, items, a.task)  # O(k + F) one append
-    resolve_passed(a.log, a.task, failures, files)  # O(B + I + k) a --task run closes its tests that pass now (#180)
+    resolve_passed(a.log, a.task, failures, files, green=not (counts["failed"] or not (counts["passed"] or counts["skipped"])), full=label == "full", started=getattr(a, "started", None))  # O(B + I + k) a green run closes stale failures (#180, #380)
 
     summary = (f"{counts['passed']} {counts['failed']} {counts['skipped']} "  # O(1)
                f"{seconds:.1f}")  # O(1)
