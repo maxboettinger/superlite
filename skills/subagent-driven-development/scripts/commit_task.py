@@ -496,6 +496,16 @@ def committed_owners(path, info, call, done, running):  # O(n*f)
     return [t for t in owners if t in done]  # O(n)
 
 
+def running_shared(files, info, running):  # O(m*n*f)
+    """{file: [task ids]} for each file a running task (one in `info`) owns, ids in plan order; other files are absent."""
+    out = {}  # O(1)
+    for f in files:  # O(m) iterations
+        ids = [t for t, i in info.items() if t in running and nt.owns_match(f, i["owns"])]  # O(n*f)
+        if ids:  # O(1)
+            out[f] = ids  # O(1)
+    return out  # O(1)
+
+
 def others_running(pool_path, tids):  # O(pool bytes)
     """Tasks that busy pool agents are working on, other than `tids`; [] when the pool is missing or unreadable."""
     try:  # O(1)
@@ -607,15 +617,17 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         mine += shared  # O(m)
 
     call = getattr(a, "task", [tid])  # O(1)
-    running = others_running(getattr(a, "pool", None) or state.pool_path(), call) if out_of_scope or theirs else []  # O(pool bytes)
+    pool_path = getattr(a, "pool", None) or state.pool_path()  # O(1)
+    running = others_running(pool_path, call) if theirs or mine else []  # tasks running outside this call | O(pool bytes)
     owned = {f: committed_owners(f, info, call, done, running) for f in theirs}  # O(m*n*f)
     owned = {f: o for f, o in owned.items() if o}  # O(m)
     if owned:  # a file changed after its committed owner's checkpoint: say so (#397) | O(1)
         for f in changed_vs_parent(list(owned)):  # O(m) + process spawns
             note_once(a, f"left uncommitted (owned by {', '.join(owned[f])}, changed after its checkpoint; run commit_task {owned[f][0]}): {f}")  # O(1)
-    if out_of_scope and running:  # a running task's stray file is not this task's block | O(m)
+    running_tid = others_running(pool_path, [tid]) if out_of_scope else []  # a batch agent's in-call sibling counts here | O(pool bytes)
+    if out_of_scope and running_tid:  # a running task's stray file is not this task's block | O(m)
         for f in out_of_scope:  # O(m) iterations
-            note_once(a, f"left uncommitted (another task is running: {', '.join(running)}): {f}")  # O(1)
+            note_once(a, f"left uncommitted (another task is running: {', '.join(running_tid)}): {f}")  # O(1)
         out_of_scope = []  # O(1)
     if out_of_scope:  # O(1)
         base = baseline_dirty(a.plan)  # O(b)
@@ -636,8 +648,22 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         log_incidents(a.log, tid, [(f, 0, f"change outside Owns{why[f]} blocked by commit_task; "  # O(m) one append
                                     "nothing committed") for f in out_of_scope])
         return fail(1, "out-of-scope " + ", ".join(out_of_scope[:5]) + (" ..." if len(out_of_scope) > 5 else ""))  # O(m)
+    held = {}  # file -> running siblings that also own it (#399) | O(1)
+    if running and mine and not (w0 and tid == w0[0]):  # Wave 0 stubs commit while their owner runs; a running sibling's edits in a shared file stay out of this checkpoint | O(1)
+        cand_hold = [f for f in mine if not any(hit(f, e) for e in also)]  # --also entries are never held | O(m*k)
+        shared_run = running_shared(cand_hold, info, running)  # O(m*n*f)
+        if shared_run:  # O(1)
+            diff = set(changed_vs_parent(list(shared_run)))  # O(m) + process spawns
+            held = {f: ids for f, ids in shared_run.items() if f in diff}  # O(m)
+    if held:  # O(1)
+        mine = [f for f in mine if f not in held]  # O(m)
+        sib = [t for t in info if any(t in ids for ids in held.values())]  # plan order | O(n*m)
+        files = ", ".join(sorted(held))  # O(m log m)
+        note_once(a, f"left uncommitted (shared with running {', '.join(sib)}; commit_task {tid} again once it is done): {files}")  # O(1)
     if not mine:  # O(1)
         print(f"nothing to commit for {tid}", file=sys.stderr)  # O(1)
+        if held:  # O(1)
+            return fail(1, f"nothing to commit; held for running {', '.join(sib)}: {files}")  # O(1)
         return fail(1, "nothing to commit")  # O(1)
 
     for f in shared:  # O(m) iterations
