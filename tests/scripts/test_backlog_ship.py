@@ -140,3 +140,41 @@ def test_merge_refuses_a_body_file_that_is_not_utf8_and_keeps_utf8_intact(sh, ca
     pb.write_text("Umlaut ä ✓\n", encoding="utf-8"); sh.replies = {"maxapp ship": (0, "merged #201\n")}
     assert ship(capsys, "B1", "merge")[0] == 0
     assert (sh.sd / "backlog" / "B1.pr-body.md").read_text(encoding="utf-8").startswith("Umlaut ä ✓")
+
+
+LOST = ("refused: this session has no fleet environment (SUPERLITE_FLEET_ROLE and SUPERLITE_FLEET_WORKER unset), as a lead "
+        "resumed after a crash has none, so it cannot ship as lead W1; B1 is parked: end your turn with Status: BLOCKED "
+        "fleet env lost, then main runs sl backlog " + "start B1\n")
+PLAIN = "refused: sl backlog ship B1 runs only in its lead W1\n"
+
+def lose_env(monkeypatch):
+    monkeypatch.delenv("SUPERLITE_FLEET_ROLE"); monkeypatch.delenv("SUPERLITE_FLEET_WORKER")
+
+def test_a_lead_resumed_without_its_fleet_env_parks_its_batch_and_names_start(sh, capsys, monkeypatch):
+    locked(sh, capsys); lose_env(monkeypatch); monkeypatch.chdir(sh.wt / "scripts")
+    assert ship(capsys, "B1", "bump") == (2, LOST) and sh.calls == []
+    x = b1(sh)
+    assert (x["state"], x["reason"], x["parked_at"]) == ("parked", "lead W1 lost its fleet env (resumed after a crash)", 10_000)
+    assert not ship_lock.holder(sh.lock)
+
+def test_lost_env_parks_only_a_running_batch_from_inside_its_worktree(sh, capsys, monkeypatch):
+    lose_env(monkeypatch); monkeypatch.chdir(sh.root)
+    assert ship(capsys, "B1", "lock") == (2, PLAIN) and b1(sh)["state"] == "running"
+    monkeypatch.chdir(sh.wt); monkeypatch.setenv("SUPERLITE_FLEET_WORKER", "W2")
+    assert ship(capsys, "B1", "lock") == (2, PLAIN) and b1(sh)["state"] == "running"
+    monkeypatch.delenv("SUPERLITE_FLEET_WORKER")
+    bs.update(bs.path(sh.root), lambda d: bs.batch(d, "B1").update({"state": "needs_decision"}))
+    assert ship(capsys, "B1", "lock") == (2, PLAIN) and b1(sh)["state"] == "needs_decision"
+
+def test_lost_env_with_a_held_lock_of_another_batch_keeps_that_lock(sh, capsys, monkeypatch):
+    ship_lock.acquire(sh.lock, B2, None, 9_000); lose_env(monkeypatch); monkeypatch.chdir(sh.wt)
+    assert ship(capsys, "B1", "release") == (2, LOST)
+    assert ship_lock.holder(sh.lock)["batch"] == "B2" and b1(sh)["state"] == "parked"
+
+def test_env_lost_needs_both_vars_unset_and_the_worktree_cwd(sh, monkeypatch):
+    b = b1(sh); monkeypatch.chdir(sh.wt)
+    assert not bsh._env_lost(b)
+    lose_env(monkeypatch)
+    assert bsh._env_lost(b) and not bsh._env_lost({**b, "worktree": None}) and not bsh._env_lost({**b, "state": "parked"})
+    monkeypatch.chdir(sh.root)
+    assert not bsh._env_lost(b)

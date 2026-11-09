@@ -12,6 +12,8 @@ description; each cut is reported as `shortened:`); one still invalid is sent ba
 (`question_reprompted`), then parked. A stop record whose transcript lags (blank, or
 without the status its `last` holds) is re-read for fleet_io.READ_MS, then parked "(transcript unread)".
 A lead whose brief Herdr refuses (after send_brief's one resend on a stall) is stopped and its batch keeps its state (BLOCKED line, exit 2).
+A resumed batch's lead brief ends with the worktree state (commits, uncommitted files, answers already given).
+`wait` tells a live lead once when the Herdr panes of its fleet workers stay gone for GONE_MS (a crash), and flags it.
 Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
 """
 # Complexity notation: b = batches, w = workers, m = lines of metrics.jsonl
@@ -39,6 +41,10 @@ QUESTION_FIX = ("superlite: your .superlite/question.json is invalid: {errs}. Li
                 "(an over-long header, label or description is cut for you). Rewrite the file and end your turn with "
                 "Status: NEEDS_DECISION.")
 
+GONE_MS = 30000  # O(1)
+GONE = ("superlite: the Herdr panes of your fleet workers {ids} are gone (a crash?), so their tasks will never report. "
+        "Run `{sl} fleet stop {ids} --plan .superlite`, then dispatch their unfinished tasks again.")
+
 
 def _root() -> Path:
     return bs.main_root(Path.cwd())  # O(1) + spawn
@@ -57,7 +63,60 @@ def _run(cmd, cwd):
 
 
 def _ctrl(s: str) -> bool:
-    return any((ord(c) < 32 and c not in "\n\t") or ord(c) == 127 for c in s)  # O(len)
+    return any(_bad(c) for c in s)  # O(len)
+
+
+def _bad(c: str) -> bool:  # O(1)
+    return (ord(c) < 32 and c not in "\n\t") or ord(c) == 127  # O(1)
+
+
+def _clean(t: str) -> str:  # O(len)
+    return "".join("?" if _bad(c) else c for c in t)[:120]  # O(len)
+
+
+def _resume_state(batch: dict, wt: Path, branch: str) -> list:
+    cut = _clean  # O(1)
+    rc, ref = _run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], wt)  # O(cmd)
+    base = ref.split("/", 1)[1] if rc == 0 and "/" in ref else "main"  # O(1)
+    out = [f"Previous lead {batch['lead']}: parked ({_clean(' '.join(str(batch['reason']).split()))}); its work stays in this worktree. "
+           "Read it before you plan; keep, finish or drop each part on purpose:"]  # O(1)
+    rc, log = _run(["git", "log", "--format=%h %s", f"origin/{base}..HEAD"], wt)  # O(cmd)
+    lines = [cut(x) for x in log.splitlines() if x.strip()] if rc == 0 else []  # O(lines)
+    more = f" (+{len(lines) - 5} more)" if len(lines) > 5 else ""  # O(1)
+    head = f"- Commits on {branch} not on origin/{base}: "  # O(1)
+    out.append(head + (f"{len(lines)}" + (": " + "; ".join(lines[:5]) + more if lines else "") if rc == 0 else "unknown (git log failed)"))  # O(1)
+    rc, st = _run(["git", "status", "--short"], wt)  # O(cmd)
+    files = [cut(x.strip()) for x in st.splitlines() if x.strip()] if rc == 0 else []  # O(lines)
+    more = f" (+{len(files) - 10} more)" if len(files) > 10 else ""  # O(1)
+    out.append("- Uncommitted files: " + (f"{len(files)}" + (": " + ", ".join(files[:10]) + more if files else "") if rc == 0 else "unknown (git status failed)"))  # O(1)
+    names = [x.name for x in sorted((wt / ".superlite").glob("answer-*.json"))]  # O(a log a)
+    if names:  # O(1)
+        out.append(f"- Answers Max gave mid-run: {', '.join(names)} in .superlite/ (also under Max's decisions above; never ask them again)")  # O(a)
+    return out  # O(1)
+
+
+def _gone(p, sd, b: dict, states: dict) -> list:
+    import fleet_io
+    import fleet_state
+    lsd, bid = Path(b["worktree"]) / ".superlite", b["id"]  # O(1)
+    old = b.get("gone_seen") or {}  # O(1)
+    done = list(b.get("gone_workers") or [])  # O(1)
+    now = _now_ms()  # O(1)
+    seen = {}  # O(1)
+    for wid, w in fleet_state.load(lsd).get("workers", {}).items():  # O(w)
+        if w.get("state") in ("stopped", "starting") or w.get("role") == "layer" or wid in done:  # O(1)
+            continue  # O(1)
+        if fleet_state.name_of(lsd, wid, w) not in states:  # O(1)
+            seen[wid] = old.get(wid, now)  # O(1)
+    due = [wid for wid, t in seen.items() if now - t >= GONE_MS]  # O(w)
+    keep = {wid: t for wid, t in seen.items() if wid not in due}  # O(w)
+    if keep != old or due:  # O(1)
+        bs.update(p, lambda d: bs.batch(d, bid).update({"gone_seen": keep, "gone_workers": done + due}))  # O(size)
+    if not due:  # O(1)
+        return []  # O(1)
+    ids = " ".join(due)  # O(w)
+    rc = fleet_io.main(["send", b["lead"], "--text", GONE.format(ids=ids, sl=HERE / "sl"), "--plan", str(sd)])  # O(w)
+    return [f"{bid} worker panes gone: {ids}; lead {b['lead']} " + ("not told (send failed)" if rc else "told")]  # O(1)
 
 
 def _stop(sd, lead):  # O(w)
@@ -155,7 +214,10 @@ def cmd_start(a) -> int:
                "resume": batch["state"] == "parked" and bool(batch.get("worktree"))}  # O(1)
         brief = wt / ".superlite" / "briefs" / "lead.md"  # O(1)
         brief.parent.mkdir(parents=True, exist_ok=True)  # O(1)
-        brief.write_text(backlog_brief.lead_brief(batch, ctx), encoding="utf-8")  # O(size)
+        text = backlog_brief.lead_brief(batch, ctx)  # O(size)
+        if ctx["resume"]:  # O(1)
+            text = text.rstrip("\n") + "\n" + "\n".join(_resume_state(batch, wt, branch)) + "\n"  # O(size) + spawns
+        brief.write_text(text, encoding="utf-8")  # O(size)
         if not fleet_on and not fleet_state.is_on(sd):  # O(w)
             fleet.main(["on", "--plan", str(sd)])  # O(w)
         fleet_on = True  # O(1)
@@ -174,7 +236,8 @@ def cmd_start(a) -> int:
         def mark(d, bid=bid, rec=rec, wt=wt, branch=branch):  # O(b)
             x = bs.batch(d, bid)
             x.update({"state": "running", "lead": rec["id"], "agent": rec["name"], "worktree": str(wt), "branch": branch,
-                      "since": _now_ms(), "reason": "", "ship_runs": 0, "reprompted": False, "question_reprompted": False})
+                      "since": _now_ms(), "reason": "", "ship_runs": 0, "reprompted": False, "question_reprompted": False,
+                      "gone_seen": {}, "gone_workers": []})
         bs.update(p, mark)  # O(size)
         print(f"{bid} running lead={rec['id']} worktree={wt}")  # O(1)
     return code  # O(1)
@@ -260,6 +323,8 @@ def _round(root, sd, p, states) -> list:
                     out.extend(_shipped(p, sd, root, b, wt))  # O(size)
                     continue  # O(1)
                 _park(p, sd, data.get("repo", ""), b, "lead pane gone", out)  # O(size)
+            elif isinstance(states["v"], dict) and b.get("agent") in states["v"] and b.get("worktree"):  # O(1)
+                out.extend(_gone(p, sd, b, states["v"]))  # O(w)
             continue  # O(1)
         q = wt / ".superlite" / "question.json"  # O(1)
         try:  # O(1)

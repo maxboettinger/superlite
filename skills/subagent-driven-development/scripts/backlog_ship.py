@@ -3,6 +3,7 @@
 
 `done --pr N [--version X]` runs in the main session: it records a batch main shipped by hand (PR merged).
 `merge --from-main` runs in the main session: it ships a parked batch (lock as main, rebase, second bump, maxapp ship, then done's bookkeeping).
+A lead resumed after a crash has no fleet env: its ship call parks the batch and names the start command as the fix.
 
 Exit 0 done, 2 refused, 3 BLOCKED, 4 WAIT/RERUN, 5 CONFLICT, 6 RED. Stdlib only.
 """
@@ -406,6 +407,15 @@ def _done(a, root, data, b):  # O(issues)
     return _out(0, "\n".join(lines))  # O(lines)
 
 
+def _env_lost(b):  # O(1)
+    if os.environ.get("SUPERLITE_FLEET_ROLE") or os.environ.get("SUPERLITE_FLEET_WORKER"):  # O(1)
+        return False  # O(1)
+    if b.get("state") != "running" or not b.get("worktree"):  # O(1)
+        return False  # O(1)
+    wt, cwd = Path(b["worktree"]).resolve(), Path.cwd().resolve()  # O(1)
+    return cwd == wt or wt in cwd.parents  # O(depth)
+
+
 def main(argv=None):  # O(1)
     import backlog_state as bs  # O(1)
     import ship_lock  # O(1)
@@ -428,6 +438,16 @@ def main(argv=None):  # O(1)
     if a.action == "done":  # O(1)
         return _done(a, root, data, b)  # O(1)
     if os.environ.get("SUPERLITE_FLEET_ROLE") != "lead" or os.environ.get("SUPERLITE_FLEET_WORKER") != b.get("lead"):  # O(1)
+        if _env_lost(b):  # O(1)
+            if data.get("repo"):  # O(1)
+                try:  # O(1)
+                    ship_lock.release(ship_lock.lock_path(data["repo"]), a.batch)  # O(1)
+                except (OSError, ValueError):  # O(1)
+                    pass  # O(1)
+            _set(root, a.batch, state="parked", reason=f"lead {b.get('lead')} lost its fleet env (resumed after a crash)", parked_at=_now_ms())  # O(batches)
+            return _out(2, "refused: this session has no fleet environment (SUPERLITE_FLEET_ROLE and SUPERLITE_FLEET_WORKER unset), as a lead "  # O(1)
+                           f"resumed after a crash has none, so it cannot ship as lead {b.get('lead')}; {a.batch} is parked: end your turn with "  # O(1)
+                           f"Status: BLOCKED fleet env lost, then main runs sl backlog start {a.batch}")  # O(1)
         return _out(2, f"refused: sl backlog ship {a.batch} runs only in its lead {b.get('lead')}")  # O(1)
     if not data.get("approved_ship"):  # O(1)
         return _out(2, "refused: no ship approval recorded (sl backlog decide)")  # O(1)
