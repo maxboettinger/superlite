@@ -46,6 +46,7 @@ A tracked, modified (not new, not deleted) file under a `tests/` folder that no 
 commits with the task being committed (a fixer's edit to a shared test): `shared-test <path>`
 on stderr and a `workaround` incident `Tn: shared test adjusted` (resolution `accepted`).
 New tests, deletions and source files still block; T0 never takes shared tests.
+An owned file a checkpoint of this plan holds that git status no longer lists (back to its HEAD content, or a new file deleted) is staged again when it differs from the newest checkpoint; a restored one prints `restored F (back to its HEAD content)` on stderr.
 Stdlib only.
 """
 
@@ -681,7 +682,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     a.ledger = a.ledger or str(sd / "progress.md")  # defaults follow the parsed --plan, not the session's binding | O(1)
     a.log = a.log or str(sd / "incidents.jsonl")  # O(1)
     a.pool = a.pool or str(sd / "pool.json")  # O(1)
-    root = state.git_root(a.plan) if given else None  # O(1) git spawn
+    root = state.git_root(a.plan) if given else None  # O(d) stat walk, no spawn
     if root and Path(root).resolve() != Path.cwd().resolve():  # --plan in another checkout: work there (#365) | O(1)
         a.plan, a.ledger, a.log, a.pool = (os.path.abspath(x) for x in (a.plan, a.ledger, a.log, a.pool))  # O(1)
         os.chdir(root)  # O(1)

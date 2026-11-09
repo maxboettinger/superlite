@@ -98,3 +98,10 @@ def test_reverted_owned_in_process(tmp_path, monkeypatch):
     assert commit_task.reverted_owned(["src/b.py"], set(), "plan.md") == []
     monkeypatch.setenv("SUPERLITE_AUTOCOMMIT", "1")
     assert commit_task.reverted_owned(["src/a.py"], set(), "plan.md") == []
+
+
+def test_docstring_and_comment_match_behaviour():
+    text = (SCRIPTS / "commit_task.py").read_text()
+    assert "restored F (back to its HEAD content)" in text.split('"""')[1]
+    assert "# O(d) stat walk, no spawn" in text
+    assert "O(1) git spawn" not in text
