@@ -38,6 +38,7 @@ A green --full run (not --task, not --fast, not --record) in a git toplevel hold
 unit layer green (`run_tests: unit layer stamped`), from digests taken before the run, so a file changed during it stays stale; a stamp
 error prints `run_tests: unit layer not stamped: <err>` and never changes the exit code. `--record` never stamps.
 Every test subprocess (pytest, a test-cmd.json command and its setup) gets the environment without `SUPERLITE_FLEET_*` variables (a fleet pane's worker, role and parent dir); a test-cmd.json `env` entry still applies on top.
+A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is refused before the run (exit 2, `test-cmd.json uses {only_testing}, the Xcode (Swift) placeholder, ...`, no incident; `--background` refuses in the parent).
 Stdlib only.
 """
 # Complexity notation:
@@ -352,7 +353,7 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
             "skipped_tests": counts["skipped_tests"],  # O(1)
             "files": {k: list(v) for k, v in (files or {}).items()}}  # O(F)
     if error:  # a crashed run says so, so the packet never reads it as a test run (#81) | O(1)
-        data["error"] = error[:200]  # O(1)
+        data["error"] = error[:400]  # the placeholder refusal is longer than 200 chars | O(1)
     if started is not None:  # the packet closes only incidents logged before this run started (#101) | O(1)
         data["started"] = started  # O(1)
     p = Path(path)  # O(1)
@@ -534,6 +535,38 @@ def link_node_modules(root, tree, spec):  # O(F log F) link the root's and each 
     return changed  # O(1)
 
 
+def has_swift(root):  # does the git tree (tracked or untracked, not ignored) hold Swift sources or an Xcode project; None when git cannot say | O(files)
+    try:  # O(1)
+        r = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=off", "ls-files", "-co", "--exclude-standard", "--",  # O(files)
+                            "*.swift", "*.xcodeproj/*", "*.xcworkspace/*"], capture_output=True, text=True, timeout=30)  # O(1)
+    except (OSError, subprocess.SubprocessError):  # O(1)
+        return None  # O(1)
+    if r.returncode != 0:  # O(1)
+        return None  # O(1)
+    return bool(r.stdout.strip())  # O(1)
+
+
+def placeholder_line(root, spec):  # the refusal text for a test-cmd.json {only_testing} placeholder in a project without Swift files, else None | O(m + f)
+    if not spec or spec.get("python") or spec.get("source") != "test-cmd.json":  # O(1)
+        return None  # O(1)
+    root = Path(root)  # O(1)
+    cfg = testcmd.read_config(root) or testcmd.main_checkout_config(root)  # O(file)
+    if not isinstance(cfg, dict) or not any(isinstance(cfg.get(k), str) and "{only_testing}" in cfg[k] for k in ("test", "test_file")):  # O(1)
+        return None  # O(1)
+    if has_swift(root) is not False:  # O(files)
+        return None  # O(1)
+    where = ".superlite/test-cmd.json" if (root / ".superlite" / "test-cmd.json").is_file() else "the main checkout's .superlite/test-cmd.json"  # O(1)
+    det = testcmd.detect(root)  # O(m + f)
+    head = "test-cmd.json uses {only_testing}, the Xcode (Swift) placeholder, but this"  # O(1)
+    if not det:  # O(1)
+        return f"{head} project has no Swift files: in {where} use {{files}}"  # O(1)
+    lang = det["language"]  # O(1)
+    if lang == "python":  # O(1)
+        return (f"{head} python project has no Swift files: in {where} write the python form {{files}} "  # O(1)
+                '(e.g. "test_file": "python -m pytest {files}"), or delete that file so run_tests runs pytest itself')
+    return f'{head} {lang} project has no Swift files: in {where} write the {lang} form {{files}} (e.g. "test_file": "{det["test_file"]}")'  # O(1)
+
+
 def usage_error(a, label, reason):  # O(summary size) a usage error: stderr, zero summary, exit 2
     print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
     write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
@@ -616,6 +649,13 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     if a.wait_path is not None:  # O(1)
         return wait_background(a)  # O(timeout / POLL_SECONDS)
     if a.background:  # O(1)
+        try:  # a crash in resolve never breaks today's background start | O(1)
+            gate = placeholder_line(Path.cwd(), testcmd.resolve(".", ()))  # O(m + f)
+        except Exception:  # O(1)
+            gate = None  # O(1)
+        if gate:  # refused in the parent: nothing spawned, no summary | O(1)
+            print(f"run_tests: {gate}", file=sys.stderr)  # O(1)
+            return 2  # O(1)
         if not a.fast:  # a Node project without node_modules is refused here too | O(m + f)
             try:  # a crash in resolve never breaks today's background start | O(1)
                 node_gone = node_install_line(Path.cwd(), testcmd.resolve(".", ()))  # O(m + f)
@@ -795,6 +835,9 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         publish_summary(a)  # O(summary size)
         print("0 0 0 0.0")  # O(1)
         return 2  # O(1)
+    gate = placeholder_line(Path("."), spec)  # O(m + f)
+    if gate:  # a Swift placeholder in a project without Swift files: exit 2, no incident | O(1)
+        return usage_error(a, label, gate)  # O(summary size)
     if not spec["python"]:  # a configured `test` command may narrow the suite: it never stamps the unit layer | O(1)
         a.unit_snap = None  # O(1)
     node_gone = node_install_line(Path.cwd(), spec)  # O(m + f)
