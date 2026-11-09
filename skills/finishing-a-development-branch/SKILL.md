@@ -47,7 +47,7 @@ No further menus or typed confirmations. Act on the answer.
 
 ## 6. Worktree cleanup
 
-For a superlite build, first end the run in every case, while the worktree still exists: `<skill-dir>/../subagent-driven-development/scripts/sl orchestrator end --plan <absolute plan path>` (archives the run markers and logs; the coordinator guard stops).
+For a superlite build, first end the run in every case, while the worktree still exists: `<skill-dir>/../subagent-driven-development/scripts/sl orchestrator end --plan <absolute plan path>` (archives the run markers and logs; the coordinator guard stops). When `end` refuses because another session owns the run (this session took over a run whose first session ran out of usage or crashed; `finish` names it too), run `<skill-dir>/../subagent-driven-development/scripts/sl orchestrator takeover --plan <absolute plan path>` first, then `end` again.
 
 Only if the work ran in a worktree you created and the branch was merged: `git worktree remove <path>`. For push-and-PR or keep, leave it in place.
 

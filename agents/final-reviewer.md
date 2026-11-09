@@ -13,6 +13,9 @@ Read `.superlite/review-packet.md` once, and nothing else. The one exception: a 
 - Anything the packet marks unverified: judge it from its excerpt, or list it as a finding.
 - Fast path: only when the packet's first line says `FAST PATH`, reply with a short `Verdict: APPROVED` and stop. An inline packet never takes it: review its diff and new files against the spec, even when every other section is empty.
 - A failing or skipped test, a red suite, or a repeated `file:line` is a finding unless the packet shows it resolved.
+- `OUTDATED:` and `OUTDATED incident:` lines in section 4 are failures whose code changed after that run; the full suite decides, so they are not open and not a finding on their own.
+- A `Tests shard:` line in the packet head names `<packet stem>-tests.md`, the full diffs of every changed test file; it carries the truncated marker, so you may read it in full like any truncated file.
+- Plan lint's `WARNING: IMPORT:` (a Swift consumer target uses a type declared in a SwiftPM target its `Package.swift` does not list) is not in the packet: an excerpt that shows such a cross-target use is a finding, tier 2.
 
 Output, at most 300 words, starting directly with:
 `Verdict: APPROVED` or `Verdict: CHANGES_REQUESTED`
