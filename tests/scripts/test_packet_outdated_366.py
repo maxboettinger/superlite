@@ -85,6 +85,11 @@ def test_redstep_incident_is_outdated(proj):
     assert "FAILING" not in s4
 
 
+def test_outdated_incident_not_counted_as_stale(proj):
+    base = setup(proj, {**OLD, "src/mod.py": NOW - 50})
+    assert "dropped" not in sec(packet(proj, base), 1)
+
+
 def test_failure_after_last_change_stays_open(proj):
     base = setup(proj, {**OLD, "src/mod.py": NOW - 200})
     t = packet(proj, base)

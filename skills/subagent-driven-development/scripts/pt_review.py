@@ -2438,7 +2438,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     gone_ids = {id(e) for e, _ in gone}  # O(K)
     entries = [e for e in entries if id(e) not in gone_ids]  # O(K)
     n_gone = len(gone)  # O(1)
-    n_stale = n_all - len(entries)  # O(1)
+    n_stale = n_all - len(entries) - n_gone  # outdated ones are counted on their own line, not as stale | O(1)
     items = incident_items(entries) + read_probe_failures(probes)  # O(K + R)
     if not inline:  # probe coverage needs plan tasks; an inline build ran no probes (#130) | O(1)
         items += uncovered_items(plan, root, entries)  # O(pkgs*cats*...)
