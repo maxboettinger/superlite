@@ -150,8 +150,14 @@ def test_newest_no_result_keeps_the_location(tmp_path):
     assert len(lines(p)) == 2
 
 
-def test_r1_ignores_started(tmp_path):  # R1 (a --task test that passes now) keeps its old behaviour: no start-time gate
-    p = seed(tmp_path, entry(300.0, file="tests/test_a.py", context="test_x: failed"))
-    run_tests.resolve_passed(str(p), "T3", [], {"tests/test_a.py": [1, 0]}, green=False, started=200.0)
+def test_r1_keeps_an_entry_logged_after_start(tmp_path):  # no closing rule touches an entry logged at or after this run's start
+    e = {"file": "tests/test_a.py", "line": 2, "kind": "test-failure", "agent": "run_tests", "task": "T3", "resolution": "open", "context": "test_x: assert 1 == 2", "epoch": 300.0}
+    p = tmp_path / "incidents.jsonl"
+    p.write_text(json.dumps(e) + "\n")
+    run_tests.resolve_passed(str(p), "T3", [], {"tests/test_a.py": [2, 0]}, green=True, full=False, started=200.0)
+    assert len(lines(p)) == 1
+    p.write_text(json.dumps({**e, "epoch": 100.0}) + "\n")
+    run_tests.resolve_passed(str(p), "T3", [], {"tests/test_a.py": [2, 0]}, green=True, full=False, started=200.0)
     got = lines(p)
     assert len(got) == 2 and got[1]["context"] == "fixed: passed on a later run"
+

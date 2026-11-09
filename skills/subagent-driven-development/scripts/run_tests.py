@@ -487,12 +487,10 @@ def resolve_passed(log, task, failures, files, green=False, full=False, started=
         return started is None or isinstance(ep, bool) or not isinstance(ep, (int, float)) or ep < started  # O(1)
 
     def context(f, e):  # O(len) the closing context for the entry, or None to keep it open
-        if e.get("kind") != "test-failure" or str(e.get("resolution", "")).lower() in resolved:  # O(1)
+        if e.get("kind") != "test-failure" or str(e.get("resolution", "")).lower() in resolved or not before(e):  # no rule closes an entry logged at or after this run's start | O(1)
             return None  # O(1)
         if task and e.get("task") == task and norm(f) in ran and (norm(f), str(e.get("context", "")).split(": ", 1)[0]) not in failing:  # O(len)
             return "fixed: passed on a later run"  # O(1)
-        if not before(e):  # R2 and R3 never close an entry logged at or after this run's start | O(1)
-            return None  # O(1)
         if task and green and e.get("task") == task and f == "-":  # O(1)
             return f"fixed: a green {task} run"  # O(1)
         if not task and green and full and e.get("agent") == "run_tests":  # O(1)
