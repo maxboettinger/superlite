@@ -1225,6 +1225,31 @@ class _Deps(set):  # O(1) a set that remembers the manifest order for messages
     order: list[str]  # O(1)
 
 
+def _swift_uncomment(text: str) -> str:  # O(s) the manifest without // and /* */ comments (strings kept, newlines kept)
+    out: list[str] = []  # O(1)
+    i, n = 0, len(text)  # O(1)
+    while i < n:  # O(s) iterations
+        c = text[i]  # O(1)
+        if c == '"':  # O(1)
+            j = i + 1  # O(1)
+            while j < n and text[j] != '"':  # O(s) total
+                j += 2 if text[j] == "\\" else 1  # O(1)
+            out.append(text[i:j + 1])  # O(s)
+            i = j + 1  # O(1)
+        elif text.startswith("//", i):  # O(1)
+            j = text.find("\n", i)  # O(s)
+            i = n if j < 0 else j  # O(1)
+        elif text.startswith("/*", i):  # O(1)
+            j = text.find("*/", i + 2)  # O(s)
+            j = n if j < 0 else j + 2  # O(1)
+            out.append("\n" * text.count("\n", i, j))  # O(s)
+            i = j  # O(1)
+        else:  # O(1)
+            out.append(c)  # O(1)
+            i += 1  # O(1)
+    return "".join(out)  # O(s)
+
+
 def _swift_call(text: str, start: int) -> tuple[str, int]:  # O(s) the text inside the balanced parentheses opened at text[start], comments dropped
     out: list[str] = []  # O(1)
     depth, i, n = 0, start, len(text)  # O(1)
@@ -1286,12 +1311,19 @@ def swift_targets(root: Path) -> dict[str, dict]:  # O(F + M*s) F = folders walk
         if "Package.swift" not in files:  # O(1)
             continue  # O(1)
         manifest = Path(cur) / "Package.swift"  # O(1)
-        text = manifest.read_text(encoding="utf-8", errors="replace")  # O(s)
+        try:  # one unreadable manifest must not hide the others | O(1)
+            text = _swift_uncomment(manifest.read_text(encoding="utf-8", errors="replace"))  # O(s)
+        except OSError:  # O(1)
+            continue  # O(1)
         rel = manifest.relative_to(root).as_posix()  # O(d)
-        for marker in SWIFT_CALLS:  # O(1) iterations
-            pos = text.find(marker)  # O(s)
-            while pos >= 0:  # O(targets) iterations
+        spans = sorted((m.start(), m.group(0)) for m in re.finditer(r"\.(?:target|executableTarget|testTarget|macro)\(", text))  # O(s)
+        covered = 0  # a .target(name:) inside another target's dependencies is a reference, not a target | O(1)
+        for pos, marker in spans:  # O(targets) iterations
+            if pos < covered:  # O(1)
+                continue  # O(1)
+            if True:  # O(1)
                 inner, end = _swift_call(text, pos + len(marker) - 1)  # O(s)
+                covered = end  # O(1)
                 fields = {a.split(":", 1)[0].strip(): a.split(":", 1)[1].strip() for a in _swift_args(inner) if ":" in a}  # O(s)
                 nm = re.fullmatch(r'"([^"]*)"', fields.get("name", ""))  # O(s)
                 if nm:  # O(1)
@@ -1304,7 +1336,6 @@ def swift_targets(root: Path) -> dict[str, dict]:  # O(F + M*s) F = folders walk
                             deps.add(m.group(2))  # O(1)
                             deps.order.append(m.group(2))  # O(1)
                     found[nm.group(1)] = {"dir": Path(cur) / (pm.group(1) if pm else f"{kind}/{nm.group(1)}"), "deps": deps, "manifest": rel}  # O(1)
-                pos = text.find(marker, end)  # O(s)
     return found  # O(1)
 
 

@@ -170,3 +170,24 @@ def test_warning_is_not_an_issue(tmp_path):
     assert any("IMPORT:" in w for w in warnings)
     stable, _fix, _pi = plan_tools.stable_partition(plan, issues, warnings)
     assert "T2" in stable
+
+
+def test_dependency_reference_and_comments_do_not_make_targets(tmp_path):
+    root = tmp_path / "p"
+    write(root / "Package.swift", '''let package = Package(targets: [
+    .target(name: "A", dependencies: ["B"]),
+    /* .target(name: "Ghost", dependencies: [")"]) */
+    // .target(name: "Ghost2")
+    .target(name: "B"),
+    .testTarget(name: "ATests", dependencies: [.target(name: "A"), .target(name: "B")]),
+])
+''')
+    t = plan_tools.swift_targets(root)
+    assert set(t) == {"A", "B", "ATests"}
+    assert t["A"]["deps"] == {"B"} and t["ATests"]["deps"] == {"A", "B"}
+
+
+def test_odd_manifest_does_not_crash(tmp_path):
+    root = tmp_path / "p"
+    write(root / "Package.swift", '.target(name: "A", dependencies: ["B", ".target(\n/* unclosed')
+    plan_tools.swift_targets(root)
