@@ -6,6 +6,10 @@
     run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] --command CMD   (a full result run outside run_tests; report only, closes no incidents)
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
+Every exit path leaves a summary: a usage error, an unknown task, a missing pytest, an unprepared tree or a crash (`run_tests crashed: ...`, exit 2) writes a red zero summary; `--wait` names a background run whose process died (its pid sits in `<summary>.pid`) and the log of one that timed out.
+A no-result stop keeps its command, exit and output in `.superlite/no-result-*.log` (newest 20) and its incident carries them as `target`, `command`, `exit`, `log`.
+An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change except files owned by unfinished sibling tasks (kept at base, named on the line), a `--full` tree the task's own files.
+
 Prints `passed failed skipped seconds` (errors count as failed). Each failing
 test becomes a `test-failure` incident; on a --full run each test file whose
 tests all pass becomes a `verified` incident (once per distinct entry). With `--task Tn` each
@@ -49,6 +53,7 @@ import subprocess  # O(1)
 import sys  # O(1)
 import tempfile  # O(1)
 import time  # O(1)
+import traceback  # O(1)
 import xml.etree.ElementTree as ET  # O(1)
 from pathlib import Path  # O(1)
 
@@ -63,6 +68,7 @@ import trees  # noqa: E402  # O(1) module load
 DEFAULT_SUMMARY = ".superlite/test-summary.json"  # O(1)
 POLL_SECONDS = 0.5  # O(1)
 DEFAULT_WAIT = 600.0  # O(1)
+WRITTEN = set()  # resolved summary paths this process wrote; main clears it | O(1)
 
 
 def project_root(start):  # O(d) stats, d = depth of start
@@ -136,7 +142,11 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
     atomic_write(pointer_path(a.summary), json.dumps({"id": run_id, "summary": str(mine),  # O(1)
                                                       "started": time.time(),  # O(1)
                                                       "mode": "fast" if "--fast" in argv else "full"}) + "\n")  # O(1)
-    pyrun.spawn_detached(child, mine.with_suffix(".log"))  # O(1) + process spawn
+    proc = pyrun.spawn_detached(child, mine.with_suffix(".log"))  # O(1) + process spawn
+    try:  # the pid lets --wait name a child that died without a summary | O(1)
+        atomic_write(mine.with_suffix(".pid"), f"{proc.pid}\n")  # O(1)
+    except OSError:  # O(1)
+        pass  # O(1)
     print(f"summary: {mine}")  # O(1)
     print(WAIT_CUE)  # O(1) the cue sits right above the wait line, which stays last (#286)
     print(wait_line(mine))  # O(1)
@@ -155,6 +165,21 @@ def wait_target(a):  # O(1)
     return Path(ptr["summary"]) if ptr else None  # O(1)
 
 
+def pid_gone(mine):  # O(1) the pid recorded for a background run, when that process no longer exists (POSIX only), else None
+    if os.name == "nt":  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        pid = int(mine.with_suffix(".pid").read_text(encoding="utf-8").strip())  # O(1)
+        if pid <= 0:  # O(1)
+            return None  # O(1)
+        os.kill(pid, 0)  # O(1)
+    except ProcessLookupError:  # O(1)
+        return pid  # O(1)
+    except (OSError, ValueError):  # no pid file, bad content or any other error: alive | O(1)
+        return None  # O(1)
+    return None  # O(1)
+
+
 def wait_background(a):  # O(timeout / POLL_SECONDS) polls
     mine = wait_target(a)  # O(1)
     if mine is None:  # O(1)
@@ -168,8 +193,18 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
                 break  # O(1)
             except (OSError, ValueError):  # O(1) half-written (non-atomic fs): retry
                 pass  # O(1)
+        dead = pid_gone(mine) if not mine.exists() else None  # O(1)
+        if dead is not None and not mine.exists():  # one more look: the child may have written it just before exiting | O(1)
+            reason = f"background run ended without a summary (pid {dead}); log {mine.with_suffix('.log')}"  # O(1)
+            print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+            write_summary(mine, "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
+            data = json.loads(mine.read_text(encoding="utf-8"))  # O(1)
+            ptr = read_pointer(a.summary)  # O(1) the published summary the packet reads must carry the error too
+            if ptr and Path(ptr["summary"]).resolve() == Path(mine).resolve():  # O(1)
+                atomic_write(a.summary, mine.read_text(encoding="utf-8"))  # O(summary size)
+            break  # O(1)
         if time.monotonic() >= deadline:  # O(1)
-            print(f"run_tests: timed out waiting for {mine}", file=sys.stderr)  # O(1)
+            print(f"run_tests: timed out waiting for {mine}; log {mine.with_suffix('.log')}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         time.sleep(POLL_SECONDS)  # O(1)
     print(json.dumps(data, ensure_ascii=False, indent=1))  # O(summary size)
@@ -322,12 +357,14 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
     p = Path(path)  # O(1)
     p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     tmp = p.with_name(p.name + ".tmp")  # O(1)
+    WRITTEN.add(p.resolve())  # O(1)
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")  # O(k + sk) dumps + write
     tmp.replace(p)  # O(1) rename
 
 
-def add_incidents(log, items, task=None):  # O(total c) + one locked append (no spawn in process)
-    """items: (file, line, context, kind, resolution). A --task run stamps `task` on each entry; a kind outside
+def add_incidents(log, items, task=None, extra=None):  # O(total c) + one locked append (no spawn in process)
+    """items: (file, line, context, kind, resolution). A --task run stamps `task` on each entry; `extra` (a dict) is merged
+    into every entry after `kind` and `task`; a kind outside
     incident.KINDS (`no-result`) is set after make_entry, as the hooks write theirs. Never spawns `incident add`,
     which takes neither `task` nor `no-result` (SUPERLITE_SL swaps only the launcher)."""
     # always in process, also with SUPERLITE_SL: the spawned `incident add` takes neither task nor `no-result` | O(1)
@@ -343,11 +380,41 @@ def add_incidents(log, items, task=None):  # O(total c) + one locked append (no 
             e["kind"] = kind  # O(1)
         if task:  # O(1)
             e["task"] = task  # O(1)
+        if extra:  # O(1)
+            e.update(extra)  # O(1)
         entries.append(e)  # O(1)
     try:  # O(1)
         inc.append(log, entries)  # O(total c) one locked write
     except OSError as err:  # O(1)
         print(f"warning: incidents not logged: {err}", file=sys.stderr)  # O(1)
+
+
+def no_result_log(summary, command, cwd, rc, lines):  # O(L) + file write, keeps the newest 20 logs
+    """Write `<dir of summary>/no-result-<time>-<ns>.log` (command, cwd, exit, the last 40 lines); return its absolute path, "" on OSError."""
+    try:  # O(1)
+        d = Path(summary).resolve().parent  # O(1)
+        ns = time.time_ns()  # O(1)
+        name = f"no-result-{time.strftime('%Y%m%dT%H%M%S', time.gmtime(ns // 10**9))}-{ns % 10**9:09d}.log"  # O(1)
+        path = d / name  # O(1)
+        atomic_write(path, "\n".join([f"command: {command}", f"cwd: {cwd}", f"exit: {rc}", "", *lines[-40:]]) + "\n")  # O(L)
+        for old in sorted(d.glob("no-result-*.log"))[:-20]:  # O(n log n) n = logs kept
+            old.unlink(missing_ok=True)  # O(1)
+        return str(path)  # O(1)
+    except OSError:  # O(1)
+        return ""  # O(1)
+
+
+def no_result_target(command, rc, log):  # O(1) the feedback target of a no-result stop
+    return f"exit {rc} from `{command[:200]}`; log {log or 'not written'}"  # O(1)
+
+
+def record_no_result(a, reason, command, rc, lines, tree=None):  # O(L + c) log the stop's trace, print its path, log the incident
+    log = no_result_log(a.summary, command, str(tree) if tree else str(Path.cwd()), rc, lines)  # O(L)
+    print(f"run_tests: no-result log {log}", file=sys.stderr)  # O(1)
+    extra = {"target": no_result_target(command, rc, log), "command": command[:300], "exit": rc, "log": log}  # O(1)
+    if tree:  # O(1)
+        extra["cwd"] = str(tree)  # O(1)
+    add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task, extra)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
 
 
 def resolve_passed(log, task, failures, files):  # O(B + I + k) read the log once, one append (#180)
@@ -536,6 +603,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
     a = ap.parse_args(argv)  # O(1)
+    WRITTEN.clear()  # O(1)
     a.started = time.time()  # before the runner reads any code: the summary's `started` (#101) | O(1)
     cwd = Path.cwd().resolve()  # O(1)
     a.cwd = cwd  # for the missing-path message, before to_root moves us | O(1)
@@ -567,17 +635,22 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                 print(f"run_tests: {gone}", file=sys.stderr)  # O(1)
                 return 2  # O(1)
         return start_background(a, argv)  # O(len argv) + spawn
-    if a.run_id:  # O(1) detached child: a crash still leaves a (red) summary for --wait
-        try:  # O(1)
-            return run(a)  # see run
-        except BaseException as e:  # O(1)
-            if not Path(a.summary).exists():  # O(1)
-                write_summary(a.summary, "full", {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
-                                                  "skipped_tests": []}, [], 0.0,  # O(1)
-                              error=f"run_tests crashed: {e!r}")  # O(1)
-                publish_summary(a)  # O(summary size)
+    try:  # O(1)
+        return run(a)  # see run
+    except BaseException as e:  # a crash still leaves a (red) summary and the zero line | O(1)
+        if isinstance(e, SystemExit) and e.code in (0, None):  # O(1)
             raise  # O(1)
-    return run(a)  # see run
+        if Path(a.summary).resolve() not in WRITTEN:  # a result already written stays | O(1)
+            write_summary(a.summary, "fast" if a.fast else "full", {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
+                                                                    "skipped_tests": []}, [], 0.0,  # O(1)
+                          error=f"run_tests crashed: {e!r}"[:200])  # O(1)
+            publish_summary(a)  # O(summary size)
+            print("0 0 0 0.0")  # O(1)
+        if not isinstance(e, Exception):  # O(1)
+            raise  # O(1)
+        traceback.print_exc()  # O(depth)
+        print(f"run_tests: crashed: {e!r}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
 
 
 def record_run(a):  # a full result the agent ran outside run_tests: reports only, closes no incidents | O(1)
@@ -660,7 +733,7 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
                 print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
                 write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
                 publish_summary(a)  # O(summary size)
-                add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task)  # O(c)
+                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*kept, *p["tail"]], cwd)  # O(40 + c)
                 print(f"0 0 0 {seconds:.1f}")  # O(1)
                 return 1  # O(1)
     return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
@@ -732,9 +805,17 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                 return usage_error(a, label, reason)  # O(summary size)
             info = nt.parse_plan(plan)  # O(L)
             if a.task not in info:  # O(1)
-                nt.die(f"unknown task {a.task}")  # O(1)
+                return usage_error(a, label, f"unknown task {a.task} in {plan}")  # O(summary size)
             ct.add_also_owns(info, a.ledger)  # --also and --claim rulings own their files too (#239) | O(c + o)
-            tree = trees.prepare(".", a.task, info[a.task]["owns"])  # O(f * o) + git checkout
+            held = {}  # O(1)
+            try:  # O(1)
+                if paths:  # a --fast run tests every working-tree change except the files of unfinished siblings | O(1)
+                    overlay, kept = fast_overlay(".", a.task, info, a.ledger)  # O(c + f * T * o)
+                    held = kept  # {path: sorted owner ids}
+                tree = trees.prepare(".", a.task, overlay if paths else info[a.task]["owns"])  # a --full run tests the task's own files | O(f * o) + git checkout
+            except (RuntimeError, OSError) as err:  # O(1)
+                return usage_error(a, label, f"isolated tree for {a.task} not prepared: {err}")  # O(summary size)
+            announce_tree(tree, a.task, bool(paths), held)  # O(f)
             link_node_modules(Path.cwd(), tree, spec)  # O(d)
             tree_gone = node_install_line(tree, spec)  # a tree without node_modules fails like the root | O(m + f)
             if tree_gone:  # O(1)
@@ -746,9 +827,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         try:  # O(1)
             base = pyrun.pytest_cmd()  # O(1) + at most one probe spawn
         except pyrun.PytestUnavailable as e:  # O(1)
-            print(f"run_tests: {e}", file=sys.stderr)  # O(1)
-            print("0 0 0 0.0")  # O(1)
-            return 2  # O(1)
+            return usage_error(a, label, str(e))  # the summary is written too | O(summary size)
         cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), "-q", "-p", "no:cacheprovider",  # O(p)
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
         t0 = time.monotonic()  # O(1)
@@ -759,17 +838,53 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         parsed = collection_report(xml_path) if r.returncode == 2 and has_xml else None  # a collection error stops pytest with exit 2 (#196) | O(X + T*d)
         if parsed is None and (r.returncode not in (0, 1) or not has_xml):  # O(1)
             tail = (r.stdout + r.stderr).strip().splitlines()[-5:]  # O(O)
-            reason = "pytest produced no results: " + " | ".join(tail)  # O(1)
+            reason = f"pytest produced no results (exit {r.returncode}): " + (" | ".join(tail) or "no output")  # O(1)
             print(reason, file=sys.stderr)  # O(1)
             write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
                                              "skipped_tests": []}, [], seconds,  # O(1)
                           error=reason if r.returncode != 5 else None)  # O(1)
             publish_summary(a)  # O(summary size)
-            add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
+            record_no_result(a, reason, shlex.join(cmd), r.returncode, (r.stdout + r.stderr).splitlines())  # O(O + c)
             print(f"0 0 0 {seconds:.1f}")  # O(1)
             return 1 if r.returncode == 5 else 2  # O(1)
         counts, failures, files = parsed or parse_junit(xml_path)  # O(X + T*d)
     return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
+
+
+def unfinished_owners(path, task, info, done):  # O(T * o) the other uncommitted plan tasks owning path; [] when task owns it too (done: committed task ids)
+    if nt.owns_match(path, info[task]["owns"]):  # O(o)
+        return []  # O(1)
+    return sorted(t for t in info if t != task and t not in done and nt.owns_match(path, info[t]["owns"]))  # O(T * o)
+
+
+def fast_overlay(root, task, info, ledger):  # O(f * T * o) + two spawns: (paths to overlay, paths kept at base), both sorted
+    copy, delete = trees.own_changes(root, trees.base_commit(root), ["**/*"])  # O(f)
+    done = ct.committed_tasks(ledger)  # one ledger read per run | O(c)
+    overlay, held = [], {}  # O(1)
+    for p in sorted(set(copy) | set(delete)):  # O(f log f)
+        owners = unfinished_owners(p, task, info, done)  # O(T * o)
+        if owners:  # O(1)
+            held[p] = owners  # O(1)
+        else:  # O(1)
+            overlay.append(p)  # O(1)
+    return overlay, held  # O(1)
+
+
+def announce_tree(tree, task, fast, held=None):  # O(f) name the isolated tree and how many files it overlays on stderr
+    try:  # O(1)
+        n = len(json.loads(trees.overlay_file(".", task).read_text(encoding="utf-8")))  # O(f)
+    except (OSError, ValueError, TypeError):  # an unreadable overlay counts 0 | O(1)
+        n = 0  # O(1)
+    try:  # O(1)
+        rel = Path(tree).resolve().relative_to(Path.cwd().resolve()).as_posix()  # O(1)
+    except ValueError:  # O(1)
+        rel = Path(tree).as_posix()  # O(1)
+    what = "all working-tree changes (--fast)" if fast else f"{task}'s own changes"  # O(1)
+    kept = ""  # O(1)
+    if held:  # O(1)
+        ids = sorted({t for owners in held.values() for t in owners})  # O(f)
+        kept = f"; kept at base: {len(held)} file{'' if len(held) == 1 else 's'} of unfinished {' '.join(ids)}"  # O(1)
+    print(f"run_tests: tree {rel} = base + {what}: {n} file{'' if n == 1 else 's'}{kept}", file=sys.stderr)  # O(1)
 
 
 def finish_run(a, label, counts, failures, files, seconds, returncode):  # O(k + F + B) one incident append
