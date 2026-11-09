@@ -1,7 +1,6 @@
 # tests/scripts/test_backlog_start_test_cmd_334.py
 # backlog start seeds the main checkout's .superlite/test-cmd.json into each new lead worktree (#334).
 import sys
-from pathlib import Path
 from backlog_fixtures import batch as b
 from test_backlog_run import bk, put, get, run, br  # noqa: F401
 import backlog  # noqa: E402
@@ -13,8 +12,8 @@ def test_start_seeds_the_main_test_cmd_before_the_brief_is_sent(bk, capsys, monk
     (bk.sd / "test-cmd.json").write_text(CFG)
     put(bk, b("B1", ["a.py"]))
     seen = []
+    f = bk.root / "wts" / "superlite-b1-t" / ".superlite" / "test-cmd.json"
     def send(sd, wid, brief, label=""):
-        f = Path(brief).parent.parent / "test-cmd.json"
         seen.append(f.read_text() if f.is_file() else None)
         return label
     monkeypatch.setattr(sys.modules["fleet_io"], "send_brief", send, raising=False)

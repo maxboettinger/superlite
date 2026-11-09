@@ -48,7 +48,7 @@ def seed_test_cmd(root: Path, wt: Path) -> bool:
     return True  # O(1)
 
 
-ISSUES_JQ =(".[] | select(has(\"pull_request\") | not) | {number, title, body, author: {login: .user.login}, "
+ISSUES_JQ = (".[] | select(has(\"pull_request\") | not) | {number, title, body, author: {login: .user.login}, "
              "authorAssociation: .author_association}")
 BODY_LIMIT = 4000  # characters of one issue body kept in the triage brief
 
