@@ -2,7 +2,8 @@
 """Backlog state (phase 3): `<main root>/.superlite/backlog.json`, locked read-modify-write, questions, status lines.
 
 An `outside[]` entry with a non-empty string `reason` is a left-out issue (the plan did not take it): it never becomes an
-Admit question and `status_lines` prints it grouped by reason. An entry without one is an outside-author issue."""
+Admit question and `status_lines` prints it grouped by reason. An entry without one is an outside-author issue.
+`status_lines` collapses the shipped batches of earlier plan rounds into one `earlier rounds: N shipped` line; `status --all` lists them (#406)."""
 import fcntl
 import json
 import os
@@ -198,7 +199,16 @@ def park(data: dict, bid: str, reason: str) -> str:
     return f"{bid} parked: {reason}"
 
 
-def status_lines(data: dict) -> list:
+def in_round(data: dict, b: dict) -> bool:
+    if b["state"] != "shipped":  # O(1)
+        return True  # O(1)
+    if isinstance(data.get("round"), list):  # O(1)
+        return b["id"] in data["round"]  # O(round)
+    titles = data.get("titles") or {}  # O(1)
+    return not titles or any(str(i) in titles for i in b.get("issues", []))  # O(issues)
+
+
+def status_lines(data: dict, all_: bool = False) -> list:
     bs = data.get("batches", [])
     run = sum(1 for b in bs if b["state"] in ACTIVE)
     ship = data.get("approved_ship")
@@ -208,8 +218,13 @@ def status_lines(data: dict) -> list:
     if not bs:
         return [head] + left_out_lines(data)
     active = [b for b in bs if b["state"] in ACTIVE]
-    lines = [head, "batch | issues | state | lead | PR | next"]
-    for b in bs:  # O(batches)
+    rows = bs if all_ else [b for b in bs if in_round(data, b)]  # O(batches)
+    lines = [head]  # O(1)
+    if len(rows) < len(bs):  # O(1)
+        lines.append(f"earlier rounds: {len(bs) - len(rows)} shipped (sl backlog status --all lists them)")  # O(1)
+    if rows:  # O(1)
+        lines.append("batch | issues | state | lead | PR | next")  # O(1)
+    for b in rows:  # O(batches)
         s = b["state"]
         if s == "planned":
             dep = next((d for d in b.get("depends", []) if not _shipped(data, d)), None)
