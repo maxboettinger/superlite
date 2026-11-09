@@ -35,7 +35,7 @@ def test_reviewers_take_frontmatter_model_without_model_flag():
 
 def test_research_runs_the_read_only_researcher():
     r = fr.launch("research", None, CFG)
-    assert r["argv"] == ["--agent", "superlite:researcher", "--effort", "low"] + TAIL + ["Edit", "Write", "NotebookEdit", "Bash"] and r["model"] == "haiku" and r["one_turn"]
+    assert r["argv"] == ["--agent", "superlite:researcher", "--model", "sonnet", "--effort", "low"] + TAIL + ["Edit", "Write", "NotebookEdit", "Bash"] and r["model"] == "sonnet" and r["one_turn"]
     s = fr.launch("research", "sonnet", CFG)
     assert s["argv"][:4] == ["--agent", "superlite:researcher", "--model", "sonnet"] and s["model"] == "sonnet"
 

@@ -56,7 +56,7 @@ def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS) ->
         agent = FIXER_AGENTS[tier or "sonnet"]  # O(1)
     elif role == "research":  # O(1)
         agent = "superlite:researcher"  # O(1)
-        pin = tier  # O(1)
+        pin = tier or "sonnet"  # O(1) researchers default to sonnet
     else:  # O(1)
         if tier is not None:  # O(1)
             raise ValueError("%s takes no --tier" % role)  # O(1)
