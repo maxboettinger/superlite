@@ -1,6 +1,6 @@
 """#276: in a fleet session (lead or worker) the backlog guard blocks `sl backlog decide|answer|start|plan` run as a
 command, not the same words in a heredoc body or a quoted argument that only writes them."""
-import json, os, subprocess, time
+import json, os, subprocess
 import pytest
 from test_block_coordinator_edits import BASH, HOOK
 
@@ -84,11 +84,20 @@ def test_long_line_keeps_the_raw_block(sd):
     assert call(sd, 'printf %s "' + "x" * 5000 + ' sl backlog start"').returncode == 2
 
 
+def child_cpu():
+    t = os.times()
+    return t.children_user + t.children_system
+
+
+@pytest.mark.skipif(os.name == "nt", reason="os.times() reports no child CPU time on Windows")
 def test_large_heredoc_is_quick(sd):
+    # #353: CPU time of the hook's process tree, not wall clock, which parallel suites stretch.
+    # time.process_time() would count only this test process, not the hook.
     cmd = "cat > docs/big.md <<'EOF'\n" + "Run `sl backlog start B1` from the main session.\n" * 3000 + "EOF"
-    t = time.monotonic()
+    t = child_cpu()
     r = call(sd, cmd)
-    assert r.returncode == 0 and time.monotonic() - t < 5, r.stderr
+    cpu = child_cpu() - t
+    assert r.returncode == 0 and cpu < 5, (cpu, r.stderr)
 
 
 def test_description_alone_passes(sd):
