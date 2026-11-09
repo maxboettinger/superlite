@@ -19,10 +19,13 @@ A block's or group's heredoc, here-string or pipe reaches every command inside i
 A variable's value is used only when bash would not split it (default IFS or the IFS the command sets) and a value with a
 glob is judged as a glob in every mode; `~+`, `~-` and `~` follow PWD, OLDPWD and HOME, `~user` is unknown, and PWD is the
 directory the current command runs in.
+`NAME=(words)` is an array assignment: its words run nothing, its substitutions and redirects are judged, NAME is unknown.
 A loop is walked again while its variables change (still changing after MAX_DIRS rounds: those variables are unknown), and
 a name first assigned in a block or after `&&`/`||` is one possible value, not the value, once that block or chain ends;
 the other possible value is the value before the command (unset, so empty, unless the environment holds the name).
 `$TMPDIR` reads the hook's environment.
+From an unknown shell directory a relative path under `.superlite/` passes (not after an unknown `$VAR/`).
+A function definition is the literal `function` command word or a one-word `NAME` segment the text defines with `NAME() {`, so prose in a heredoc body is none.
 """
 # Complexity notation:
 #   n = characters of the command text, s = segments, d = directories the shell may sit in (<= MAX_DIRS),
@@ -74,7 +77,9 @@ TILDE_FORM = {"HOME": "~", "PWD": "~+", "OLDPWD": "~-"}  # variable -> the tilde
 KNOWN = frozenset({"PWD", "CLAUDE_PROJECT_DIR", "HOME", "IFS", "TMPDIR"})  # names whose value before the command the guard reads itself | O(1)
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")  # O(1)
 VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")  # O(1)
-FUNC = re.compile(r"(^|[;&|{}\s])(function\s+\S+|[A-Za-z_][\w.:-]*\s*\(\s*\)\s*\{)")  # a function definition: its body runs later | O(1)
+STAYS = (".superlite/*",)  # folders a write may name from an unknown directory: it sits at the root or not at all | O(1)
+UNRESOLVED_HINT = ("The guard cannot resolve this target: name the path literally in the command, or write the file (a findings report, "
+                   "a plan edit, a fixer brief, a wait file under .superlite/ or a plans folder) with the Write or Edit tool.")  # O(1)
 WRAP = {  # wrapper: (short options that take a value, long options that take a value) | O(1)
     "env": ("CuaPS", ("chdir", "unset", "argv0", "split-string", "block-signal", "default-signal", "ignore-signal")),
     "sudo": ("CDghprtTUu", ("chdir", "user", "group", "host", "prompt", "role", "type", "close-from", "other-user",
@@ -118,6 +123,7 @@ class _Ctx:  # O(p)
         self.steps = 0  # O(1)
         self.ifs = re.search(r"\bIFS\b", command) is not None  # IFS (case-sensitive) may split a loop list's expanded words | O(1)
         self.rolled = 0  # for loops the walk met that it did not unroll (their body runs again from the state it left) | O(1)
+        self.arrays = {}  # id(segment) -> ("head"|"body", NAME, segment) of the array assignments `NAME=(words)` | O(1)
         self.vglob = set()  # texts a variable's value gave that hold a glob: judged as globs, also when quoted | O(1)
         self.cmd = None  # base name of the command being judged, for the word of a "?" target | O(1)
         self.deadline = time.monotonic() + MAX_SECONDS  # O(1)
@@ -252,7 +258,7 @@ def _hardlinked(real):  # O(1) | an existing regular file with more than one nam
     return stat.S_ISREG(st.st_mode) and st.st_nlink > 1  # O(1)
 
 
-def _judge_path(path, base, ctx, name=None):  # O(p + depth) | the policy's verdict for one path from directory base
+def _judge_path(path, base, ctx, name=None, stays=True):  # O(p + depth) | the policy's verdict for one path from directory base
     p = _winpath(path)  # O(p)
     if p == "" or p.startswith("/dev/"):  # O(1)
         return None  # O(1)
@@ -289,8 +295,11 @@ def _judge_path(path, base, ctx, name=None):  # O(p + depth) | the policy's verd
         if not ctx.enforce:  # O(1)
             return None  # O(1)
         parts = p.split("/")  # O(p)
-        if ".." in parts or not (_allowed(p, ctx.mode) and _allowed("x/" + p, ctx.mode)):  # allowed only by its prefix: not sure | O(p)
+        sure = _allowed("x/" + p, ctx.mode) or (stays and any(fnmatchcase(p, g) for g in STAYS))  # a file under .superlite/ stays there from any directory, unless an unknown $VAR/ led to it | O(p)
+        if ".." in parts or not (_allowed(p, ctx.mode) and sure):  # allowed only by its prefix: not sure | O(p)
             return Verdict(p, ctx.projn + "/" + p, ctx.kind)  # O(p)
+        if not _allowed("x/" + p, ctx.mode):  # passed on the STAYS exception alone: judge it from the project root (links, protected names, hard links) | O(p)
+            return _judge_path(p, ctx.projn, ctx, name, stays)  # O(p + depth)
         return None  # O(1)
     full = _clean(p if p.startswith("/") else base + "/" + p)  # O(p)
     real = _real(full)  # O(p) syscalls
@@ -438,7 +447,8 @@ def _glob_check(t, inn, st, ctx, name=None, protect_only=False):  # O(d * p) | a
     """Protected when the glob may match a protected file (also `orch*` from inside .superlite), in every mode; else the
     glob's part of the path is unknown ("?"): `docs/plans/*` stays in docs/plans, `*/x` may be anywhere."""
     m = re.match(r"^\$(?:\{\w+\}|\w+)/+(.+)$", t)  # `$VAR/rest`: rest judged from an unknown directory | O(p)
-    if m and "$" not in m.group(1) and "`" not in m.group(1):  # O(p)
+    cut = bool(m) and "$" not in m.group(1) and "`" not in m.group(1)  # O(p)
+    if cut:  # O(1)
         t, inn = m.group(1), (None,)  # O(1)
     p = _winpath(t).replace("\\", "/")  # O(p)
     parts = p.split("/")  # O(p)
@@ -457,7 +467,7 @@ def _glob_check(t, inn, st, ctx, name=None, protect_only=False):  # O(d * p) | a
         if protect_only:  # O(1)
             continue  # O(1)
         q = "/".join(parts[:k] + ["?"] + parts[k + 1:]) if k is not None else p  # O(p)
-        v = _judge_path(q, base, ctx, name)  # O(p + depth)
+        v = _judge_path(q, base, ctx, name, stays=False)  # O(p + depth)
         if v is not None and (found is None or v.kind == "protected"):  # O(1)
             found = v  # O(1)
     return found  # O(1)
@@ -498,7 +508,7 @@ def _check(t, inn, st, ctx, name=None, flag=""):  # O(d * (p + depth)) | verdict
     for base in inn:  # O(d)
         if base is not None or t.startswith("/"):  # a later mkdir or cd into this path is not sure | O(p)
             st.shared["written"].add(_clean(_winpath(t) if t.startswith("/") else base + "/" + t))  # O(p)
-        v = _judge_path(t, base, ctx, name)  # O(p + depth)
+        v = _judge_path(t, base, ctx, name, stays=not cut)  # O(p + depth)
         if v is not None and (found is None or v.kind == "protected"):  # protected wins | O(1)
             found = v  # O(1)
     if cut and found is not None:  # blocked only because $VAR was unknown: the verdict names that word too | O(1)
@@ -589,18 +599,31 @@ def _unwrap(words, dyn, c, st, ctx):  # O(w) | (command words, dyn, directories,
     return words, dyn, inn, xargs, sh  # O(1)
 
 
+def _defines_function(text, segs):  # O(s * n) | does the command define a function (its body runs later)? the literal `function` command word, or a one-word `NAME` segment that `NAME() {` in the text defines
+    for seg in segs:  # O(s)
+        k = _lead(seg)  # O(w)
+        if not _lit(seg, k):  # O(1)
+            continue  # O(1)
+        if seg.words[k] == "function":  # O(1)
+            return True  # O(1)
+        if len(seg.words) == k + 1 and seg.sep == ";" and re.search(r"(^|[;&|{}\s])" + re.escape(seg.words[k]) + r"\s*\(\s*\)\s*\{", text):  # O(n)
+            return True  # O(1)
+    return False  # O(1)
+
+
 def _walk_text(text, st, ctx, depth, force_cond=False):  # O(n) | verdict for a command line of its own
     if depth > MAX_DEPTH:  # O(1)
         return _unknown(ctx, f"nesting deeper than {MAX_DEPTH}")  # O(1)
     _tick(ctx)  # O(1)
     segs = guard_lex.split(text)  # O(n)
+    ctx.arrays.update(_arrays(text, segs))  # the stored segment keeps its id from being reused | O(s * n)
     for seg in segs:  # a heredoc whose delimiter line is missing: its body is judged as commands too | O(s)
         for r in seg.redirects:  # O(redirects)
             if r.op in ("<<", "<<-") and not re.search(r"(?m)^\t*" + re.escape(r.target) + r"[ \t]*\r?$", text):  # O(n)
                 v = _walk_docs(seg.heredocs, _Cmd(seg, st.dirs, False, False, [], False), st, ctx, depth)  # O(n)
                 if v is not None:  # O(1)
                     return v  # O(1)
-    func = FUNC.search(text) is not None  # O(n)
+    func = _defines_function(text, segs)  # O(s * n)
     loop = func or any(_loopy(s) for s in segs)  # O(s)
     wloop, rolled = func or any(_loopy(s, False) for s in segs), ctx.rolled  # a for loop the walk unrolls runs its copies in order: the variables need no second walk | O(s)
     # `{ ...; } && cd x`: the lexer flattens the group and drops its `&&`, so every cd may not run | O(n)
@@ -1113,7 +1136,17 @@ def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, th
         v = _walk_text(body, sub, ctx, depth + 1)  # O(body)
         if v is not None:  # O(1)
             return v  # O(1)
-    if seg.subshell is not None:  # O(1)
+    arr = ctx.arrays.get(id(seg))  # O(1)
+    parts = _array_parts(seg) if arr is not None and arr[0] == "body" else None  # O(n)
+    if parts is not None:  # an array body: its words run nothing, its substitutions run | O(parts)
+        for part in parts:  # O(parts)
+            for body in part.bodies:  # O(bodies)
+                sub = st.fork(c.inn)  # O(v)
+                sub.stdin, sub.pipe = list(c.stdin), c.piped  # O(docs)
+                v = _walk_text(body, sub, ctx, depth + 1)  # O(body)
+                if v is not None:  # O(1)
+                    return v  # O(1)
+    elif seg.subshell is not None:  # O(1)
         sub = st.fork(c.inn)  # O(v)
         sub.stdin, sub.pipe = list(c.docs), c.piped  # a `( ... ) <<EOF` subshell reads the command's own docs too | O(docs)
         v = _walk_text(seg.subshell, sub, ctx, depth + 1)  # O(subshell)
@@ -1159,6 +1192,9 @@ def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, th
             for w, d in assigns:  # O(w)
                 name, val = w.split("=", 1)  # O(p)
                 plus, name = name.endswith("+"), name.rstrip("+")  # O(1)
+                if arr is not None and arr[0] == "head" and w == words[-1] and arr[1] == name:  # an array's value is unknown | O(1)
+                    _assign(st, name, None)  # O(1)
+                    continue  # O(1)
                 val = _expand(val, st, ctx, False) if d else val  # O(p)
                 if plus:  # `NAME+=x` appends to the value; one this command never set is unknown | O(1)
                     val = "$" if st.vars.get(name) is None else st.vars[name] + val  # O(p)
@@ -1172,6 +1208,35 @@ def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, th
     if neg:  # O(1)
         c.ok, c.fail = c.fail, c.ok  # O(1)
     return v  # O(1)
+
+
+def _array_parts(seg):  # O(n) | the segments of an array body when it holds only words and substitutions, else None
+    parts = guard_lex.split(seg.subshell)  # O(n)
+    if all(not x.redirects and not x.heredocs and x.subshell is None and x.sep in ("\n", "") for x in parts):  # O(parts)
+        return parts  # O(1)
+    return None  # O(1)
+
+
+def _arrays(text, segs):  # O(s * n) | id(segment) -> ("head"|"body", NAME, segment) for each `NAME=(words)` the lexer split in two
+    out = {}  # O(1)
+    for e in range(len(segs) - 1):  # O(s)
+        head, body = segs[e], segs[e + 1]  # O(1)
+        if head.sep != ";" or not head.words or body.words or body.subshell is None or not _lit(head, len(head.words) - 1):  # O(1)
+            continue  # O(1)
+        m = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\+?=", head.words[-1])  # O(p)
+        if m is None:  # O(1)
+            continue  # O(1)
+        k = _lead(head)  # O(w)
+        mid = head.words[k:-1]  # O(w)
+        if mid and mid[0] in DECLARE:  # `local -a NAME=(...)`: options, then assignments | O(1)
+            ok = all(x.startswith("-") or ASSIGN.match(x) for x in mid[1:])  # O(w)
+        else:  # O(1)
+            ok = all(ASSIGN.match(x) for x in mid)  # O(w)
+        name = m.group(1)  # O(1)
+        if not ok or not re.search(r"(^|[\s;&|(){}!])" + name + r"\+?=\(", text) or re.search(r"(^|[\s;&|(){}!])" + name + r"\+?=[ \t]*;", text):  # `x=; (cmd)` keeps the subshell walk | O(n)
+            continue  # O(1)
+        out[id(head)], out[id(body)] = ("head", name, head), ("body", name, body)  # O(1)
+    return out  # O(s)
 
 
 def _alternatives(seg, st):  # O(w * v + MAX_BRACE * v) | every mix of earlier values ({name: value}) of the reassigned variables the segment uses; None when over MAX_BRACE
@@ -1557,6 +1622,7 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
         _err(line)  # O(len)
     if v.kind != "protected":  # the protected message names no target | O(1)
         if v.word:  # the word the guard could not resolve | O(len)
+            _err(UNRESOLVED_HINT)  # the supported way, right before the word so the last lines stay as before | O(len)
             _err(f"Unresolved word: {_flat(v.word, 500)}")  # O(len)
         if named:  # the absolute path on its own line; the last line stays `Blocked target: <rel>` as before | O(len)
             _err(f"Absolute target: {_flat(v.abs, 500)}")  # O(len)

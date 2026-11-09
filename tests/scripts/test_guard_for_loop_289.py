@@ -312,3 +312,109 @@ def test_arithmetic_assignment_makes_variable_unknown(P, cmd):
 
 def test_arithmetic_for_header_with_literal_target_passes(P):
     assert run("for ((i=0;i<2;i++)); do echo hi > .superlite/n.log; done", P) is None
+
+
+# --- #351: unresolved targets: .superlite/ and plan writes from an unknown directory, prose "function", the hint
+
+
+@pytest.mark.parametrize("tgt", [".superlite/last-wait.txt", ".superlite/fixes/a.md"])
+def test_unknown_dir_state_writes_pass(P, tgt):
+    assert run(f"cd $X; echo hi > {tgt}", P) is None
+
+
+@pytest.mark.parametrize("tgt,kind", [
+    ("src/x.py", "code"), ("docs/a.md", "code"), ("docs/plans/x.md", "code"), ("docs/sub/plans/x.md", "code"), (".superlite/../src/x.py", "code"), ("x/.superlite/a", "code"),
+    (".superlite/orchestrator.json", "protected"),
+])
+def test_unknown_dir_other_writes_still_block(P, tgt, kind):
+    v = run(f"cd $X; echo hi > {tgt}", P)
+    assert v is not None and v.rel == tgt and v.kind == kind
+
+
+def test_unknown_dir_human_mode(P):
+    assert run("cd $X; echo hi > .superlite/a", P, "human") is None
+    v = run("cd $X; echo hi > docs/plans/x.review.md", P, "human")
+    assert v is not None and v.kind == "human"
+    v = run("cd $X; echo hi > docs/plans/x.md", P, "human")
+    assert v is not None and v.kind == "human"
+
+
+def test_variable_prefix_is_no_unknown_dir(P):
+    v = run("rm $X/.superlite/a", P)
+    assert v is not None and v.kind == "code" and v.word == "$X/.superlite/a"
+    v = run("IFS=/; echo hi > $CLAUDE_PROJECT_DIR/.superlite/a", P)
+    assert v is not None and v.kind == "code"
+
+
+def test_wait_file_after_unknown_dir_passes(P, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    cmd = (f"cd {out} && SL=/x/sl && $SL fleet stop W17 2>&1 | tail -1; ( git diff main --name-only -- '*.swift' ) "
+           "| sort -u | while read f; do [ -f \"$f\" ] && echo \"$f\"; done | xargs -n 20 swift format lint 2>&1 "
+           "| grep -c warning; W=$($SL run_tests --full --background 2>&1 | grep '^wait:'); "
+           "echo \"$W\" > .superlite/last-wait.txt; eval \"$W\" >/dev/null 2>&1")
+    assert run(cmd, P) is None
+
+
+def test_prose_function_word_is_no_function(P, tmp_path):
+    out = tmp_path / "out"
+    (out / "docs" / "plans").mkdir(parents=True)
+    cmd = (f"cd {out} && P=docs/plans/x.md && python3 - $P <<'EOF'\nimport sys\np=sys.argv[1]\n"
+           "open(p,'w').write('a #if DEBUG public function in Dashboard')\nEOF")
+    assert run(cmd, P) is None
+    assert run("cat <<'EOF' > .superlite/n.md\nf() { x; }\nEOF\necho hi > .superlite/a; cd docs", P) is None
+
+
+@pytest.mark.parametrize("cmd", [
+    "f() { echo hi > .superlite/a; }; cd docs; f",
+    "function f { echo hi > .superlite/a; }; cd docs; f",
+    "if true; then function f { echo hi > .superlite/a; }; fi; cd docs; f",
+    "cat <<'EOF' > .superlite/n.md\nnotes\nEOF\nf() { echo hi > .superlite/a; }; cd docs; f",
+])
+def test_real_function_body_still_runs_later(P, cmd):
+    v = run(cmd, P)
+    assert v is not None and v.rel == "docs/.superlite/a"
+
+
+@pytest.mark.parametrize("cmd", [
+    "f()\n{\necho hi > .superlite/a\n}\ncat <<'EOF' > .superlite/n.md\n{\nEOF\ncd docs; f",
+    "f()\n{\necho hi > .superlite/a\n}\ncd docs; f",
+])
+def test_heredoc_text_does_not_hide_a_function_definition(P, cmd):
+    v = run(cmd, P)
+    assert v is not None and v.rel == "docs/.superlite/a"
+
+
+@pytest.mark.parametrize("cmd,word", [
+    ("for B in $(awk '{print $2}' .superlite/route.txt); do echo x >> $B; done", "$B"),
+    ("for B in $(cat .superlite/r.txt); do echo x > .superlite/fixes/$B.md; done", ".superlite/fixes/$B.md"),
+])
+def test_unresolvable_loop_targets_stay_blocked(P, cmd, word):
+    v = run(cmd, P)
+    assert v == UNK and v.word == word
+
+
+def test_unresolved_block_names_the_supported_way(P, tmp_path, monkeypatch, capsys):
+    cmd = "for B in $(awk '{print $2}' .superlite/route.txt); do echo x >> $B; done"
+    code, err, rows = _main(P, tmp_path, monkeypatch, capsys, cmd)
+    lines = err.splitlines()
+    assert code == 2 and lines[-2:] == ["Unresolved word: $B", "Blocked command: " + cmd]
+    assert lines[-3] == guard_judge.UNRESOLVED_HINT
+    assert "Write or Edit tool" in guard_judge.UNRESOLVED_HINT and ".superlite/" in guard_judge.UNRESOLVED_HINT
+    code, err, rows = _main(P, tmp_path, monkeypatch, capsys, "rm src/a")
+    assert code == 2 and guard_judge.UNRESOLVED_HINT not in err
+
+
+def test_unknown_dir_state_write_follows_links(P):
+    import os
+    os.makedirs(P + "/src", exist_ok=True)
+    (Path(P) / "src/a.py").write_text("x")
+    os.symlink("../src/a.py", P + "/.superlite/l")
+    v = run("cd $X && echo hi > .superlite/l", P)
+    assert v is not None and v.rel == "src/a.py"
+    os.link(P + "/src/a.py", P + "/.superlite/h")
+    v = run("cd $X && echo hi > .superlite/h", P)
+    assert v is not None and v.kind == "code"
+    v = run("cd $X && ln -s ../src/a.py .superlite/m && echo hi > .superlite/m", P)
+    assert v is not None
+    assert run("cd $X && echo hi > .superlite/last-wait.txt", P) is None
