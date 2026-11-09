@@ -34,7 +34,7 @@ background `sl probe_run --commit SHA` and, for every seam of the task graph
 (`sl plan_tools taskgraph --format full`) that involves this task and whose both
 sides are now committed per the ledger, `sl pt_review contract --plan P --seam
 Ta,Tb --log LOG` (mismatches become incidents, a pass logs `verified`). Prints the
-SHA, or exits 1 listing the problem files. Run it from the repository root.
+SHA, or exits 1 listing the problem files. Without --plan, run it from the repository root; with --plan P it works in the checkout holding P (state.git_root), a P outside any checkout keeps the cwd.
 
 Scope rules: `tests/regression/` (where probe_run writes `test_probe_*.py`) is owned
 by whichever task is committing, so the task or review that fixes a defect commits
@@ -46,6 +46,7 @@ A tracked, modified (not new, not deleted) file under a `tests/` folder that no 
 commits with the task being committed (a fixer's edit to a shared test): `shared-test <path>`
 on stderr and a `workaround` incident `Tn: shared test adjusted` (resolution `accepted`).
 New tests, deletions and source files still block; T0 never takes shared tests.
+An owned file a checkpoint of this plan holds that git status no longer lists (back to its HEAD content, or a new file deleted) is staged again when it differs from the newest checkpoint; a restored one prints `restored F (back to its HEAD content)` on stderr.
 Stdlib only.
 """
 
@@ -426,15 +427,15 @@ def changed_vs_parent(files):  # O(m) + 2 git spawns, batched
     return [f for f in files if (f in have if f in gone else f not in now or have.get(f) != now[f])]  # O(m) unreadable hash = changed
 
 
-def deleted_owned(owns, live, plan):  # O(e*f + m) + 2 git spawns; checkpoint mode only
-    """Files this plan's checkpoints hold that this task owns and that are gone from disk and from git status."""
+def reverted_owned(owns, live, plan):  # O(e*f + m) + 2 git spawns; checkpoint mode only
+    """Files this plan's checkpoints hold that this task owns and that git status no longer lists (deleted, or back to HEAD) and differ from the newest checkpoint."""
     if autocommit.is_on():  # O(1)
         return []  # O(1)
     st = autocommit.load_state()  # O(1) file read
     if not st or autocommit.plan_key(st.get("plan")) != autocommit.plan_key(plan):  # same plan only | O(len)
         return []  # O(1)
     seen = {f for e in st.get("entries", []) for f in e.get("files", [])}  # O(e*f)
-    gone = [f for f in sorted(seen) if f not in live and not os.path.lexists(f) and nt.owns_match(f, owns)]  # O(f) stat
+    gone = [f for f in sorted(seen) if f not in live and nt.owns_match(f, owns)]  # O(f) stat
     return changed_vs_parent(gone) if gone else []  # O(m) + process spawns
 
 
@@ -573,7 +574,11 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     if out_of_scope and not autocommit.is_on():  # a file already in the parent checkpoint (an earlier --also) is no new change | O(1)
         keep = set(changed_vs_parent(out_of_scope))  # O(m) + process spawns
         out_of_scope = [f for f in out_of_scope if f in keep]  # O(m)
-    mine += deleted_owned(owns, live, a.plan)  # an owned file only the checkpoints hold, deleted since | O(e*f) + process spawns
+    back = reverted_owned(owns, live, a.plan)  # an owned file only the checkpoints hold, deleted or restored to HEAD since | O(e*f) + process spawns
+    for f in back:  # O(m) iterations
+        if os.path.lexists(f):  # a deleted one prints nothing | O(1) stat
+            print(f"restored {f} (back to its HEAD content)", file=sys.stderr)  # O(1)
+    mine += back  # O(m)
     if cand:  # a shared test already in the parent checkpoint is not this task's change | O(1)
         shared = changed_vs_parent(cand)  # O(m) + process spawns
         mine += shared  # O(m)
@@ -671,11 +676,17 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
                     help="record that the one named task also commits FILE (needs --ruling); commits nothing")  # O(1)
     ap.add_argument("--ruling", help="why --also or --claim is needed; written to the ledger")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    given = bool(a.plan)  # O(1)
     sd = state.for_plan(a.plan) if a.plan else state.resolve()  # the run folder: --plan's own once started (#178), else the session's | O(d)
     a.plan = a.plan or nt.DEFAULT_PLAN  # O(1)
     a.ledger = a.ledger or str(sd / "progress.md")  # defaults follow the parsed --plan, not the session's binding | O(1)
     a.log = a.log or str(sd / "incidents.jsonl")  # O(1)
     a.pool = a.pool or str(sd / "pool.json")  # O(1)
+    root = state.git_root(a.plan) if given else None  # O(d) stat walk, no spawn
+    if root and Path(root).resolve() != Path.cwd().resolve():  # --plan in another checkout: work there (#365) | O(1)
+        a.plan, a.ledger, a.log, a.pool = (os.path.abspath(x) for x in (a.plan, a.ledger, a.log, a.pool))  # O(1)
+        os.chdir(root)  # O(1)
+        os.environ["PWD"] = str(root)  # O(1)
     ids = [x for x in a.also + a.claim if re.fullmatch(r"T\d+", x) and not os.path.exists(x)]  # `--also F T1`: the greedy flag took the task id | O(k)
     a.also = [x for x in a.also if x not in ids]  # O(k)
     a.claim = [x for x in a.claim if x not in ids]  # `--claim F T1` too | O(k)
