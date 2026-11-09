@@ -107,3 +107,47 @@ def test_scratchpad_writes_pass(P, SP, mode):
     assert run(f"cd {SP} && python3 - <<'PY'\nopen('png.py','w').write('x')\nPY", P, mode) is None
     v = run(f"cd {SP}/missing; cat > png.py", P, mode)
     assert v is not None and v.rel == "png.py"
+
+
+# --- #352: an array assignment NAME=(words) assigns, it runs no command
+
+
+@pytest.mark.parametrize("cmd", [
+    "files=(tests/scripts/test_guard*.py tests/scripts/test_x.py)\nsl run_tests --fast $files",
+    "SL=/x/sl; files=(tests/scripts/test_guard*.py tests/scripts/test_x.py); $SL run_tests --fast $files",
+    "files=(rm src/x.py)",
+    "a=1 files+=(rm src/x.py)",
+    "local -a files=(src/*.py src/x.py)",
+    "declare -a files=(tee src/x.py)",
+    "export A=(rm src/x.py)",
+    "files=(\n  rm src/x.py\n)",
+    "if true; then files=(src/*.py src/x.py); fi",
+    "for f in a b; do files=(src/*.py src/$f.py); done",
+])
+@pytest.mark.parametrize("mode", ["active", "human"])
+def test_array_assignment_runs_no_command(P, cmd, mode):
+    assert run(cmd, P, mode) is None
+
+
+@pytest.mark.parametrize("cmd", ["x=(a $(rm src/x.py) b)", "x=(a `touch src/x.py`)", "x=(a)>src/x.py"])
+def test_array_substitution_and_redirect_still_judged(P, cmd):
+    v = run(cmd, P)
+    assert v is not None and v.rel == "src/x.py" and v.kind == "code"
+
+
+@pytest.mark.parametrize("cmd", [
+    "x=; (rm src/x.py)",
+    "x= ;(rm src/x.py)",
+    "x=\n(rm src/x.py)",
+    "x=(a); x=; (rm src/x.py)",
+    "x=(a; rm src/x.py)",
+])
+def test_subshell_after_empty_assignment_still_judged(P, cmd):
+    v = run(cmd, P)
+    assert v is not None and v.rel == "src/x.py" and v.kind == "code"
+
+
+@pytest.mark.parametrize("cmd", ["x=(src/x.py); rm $x", "x=(.superlite/a); x+=(b); echo hi > $x"])
+def test_array_value_is_unknown(P, cmd):
+    v = run(cmd, P)
+    assert v == UNK and v.word == "$x"
