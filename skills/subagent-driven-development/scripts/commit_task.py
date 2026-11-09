@@ -28,9 +28,11 @@ makes real commits.
 Steps: scope check (a change outside every task's Owns blocks the commit and is logged as an incident when it was dirty
 before the run (stable.json `baseline_dirty`) or the run recorded no baseline; with a baseline, any other such file is
 unrelated to the task: it is left uncommitted and listed as `left uncommitted (outside every Owns): F`; files another
-task owns is left uncommitted; when its owner is committed and not running and the file changed after the newest
+task owns are left uncommitted; when its owner is committed and not running and the file changed after the newest
 checkpoint, `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` says so. Each stderr note
-prints once per call, not once per task), py_compile plus an import check on each touched .py file, commit
+prints once per call, not once per task). A file this task owns that a running sibling (busy in pool.json, outside this call) also owns and that
+differs from the newest checkpoint is held out: one `left uncommitted (shared with running T2; commit_task T1 again once it is done): F` note per task;
+a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held), py_compile plus an import check on each touched .py file, commit
 with the task title, append the SHA to the progress ledger, then launch in the
 background `sl probe_run --commit SHA` and, for every seam of the task graph
 (`sl plan_tools taskgraph --format full`) that involves this task and whose both
@@ -417,7 +419,7 @@ def changed_vs_parent(files):  # O(m) + 2 git spawns, batched
     st = None if autocommit.is_on() else autocommit.load_state()  # O(1) file read
     parent = st["entries"][-1]["sha"] if st and st.get("entries") else "HEAD"  # O(1)
     have = {}  # path -> blob sha in parent | O(1)
-    for ln in git("ls-tree", "-z", parent, "--", *files).stdout.split("\0"):  # O(m) + process spawn
+    for ln in git("ls-tree", "-z", parent, "--", *files, check=False).stdout.split("\0"):  # O(m) + process spawn
         if ln:  # O(1)
             meta, _, p = ln.partition("\t")  # O(len)
             have[p] = meta.split()[2]  # O(1)
