@@ -161,3 +161,43 @@ def test_r1_keeps_an_entry_logged_after_start(tmp_path):  # no closing rule touc
     got = lines(p)
     assert len(got) == 2 and got[1]["context"] == "fixed: passed on a later run"
 
+
+
+def top(p):
+    return newest(lines(p)).get(("-", 0))
+
+
+def test_green_task_run_keeps_a_siblings_dash_failure_open(tmp_path):
+    a = entry(100.0, context="testA: failed")
+    b = entry(110.0, context="testB: failed", task="T4")
+    p = seed(tmp_path, a, b)
+    run_tests.resolve_passed(str(p), "T4", [], {}, green=True, started=200.0)
+    got = lines(p)[2:]
+    assert len(got) == 2
+    assert got[0]["file"] == "-" and got[0]["line"] == 0 and got[0]["resolution"] == "fixed" and got[0]["context"] == "fixed: a green T4 run" and got[0]["task"] == "T4"
+    assert got[1] == a
+    assert top(p)["resolution"] == "open" and top(p)["task"] == "T3"
+
+
+def test_interleaved_green_runs_close_the_location(tmp_path):
+    p = seed(tmp_path, entry(100.0, context="testA: failed"), entry(110.0, context="testB: failed", task="T4"))
+    run_tests.resolve_passed(str(p), "T4", [], {}, green=True, started=200.0)
+    n = len(lines(p))
+    run_tests.resolve_passed(str(p), "T3", [], {}, green=True, started=300.0)
+    got = lines(p)[n:]
+    assert len(got) == 1 and got[0]["context"] == "fixed: a green T3 run"
+    assert top(p)["resolution"] == "fixed"
+
+
+def test_stop_in_the_stretch_blocks_the_close(tmp_path):
+    p = seed(tmp_path, entry(100.0), entry(105.0, kind="no-result", task="T5"))
+    run_tests.resolve_passed(str(p), "T3", [], {}, green=True, started=200.0)
+    assert len(lines(p)) == 2
+
+
+def test_own_entry_after_start_is_kept(tmp_path):
+    late = entry(250.0, context="testC: failed")
+    p = seed(tmp_path, entry(100.0, context="testA: failed"), late)
+    run_tests.resolve_passed(str(p), "T3", [], {}, green=True, started=200.0)
+    got = lines(p)[2:]
+    assert len(got) == 2 and got[0]["context"] == "fixed: a green T3 run" and got[1] == late

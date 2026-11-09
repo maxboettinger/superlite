@@ -14,7 +14,7 @@ Prints `passed failed skipped seconds` (errors count as failed). Each failing
 test becomes a `test-failure` incident; on a --full run each test file whose
 tests all pass becomes a `verified` incident (once per distinct entry). With `--task Tn` each
 `test-failure` incident carries `task`, and a later run closes that task's open ones whose test
-now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a green `--task` run also closes that task's `-` failures and a green `--full` run without `--task` closes every run_tests failure (#380); a pytest run that produces
+now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a green `--task` run closes that task's `-` failures and re-logs other tasks' open ones there, and a green `--full` run without `--task` closes every run_tests failure (#380); a pytest run that produces
 no results logs one `no-result` incident (so does a non-Python run that prints no test count: `no tests ran:`). A `--fast` path that does not exist (node suffix `::` ignored) is a usage error: exit 2, `test path not found`, no incident. A Node project without `node_modules` is refused the same way
 (exit 2, `node_modules missing in <dir>: run <install> first`, no incident); in an isolated `--task` tree the root's and each workspace package's `node_modules` are symlinked in first (relative link, no setup command), and the guard checks the tree. Appends
 a `tests` line to the progress ledger. On every run it also writes
@@ -407,11 +407,12 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
     tmp.replace(p)  # O(1) rename
 
 
-def add_incidents(log, items, task=None, extra=None):  # O(total c) + one locked append (no spawn in process)
+def add_incidents(log, items, task=None, extra=None, raw=None):  # O(total c) + one locked append (no spawn in process)
     """items: (file, line, context, kind, resolution). A --task run stamps `task` on each entry; `extra` (a dict) is merged
     into every entry after `kind` and `task`; a kind outside
     incident.KINDS (`no-result`) is set after make_entry, as the hooks write theirs. Never spawns `incident add`,
-    which takes neither `task` nor `no-result` (SUPERLITE_SL swaps only the launcher)."""
+    which takes neither `task` nor `no-result` (SUPERLITE_SL swaps only the launcher). `raw`: dicts appended unchanged after the built
+    entries in the same append."""
     # always in process, also with SUPERLITE_SL: the spawned `incident add` takes neither task nor `no-result` | O(1)
     inc = nt.sibling("incident")  # O(1)
     entries = []  # O(1)
@@ -428,6 +429,7 @@ def add_incidents(log, items, task=None, extra=None):  # O(total c) + one locked
         if extra:  # O(1)
             e.update(extra)  # O(1)
         entries.append(e)  # O(1)
+    entries.extend(raw or [])  # O(r)
     try:  # O(1)
         inc.append(log, entries)  # O(total c) one locked write
     except OSError as err:  # O(1)
@@ -464,13 +466,14 @@ def record_no_result(a, reason, command, rc, lines, tree=None):  # O(L + c) log 
 
 def resolve_passed(log, task, failures, files, green=False, full=False, started=None):  # O(B + I + k) read the log once, one append (#180, #380)
     """Close open test-failure incidents logged before this run: a --task run closes its tests that pass now (`fixed: passed on a later run`);
-    a green --task run also closes that task's `-` failures (`fixed: a green <task> run`); a green --full run without --task closes every
+    a green --task run also closes that task's `-` failures (`fixed: a green <task> run`) and re-logs other tasks' open ones there, so a sibling's red stays open; a green --full run without --task closes every
     run_tests failure (`fixed: the full suite passed`). The entry is what `sl incident resolve` writes (kind of the open entry, resolution `fixed`)."""
     p = Path(log)  # O(1)
     if not p.exists() or not (task and files or green and (task or full)):  # O(1)
         return  # O(1)
     resolved = nt.sibling("pt_review").RESOLVED  # the resolutions the packet counts as closed; lazy | O(module)
     newest = {}  # location -> its newest non-verified entry, as the packet and `finish` count open | O(1)
+    stretch = {}  # `-` location -> its non-verified entries after its last resolved one, in log order | O(1)
     for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():  # O(I) iterations; read O(B)
         try:  # O(1)
             e = json.loads(ln)  # O(w)
@@ -478,6 +481,11 @@ def resolve_passed(log, task, failures, files, green=False, full=False, started=
             continue  # O(1)
         if isinstance(e, dict) and "file" in e and "line" in e and e.get("kind") != "verified":  # O(1)
             newest[(e["file"], e["line"])] = e  # O(1)
+            if e["file"] == "-":  # O(1)
+                if str(e.get("resolution", "")).lower() in resolved:  # O(1)
+                    stretch.pop((e["file"], e["line"]), None)  # O(1)
+                else:  # O(1)
+                    stretch.setdefault((e["file"], e["line"]), []).append(e)  # O(1)
     norm = lambda x: str(x).replace("\\", "/")  # noqa: E731 | O(len)
     ran = {norm(f) for f, (ok, _bad) in files.items() if ok}  # a file with no passing test (a collection error) closes nothing (#196) | O(F)
     failing = {(norm(f), ctx.split(": ", 1)[0]) for f, _line, ctx in failures}  # (file, test name) still red | O(k)
@@ -491,14 +499,24 @@ def resolve_passed(log, task, failures, files, green=False, full=False, started=
             return None  # O(1)
         if task and e.get("task") == task and norm(f) in ran and (norm(f), str(e.get("context", "")).split(": ", 1)[0]) not in failing:  # O(len)
             return "fixed: passed on a later run"  # O(1)
-        if task and green and e.get("task") == task and f == "-":  # O(1)
-            return f"fixed: a green {task} run"  # O(1)
         if not task and green and full and e.get("agent") == "run_tests":  # O(1)
             return "fixed: the full suite passed"  # O(1)
         return None  # O(1)
 
     items = [(f, line, c, "test-failure", "fixed") for (f, line), e in newest.items() if (c := context(f, e))]  # O(I)
-    add_incidents(log, items, task)  # O(total c) one append
+    raw = []  # O(1)
+    if task and green:  # O(1)
+        for (f, line), ents in stretch.items():  # O(I)
+            closable = [e for e in ents if e.get("kind") == "test-failure" and e.get("task") == task and before(e)]  # O(len)
+            keep = [e for e in ents if not (e.get("kind") == "test-failure" and e.get("task") == task and before(e))]  # O(len)
+            if not closable or any(e.get("kind") != "test-failure" for e in keep):  # a re-logged stop would be counted twice | O(len)
+                continue  # O(1)
+            items.append((f, line, f"fixed: a green {task} run", "test-failure", "fixed"))  # O(1)
+            last = {}  # (task, context) -> index of its newest kept entry | O(1)
+            for i, e in enumerate(keep):  # O(len)
+                last[(e.get("task"), e.get("context"))] = i  # O(1)
+            raw.extend(keep[i] for i in sorted(last.values()))  # exact copies, log order | O(len log len)
+    add_incidents(log, items, task, raw=raw)  # O(total c) one append
 
 
 def missing_fast_paths(paths):  # O(p) the --fast paths that do not exist (a `::node` suffix is dropped)
