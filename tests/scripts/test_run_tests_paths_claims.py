@@ -76,8 +76,8 @@ def two_tasks(tmp_path):
     return make_plan(tmp_path / "docs" / "plans", [{"id": "T1", "owns": "src/a.txt"}, {"id": "T2", "owns": "src/b.txt"}], name="p.md")
 
 
-def fast_t1(tmp_path, plan):
-    cp = go(tmp_path, "--fast", "src/a.txt", "--task", "T1", "--plan", str(plan))
+def full_t1(tmp_path, plan):
+    cp = go(tmp_path, "--full", "--task", "T1", "--plan", str(plan))
     assert cp.returncode == 0, cp.stdout + cp.stderr
     return tmp_path / ".superlite" / "trees" / "T1"
 
@@ -89,7 +89,7 @@ def test_claimed_file_reaches_the_tree(tmp_path):
                         cwd=tmp_path, capture_output=True, text=True, encoding="utf-8")
     assert cp.returncode == 0, cp.stdout + cp.stderr
     (tmp_path / "src" / "b.txt").write_text("new", encoding="utf-8")
-    tree = fast_t1(tmp_path, plan)
+    tree = full_t1(tmp_path, plan)
     assert (tree / "src" / "b.txt").read_text(encoding="utf-8") == "new"
 
 
@@ -99,14 +99,14 @@ def test_also_dir_entry_reaches_the_tree(tmp_path):
         f.write("- Ruling: T1 also commits src/c/ - why\n")
     (tmp_path / "src" / "c").mkdir()
     (tmp_path / "src" / "c" / "x.txt").write_text("c", encoding="utf-8")
-    tree = fast_t1(tmp_path, plan)
+    tree = full_t1(tmp_path, plan)
     assert (tree / "src" / "c" / "x.txt").read_text(encoding="utf-8") == "c"
 
 
 def test_unclaimed_file_stays_at_base(tmp_path):
     plan = two_tasks(tmp_path)
     (tmp_path / "src" / "b.txt").write_text("edited", encoding="utf-8")
-    tree = fast_t1(tmp_path, plan)
+    tree = full_t1(tmp_path, plan)
     assert (tree / "src" / "b.txt").read_text(encoding="utf-8") == "base"
 
 
