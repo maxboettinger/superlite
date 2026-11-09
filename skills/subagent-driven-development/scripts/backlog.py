@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -360,7 +360,9 @@ def cmd_plan(a) -> int:
         data["titles"] = {str(t["number"]): t["title"] for t in trusted}
         data["outside"] = outside
         data["approved_ship"] = None
-        data["batches"] += _renumber(copy.deepcopy(batches), data["batches"])
+        new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
+        data["batches"] += new  # O(b)
+        data["round"] = [x["id"] for x in new]  # O(b)
         shown["lines"] = bs.status_lines(data)
     bs.update(p, apply)
     print("\n".join(shown["lines"] + cuts))
@@ -448,7 +450,7 @@ def cmd_park(a) -> int:
 def cmd_status(a) -> int:
     import backlog_state as bs  # O(1)
     d = bs.load(bs.path(_root()))  # O(size)
-    lines = bs.status_lines(d)  # O(b)
+    lines = bs.status_lines(d, all_=getattr(a, "all", False))  # O(b)
     if all(b["state"] == "shipped" for b in d["batches"]):  # O(b) no batch yet, or every batch shipped (#369)
         lines.append("next: sl backlog plan")  # O(1)
     print("\n".join(lines))  # O(lines)
@@ -473,7 +475,9 @@ def main(argv=None) -> int:
         return backlog_ship.main(argv[1:])
     ap = argparse.ArgumentParser(prog="sl backlog")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("status").set_defaults(fn=cmd_status)
+    st = sub.add_parser("status")  # O(1)
+    st.add_argument("--all", action="store_true", help="list every batch, also the shipped batches of earlier plan rounds (#406)")  # O(1)
+    st.set_defaults(fn=cmd_status)  # O(1)
     pl = sub.add_parser("plan")
     pl.add_argument("--tier", default="sonnet")
     pl.add_argument("--timeout-min", type=int, default=60)
