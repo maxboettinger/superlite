@@ -156,6 +156,21 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
     return 0  # O(1)
 
 
+def pid_alive(mine):  # O(1) True when the pid recorded for a background run is a live process, False when gone or unknown (never claim a dead pid runs)
+    if os.name == "nt":  # O(1) no cheap liveness probe: say nothing
+        return False  # O(1)
+    try:  # O(1)
+        pid = int(mine.with_suffix(".pid").read_text(encoding="utf-8").strip())  # O(1)
+        if pid <= 0:  # O(1)
+            return False  # O(1)
+        os.kill(pid, 0)  # O(1)
+    except PermissionError:  # exists, owned by another user | O(1)
+        return True  # O(1)
+    except (OSError, ValueError):  # O(1)
+        return False  # O(1)
+    return True  # O(1)
+
+
 def wait_line(path):  # O(1)
     sl = str(Path(__file__).resolve().with_name("sl"))  # O(1) absolute: shell variables do not persist between calls
     return f'wait: {json.dumps(sl) if " " in sl else sl} run_tests --wait {path}'  # O(1)
@@ -231,7 +246,7 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
                 pid = int(mine.with_suffix(".pid").read_text(encoding="utf-8").strip())  # O(1)
             except (OSError, ValueError):  # O(1)
                 pass  # O(1)
-            alive = f" (pid {pid} still running)" if pid and pid > 0 else ""  # O(1)
+            alive = f" (pid {pid} still running)" if pid and pid > 0 and pid_alive(mine) else ""  # O(1)
             print(f"tests: no result yet after {limit:g} s{alive}; run again: {wait_line(mine)[len('wait: '):]}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         time.sleep(POLL_SECONDS)  # O(1)
@@ -472,10 +487,12 @@ def resolve_passed(log, task, failures, files, green=False, full=False, started=
         return started is None or isinstance(ep, bool) or not isinstance(ep, (int, float)) or ep < started  # O(1)
 
     def context(f, e):  # O(len) the closing context for the entry, or None to keep it open
-        if e.get("kind") != "test-failure" or str(e.get("resolution", "")).lower() in resolved or not before(e):  # O(1)
+        if e.get("kind") != "test-failure" or str(e.get("resolution", "")).lower() in resolved:  # O(1)
             return None  # O(1)
         if task and e.get("task") == task and norm(f) in ran and (norm(f), str(e.get("context", "")).split(": ", 1)[0]) not in failing:  # O(len)
             return "fixed: passed on a later run"  # O(1)
+        if not before(e):  # R2 and R3 never close an entry logged at or after this run's start | O(1)
+            return None  # O(1)
         if task and green and e.get("task") == task and f == "-":  # O(1)
             return f"fixed: a green {task} run"  # O(1)
         if not task and green and full and e.get("agent") == "run_tests":  # O(1)

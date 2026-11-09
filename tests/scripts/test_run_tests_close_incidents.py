@@ -148,3 +148,10 @@ def test_newest_no_result_keeps_the_location(tmp_path):
     p = seed(tmp_path, entry(100.0), entry(100.0, kind="no-result"))
     run_tests.resolve_passed(str(p), "T3", [], {}, green=True, started=200.0)
     assert len(lines(p)) == 2
+
+
+def test_r1_ignores_started(tmp_path):  # R1 (a --task test that passes now) keeps its old behaviour: no start-time gate
+    p = seed(tmp_path, entry(300.0, file="tests/test_a.py", context="test_x: failed"))
+    run_tests.resolve_passed(str(p), "T3", [], {"tests/test_a.py": [1, 0]}, green=False, started=200.0)
+    got = lines(p)
+    assert len(got) == 2 and got[1]["context"] == "fixed: passed on a later run"
