@@ -15,7 +15,7 @@ def line_starting(prefix):
 
 def test_research_row_names_missing_write_and_model_pin():
     row = line_starting("| `research` |")
-    for s in ("read-only (Read, Grep, Glob; no Write, Edit or shell)", "(`--tier sonnet\\|opus` pins another model)"):
+    for s in ("read-only (Read, Grep, Glob; no Write, Edit or shell)", "(`--tier haiku\\|opus` pins another model"):
         assert s in row, s
 
 

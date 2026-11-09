@@ -4,6 +4,7 @@
     fleet.py on [--accounts A,B] [--plan P] | off | status [--all]
     fleet.py spawn [--role R] [--tier T] --plan P | stop [IDS...] [--all]
     fleet.py spawn --for-dispatch --plan P    (one dispatch round: dispatch, spawn, send)
+    fleet.py report IDS... [--plan P]    (print a worker's last report, or a report by label; read-only)
     fleet.py send | keys | wait     (delegated to fleet_io)
     fleet.py run --layer headless|tui|evals     (delegated to fleet_layer)
 
@@ -12,6 +13,8 @@ Roles: implementer (default), fixer, package-reviewer, final-reviewer, research 
 Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-dispatch` prints one
 `Wn Tn[,Tm] sent` line per worker, `BLOCKED: Tn[,Tm] not sent (<reason>)` for a line that got no worker
 (the other lines still go out; exit 3); the Wave 0 line starts a haiku worker and sends it `briefs/wave0.md`.
+`--plan P` (or `--plan=P`) is checked first, for every subcommand: a path that is neither file nor folder, or whose state folder cannot be
+created, prints `error: --plan P: <reason>; ...` on stderr and exits 2, creating nothing (#372).
 A start that fails with `not an available shell` (a freed pane) is retried once after SHELL_PAUSE_S.
 While the run's fleet.json says off, `spawn` (both forms) starts nothing: `BLOCKED: fleet is off in <state dir>; run sl fleet on [--plan P] first ...`, exit 3 (#355).
 """
@@ -399,30 +402,98 @@ def _sd(a):  # O(d)
     return Path(state.resolve(getattr(a, "plan", None))).resolve()  # O(d)
 
 
+def _plan_arg(argv):  # the value of the last --plan P or --plan=P (argparse's pick), else None | O(n)
+    found = None  # O(1)
+    for i, x in enumerate(argv):  # O(n)
+        if x == "--plan" and i + 1 < len(argv):  # O(1)
+            found = argv[i + 1]  # O(1)
+        elif x.startswith("--plan="):  # O(1)
+            found = x[len("--plan="):]  # O(1)
+    return found  # O(1)
+
+
+def _plan_problem(plan):  # why a --plan value cannot hold a run, or "" | O(d)
+    pp = Path(plan)  # O(1)
+    if pp.exists() and not (pp.is_file() or pp.is_dir()):  # O(1) e.g. /dev/null
+        return "not a plan file or folder"  # O(1)
+    sd = state.plan_dir(plan).resolve()  # O(d)
+    if sd.is_dir():  # O(1)
+        return ""  # O(1)
+    d = sd.parent  # O(1)
+    while not d.exists() and d != d.parent:  # nearest existing ancestor | O(d)
+        d = d.parent  # O(1)
+    return "" if d.is_dir() and os.access(d, os.W_OK) else f"cannot create {sd}"  # O(1)
+
+
+def _report(sd, ids):  # print each worker's last report or a report by label; read-only | O(ids * file)
+    rd = sd / "fleet" / "reports"  # O(1)
+    ws = fs.workers(sd)  # O(w)
+    bad = False  # O(1)
+    for x in ids:  # O(ids)
+        label = x  # O(1)
+        if x in ws:  # O(1)
+            w = ws[x]  # O(1)
+            if w.get("state") == "busy":  # O(1)
+                print(f"error: {x} is busy on {w.get('task')}; run sl fleet wait {x} first", file=sys.stderr)  # O(1)
+                bad = True  # O(1)
+                continue  # O(1)
+            if w.get("state") == "blocked" or w.get("task"):  # a current task: last_task is an older label's report | O(1)
+                print(f"error: {x} is blocked on {w.get('task') or x} (BLOCKED-UI); screen: {sd / 'fleet' / 'screens' / f'{x}.txt'}", file=sys.stderr)  # O(1)
+                bad = True  # O(1)
+                continue  # O(1)
+            if not w.get("last_task"):  # O(1)
+                print(f"error: {x} has no collected report; run sl fleet wait {x} first", file=sys.stderr)  # O(1)
+                bad = True  # O(1)
+                continue  # O(1)
+            label = w["last_task"]  # O(1)
+        key = label.split(",")[0]  # O(1)
+        f = next((q for q in (rd / f"{key}.md", rd / f"{key}.json") if q.is_file()), None)  # O(1)
+        if f is None:  # O(1)
+            print(f"error: {x} {label}: no report file in {rd}" if x in ws else f"error: unknown worker or report label {x}", file=sys.stderr)  # O(1)
+            bad = True  # O(1)
+            continue  # O(1)
+        if len(ids) > 1:  # O(1)
+            print(f"== {x} {f}")  # O(1)
+        t = f.read_text(encoding="utf-8")  # O(file)
+        print(t, end="" if t.endswith("\n") else "\n")  # O(file)
+    return 1 if bad else 0  # O(1)
+
+
 def main(argv=None):  # O(w) plus command cost
     argv = list(sys.argv[1:] if argv is None else argv)  # O(n)
+    plan = _plan_arg(argv)  # O(n)
+    why = _plan_problem(plan) if plan is not None else ""  # O(d)
+    if why:  # O(1)
+        print(f"error: --plan {plan}: {why}; pass the plan file or the run's .superlite folder, or leave --plan out to use the current directory's run", file=sys.stderr)  # O(1)
+        return 2  # O(1)
     if argv and argv[0] in ("send", "keys", "wait"):  # O(1)
         return importlib.import_module("fleet_io").main(argv)  # O(1) delegated
     if argv and argv[0] == "run":  # a layer run: a shell pane per layer | O(1)
         return importlib.import_module("fleet_layer").main(argv[1:])  # O(1) delegated
     p = argparse.ArgumentParser(prog="fleet.py")  # O(1)
     sub = p.add_subparsers(dest="cmd", required=True)  # O(1)
-    s = sub.add_parser("on")  # O(1)
+    s = sub.add_parser("on", help="turn fleet mode on")  # O(1)
     s.add_argument("--accounts", default="")  # O(1)
     s.add_argument("--plan")  # O(1)
-    sub.add_parser("off").add_argument("--plan")  # O(1)
-    s = sub.add_parser("status")  # O(1)
+    sub.add_parser("off", help="stop every worker and turn fleet mode off").add_argument("--plan")  # O(1)
+    s = sub.add_parser("status", help="list the workers")  # O(1)
     s.add_argument("--plan")  # O(1)
     s.add_argument("--all", action="store_true")  # O(1) also stopped and blocked workers
-    s = sub.add_parser("spawn")  # O(1)
+    s = sub.add_parser("spawn", help="start a worker")  # O(1)
     s.add_argument("--role", default="implementer")  # O(1) checked by fleet_roles, which names the valid roles
     s.add_argument("--tier", default=None)  # O(1) the implementer's default is sonnet, a fixer's tier is 1/2/3
     s.add_argument("--plan")  # O(1)
     s.add_argument("--for-dispatch", action="store_true")  # O(1) run dispatch, spawn per `fresh` line, send each line's tasks
-    s = sub.add_parser("stop")  # O(1)
+    s = sub.add_parser("stop", help="close workers")  # O(1)
     s.add_argument("ids", nargs="*")  # O(1)
     s.add_argument("--all", action="store_true")  # O(1)
     s.add_argument("--plan")  # O(1)
+    s = sub.add_parser("report", help="print a worker's last report")  # O(1)
+    s.add_argument("ids", nargs="+")  # O(1)
+    s.add_argument("--plan")  # O(1)
+    for n, h in (("send", "send tasks, a brief or text to a worker"), ("keys", "send keys to a worker's pane"),  # O(1) delegated before parsing: these feed --help only
+                 ("wait", "wait for busy workers to report"), ("run", "run a test layer in a shell pane")):  # O(1)
+        sub.add_parser(n, help=h)  # O(1)
     a = p.parse_args(argv)  # O(n)
     sd = _sd(a)  # O(d)
     if a.cmd == "on":  # O(1)
@@ -470,6 +541,8 @@ def main(argv=None):  # O(w) plus command cost
         except ValueError as e:  # an unknown role or tier | O(1)
             print(f"error: {e}", file=sys.stderr)  # O(1)
             return 2  # O(1)
+    elif a.cmd == "report":  # O(ids * file)
+        return _report(sd, a.ids)  # O(ids * file)
     elif a.cmd == "stop":  # O(w)
         for wid in stop(sd, a.ids, a.all):  # O(w)
             print(f"stopped {wid}")  # O(1)
