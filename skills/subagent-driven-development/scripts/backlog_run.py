@@ -10,6 +10,7 @@ Status line is re-prompted once (`reprompted`), then parked. A question.json is 
 description; each cut is reported as `shortened:`); one still invalid is sent back to the lead once
 (`question_reprompted`), then parked. A stop record whose transcript lags (blank, or
 without the status its `last` holds) is re-read for fleet_io.READ_MS, then parked "(transcript unread)".
+A lead whose brief Herdr refuses (after send_brief's one resend on a stall) is stopped and its batch keeps its state (BLOCKED line, exit 2).
 Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
 """
 # Complexity notation: b = batches, w = workers, m = lines of metrics.jsonl
@@ -159,7 +160,13 @@ def cmd_start(a) -> int:
             rec = fleet_lead.spawn_lead(sd, wt, a.model)  # O(1) + spawns
         except SystemExit as e:  # O(1)
             return e.code if isinstance(e.code, int) else 3  # O(1)
-        fleet_io.send_brief(sd, rec["id"], str(brief), bid)  # O(w)
+        try:  # O(1)
+            fleet_io.send_brief(sd, rec["id"], str(brief), bid)  # O(w)
+        except fleet.hc.HerdrError as e:  # O(1)
+            _stop(sd, rec["id"])  # O(w)
+            print(f"BLOCKED: {bid} lead {rec['id']} got no brief ({e}); lead stopped, rerun sl backlog start {bid}")  # O(1)
+            code = 2  # O(1)
+            continue  # O(1)
 
         def mark(d, bid=bid, rec=rec, wt=wt, branch=branch):  # O(b)
             x = bs.batch(d, bid)
