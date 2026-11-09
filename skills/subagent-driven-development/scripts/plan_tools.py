@@ -22,6 +22,7 @@ import argparse  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
 import json  # O(1)
+import os  # O(1)
 import re  # O(1)
 import sys  # O(1)
 from dataclasses import dataclass, field  # O(1)
@@ -189,7 +190,17 @@ class Task:  # O(1)
         return " ".join(x for x in self.fields.get(name, []) if x).strip()  # O(k*s)
 
     @property  # O(1)
-    def owns(self) -> list[str]:  # O(k*s*A)
+    def repo(self) -> dict | None:  # O(k*s) the external repository this task changes, None for a local task
+        if not self.fields.get("repo"):  # O(1)
+            return None  # O(1)
+        return {"root": strip_ticks(self.field_text("repo")), "test": strip_ticks(self.field_text("repo test")), "ship": strip_ticks(self.field_text("repo ship"))}  # O(k*s)
+
+    @property  # O(1)
+    def owns(self) -> list[str]:  # O(k*s*A) the local view: an external task owns nothing here
+        return [] if self.repo else self.written_owns  # O(k*s*A)
+
+    @property  # O(1)
+    def written_owns(self) -> list[str]:  # O(k*s*A)
         out: list[str] = []  # O(1)
         for raw in self.fields.get("owns", []):  # O(k) iterations
             for part in split_top_level(raw):  # O(parts) iterations; split O(s)
@@ -1245,7 +1256,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         except Exception:  # plan outside the root or no state dir: nothing reserved | O(1)
             reserved = set()  # O(1)
     for t in plan.tasks:  # O(n) iterations
-        if not t.owns:  # O(k*s*A)
+        if not t.written_owns:  # O(k*s*A)
             issues.append(Issue(f"{t.id}: no **Owns:** line", [t.id]))  # O(1)
             continue  # O(1)
         folder = ""  # folder of the last path entry before a bare name | O(1)
@@ -1253,23 +1264,25 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         for raw in t.fields.get("owns", []):  # O(k) iterations
             for part in split_top_level(raw):  # O(parts) iterations
                 ent = strip_ticks(re.sub(r"\s+\([^)]*\)\s*$", "", strip_ticks(re.sub(r"^[-*]\s+", "", part.strip()))).strip())  # drop a trailing (note), then the ticks around the path | O(s)
-                if ent.removeprefix("./") in reserved:  # O(s)
+                if not t.repo and ent.removeprefix("./") in reserved:  # O(s)
                     issues.append(Issue(f"{t.id}: Owns `{ent}` is the build report `sl finish` writes; give the task's own report another name (e.g. `<stem>.report.md`)", [t.id]))  # O(1)
                 if not ent or re.search(r"[*?\[{]", ent):  # globs and braces are not bare names | O(s)
                     continue  # O(1)
                 if "/" in ent:  # O(1)
                     prev = ent  # O(1)
                     folder = ent.rsplit("/", 1)[0] if not ent.endswith("/") else ""  # O(s)
-                elif folder and not (plan.path and (stable_root(str(plan.path)) / ent).exists()):  # O(d) existing root file is fine
+                elif folder and not (plan.path and ((repo_root(str(plan.path), t.repo["root"]) if t.repo else stable_root(str(plan.path))) / ent).exists()):  # O(d) existing root file is fine
                     issues.append(Issue(f"{t.id}: Owns entry `{ent}` has no folder (after `{prev}`); write the full path (`{folder}/{ent}`) or list root-level files before paths", [t.id]))  # O(1)
     if graph:  # O(1)
         anc = ancestors(graph)  # O(e*n)
         for a_i, a in enumerate(plan.tasks):  # O(n) iterations
             for b in plan.tasks[a_i + 1:]:  # O(n) iterations; n^2 pairs total
                 if a.id in graph and b.id in graph and a.id not in anc[b.id] and b.id not in anc[a.id]:  # O(1)
-                    shared = sorted(set(a.owns) & set(b.owns))  # O(k*s*A) re-parses owns per pair; hotspot
+                    shared = sorted({o for r, o in {((a.repo or {}).get("root", ""), o) for o in a.written_owns} & {((b.repo or {}).get("root", ""), o) for o in b.written_owns}})  # O(k*s*A) re-parses owns per pair; hotspot
                     if shared:  # O(1)
                         issues.append(Issue(f"{a.id} and {b.id} can run in parallel but both own {', '.join(shared)}", [a.id, b.id]))  # O(1)
+
+    issues.extend(repo_issues(plan))  # O(n*k*s)
 
     # Consumes / Produces consistency
     produced: dict[str, list[tuple[str, dict]]] = {}  # O(1)
@@ -1499,6 +1512,56 @@ def stable_root(plan_path: str) -> Path:  # O(d) directory that holds .superlite
     return state.plan_dir(plan_path).parent  # O(d)
 
 
+def repo_root(plan_path: str, written: str) -> Path:  # O(d) the external repository root a task names, resolved
+    p = Path(os.path.expanduser(written))  # O(s)
+    return (p if p.is_absolute() else stable_root(plan_path) / p).resolve()  # O(d)
+
+
+def repo_issues(plan: Plan) -> list:  # O(n*k*s) lint the **Repo:** fields of every task
+    out: list = []  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        repo = t.repo  # O(k*s)
+        if repo is None:  # O(1)
+            if t.fields.get("repo test") or t.fields.get("repo ship"):  # O(1)
+                out.append(Issue(f"{t.id}: **Repo test:** or **Repo ship:** without a **Repo:** line (the other repository's root)", [t.id]))  # O(1)
+            continue  # O(1)
+        if not repo["test"]:  # O(1)
+            out.append(Issue(f"{t.id}: external repo task has no **Repo test:** line (the test command run in its tree)", [t.id]))  # O(1)
+        if not repo["ship"]:  # O(1)
+            out.append(Issue(f"{t.id}: external repo task has no **Repo ship:** line (the commit/ship step, e.g. maxapp ship -C {{tree}})", [t.id]))  # O(1)
+        elif "{tree}" not in repo["ship"] and "{root}" not in repo["ship"]:  # O(s)
+            out.append(Issue(f"{t.id}: **Repo ship:** names neither {{tree}} nor {{root}}; it would run in the coordinator's checkout", [t.id]))  # O(1)
+        if not plan.path:  # O(1)
+            continue  # O(1)
+        try:  # O(1)
+            root = repo_root(str(plan.path), repo["root"])  # O(d)
+            here = stable_root(str(plan.path)).resolve()  # O(d)
+        except (OSError, ValueError):  # O(1)
+            continue  # O(1)
+        if not root.is_dir():  # O(1)
+            out.append(Issue(f"{t.id}: **Repo:** {repo['root']} is not a folder ({root})", [t.id]))  # O(1)
+        elif not (root / ".git").exists():  # O(1)
+            out.append(Issue(f"{t.id}: **Repo:** {repo['root']} is not a git checkout ({root})", [t.id]))  # O(1)
+        elif root == here:  # O(1)
+            out.append(Issue(f"{t.id}: **Repo:** {repo['root']} is this repository; drop the Repo lines", [t.id]))  # O(1)
+    return out  # O(1)
+
+
+def external_brief(plan_path: str | None, task: Task, sl: str = "sl") -> list[str]:  # O(d) the worker text of an external task, [] for a local one
+    repo = task.repo  # O(k*s)
+    if not repo:  # O(1)
+        return []  # O(1)
+    root = str(repo_root(plan_path, repo["root"])) if plan_path else repo["root"]  # O(d)
+    plan = plan_path or "$PLAN"  # O(1)
+    return [  # O(1)
+        "## External repository",
+        f"This task changes another repository: {root} (**Repo:** {repo['root']}). Owns paths are relative to its tree.",
+        f"1. Tree: `{sl} plan_tools external {task.id} --plan {plan}` makes or reuses the task's worktree of that repository and prints `tree: <path>`; edit only there.",
+        f"2. Verify: `{sl} plan_tools external {task.id} --plan {plan} --test` runs `{repo['test']}` in the tree; not run_tests.",
+        "3. Do not commit or ship: the coordinator runs `--commit`, the **Repo ship:** step and `--done`.",
+    ]
+
+
 def dispatched_tasks(sl_dir: Path) -> set[str]:  # O(c + pool)
     out: set[str] = set()  # O(1)
     ledger = sl_dir / "progress.md"  # O(1)
@@ -1531,7 +1594,7 @@ def startable(plan: Plan, sl_dir: Path) -> set[str]:  # O(L + n + e)
     w0 = not plan.header_wave0_off()  # the Wave 0 skeleton stubs each produced interface, so a consumer need not wait for its producer | O(L)
 
     def covered(t, d: str) -> bool:  # O(k*s)
-        return w0 and (d, t.id) not in hard and d in plan.by_id and bool({sig_text(i) for i in t.consumes} & {sig_text(i) for i in plan.by_id[d].produces})  # O(k*s)
+        return w0 and (d, t.id) not in hard and d in plan.by_id and not plan.by_id[d].repo and bool({sig_text(i) for i in t.consumes} & {sig_text(i) for i in plan.by_id[d].produces})  # O(k*s)
     return {t.id for t in plan.tasks if t.id not in drafts and all(d in done or covered(t, d) for d in graph.get(t.id, []))}  # O(n + e*k*s)
 
 
