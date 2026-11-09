@@ -330,16 +330,26 @@ def apply(squash=True):
         sys.exit("apply: refused, files edited after their checkpoint: "
                  + ", ".join(edited[:8]) + (" ..." if len(edited) > 8 else "")
                  + "; checkpoint them again with `sl commit_task`, or commit the files yourself with `git add -A && git commit`")
-    for e, tree in chain:
+    ptree = git("rev-parse", f"{start}^{{tree}}").stdout.strip() if start else EMPTY_TREE  # O(1)
+    done, skipped = [], []  # O(1)
+    for e, tree in chain:  # O(n)
+        if tree == ptree:  # O(1)
+            skipped.append(e)  # O(1)
+            continue  # O(1)
         parent = git("commit-tree", tree, "-m", e["title"],
-                     *(["-p", parent] if parent else [])).stdout.strip()
-    git("update-ref", "-m", "superlite: apply checkpoints", "HEAD", parent, *([start] if start else []))
-    git("reset", "-q", "--", *sorted(files), env={"GIT_LITERAL_PATHSPECS": "1"})  # the run's files to the new HEAD; unrelated staged changes stay staged, the tree is untouched
+                     *(["-p", parent] if parent else [])).stdout.strip()  # O(1)
+        ptree = tree  # O(1)
+        done.append(e)  # O(1)
+    if done:  # O(1)
+        git("update-ref", "-m", "superlite: apply checkpoints", "HEAD", parent, *([start] if start else []))  # O(1)
+        git("reset", "-q", "--", *sorted(files), env={"GIT_LITERAL_PATHSPECS": "1"})  # the run's files to the new HEAD; unrelated staged changes stay staged, the tree is untouched  # O(f)
     if note:
         print(note)
-    print(f"applied {len(plan)} commit(s) on {st.get('branch') or 'HEAD'}:")
-    for e in plan:
+    print(f"applied {len(done)} commit(s) on {st.get('branch') or 'HEAD'}:")
+    for e in done:
         print(f"- {e['title']}")
+    for e in skipped:
+        print(f"apply: skipped {e['title']} (no change left)")
     if left:
         print("apply: left uncommitted: " + ", ".join(left[:8]) + (" ..." if len(left) > 8 else ""))
     clean()
