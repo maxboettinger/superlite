@@ -38,7 +38,7 @@ def test_fast_overlay_holds_unfinished_sibling_files(tmp_path, monkeypatch):
     (tmp_path / "src/a.py").write_text("new", encoding="utf-8")
     (tmp_path / "src/b.py").write_text("new", encoding="utf-8")
     (tmp_path / "README.md").write_text("r", encoding="utf-8")
-    assert call(tmp_path, plan, tmp_path / ".superlite" / "l.md", monkeypatch) == (["README.md", "src/b.py"], ["src/a.py"])
+    assert call(tmp_path, plan, tmp_path / ".superlite" / "l.md", monkeypatch) == (["README.md", "src/b.py"], {"src/a.py": ["T1"]})
 
 
 def test_committed_sibling_files_are_overlaid(tmp_path, monkeypatch):
@@ -49,13 +49,13 @@ def test_committed_sibling_files_are_overlaid(tmp_path, monkeypatch):
     ledger = tmp_path / ".superlite" / "l.md"
     ledger.write_text("- commit T1 5e9dd8b464 x\n", encoding="utf-8")
     got = call(tmp_path, plan, ledger, monkeypatch)
-    assert got == (["README.md", "src/a.py", "src/b.py"], []), got
+    assert got == (["README.md", "src/a.py", "src/b.py"], {}), got
 
 
 def test_own_file_shared_with_a_sibling_is_overlaid(tmp_path, monkeypatch):
     plan = repo(tmp_path, owns=("src/s.py", "src/s.py"))
     (tmp_path / "src/s.py").write_text("new", encoding="utf-8")
-    assert call(tmp_path, plan, tmp_path / ".superlite" / "l.md", monkeypatch) == (["src/s.py"], [])
+    assert call(tmp_path, plan, tmp_path / ".superlite" / "l.md", monkeypatch) == (["src/s.py"], {})
 
 
 def swift(tmp_path):
@@ -83,3 +83,14 @@ def test_claimed_file_of_unfinished_sibling_is_held(tmp_path):
     cp = run(RUN_TESTS, "--fast", "src/b.py", "--task", "T2", "--plan", plan, "--ledger", ledger, cwd=tmp_path)
     assert cp.returncode == 0, cp.both
     assert (tmp_path / ".superlite/trees/T2/src/c.py").read_text(encoding="utf-8") == "base"
+
+
+def test_ledger_is_read_once_per_fast_overlay(tmp_path, monkeypatch):
+    plan = repo(tmp_path)
+    for f in ("src/a.py", "src/b.py", "README.md"):
+        (tmp_path / f).write_text("new", encoding="utf-8")
+    calls = []
+    real = rt.ct.committed_tasks
+    monkeypatch.setattr(rt.ct, "committed_tasks", lambda *a, **k: calls.append(1) or real(*a, **k))
+    call(tmp_path, plan, tmp_path / ".superlite" / "l.md", monkeypatch)
+    assert len(calls) == 1
