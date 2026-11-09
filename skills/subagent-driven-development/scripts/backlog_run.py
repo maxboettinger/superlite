@@ -149,7 +149,7 @@ def cmd_start(a) -> int:
         wt, _ = worktree.ensure(f"{bid.lower()}-{batch['topic']}", root)  # O(w) + spawns
         wt = Path(wt)  # O(1)
         backlog.seed_test_cmd(root, wt)  # main's .superlite/test-cmd.json before the brief (#334) | O(size)
-        branch ="superlite/" + wt.name.replace("superlite-", "", 1)  # O(1)
+        branch = "superlite/" + wt.name.replace("superlite-", "", 1)  # O(1)
         ctx = {"sl": str(HERE / "sl"), "backlog_md": str(HERE.parent / "backlog.md"), "repo": data.get("repo", ""),
                "approved": data.get("approved_ship"), "titles": data.get("titles", {}), "summaries": summaries,
                "resume": batch["state"] == "parked" and bool(batch.get("worktree"))}  # O(1)
