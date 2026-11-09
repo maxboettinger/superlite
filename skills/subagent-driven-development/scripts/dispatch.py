@@ -123,10 +123,11 @@ def make_batches(ready, tier, info, times, max_ctx, cp=(), busy_left=(), solo_mo
     if solo_mode or not ready:  # O(1)
         return [[t] for t in ready]  # O(R)
     cp = set(cp)  # O(|cp|)
-    by_tier = {}  # O(1)
+    by_tier, ext = {}, [t for t in ready if info.get(t, {}).get("repo")]  # external tasks never batch | O(R)
+    ready = [t for t in ready if t not in ext]  # O(R)
     for t in ready:  # O(R)
         by_tier.setdefault(tier(t), []).append(t)  # O(1)
-    batches = []  # O(1)
+    batches = [[t] for t in ext]  # O(R)
     for tr, ids in by_tier.items():  # O(tiers)
         ms = [sp.tenths(times.get(t, nt.DEFAULT_TIME)) for t in ids]  # O(R)
         ctx = [int(info.get(t, {}).get("est_context") or asg.DEFAULT_CONTEXT_K) for t in ids]  # O(R)
@@ -137,9 +138,16 @@ def make_batches(ready, tier, info, times, max_ctx, cp=(), busy_left=(), solo_mo
             continue  # O(1)
         for group in r[3]:  # O(A)
             batches.append([ids[i] for i in group])  # O(|group|)
-    order = {t: k for k, t in enumerate(ready)}  # O(R)
+    order = {t: k for k, t in enumerate(ready + ext)}  # O(R)
     batches.sort(key=lambda g: (-sum(times.get(t, nt.DEFAULT_TIME) for t in g), order[g[0]]))  # longest first | O(R log R)
     return batches  # O(R)
+
+
+def external_hints(lines, info):  # O(R)
+    """One stderr hint per external-repository task among the dispatch lines (tasks is "Tn" or "Tn,Tm")."""
+    return [f"external={t} root={info[t]['repo']['root']}: the worker edits its tree (plan_tools external {t}); after DONE run "  # O(R)
+            f"plan_tools external {t} --commit, the printed ship: line, then --done, not commit_task"  # O(1)
+            for tasks, _ in lines for t in tasks.split(",") if (info.get(t) or {}).get("repo")]  # O(R)
 
 
 def is_idle(ag):  # O(1)
@@ -277,6 +285,8 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=Non
     lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0, sl_dir=Path(pool_path).parent, batch=batch, held=held)  # see plan_dispatch
     for t, r in held.items():  # O(h)
         print(f"held={t} {r}", file=sys.stderr)  # O(1)
+    for hint in external_hints(lines, nt.parse_plan(plan)):  # O(R)
+        print(hint, file=sys.stderr)  # O(1)
     nt.print_unstable(nt.stable_blocked(plan, graph, done, busy, nt.taskgraph_full(plan).get("status", {}), held))  # O(n + e + S)
     drop_evicted(pool_path, evict)  # an evicted agent is never offered by a later round | O(pool bytes)
     if w0:  # first line, a haiku lane agent | O(R)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """plan_tools: mechanical tooling for superlite plans (D17).
 
-Subcommands implemented here: taskgraph, stubs, schedule, lint.
+Subcommands implemented here: taskgraph, stubs, schedule, lint, external.
 Subcommands adapter, packet and contract live in pt_review.py (lazy import).
 
 Exit codes: 0 ok, 1 findings (stubs import failure, lint issues), 2 bad plan or usage.
@@ -22,7 +22,11 @@ import argparse  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
 import json  # O(1)
+import os  # O(1)
 import re  # O(1)
+import shlex  # O(1)
+import signal  # O(1)
+import subprocess  # O(1)
 import sys  # O(1)
 from dataclasses import dataclass, field  # O(1)
 from datetime import datetime  # O(1)
@@ -189,7 +193,17 @@ class Task:  # O(1)
         return " ".join(x for x in self.fields.get(name, []) if x).strip()  # O(k*s)
 
     @property  # O(1)
-    def owns(self) -> list[str]:  # O(k*s*A)
+    def repo(self) -> dict | None:  # O(k*s) the external repository this task changes, None for a local task
+        if not self.fields.get("repo"):  # O(1)
+            return None  # O(1)
+        return {"root": strip_ticks(self.field_text("repo")), "test": strip_ticks(self.field_text("repo test")), "ship": strip_ticks(self.field_text("repo ship"))}  # O(k*s)
+
+    @property  # O(1)
+    def owns(self) -> list[str]:  # O(k*s*A) the local view: an external task owns nothing here
+        return [] if self.repo else self.written_owns  # O(k*s*A)
+
+    @property  # O(1)
+    def written_owns(self) -> list[str]:  # O(k*s*A)
         out: list[str] = []  # O(1)
         for raw in self.fields.get("owns", []):  # O(k) iterations
             for part in split_top_level(raw):  # O(parts) iterations; split O(s)
@@ -1245,7 +1259,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         except Exception:  # plan outside the root or no state dir: nothing reserved | O(1)
             reserved = set()  # O(1)
     for t in plan.tasks:  # O(n) iterations
-        if not t.owns:  # O(k*s*A)
+        if not t.written_owns:  # O(k*s*A)
             issues.append(Issue(f"{t.id}: no **Owns:** line", [t.id]))  # O(1)
             continue  # O(1)
         folder = ""  # folder of the last path entry before a bare name | O(1)
@@ -1253,23 +1267,25 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         for raw in t.fields.get("owns", []):  # O(k) iterations
             for part in split_top_level(raw):  # O(parts) iterations
                 ent = strip_ticks(re.sub(r"\s+\([^)]*\)\s*$", "", strip_ticks(re.sub(r"^[-*]\s+", "", part.strip()))).strip())  # drop a trailing (note), then the ticks around the path | O(s)
-                if ent.removeprefix("./") in reserved:  # O(s)
+                if not t.repo and ent.removeprefix("./") in reserved:  # O(s)
                     issues.append(Issue(f"{t.id}: Owns `{ent}` is the build report `sl finish` writes; give the task's own report another name (e.g. `<stem>.report.md`)", [t.id]))  # O(1)
                 if not ent or re.search(r"[*?\[{]", ent):  # globs and braces are not bare names | O(s)
                     continue  # O(1)
                 if "/" in ent:  # O(1)
                     prev = ent  # O(1)
                     folder = ent.rsplit("/", 1)[0] if not ent.endswith("/") else ""  # O(s)
-                elif folder and not (plan.path and (stable_root(str(plan.path)) / ent).exists()):  # O(d) existing root file is fine
+                elif folder and not (plan.path and ((repo_root(str(plan.path), t.repo["root"]) if t.repo else stable_root(str(plan.path))) / ent).exists()):  # O(d) existing root file is fine
                     issues.append(Issue(f"{t.id}: Owns entry `{ent}` has no folder (after `{prev}`); write the full path (`{folder}/{ent}`) or list root-level files before paths", [t.id]))  # O(1)
     if graph:  # O(1)
         anc = ancestors(graph)  # O(e*n)
         for a_i, a in enumerate(plan.tasks):  # O(n) iterations
             for b in plan.tasks[a_i + 1:]:  # O(n) iterations; n^2 pairs total
                 if a.id in graph and b.id in graph and a.id not in anc[b.id] and b.id not in anc[a.id]:  # O(1)
-                    shared = sorted(set(a.owns) & set(b.owns))  # O(k*s*A) re-parses owns per pair; hotspot
+                    shared = sorted({o for r, o in {(_repo_key(plan, a), o) for o in a.written_owns} & {(_repo_key(plan, b), o) for o in b.written_owns}})  # O(k*s*A) re-parses owns per pair; hotspot
                     if shared:  # O(1)
                         issues.append(Issue(f"{a.id} and {b.id} can run in parallel but both own {', '.join(shared)}", [a.id, b.id]))  # O(1)
+
+    issues.extend(repo_issues(plan))  # O(n*k*s)
 
     # Consumes / Produces consistency
     produced: dict[str, list[tuple[str, dict]]] = {}  # O(1)
@@ -1499,6 +1515,221 @@ def stable_root(plan_path: str) -> Path:  # O(d) directory that holds .superlite
     return state.plan_dir(plan_path).parent  # O(d)
 
 
+def repo_root(plan_path: str, written: str) -> Path:  # O(d) the external repository root a task names, resolved
+    p = Path(os.path.expanduser(written))  # O(s)
+    return (p if p.is_absolute() else stable_root(plan_path) / p).resolve()  # O(d)
+
+
+def _repo_key(plan: Plan, t: Task) -> str:  # O(d) the resolved external root of a task, "" for a local one
+    if not t.repo:  # O(1)
+        return ""  # O(1)
+    try:  # O(1)
+        return str(repo_root(str(plan.path), t.repo["root"])) if plan.path else t.repo["root"]  # O(d)
+    except (OSError, ValueError):  # O(1)
+        return t.repo["root"]  # O(1)
+
+
+def repo_issues(plan: Plan) -> list:  # O(n*k*s) lint the **Repo:** fields of every task
+    out: list = []  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        repo = t.repo  # O(k*s)
+        if repo is None:  # O(1)
+            if t.fields.get("repo test") or t.fields.get("repo ship"):  # O(1)
+                out.append(Issue(f"{t.id}: **Repo test:** or **Repo ship:** without a **Repo:** line (the other repository's root)", [t.id]))  # O(1)
+            continue  # O(1)
+        if not repo["root"]:  # O(1)
+            out.append(Issue(f"{t.id}: **Repo:** line is empty; name the other repository's root", [t.id]))  # O(1)
+            continue  # O(1)
+        if not repo["test"]:  # O(1)
+            out.append(Issue(f"{t.id}: external repo task has no **Repo test:** line (the test command run in its tree)", [t.id]))  # O(1)
+        if not repo["ship"]:  # O(1)
+            out.append(Issue(f"{t.id}: external repo task has no **Repo ship:** line (the commit/ship step, e.g. maxapp ship -C {{tree}})", [t.id]))  # O(1)
+        elif "{tree}" not in repo["ship"] and "{root}" not in repo["ship"]:  # O(s)
+            out.append(Issue(f"{t.id}: **Repo ship:** names neither {{tree}} nor {{root}}; it would run in the coordinator's checkout", [t.id]))  # O(1)
+        if not plan.path:  # O(1)
+            continue  # O(1)
+        try:  # O(1)
+            root = repo_root(str(plan.path), repo["root"])  # O(d)
+            here = stable_root(str(plan.path)).resolve()  # O(d)
+        except (OSError, ValueError):  # O(1)
+            continue  # O(1)
+        if not root.is_dir():  # O(1)
+            out.append(Issue(f"{t.id}: **Repo:** {repo['root']} is not a folder ({root})", [t.id]))  # O(1)
+        elif not (root / ".git").exists():  # O(1)
+            out.append(Issue(f"{t.id}: **Repo:** {repo['root']} is not a git checkout ({root})", [t.id]))  # O(1)
+        elif root == here:  # O(1)
+            out.append(Issue(f"{t.id}: **Repo:** {repo['root']} is this repository; drop the Repo lines", [t.id]))  # O(1)
+    return out  # O(1)
+
+
+def external_brief(plan_path: str | None, task: Task, sl: str = "sl") -> list[str]:  # O(d) the worker text of an external task, [] for a local one
+    repo = task.repo  # O(k*s)
+    if not repo:  # O(1)
+        return []  # O(1)
+    root = str(repo_root(plan_path, repo["root"])) if plan_path else repo["root"]  # O(d)
+    plan = shlex.quote(plan_path) if plan_path else "$PLAN"  # O(1)
+    return [  # O(1)
+        "## External repository",
+        f"This task changes another repository: {root} (**Repo:** {repo['root']}). Owns paths are relative to its tree.",
+        f"1. Tree: `{sl} plan_tools external {task.id} --plan {plan}` makes or reuses the task's worktree of that repository and prints `tree: <path>`; edit only there.",
+        f"2. Verify: `{sl} plan_tools external {task.id} --plan {plan} --test` runs `{repo['test']}` in the tree; not run_tests.",
+        "3. Do not commit or ship: the coordinator runs `--commit`, the **Repo ship:** step and `--done`.",
+    ]
+
+
+def _git(root, *args) -> subprocess.CompletedProcess:  # O(git) run git in a folder, never raising on a failed exit
+    return subprocess.run(["git", "-C", str(root), *map(str, args)], capture_output=True, text=True, encoding="utf-8", errors="replace")  # O(git)
+
+
+def _ext_task(plan_path: str, tid: str) -> tuple[Plan, Task]:  # O(L + n) the plan and its external task, or PlanError
+    plan = Plan.load(plan_path)  # O(C+L)
+    task = plan.by_id.get(tid)  # O(1)
+    if task is None:  # O(1)
+        raise PlanError(f"unknown task {tid}")  # O(1)
+    if not task.repo:  # O(k*s)
+        raise PlanError(f"{tid} is not an external repo task (no **Repo:** line); use commit_task")  # O(1)
+    return plan, task  # O(1)
+
+
+def _ext_paths(plan_path: str, task: Task) -> tuple[Path, Path, Path, str]:  # O(d) root, tree, record file, branch
+    import state  # O(1)
+    root = repo_root(plan_path, task.repo["root"])  # O(d)
+    repos = state.plan_dir(plan_path) / "repos"  # O(d)
+    stem = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", Path(plan_path).stem)  # O(s)
+    return root, repos / task.id, repos / f"{task.id}.json", f"superlite/{stem}-{task.id.lower()}"  # O(1)
+
+
+def _ext_expand(text: str, root: Path, tree: Path) -> str:  # O(s)
+    def sub(m):  # a path is shell-quoted unless the command already wraps the placeholder in quotes | O(1)
+        before, after = text[:m.start()][-1:], text[m.end():][:1]  # O(1)
+        val = str(tree if m.group(0) == "{tree}" else root)  # O(1)
+        return val if before in "'\"" and before and before == after else shlex.quote(val)  # O(s)
+    return re.sub(r"\{tree\}|\{root\}", sub, text)  # O(s)
+
+
+def _ext_record(rec_path: Path) -> dict:  # O(r) the saved tree record, {} when absent
+    try:  # O(1)
+        return json.loads(rec_path.read_text(encoding="utf-8"))  # O(r)
+    except (OSError, ValueError):  # O(1)
+        return {}  # O(1)
+
+
+def ensure_tree(plan_path: str, task: Task) -> dict:  # O(git) make or reuse the task's worktree of the external repository
+    root, tree, rec_path, branch = _ext_paths(plan_path, task)  # O(d)
+    if not (root / ".git").exists():  # O(1)
+        raise PlanError(f"{task.id}: **Repo:** {task.repo['root']} is not a git checkout ({root})")  # O(1)
+    rec = _ext_record(rec_path)  # O(r)
+    if (tree / ".git").exists():  # O(1)
+        return {"root": str(root), "tree": str(tree), "branch": branch, "base": rec.get("base") or _git(root, "rev-parse", "HEAD").stdout.strip(), **{k: v for k, v in rec.items() if k == "sha"}}  # O(git)
+    if tree.exists() and any(tree.iterdir()):  # O(f)
+        raise PlanError(f"{task.id}: {tree} exists but is no worktree; remove it")  # O(f)
+    tree.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+    _git(root, "worktree", "prune")  # a deleted tree stays registered and blocks worktree add | O(git)
+    head = _git(root, "rev-parse", "HEAD").stdout.strip()  # O(git)
+    if _git(root, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}").returncode == 0:  # O(git)
+        cp = _git(root, "worktree", "add", tree, branch)  # O(git)
+    else:  # O(1)
+        cp = _git(root, "worktree", "add", "-b", branch, tree, head)  # O(git)
+    if cp.returncode != 0:  # O(1)
+        raise PlanError(f"{task.id}: git worktree add failed: {(cp.stderr.strip().splitlines() or [''])[0]}")  # O(s)
+    info = {"root": str(root), "tree": str(tree), "branch": branch, "base": rec.get("base") or head}  # O(1)
+    rec_path.write_text(json.dumps({**rec, **info}, indent=1) + "\n", encoding="utf-8")  # O(1)
+    return info  # O(1)
+
+
+def _ext_test(task: Task, info: dict, timeout: float) -> int:  # O(test run) run the task's test command in its tree
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_FLEET_")}  # O(env)
+    cmd = _ext_expand(task.repo["test"], Path(info["root"]), Path(info["tree"]))  # O(s)
+    posix = os.name == "posix"  # O(1)
+    proc = subprocess.Popen(cmd, shell=True, cwd=info["tree"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", start_new_session=posix)  # own process group so a timeout reaches children | O(1)
+    try:  # O(1)
+        out, _ = proc.communicate(timeout=timeout)  # O(run)
+        code, verdict = proc.returncode, "PASS" if proc.returncode == 0 else f"FAIL (exit {proc.returncode})"  # O(1)
+    except subprocess.TimeoutExpired:  # O(1)
+        try:  # O(1)
+            os.killpg(proc.pid, signal.SIGKILL) if posix else proc.kill()  # O(1)
+        except OSError:  # O(1)
+            pass  # O(1)
+        try:  # O(1)
+            out, _ = proc.communicate(timeout=5)  # O(out)
+        except subprocess.TimeoutExpired:  # a child escaped the group and holds the pipe | O(1)
+            out = ""  # O(1)
+        code, verdict = 1, f"FAIL (timeout after {timeout:g}s)"  # O(1)
+    out = out or ""  # O(1)
+    for ln in out.splitlines()[-40:]:  # O(40) iterations
+        print(ln)  # O(s)
+    print(f"external {task.id} test: {verdict}")  # O(1)
+    return 0 if code == 0 else 1  # O(1)
+
+
+def _ext_commit(plan_path: str, task: Task, info: dict, rec_path: Path) -> int:  # O(git) commit the Owns files of the tree
+    import next_tasks  # O(1)
+    tree = Path(info["tree"])  # O(1)
+    if not (tree / ".git").exists():  # O(1)
+        raise PlanError(f"{task.id}: no tree at {tree}; run plan_tools external {task.id} --plan {shlex.quote(plan_path)} first")  # O(1)
+    _git(tree, "add", "-A")  # O(git)
+    staged = [f for f in _git(tree, "diff", "--cached", "--name-only", "-z").stdout.split("\0") if f]  # -z: no quoting of non-ASCII paths | O(f)
+    owns = task.written_owns  # O(k*s*A)
+    outside = [f for f in staged if not next_tasks.owns_match(f, owns)]  # O(f*o)
+    for f in outside:  # O(f) iterations
+        _git(tree, "reset", "-q", "--", f":(literal){f}")  # O(git)
+    if outside:  # O(1)
+        print(f"left uncommitted (outside Owns): {', '.join(outside)}", file=sys.stderr)  # O(f)
+    if len(outside) < len(staged):  # O(1)
+        cp = _git(tree, "commit", "-q", "-m", f"{task.title} ({task.id})")  # O(git)
+        if cp.returncode != 0:  # O(1)
+            raise PlanError(f"{task.id}: git commit failed: {(cp.stderr.strip() or cp.stdout.strip()).splitlines()[0] if (cp.stderr.strip() or cp.stdout.strip()) else ''}")  # O(s)
+    elif _git(tree, "rev-parse", "HEAD").stdout.strip() == info["base"]:  # O(git)
+        print(f"nothing to commit for {task.id}", file=sys.stderr)  # O(1)
+        return 1  # O(1)
+    sha = _git(tree, "rev-parse", "HEAD").stdout.strip()  # O(git)
+    rec_path.write_text(json.dumps({**_ext_record(rec_path), **info, "sha": sha}, indent=1) + "\n", encoding="utf-8")  # O(1)
+    print(f"{task.id} {sha[:10]}")  # O(1)
+    print(f"ship: {_ext_expand(task.repo['ship'], Path(info['root']), tree)}")  # O(s)
+    print(f"then: plan_tools external {task.id} --plan {shlex.quote(plan_path)} --done")  # O(s)
+    return 0  # O(1)
+
+
+def _ext_done(args, plan_path: str, task: Task, rec: dict, root: Path) -> int:  # O(ledger + pool) record the task in the ledger once
+    import commit_task  # O(1)
+    import state  # O(1)
+    sha = args.sha or rec.get("sha")  # O(1)
+    if not sha:  # O(1)
+        raise PlanError(f"{task.id}: no commit recorded; run --commit first or pass --sha")  # O(1)
+    if _git(root, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}").returncode != 0:  # O(git)
+        raise PlanError(f"{task.id}: commit {sha} not found in {root}")  # O(1)
+    sha = _git(root, "rev-parse", f"{sha}^{{commit}}").stdout.strip()  # O(git)
+    sl_dir = state.for_plan(plan_path)  # O(d)
+    ledger, pool = args.ledger or sl_dir / "progress.md", args.pool or sl_dir / "pool.json"  # O(1)
+    if task.id in commit_task.committed_tasks(ledger):  # O(c)
+        print(f"{task.id}: already recorded")  # O(1)
+        return 0  # O(1)
+    commit_task.append_ledger(ledger, f"- commit {task.id} {sha[:10]} {task.title} (repo {root})")  # O(1)
+    commit_task.release_agents(pool, [task.id])  # O(pool bytes)
+    print(f"{task.id} {sha[:10]} recorded")  # O(1)
+    return 0  # O(1)
+
+
+def cmd_external(args) -> int:  # O(git + test run) the tree, test, commit and done steps of an external repository task
+    plan, task = _ext_task(args.plan, args.task)  # O(C+L)
+    root, tree, rec_path, branch = _ext_paths(args.plan, task)  # O(d)
+    if args.done:  # O(1)
+        return _ext_done(args, args.plan, task, _ext_record(rec_path), root)  # O(ledger + pool)
+    if args.commit:  # O(1)
+        if not (tree / ".git").exists():  # O(1)
+            raise PlanError(f"{task.id}: no tree at {tree}; run plan_tools external {task.id} --plan {shlex.quote(args.plan)} first")  # O(1)
+        return _ext_commit(args.plan, task, ensure_tree(args.plan, task), rec_path)  # O(git)
+    info = ensure_tree(args.plan, task)  # O(git)
+    if args.test:  # O(1)
+        return _ext_test(task, info, args.timeout)  # O(test run)
+    print(f"root: {info['root']}")  # O(1)
+    print(f"tree: {info['tree']}")  # O(1)
+    print(f"branch: {info['branch']}")  # O(1)
+    print(f"test: {_ext_expand(task.repo['test'], Path(info['root']), Path(info['tree']))}")  # O(s)
+    print(f"ship: {_ext_expand(task.repo['ship'], Path(info['root']), Path(info['tree']))}")  # O(s)
+    return 0  # O(1)
+
+
 def dispatched_tasks(sl_dir: Path) -> set[str]:  # O(c + pool)
     out: set[str] = set()  # O(1)
     ledger = sl_dir / "progress.md"  # O(1)
@@ -1531,7 +1762,7 @@ def startable(plan: Plan, sl_dir: Path) -> set[str]:  # O(L + n + e)
     w0 = not plan.header_wave0_off()  # the Wave 0 skeleton stubs each produced interface, so a consumer need not wait for its producer | O(L)
 
     def covered(t, d: str) -> bool:  # O(k*s)
-        return w0 and (d, t.id) not in hard and d in plan.by_id and bool({sig_text(i) for i in t.consumes} & {sig_text(i) for i in plan.by_id[d].produces})  # O(k*s)
+        return w0 and (d, t.id) not in hard and d in plan.by_id and not plan.by_id[d].repo and bool({sig_text(i) for i in t.consumes} & {sig_text(i) for i in plan.by_id[d].produces})  # O(k*s)
     return {t.id for t in plan.tasks if t.id not in drafts and all(d in done or covered(t, d) for d in graph.get(t.id, []))}  # O(n + e*k*s)
 
 
@@ -1810,6 +2041,19 @@ def build_parser():  # O(1) total
     p.add_argument("--stable", action="store_true", help="partition tasks into STABLE and FIX; writes .superlite/stable.json")
     add_predictor_args(p)  # O(1)
     p.set_defaults(func=cmd_lint)  # O(1)
+
+    p = sub.add_parser("external", help="tree, test, commit and done steps of a task that changes another repository (**Repo:**)")  # O(1)
+    p.add_argument("task")  # O(1)
+    p.add_argument("--plan", required=True)  # O(1)
+    mode = p.add_mutually_exclusive_group()  # O(1)
+    mode.add_argument("--test", action="store_true", help="run the **Repo test:** command in the tree")  # O(1)
+    mode.add_argument("--commit", action="store_true", help="commit the Owns files of the tree, print the ship step")  # O(1)
+    mode.add_argument("--done", action="store_true", help="record the task in the ledger and free its pool agent")  # O(1)
+    p.add_argument("--sha", help="--done: the shipped commit (default: the one --commit saved)")  # O(1)
+    p.add_argument("--timeout", type=float, default=600, help="--test: seconds (default 600)")  # O(1)
+    p.add_argument("--ledger", help="--done: ledger file (default: the run's progress.md)")  # O(1)
+    p.add_argument("--pool", help="--done: pool file (default: the run's pool.json)")  # O(1)
+    p.set_defaults(func=cmd_external)  # O(1)
 
     for name in REVIEW_COMMANDS:  # O(1)
         sub.add_parser(name, help="implemented in pt_review.py")  # O(1)
