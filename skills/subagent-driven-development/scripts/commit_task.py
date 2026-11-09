@@ -34,7 +34,7 @@ background `sl probe_run --commit SHA` and, for every seam of the task graph
 (`sl plan_tools taskgraph --format full`) that involves this task and whose both
 sides are now committed per the ledger, `sl pt_review contract --plan P --seam
 Ta,Tb --log LOG` (mismatches become incidents, a pass logs `verified`). Prints the
-SHA, or exits 1 listing the problem files. Run it from the repository root.
+SHA, or exits 1 listing the problem files. Without --plan, run it from the repository root; with --plan P it works in the checkout holding P (state.git_root), a P outside any checkout keeps the cwd.
 
 Scope rules: `tests/regression/` (where probe_run writes `test_probe_*.py`) is owned
 by whichever task is committing, so the task or review that fixes a defect commits
@@ -675,11 +675,17 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
                     help="record that the one named task also commits FILE (needs --ruling); commits nothing")  # O(1)
     ap.add_argument("--ruling", help="why --also or --claim is needed; written to the ledger")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    given = bool(a.plan)  # O(1)
     sd = state.for_plan(a.plan) if a.plan else state.resolve()  # the run folder: --plan's own once started (#178), else the session's | O(d)
     a.plan = a.plan or nt.DEFAULT_PLAN  # O(1)
     a.ledger = a.ledger or str(sd / "progress.md")  # defaults follow the parsed --plan, not the session's binding | O(1)
     a.log = a.log or str(sd / "incidents.jsonl")  # O(1)
     a.pool = a.pool or str(sd / "pool.json")  # O(1)
+    root = state.git_root(a.plan) if given else None  # O(1) git spawn
+    if root and Path(root).resolve() != Path.cwd().resolve():  # --plan in another checkout: work there (#365) | O(1)
+        a.plan, a.ledger, a.log, a.pool = (os.path.abspath(x) for x in (a.plan, a.ledger, a.log, a.pool))  # O(1)
+        os.chdir(root)  # O(1)
+        os.environ["PWD"] = str(root)  # O(1)
     ids = [x for x in a.also + a.claim if re.fullmatch(r"T\d+", x) and not os.path.exists(x)]  # `--also F T1`: the greedy flag took the task id | O(k)
     a.also = [x for x in a.also if x not in ids]  # O(k)
     a.claim = [x for x in a.claim if x not in ids]  # `--claim F T1` too | O(k)
