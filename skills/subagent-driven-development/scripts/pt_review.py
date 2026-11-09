@@ -621,6 +621,7 @@ def locate(root: Path, plan: Plan, p: Planned) -> tuple[str, list[str], Path | N
             return module_name(root, f), parts[k:], f  # O(d)
     owned = [root / o for o in plan.tasks[p.task].owns()  # O(o*m)
              if o.endswith(".py") and not TEST_PATH_RE.search(o)]  # O(d)
+    owned += [root / o for o in test_owns(plan, p.task) if o.endswith(".py")]  # owned test helpers after the sources | O(o*m)
     for f in owned:  # O(o) iterations; short module names (`slug.slugify` -> src/sitegen/slug.py) | O(d) per module_name
         mod = module_name(root, f)  # O(d)
         for k in range(len(parts), 0, -1):  # O(d) iterations; full dotted name, or last component for k == 1
@@ -686,17 +687,21 @@ def code_owns(plan: Plan, tid: str) -> list[str]:  # O(o*m) total
     return [o for o in source_owns(plan, tid) if Path(o).suffix in DECL_PATTERNS or o.endswith(".py")]  # O(o)
 
 
+def test_owns(plan: Plan, tid: str) -> list[str]:  # O(o*m) total
+    return [o for o in plan.tasks[tid].owns() if is_test_path(o) and (Path(o).suffix in DECL_PATTERNS or o.endswith(".py"))]  # O(o)
+
+
 def by_declaration(plan: Plan, tid: str) -> bool:  # O(o*m) total
     owned = code_owns(plan, tid)  # O(o*m)
     return bool(owned) and not any(o.endswith(".py") for o in owned)  # O(o)
 
 
-def find_declaration(root: Path, files: list[str], name: str) -> tuple[str, int] | None:  # O(F*B) total
-    """First (file, line) that declares `name`; comments, strings and test files are ignored."""  # O(1)
+def find_declaration(root: Path, files: list[str], name: str, *, tests: bool = False) -> tuple[str, int] | None:  # O(F*B) total
+    """First (file, line) that declares `name`; comments and strings are ignored, test files only with `tests`."""  # O(1)
     for rel in files:  # O(F) iterations
         pat = DECL_PATTERNS.get(Path(rel).suffix)  # O(1)
         f = root / rel  # O(1)
-        if not pat or is_test_path(rel) or not f.is_file():  # O(d)
+        if not pat or (is_test_path(rel) and not tests) or not f.is_file():  # O(d)
             continue  # O(1)
         rx = re.compile(SWIFT_INIT_RE if name == "init" and f.suffix == ".swift" else pat.replace("{name}", re.escape(name)))  # a Swift init has no keyword before its name | O(m)
         lines = f.read_text(encoding="utf-8", errors="replace").splitlines()  # O(B)
@@ -729,10 +734,11 @@ def find_declaration(root: Path, files: list[str], name: str) -> tuple[str, int]
 def check_declarations(plan: Plan, root: Path, p: Planned) -> list[Mismatch]:  # O(F*B) total
     files = code_owns(plan, p.task)  # O(o*m)
     leaf = p.parts[-1]  # O(m)
-    hit = find_declaration(root, files, leaf)  # O(F*B)
+    tfiles = test_owns(plan, p.task)  # O(o*m)
+    hit = find_declaration(root, files, leaf) or find_declaration(root, tfiles, leaf, tests=True)  # O(F*B)
     if hit:  # O(1)
         return []  # O(1)
-    shown = ", ".join(files)  # O(m)
+    shown = ", ".join(files + tfiles)  # O(m)
     return [Mismatch(1, files[0], 1, f"{p.task} Produces: `{leaf}` not declared in {shown}", p.task)]  # O(1)
 
 
