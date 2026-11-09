@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Pick the failing eval cases whose with-plugin runs disagree, so evals.sh reruns each once."""
+from __future__ import annotations  # O(1)
+import json  # O(1)
+import re  # O(1)
+import sys  # O(1)
+
+SAFE = re.compile(r"[A-Za-z0-9._-]+")  # O(1)
+
+
+def retry_cases(result: dict) -> tuple[list[str], str]:  # O(cases * runs)
+    if result.get("partial"):  # O(1)
+        return [], "partial run"  # O(1)
+    threshold = (result.get("suite") or {}).get("threshold", 1.0)  # O(1)
+    failing = []  # O(1)
+    for c in result.get("cases") or []:  # O(cases)
+        score = (c.get("aggregates") or {}).get("score")  # O(1)
+        if score is None or score < threshold:  # O(1)
+            failing.append(c)  # O(1)
+    if not failing:  # O(1)
+        return [], "no failing case"  # O(1)
+    names = []  # O(1)
+    for c in failing:  # O(cases)
+        name = str(c.get("name", ""))  # O(1)
+        runs = [bool(r.get("passed")) for r in (c.get("arms") or {}).get("with") or []]  # O(runs)
+        scored = (c.get("aggregates") or {}).get("score") is not None  # O(1)
+        if not (scored and True in runs and False in runs):  # O(1)
+            return [], f"{name} failed every run"  # O(1)
+        if not SAFE.fullmatch(name):  # O(1)
+            return [], f"unsafe case name: {name}"  # O(1)
+        names.append(name)  # O(1)
+    return names, ""  # O(1)
+
+
+def main(argv: list[str]) -> int:  # O(size)
+    try:  # O(1)
+        with open(argv[0], encoding="utf-8") as f:  # O(1)
+            data = json.load(f)  # O(size)
+    except (OSError, ValueError, IndexError):  # O(1)
+        print("evals_retry: cannot read result JSON", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    names, reason = retry_cases(data if isinstance(data, dict) else {})  # O(cases * runs)
+    if not names:  # O(1)
+        print(reason, file=sys.stderr)  # O(1)
+        return 1  # O(1)
+    print("\n".join(names))  # O(cases)
+    return 0  # O(1)
+
+
+if __name__ == "__main__":  # O(1)
+    sys.exit(main(sys.argv[1:]))  # O(1)

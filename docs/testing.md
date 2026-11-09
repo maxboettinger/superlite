@@ -40,3 +40,4 @@ To turn the hook off for one session, set `SUPERLITE_TEST_LAYERS=off`.
 - Run e2e and evals once per change, not once per edit. They spend quota.
 - A change is done only when every layer its paths require ran green since the change, or a ruling records why one was skipped.
 - The e2e tests need `SUPERLITE_E2E=1`. Without it they skip, and the skip is not a pass.
+- A red evals run reruns, once, each failing case whose with-plugin runs disagree (one passed, one failed): `scripts/evals_retry.py` picks them from `evals/results/last.json`, and the suite is green when every rerun is green. A case that failed every run stays red.
