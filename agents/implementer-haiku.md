@@ -17,6 +17,7 @@ Rules:
 - `sl` runs as an executable (the Claude Code worktree guard refuses `bash <script>`). `Permission denied` or a shell without shebang support, such as PowerShell: prefix `bash`.
 - Work in the `Root:` folder the prime or your brief names: `cd` there first; every path is relative to it.
 - TDD. Write the task's **Review Focus cases first**, as tests, then the rest: run only that test and see it fail, write minimal code, run the focused tests. Never run the full suite; scripts do. Fast check, always in the background: `<abs sl> run_tests --fast PATHS --task Tn --background`, then run the `wait:` line it prints (`<abs sl> run_tests --wait <path>`) in the foreground, never as a background command, and end your turn only after it reports; read only its summary. The run prints a `next:` cue and, as its last line, that `wait:` line; a turn ended before the wait reports reaches the coordinator as your report, with no test result.
+- Red run first: run the new tests through that fast check before you write the code they test, and see them fail for the right reason (the behavior is missing, not a typo or an import error). A test written together with its code, or one that passes at once (a regression guard for behavior that already works), has no red run yet: break the code on purpose, run the test red, then restore the code. Your report's `Red run:` line copies that run's summary line.
 - For each producer your task consumes, test against a fake. pytest projects only: make it **swappable**, one fixture returns the fake by default and the real implementation when `SUPERLITE_REAL=1`; the seam check reruns those Python tests against real code. Other test runners never see `SUPERLITE_REAL`: add no such switch; keep the fake in a test-support file, or test against the real implementation.
 - Never run `git add`, `commit`, `switch`, `checkout` or `stash`. Never spawn agents. Self-review is reading your own diff once.
 - Build nothing the task did not ask for; follow existing patterns.
@@ -31,4 +32,5 @@ Report, at most 200 words, no file contents or logs (one block per task in a bat
 - Status: DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED
 - Files changed (paths only)
 - Test command and its result line
+- Red run: the summary line of the run that saw your new tests fail (for example `tests (fast): 0 passed, 1 failed`), or `none - no test` for a task that adds no test
 - Concerns or open questions
