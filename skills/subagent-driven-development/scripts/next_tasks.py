@@ -147,7 +147,8 @@ def read_text(path):  # O(L)
 def parse_plan(plan):  # O(L)
     """{task id: info}, in plan order.
 
-    info: title, est_time (min), est_context (k tokens), owns (list), body.
+    info: title, est_time (min), est_context (k tokens), owns (list), repo, body.
+    repo: {"root", "test", "ship"} for a task in another repository (owns is then []), else None.
     """
     lines = read_text(plan).split("\n")  # O(L)
     fenced, _ = sibling("plan_tools").scan_fences(lines)  # O(L)
@@ -176,12 +177,16 @@ def parse_plan(plan):  # O(L)
         if parts and parts[0] == "":  # O(1)
             parts = parts[1:]  # O(1)
         title = re.sub(r"\s+", " ", parts[0]) if parts else ""  # O(len title)
+        root = _field(body, "Repo").strip().strip("`").strip()  # O(len body)
+        repo = {"root": root, "test": _field(body, "Repo test").strip().strip("`").strip(),  # O(len body)
+                "ship": _field(body, "Repo ship").strip().strip("`").strip()} if root else None  # O(len body)
         out[tid] = {  # O(1)
             "id": tid,  # O(1)
             "title": title or tid,  # O(1)
             "est_time": _num(r"Est\.?\s*time:?\*{0,2}\s*([\d.]+)\s*min", head, plain),  # O(len body) regex
             "est_context": _num(r"Est\.?\s*context:?\*{0,2}\s*([\d.]+)\s*k", head, plain),  # O(len body) regex
-            "owns": parse_owns(_field(body, "Owns")),  # O(len body + owns text)
+            "owns": [] if repo else parse_owns(_field(body, "Owns")),  # O(len body + owns text)
+            "repo": repo,  # O(1)
             "body": body,  # O(1)
         }  # O(1)
     return out  # O(1)
