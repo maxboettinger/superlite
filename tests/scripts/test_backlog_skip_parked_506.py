@@ -38,10 +38,10 @@ def test_skip_parked_last_stops_lead(sk, capsys):
     assert sk.rels == [(ship_lock.lock_path("o/r"), "B2")]
 
 
-def test_skip_stop_failure_swallowed(sk, capsys):
+def test_skip_stop_failure_reported(sk, capsys):
     park(sk, [5])
-    sk.stop_exc = SystemExit(1)
-    assert cli(capsys, "skip", "5") == (0, "skipped #5 (B2 dropped; its worktree /w/b2 stays)\n")
+    sk.stop_exc = RuntimeError("no such worker")
+    assert cli(capsys, "skip", "5") == (0, "skipped #5 (B2 dropped; its worktree /w/b2 stays)\nB2 lead W4 not stopped: no such worker; sl fleet stop W4\n")
 
 
 def test_skip_running_refused_cli(sk, capsys):
