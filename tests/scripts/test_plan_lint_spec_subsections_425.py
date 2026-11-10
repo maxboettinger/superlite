@@ -46,7 +46,12 @@ def test_cover_stops_at_same_level():
 def test_title_covers_children():
     spec = "## Auth, sessions and tokens\n### Refresh flow\n"
     assert gaps(spec, '"Auth, sessions and tokens"') == []
-    assert gaps(spec, "Auth, sessions and tokens") == ["Auth, sessions and tokens", "Refresh flow"]
+    assert gaps(spec, "Auth, sessions and tokens") == ["Refresh flow"]
+
+
+def test_covers_line_mention_covers_heading_only():
+    assert gaps("## Parser\n### Lexer\n", "2.1 Parser") == ["Lexer"]
+    assert gaps("## Parser\n", "§2.1 Parser") == []
 
 
 def test_number_only_heading():
