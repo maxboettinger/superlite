@@ -111,6 +111,21 @@ def cut_lines(notes: list[str], prefix: str = "") -> list[str]:
     return lines
 
 
+def _fit_topic(b: dict, k: int, notes: list) -> None:
+    """Cut a topic over 40 characters at its last dash (plain cut without one); the note names the batch id, or `batch k` (#483)."""
+    v = b.get("topic")
+    if not isinstance(v, str) or len(v) <= 40:  # O(1)
+        return
+    head = v[:40]  # O(1)
+    c = head.rsplit("-", 1)[0] if v[40] != "-" and "-" in head else head  # O(1)
+    c = c.rstrip("-") or head.rstrip("-")  # O(1)
+    if not c:
+        return
+    b["topic"] = c
+    bid = b.get("id")
+    notes.append(f'"{bid if isinstance(bid, str) else f"batch {k}"}" topic: {len(v)} -> {len(c)} characters')  # O(1)
+
+
 def fit_proposal(obj: object) -> list[str]:
     """Cut an over-long question (300), header (12), option label (60) and option description (200) in place; return one note per cut.
 
@@ -118,7 +133,9 @@ def fit_proposal(obj: object) -> list[str]:
     only blanks is not made. Every other error, and every unknown key, is left alone for check_proposal."""
     notes: list[str] = []
     batches = obj.get("batches") if isinstance(obj, dict) else None
-    for b in batches if isinstance(batches, list) else []:  # O(batches * decisions * options)
+    for k, b in enumerate(batches if isinstance(batches, list) else [], 1):  # O(batches * decisions * options)
+        if isinstance(b, dict):
+            _fit_topic(b, k, notes)  # O(len)
         decisions = b.get("decisions") if isinstance(b, dict) else None
         for d in decisions if isinstance(decisions, list) else []:
             notes += fit_question(d, question=True)
@@ -227,7 +244,7 @@ def check_proposal(obj: dict, known: set[int]) -> tuple[list[dict], list[str]]:
         ids.add(bid)
         topic = b.get("topic")
         if not isinstance(topic, str) or not TOPIC_RE.match(topic):
-            errs.append(f"{bid}: topic must be lowercase words joined by -")
+            errs.append(f"{bid}: topic must be lowercase words joined by -, at most 40 characters")
         issues = b.get("issues")
         if not isinstance(issues, list) or not issues or not all(isinstance(i, int) and not isinstance(i, bool) for i in issues):
             errs.append(f"{bid}: issues must be a non-empty list of numbers")
@@ -321,3 +338,33 @@ def proposal_from(text: str) -> dict | None:
         if isinstance(o, dict) and "batches" in o:
             return o
     return None
+
+
+def _ref(i):
+    """A left-out issue ref as a number or an upper-case key; None for anything else (bool included)."""
+    if isinstance(i, int) and not isinstance(i, bool):  # O(1)
+        return i
+    if not isinstance(i, str):  # O(1)
+        return None
+    t = i.strip().lstrip("#")  # O(len)
+    return int(t) if t.isdigit() else (t.upper() or None)  # O(len)
+
+
+def left_out_reasons(obj: object, known: set) -> dict:
+    """{issue: reason} from a proposal's `left_out` list ({"issues": [...], "reason": "..."} entries); the first reason per issue wins.
+
+    A reason loses control characters and runs of blanks and is cut to 60 characters at a whole word. Entries that are not objects, a non-list `issues`, a non-string or blank reason, and issues not in known are ignored."""
+    out: dict = {}
+    entries = obj.get("left_out") if isinstance(obj, dict) else None
+    for e in entries if isinstance(entries, list) else []:  # O(entries * issues)
+        if not isinstance(e, dict) or not isinstance(e.get("issues"), list) or not isinstance(e.get("reason"), str):  # O(1)
+            continue
+        r = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", e["reason"]).split())  # O(len)
+        if not r:
+            continue
+        r = _word(r, 60)  # O(len)
+        for i in e["issues"]:
+            n = _ref(i)
+            if n is not None and n in known and n not in out:  # O(1)
+                out[n] = r
+    return out
