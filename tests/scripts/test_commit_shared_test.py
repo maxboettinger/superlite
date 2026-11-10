@@ -178,6 +178,6 @@ def test_claimed_test_not_swept_as_shared(tmp_path):
     r = run("commit_task", "T2", "--plan", "plan.md", cwd=repo, env=SRC_ENV_OFF)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "shared-test" not in r.stderr
-    assert f"left uncommitted (claimed by T3): {SHARED}" in r.stderr
+    assert f"left uncommitted (claimed by T3; commit_task T3 commits it once T3 is done): {SHARED}" in r.stderr
     state = json.loads((repo / ".superlite" / "checkpoints.json").read_text(encoding="utf-8"))
     assert state["entries"][-1]["files"] == ["src/b.py"]

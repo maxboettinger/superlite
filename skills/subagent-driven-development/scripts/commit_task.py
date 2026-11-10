@@ -29,7 +29,7 @@ Steps: scope check (a change outside every task's Owns blocks the commit and is 
 before the run (stable.json `baseline_dirty`) or the run recorded no baseline; with a baseline, any other such file is
 unrelated to the task: it is left uncommitted and listed as `left uncommitted (outside every Owns): F`; files another
 task owns are left uncommitted; when its owner is committed and not running and the file changed after the newest
-checkpoint, `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` says so. Each stderr note
+checkpoint, `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` says so. A file another task claims (`--also` or `--claim` ruling) prints nothing when its claimer is in this call or the file equals the newest checkpoint, else `left uncommitted (claimed by T2, changed after its checkpoint; run commit_task T2): F` (claimer committed, not running) or `left uncommitted (claimed by T2; commit_task T2 commits it once T2 is done): F`. Each stderr note
 prints once per call, not once per task). A file this task owns that a running sibling (busy in pool.json, outside this call) also owns and that
 differs from the newest checkpoint is held out: one `left uncommitted (shared with running T2; commit_task T1 again once it is done): F` note per task;
 a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held), py_compile plus an import check on each touched .py file, commit
@@ -557,6 +557,8 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     other = [o for t, i in info.items() if t != tid for o in i["owns"]  # O(o)
              if o not in SHARED_OWNS]
 
+    call = getattr(a, "task", [tid])  # O(1)
+    claimed = {}  # file -> claimer outside this call, no line printed yet | O(1)
     mine, out_of_scope, theirs = [], [], []  # theirs: files another task owns, no ruling | O(1)
     w0, done = getattr(a, "w0", None), committed_tasks(a.ledger)  # stub record of T0, tasks already committed | O(c)
     skip = plan_folder(a.plan)  # O(1) + process spawn
@@ -592,12 +594,11 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         if nt.owns_match(f, owns):  # O(f)
             mine.append(f)  # O(1)
         elif nt.owns_match(f, other):  # O(o)
-            for e, t2 in ruled.items():  # a ruling or claim made it theirs: say so | O(r)
-                if t2 != tid and hit(f, e):  # O(len f)
-                    note_once(a, f"left uncommitted (claimed by {t2}): {f}")  # O(1)
-                    break  # O(1)
-            else:  # no ruling or claim | O(1)
+            t2 = next((t3 for e, t3 in ruled.items() if t3 != tid and hit(f, e)), None)  # the claimer: first ruling or claim naming the file | O(r*len f)
+            if t2 is None:  # no ruling or claim | O(1)
                 theirs.append(f)  # O(1)
+            elif t2 not in call:  # a claimer in this call commits the file itself | O(call)
+                claimed[f] = t2  # O(1)
             continue  # another task's file, built in parallel in this tree: leave it alone | O(1)
         elif tid != "T0" and shared_test(f, code):  # a fixer's edit to a shared test joins this task | O(len path)
             cand.append(f)  # O(1)
@@ -618,14 +619,19 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         shared = changed_vs_parent(cand)  # O(m) + process spawns
         mine += shared  # O(m)
 
-    call = getattr(a, "task", [tid])  # O(1)
     pool_path = getattr(a, "pool", None) or state.pool_path()  # O(1)
-    running = others_running(pool_path, call) if theirs or mine else []  # tasks running outside this call | O(pool bytes)
+    running = others_running(pool_path, call) if theirs or mine or claimed else []  # tasks running outside this call | O(pool bytes)
     owned = {f: committed_owners(f, info, call, done, running) for f in theirs}  # O(m*n*f)
     owned = {f: o for f, o in owned.items() if o}  # O(m)
     if owned:  # a file changed after its committed owner's checkpoint: say so (#397) | O(1)
         for f in changed_vs_parent(list(owned)):  # O(m) + process spawns
             note_once(a, f"left uncommitted (owned by {', '.join(owned[f])}, changed after its checkpoint; run commit_task {owned[f][0]}): {f}")  # O(1)
+    for f in (changed_vs_parent(list(claimed)) if claimed else []):  # a claimed file equal to the newest checkpoint prints nothing (#419) | O(m) + process spawns
+        t2 = claimed[f]  # O(1)
+        if t2 in done and t2 not in running:  # O(call)
+            note_once(a, f"left uncommitted (claimed by {t2}, changed after its checkpoint; run commit_task {t2}): {f}")  # O(1)
+        else:  # O(1)
+            note_once(a, f"left uncommitted (claimed by {t2}; commit_task {t2} commits it once {t2} is done): {f}")  # O(1)
     running_tid = others_running(pool_path, [tid]) if out_of_scope else []  # a batch agent's in-call sibling counts here | O(pool bytes)
     if out_of_scope and running_tid:  # a running task's stray file is not this task's block | O(m)
         for f in out_of_scope:  # O(m) iterations

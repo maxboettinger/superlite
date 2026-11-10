@@ -296,7 +296,7 @@ def test_claimed_file_left_uncommitted(tmp_path):
     write(repo, "src/main.py", "M = 1\n")
     r = commit(repo, "T6")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "left uncommitted (claimed by T5): x.md" in r.stderr
+    assert "left uncommitted (claimed by T5; commit_task T5 commits it once T5 is done): x.md" in r.stderr
     assert entries(repo)[-1]["files"] == ["src/main.py"]
 
 
