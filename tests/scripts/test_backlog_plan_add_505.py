@@ -1,3 +1,4 @@
+import os
 import sys
 import pytest
 from test_backlog_cli import bk, cli, load, BATCH, bs, bl  # noqa: F401
@@ -10,6 +11,17 @@ NEW = {"id": "B1", "topic": "urgent", "issues": [2], "files": ["b.py"], "depends
 def _env(monkeypatch):
     for k in ("SUPERLITE_FLEET_ROLE", "SUPERLITE_FLEET_PARENT_DIR", "SUPERLITE_FLEET_WORKER", "SUPERLITE_STATE_DIR"):
         monkeypatch.delenv(k, raising=False)
+
+
+OPEN = "Open batches (planned, parked or running; their issues are not yours): B1 running: a.py. "
+
+
+def check_open(bk, open_batches):
+    if os.environ.get("SUPERLITE_REAL") == "1":
+        brief = (bk.sd / "briefs" / "triage.md").read_text()
+        assert (OPEN in brief) if open_batches else ("Open batches (" not in brief)
+    else:
+        assert bk.ctx["open"] == ([{"id": "B1", "state": "running", "files": ["a.py"]}] if open_batches else [])
 
 
 def setup(bk, capsys):
@@ -33,7 +45,7 @@ def test_add_plans_next_to_running(bk, capsys):
     assert d["approved_ship"] == APPROVED and d["round"] == ["B1", "B2"]
     assert set(d["titles"]) == {"1", "2"}
     assert "B2 | #2 | planned" in out
-    assert bk.ctx["open"] == [{"id": "B1", "state": "running", "files": ["a.py"]}]
+    check_open(bk, True)
 
 
 def test_add_overlap_line(bk, capsys):
@@ -65,7 +77,8 @@ def test_add_without_open_batch(bk, capsys):
     bk.batches = [{**BATCH, "issues": [1]}]
     rc, _ = cli(capsys, "plan", "--issues", "1", "--add")
     d = load(bk)
-    assert rc == 0 and d["approved_ship"] is None and d["round"] == ["B1"] and bk.ctx["open"] == []
+    assert rc == 0 and d["approved_ship"] is None and d["round"] == ["B1"]
+    check_open(bk, False)
 
 
 def test_add_keeps_source_cap_outside(bk, capsys):
