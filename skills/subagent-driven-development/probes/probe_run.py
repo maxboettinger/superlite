@@ -5,6 +5,11 @@
                  [--categories deep,numeric,...] [--files a,b | --commit SHA]
                  [--timeout CAP] [--workers N] [--out .superlite/probes/probe-results.json]
                  [--log .superlite/incidents.jsonl] [--raises A,B] [--background]
+    probe_run.py [--plan PLAN] --dismiss ID [--reason TEXT]
+        --dismiss rules a failure group no defect (ID: a generated test name, a group id of the last results
+        file or a probe id): it stores the ruling in <run folder>/probes/dismissed.json, deletes the generated
+        test and closes its incident. Later runs list matching groups under results["dismissed"], not in
+        "failures": no regression test, no incident, no exit 1.
     probe_run.py --plan PLAN_OR_.superlite_FOLDER [same options]
         --plan fills --root, --adapter, --out and --log from the run folder (explicit options win) and
         reads the Probe entries' `raises=` names; --raises adds names for a hand-written adapter.
@@ -78,6 +83,7 @@ from pathlib import Path  # O(1)
 HERE = Path(__file__).resolve().parent  # O(1)
 if str(HERE) not in sys.path:  # O(len sys.path)
     sys.path.insert(0, str(HERE))  # O(1)
+import dismiss  # noqa: E402 | dismissal records, beside this file  # O(1)
 
 IS_WIN = sys.platform == "win32"  # O(1)
 ENTRY_TIMEOUT = {"call": 2.0, "run": 5.0, "request": 10.0, "raw": 10.0}  # O(1)
@@ -1243,6 +1249,11 @@ def run_folder(plan: Path) -> Path:  # O(d)
         return plan / ".superlite" if plan.is_dir() else plan.parent / ".superlite"  # O(1)
 
 
+def root_base(a, root: Path) -> Path:  # O(1)
+    """The run folder of this invocation (--plan's folder, else <root>/.superlite)."""  # O(1)
+    return run_folder(Path(a.plan).resolve()) if a.plan else root / ".superlite"  # O(module size)
+
+
 def run_main(a) -> int:  # O(checkout + _run_main) total; one git checkout per --commit run
     folder, plan = None, None  # O(1)
     if a.plan:  # O(1)
@@ -1257,6 +1268,9 @@ def run_main(a) -> int:  # O(checkout + _run_main) total; one git checkout per -
         a.out = str(base / "probes" / "probe-results.json") if folder else ".superlite/probes/probe-results.json"  # O(1)
     if a.log is None:  # O(1)
         a.log = str(base / "incidents.jsonl") if folder else ".superlite/incidents.jsonl"  # O(1)
+    if a.dismiss:  # O(1)
+        under = lambda p: Path(p) if Path(p).is_absolute() else root / p  # noqa: E731 | O(1)
+        return dismiss.run(a.dismiss, a.reason, base, root, under(a.out), under(a.log), _log_incidents)  # O(results + file bytes)
     adapter = Path(a.adapter).resolve() if a.adapter else base / "probes" / "adapter.py"  # O(1)
     a.raises_all = [n for n in (a.raises or "").split(",") if n]  # O(len raises)
     for n in plan_raises(plan) if plan and plan.is_file() else plan_raises(Path(adapter_consts(adapter).get("PLAN", ""))):  # O(plan bytes)
@@ -1308,6 +1322,7 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
     cfg = Cfg(work, adapter, probes_dir, a.timeout)  # O(1)
     cfg.out_root = root  # O(1)
     cfg.raises = list(getattr(a, "raises_all", []))  # O(k)
+    records = dismiss.load(root_base(a, root))  # O(file bytes) stored dismissals
 
     if a.commit:  # O(1)
         try:  # O(1)
@@ -1341,7 +1356,7 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
     results: dict = {"version": 1, "root": str(root), "adapter": cfg.rel(str(adapter)),  # O(1)
                      **({"commit": a.commit} if a.commit else {}),  # O(1)
                      "files": files, "selected_categories": selected, "categories": {},  # O(1)
-                     "probes": [], "failures": [], "load_errors": load_errors, "raises": cfg.raises}  # O(1)
+                     "probes": [], "failures": [], "dismissed": [], "load_errors": load_errors, "raises": cfg.raises}  # O(1)
     try:  # O(1)
         try:  # O(1)
             w0 = pool.acquire()  # O(1) + worker spawn
@@ -1427,7 +1442,16 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
                 g["regression_error"] = f"{type(e).__name__}: {e}"  # O(1)
             return g  # O(1)
 
-        glist = list(groups.values())  # O(g)
+        glist = []  # O(1)
+        for g in groups.values():  # O(g) iterations
+            rec = dismiss.matches(records, g)  # O(records * probes)
+            if rec:  # O(1)
+                g.pop("_rep", None)  # O(1)
+                g["dismissed"] = rec["id"]  # O(1)
+                results["dismissed"].append(g)  # O(1)
+            else:  # O(1)
+                glist.append(g)  # O(1)
+        dismissed_ids = {x for g in results["dismissed"] for x in g["probes"]}  # O(probes)
         if glist:  # O(1)
             with cf.ThreadPoolExecutor(max_workers=min(nworkers, len(glist))) as ex:  # O(1) + thread start
                 glist = list(ex.map(finish_group, glist))  # O(g * (shrink + regression) / w)
@@ -1438,13 +1462,13 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
     # per-category status, verified entries, cache
     failed_files: dict[str, set] = {}  # O(1)
     unattributed: set = set()  # O(1)
-    for g in results["failures"]:  # O(g) iterations
+    for g in results["failures"] + results["dismissed"]:  # O(g) iterations
         (failed_files.setdefault(g["category"], set()).add(g["file"]) if g["file"]  # O(1)
          else unattributed.add(g["category"]))  # O(1)
     new_cache, verified_jobs = {}, []  # O(1)
     for cat, todo in pending.items():  # O(c) iterations
         cres = [r for r in done if r["category"] == cat]  # O(p) rescan of done per category
-        bad = [r for r in cres if r["status"] not in ("pass", "skip")]  # O(p_c)
+        bad = [r for r in cres if r["status"] not in ("pass", "skip") and r["id"] not in dismissed_ids]  # O(p_c)
         entry_kinds = sorted({r["entry"] for r in cres})  # O(p_c log p_c)
         status = "fail" if bad else "pass"  # O(1)
         results["categories"][cat] = {"status": status, "cached": False, "probes": len(cres),  # O(1)
@@ -1501,13 +1525,14 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
         "probes_run": len(done), "run_timeout": timeout_for({"entry": "run"}, cfg),  # O(1)
         "workers_started": cfg.workers_started, "server_starts": sum(cfg.server_starts.values()),  # O(1)
         "server_ports": sorted(cfg.server_ports), "killed_pids": cfg.killed_pids,  # O(1)
-        "failure_groups": len(results["failures"]),  # O(1)
+        "failure_groups": len(results["failures"]), "dismissed_groups": len(results["dismissed"]),  # O(1)
     }  # O(1)
     out_path.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     out_path.write_text(json.dumps(results, indent=1, default=str), encoding="utf-8")  # O(results size) json dump + write
-    nfail = len(results["failures"]) + sum(r["status"] == "error" for r in done)  # O(p)
+    nfail = len(results["failures"]) + sum(r["status"] == "error" and r["id"] not in dismissed_ids for r in done)  # O(p)
     print(f"probe_run: {len(done)} probes, {len(results['failures'])} failure group(s), "  # O(1)
-          f"{results['stats']['elapsed']}s -> {out_path}")  # O(1)
+          f"{results['stats']['elapsed']}s -> {out_path}"  # O(1)
+          + (f"; {len(results['dismissed'])} dismissed" if results["dismissed"] else ""))  # O(1)
     return 1 if nfail else 0  # O(1)
 
 
@@ -1541,6 +1566,8 @@ def main(argv: list[str] | None = None) -> int:  # O(argv) + run
     ap.add_argument("--log", default=None, help="incident log (default <run folder>/incidents.jsonl)")  # O(1)
     ap.add_argument("--plan", help="plan file or .superlite folder: sets the run folder, root, adapter, out, log and raises=")  # O(1)
     ap.add_argument("--raises", help="comma list of exception names to treat as rejections (adds to the plan's raises=)")  # O(1)
+    ap.add_argument("--dismiss", help="rule a failure group no defect: test name, group id or probe id")  # O(1)
+    ap.add_argument("--reason", default="ruled no defect", help="why --dismiss was ruled (default: ruled no defect)")  # O(1)
     ap.add_argument("--background", action="store_true", help="detach and return at once")  # O(1)
     ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)  # O(1)
     a = ap.parse_args(argv)  # O(1)
