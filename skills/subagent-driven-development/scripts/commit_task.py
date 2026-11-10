@@ -7,7 +7,7 @@
                       [--dispatch [--pool .superlite/pool.json] [--running T3] [--cap 10] [--batch N]]
 
 Several ids commit in order in one process (one plan parse, one exclude check). Output:
-the SHA for one task; `Tn <sha>` per task for several; `Tn: no change since its last checkpoint <sha>` for a task
+the SHA for one task; `Tn <sha>` per task for several (each followed by `Tn: probe files committed: F ... (a background probe_run wrote them; a false positive: sl probe_run --dismiss ID --plan P)` when its new checkpoint took generated `tests/regression/test_probe_*.py` or `_probe_adapter.py` files); `Tn: no change since its last checkpoint <sha>` for a task
 re-run with no change since its own checkpoint (no new commit, no probe or seam check). A task that is not checkpointed prints `Tn FAILED: <reason>`
 (one task or several) and the call exits non-zero. Each committed
 task's agent in the pool (`current: Tn`) gets `current` cleared, `busy: false`, and Tn in
@@ -34,7 +34,7 @@ prints once per call, not once per task). A file this task owns that a running s
 differs from the newest checkpoint is held out: one `left uncommitted (shared with running T2; commit_task T1 again once it is done): F` note per task;
 a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held), py_compile plus an import check on each touched .py file, commit
 with the task title, append the SHA to the progress ledger, then launch in the
-background `sl probe_run --commit SHA` and, for every seam of the task graph
+background `sl probe_run --commit SHA [--plan P]` and, for every seam of the task graph
 (`sl plan_tools taskgraph --format full`) that involves this task and whose both
 sides are now committed per the ledger, `sl pt_review contract --plan P --seam
 Ta,Tb --log LOG` (mismatches become incidents, a pass logs `verified`). Prints the
@@ -302,6 +302,8 @@ def launch_probes(sha, plan=None):  # O(L) + process spawn
     cats = probe_categories(plan) if plan else ""  # O(L)
     if cats:  # O(1)
         extra = ["--categories", cats]  # O(1)
+    if plan and os.path.isfile(plan):  # the probe run reads dismissals from the plan's run folder | O(1) stat
+        extra += ["--plan", plan]  # O(1)
     spawn_background(nt.sl_command("probe_run", "--commit", sha, *extra))  # O(1) + process spawn
     return True  # O(1)
 
@@ -539,6 +541,9 @@ def wave0_stubs(plan):  # O(1) file read
         return None  # O(1)
 
 
+PROBE_FILE = re.compile(r"(^|/)tests/regression/(test_probe_[^/]+\.py|_probe_adapter\.py)$")  # O(1)
+
+
 def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (status, add, commit, rev-parse)
     """Commit one task; (exit code, sha or None). Files other tasks own are left alone. A task not committed leaves its
     reason in a.failed[tid] for the `Tn FAILED: <reason>` line."""
@@ -714,6 +719,9 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         append_ledger(a.ledger, f"- Ruling: {tid} also commits {named.get(f, f)} - {a.ruling}")  # O(1) file I/O
     resolve_blocked(a.log, tid, set(mine))  # O(log size)
     if not reused:  # O(1)
+        pf = sorted(f for f in mine if PROBE_FILE.search(f) and os.path.exists(f))  # O(m log m) stat
+        if pf:  # O(1)
+            a.probe_files[tid] = pf  # O(1)
         launch_probes(sha, a.plan)  # O(L) + process spawn
         launch_seam_checks(a.plan, tid, a.ledger, a.log)  # O(c + s) + process spawn per seam (graph memoized)
     return 0, sha  # O(1)
@@ -740,6 +748,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     ap.add_argument("--ruling", help="why --also or --claim is needed; written to the ledger")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     given = bool(a.plan)  # O(1)
+    plan_arg = a.plan or nt.DEFAULT_PLAN  # the --plan value as passed, for the dismiss hint | O(1)
     sd = state.for_plan(a.plan) if a.plan else state.resolve()  # the run folder: --plan's own once started (#178), else the session's | O(d)
     a.plan = a.plan or nt.DEFAULT_PLAN  # O(1)
     a.ledger = a.ledger or str(sd / "progress.md")  # defaults follow the parsed --plan, not the session's binding | O(1)
@@ -806,6 +815,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     a.blocked = set()  # files reported out-of-scope by any task | O(1)
     a.left = set()  # unrelated files already listed as left uncommitted | O(1)
     a.failed = {}  # task -> why it was not checkpointed | O(1)
+    a.probe_files = {}  # task -> generated probe files its new checkpoint took | O(1)
     worst = 0  # O(1)
     committed = []  # O(1)
     also_all = a.also  # only the first task receives --also | O(1)
@@ -820,6 +830,11 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
                 print(f"{tid}: no change since its last checkpoint {sha}")  # O(1)
             else:  # O(1)
                 print(sha if len(a.task) == 1 else f"{tid} {sha}")  # O(1)
+                if tid in a.probe_files:  # O(1)
+                    pf = a.probe_files[tid]  # O(1)
+                    tests = [Path(f).stem for f in pf if Path(f).name != "_probe_adapter.py"]  # O(m)
+                    hint = f"; a false positive: sl probe_run --dismiss {tests[0]} --plan {plan_arg}" if tests else ""  # O(1)
+                    print(f"{tid}: probe files committed: {' '.join(pf)} (a background probe_run wrote them{hint})")  # O(m)
         else:  # a task that is not checkpointed always says so, one task or several (#179) | O(1)
             print(f"{tid} FAILED: {a.failed.get(tid, 'not checkpointed')}")  # O(1)
     if a.blocked:  # one hint for every task, not one per task | O(1)
