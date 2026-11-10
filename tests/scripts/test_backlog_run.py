@@ -115,7 +115,7 @@ def test_answer_sends_the_file_and_resumes_the_lead(bk, capsys, tmp_path):
     waiting(); (wt / ".superlite" / "question.json").write_text(json.dumps(Q))
     f = tmp_path / "a.json"; f.write_text(json.dumps({"answers": {"Keep the v1 API?": "Drop"}})); ans = wt / ".superlite" / "answer-1.json"
     assert run(capsys, "answer", "B1", "--file", str(f)) == (0, "B1 answered: answer-1.json sent to W1\n")
-    assert json.loads(ans.read_text()) == {"answers": {"Keep the v1 API?": "Drop"}} and (wt / ".superlite" / "question-1.json").exists()
+    assert json.loads(ans.read_text()) == {"answers": {"Keep the v1 API?": "Drop"}, "by": {"Keep the v1 API?": "user"}} and (wt / ".superlite" / "question-1.json").exists()
     text = next(c[1] for c in bk.calls if c[0] == "text")
     assert text[:3] == ["send", "W1", "--text"] and str(ans) in text[3] and text[4:] == ["--plan", str(bk.sd)]
     x = get(bk, "B1")
@@ -185,7 +185,7 @@ def test_start_after_a_crash_briefs_the_worktree_state_and_the_answers(bk, capsy
             "keep, finish or drop each part on purpose:\n") in text
     assert "- Commits on superlite/b1-t not on origin/main: 2: abc1234 T1 ship guard; def5678 T0 stubs\n" in text
     assert "- Uncommitted files: 2: M skills/x.py, ?? tests/y.py\n" in text
-    assert "- Answers Max gave mid-run: answer-1.json in .superlite/ (also under Max's decisions above; never ask them again)\n" in text
+    assert "- Answers given mid-run: answer-1.json in .superlite/ (also under Max's decisions or main's rulings above; each file's by names who answered; never ask them again)\n" in text
     assert calls and all(cwd == wt for c, cwd in calls if c == "git")
 
 def test_start_after_a_crash_caps_the_lists_and_names_git_failures(bk, capsys, monkeypatch):

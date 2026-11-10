@@ -3,7 +3,8 @@
 
     backlog_run.py start [B ...] [--cap 2] [--model opus]
     backlog_run.py wait [--timeout 21600] [--poll 10]
-    backlog_run.py answer B --file F        (F = {"answers": {question: answer}})
+    backlog_run.py answer B --file F        (F = {"answers": {question: answer}, "by": "user"|"main"|{question: ...}})
+    backlog_run.py tell B --text T          (send main's text to the running lead of B)
 
 `start` takes several ids: each refusal prints BLOCKED, the others start. Each lead worktree gets a copy of the main
 checkout's `.superlite/test-cmd.json` before its brief, unless it already has one (#334). A lead whose stop text holds no
@@ -40,6 +41,12 @@ QUESTION_FIX = ("superlite: your .superlite/question.json is invalid: {errs}. Li
                 "characters, a header of 1 to 12, 2 to 4 options with distinct labels of 1 to 60 and descriptions up to 200 "
                 "(an over-long header, label or description is cut for you). Rewrite the file and end your turn with "
                 "Status: NEEDS_DECISION.")
+
+ANSWER_MAIN = ("Main answered your question as AI orchestrator, not Max: read {af}; its by map names who answered each question "
+               "(user: Max's decision, main: main's ruling); record each that way, then go on with the batch.")
+ANSWERS_LINE = ("- Answers given mid-run: {names} in .superlite/ (also under Max's decisions or main's rulings above; each file's by "
+                "names who answered; never ask them again)")
+TELL = "superlite: main says (sl backlog tell): {text}"
 
 GONE_MS = 30000  # O(1)
 GONE = ("superlite: the Herdr panes of your fleet workers {ids} are gone (a crash?), so their tasks will never report. "
@@ -91,7 +98,7 @@ def _resume_state(batch: dict, wt: Path, branch: str) -> list:
     out.append("- Uncommitted files: " + (f"{len(files)}" + (": " + ", ".join(files[:10]) + more if files else "") if rc == 0 else "unknown (git status failed)"))  # O(1)
     names = [x.name for x in sorted((wt / ".superlite").glob("answer-*.json"))]  # O(a log a)
     if names:  # O(1)
-        out.append(f"- Answers Max gave mid-run: {', '.join(names)} in .superlite/ (also under Max's decisions above; never ask them again)")  # O(a)
+        out.append(ANSWERS_LINE.format(names=", ".join(names)))  # O(a)
     return out  # O(1)
 
 
@@ -281,7 +288,11 @@ def _shipped(p, sd, root, b, wt) -> list:  # O(size)
     _stop(sd, b["lead"])  # O(w)
     pr = f" PR #{b['pr']}" if b.get("pr") else ""
     ver = f" {b['version']}" if b.get("version") else ""
-    out = [f"{bid} shipped{pr}{ver} summary={sd / 'backlog' / (bid + '.md')}"]
+    fu, un = list(b.get("followups") or []), list(b.get("undone") or [])  # O(k)
+    cnt = (f" followups={len(fu)}" if fu else "") + (f" undone={len(un)}" if un else "")  # O(1)
+    out = [f"{bid} shipped{pr}{ver} summary={sd / 'backlog' / (bid + '.md')}{cnt}"]
+    out.extend(f"{bid} follow-up: {t}" for t in fu)  # O(k)
+    out.extend(f"{bid} left undone: {t}" for t in un)  # O(k)
     if b.get("open_issues"):  # O(k)
         out.append(f"{bid} OPEN " + " ".join(bs.ref(n) for n in b["open_issues"]))  # O(k)
     rc, msg = _run(["maxapp", "ship", "-C", str(wt)], root)  # O(cmd)
@@ -401,18 +412,19 @@ def cmd_wait(a) -> int:
         time.sleep(a.poll)  # O(poll)
 
 
-def _answers(f) -> tuple:
+def _answers(f) -> tuple:  # -> (answers, by map, error)
     try:  # O(1)
         obj = json.loads(Path(f).read_text(encoding="utf-8"))  # O(size)
     except (OSError, ValueError) as e:  # O(1)
-        return None, f"cannot read {f}: {e}"  # O(1)
+        return None, {}, f"cannot read {f}: {e}"  # O(1)
     ans = obj.get("answers") if isinstance(obj, dict) else None  # O(1)
     if not isinstance(ans, dict) or not 1 <= len(ans) <= 4:  # O(1)
-        return None, "answers: 1 to 4 entries"  # O(1)
+        return None, {}, "answers: 1 to 4 entries"  # O(1)
     for k, v in ans.items():  # O(4 * len)
         if not isinstance(k, str) or not isinstance(v, str) or not 1 <= len(v) <= 300 or _ctrl(v) or _ctrl(k):
-            return None, f"bad answer for {str(k)[:60]}"  # O(1)
-    return ans, ""  # O(1)
+            return None, {}, f"bad answer for {str(k)[:60]}"  # O(1)
+    by, err = bc.answer_by(obj, ans)  # O(4)
+    return (ans, by, "") if not err else (None, {}, err)  # O(1)
 
 
 def cmd_answer(a) -> int:
@@ -427,7 +439,7 @@ def cmd_answer(a) -> int:
         return _refuse(f"unknown batch {a.batch}")  # O(1)
     if b["state"] != "needs_decision":  # O(1)
         return _refuse(f"{a.batch} is {b['state']}, not waiting for an answer")  # O(1)
-    ans, err = _answers(a.file)  # O(size)
+    ans, by, err = _answers(a.file)  # O(size)
     if ans is None:  # O(1)
         return _refuse(err)  # O(1)
     n = int(b.get("questions", 0)) + 1  # O(1)
@@ -436,19 +448,45 @@ def cmd_answer(a) -> int:
     if q.is_file():  # O(1)
         q.replace(ed / f"question-{n}.json")  # O(1)
     af = ed / f"answer-{n}.json"  # O(1)
-    af.write_text(json.dumps({"answers": ans}, indent=2), encoding="utf-8")  # O(size)
+    af.write_text(json.dumps({"answers": ans, "by": by}, indent=2), encoding="utf-8")  # O(size)
 
     def mark(d):  # O(b)
         x = bs.batch(d, a.batch)
         x.setdefault("answers", {}).update(ans)
+        x.setdefault("answered_by", {}).update(by)
         x.update({"questions": n, "state": "running", "since": _now_ms(), "reprompted": False, "question_reprompted": False})
     bs.update(p, mark)  # O(size)
-    msg = f"Max answered your question: read {af} (record it as a Ruling), then go on with the batch."  # O(1)
+    if "main" in by.values():  # O(4)
+        msg = ANSWER_MAIN.format(af=af)  # O(1)
+    else:  # O(1)
+        msg = f"Max answered your question: read {af} (record it as a Ruling), then go on with the batch."  # O(1)
     rc = fleet_io.main(["send", b["lead"], "--text", msg, "--plan", str(sd)])  # O(w)
     if rc:  # O(1)
         bs.update(p, lambda d: bs.batch(d, a.batch).__setitem__("state", "needs_decision"))  # O(size)
         return 3  # O(1)
     print(f"{a.batch} answered: {af.name} sent to {b['lead']}")  # O(1)
+    return 0  # O(1)
+
+
+def cmd_tell(a) -> int:
+    import fleet_io
+    if os.environ.get("SUPERLITE_FLEET_WORKER"):  # only Max's session runs this; never a lead or worker
+        return _refuse("sl backlog tell runs only in the main session")  # O(1)
+    root = _root()  # O(1)
+    sd, p = root / ".superlite", bs.path(root)  # O(1)
+    try:  # O(1)
+        b = bs.batch(bs.load(p), a.batch)  # O(b)
+    except KeyError:  # O(1)
+        return _refuse(f"unknown batch {a.batch}")  # O(1)
+    if b["state"] == "needs_decision":  # O(1)
+        return _refuse(f"{a.batch} waits for an answer: sl backlog answer {a.batch} --file F")  # O(1)
+    if b["state"] != "running" or not b.get("lead"):  # O(1)
+        return _refuse(f"{a.batch} is {b['state']}; only a running batch has a lead to tell")  # O(1)
+    if not a.text.strip() or len(a.text) > 2000 or _ctrl(a.text):  # O(len)
+        return _refuse("--text: 1 to 2000 characters, no control characters")  # O(1)
+    if fleet_io.main(["send", b["lead"], "--text", TELL.format(text=a.text), "--plan", str(sd)]):  # O(w)
+        return _refuse(f"{a.batch} lead {b['lead']} not told (fleet send failed)", 3)  # O(1)
+    print(f"{a.batch} told lead {b['lead']}")  # O(1)
     return 0  # O(1)
 
 
@@ -465,8 +503,11 @@ def main(argv=None) -> int:
     an = sub.add_parser("answer")  # O(1)
     an.add_argument("batch")  # O(1)
     an.add_argument("--file", required=True)  # O(1)
+    t = sub.add_parser("tell")  # O(1)
+    t.add_argument("batch")  # O(1)
+    t.add_argument("--text", required=True)  # O(1)
     a = ap.parse_args(argv)  # O(1)
-    return {"start": cmd_start, "wait": cmd_wait, "answer": cmd_answer}[a.cmd](a)  # O(1)
+    return {"start": cmd_start, "wait": cmd_wait, "answer": cmd_answer, "tell": cmd_tell}[a.cmd](a)  # O(1)
 
 
 if __name__ == "__main__":
