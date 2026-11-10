@@ -115,12 +115,29 @@ def admit_entries(data: dict) -> list:
     return [o for o in data.get("outside", []) if not _left_out(o)]  # O(outside)
 
 
+def ref(n) -> str:
+    """An issue as shown: #12 for a number, the key itself (PIX-4) for a Jira key."""
+    return f"#{n}" if isinstance(n, int) else str(n)  # O(1)
+
+
 def left_out_lines(data: dict) -> list:
+    """One `<reason>: refs` line per reason; an issue already in a batch is not listed (#483); rounds above 1 show as `(N rounds)`; cap hints close the list."""
+    held = {i for b in data.get("batches", []) for i in b.get("issues", [])}  # O(batches * issues)
     groups = {}
     for o in data.get("outside", []):  # O(outside)
-        if _left_out(o):
-            groups.setdefault(_title(o["reason"]), []).append(f"#{o['number']}")
-    return [f"{r}: {' '.join(ns)}" for r, ns in groups.items()]  # O(groups)
+        if _left_out(o) and o.get("number") not in held:  # O(1)
+            r = o.get("rounds")
+            tag = f" ({r} rounds)" if isinstance(r, int) and not isinstance(r, bool) and r > 1 else ""  # O(1)
+            groups.setdefault(_title(o["reason"]), []).append(ref(o["number"]) + tag)  # O(1)
+    lines = [f"{r}: {' '.join(ns)}" for r, ns in groups.items()]  # O(groups)
+    if any(r.startswith("not planned (cap)") for r in groups):  # O(groups)
+        m = data.get("max_batches")
+        m = m if isinstance(m, int) and not isinstance(m, bool) else 7  # O(1)
+        lines.append(f"cap: a plan round holds at most {m} batches (sl backlog plan --max-batches N raises it, up to 20); capped issues rank first in the next round")  # O(1)
+    ks = list(dict.fromkeys(m.group(1) for r in groups if (m := re.match(r"^not triaged \((\d+) cap\)$", r))))  # O(groups)
+    for k in ks:  # O(ks)
+        lines.append(f"cap: a plan round triages only the first {k} open issues; the rest rank first in the next round")  # O(1)
+    return lines
 
 
 def _admit_q(o: dict) -> str:
@@ -171,18 +188,18 @@ def answer(data: dict, answers: dict, by: str, now: str) -> list:
 def skip_issue(data: dict, n: int) -> str:
     hit = next((b for b in data.get("batches", []) if n in b.get("issues", [])), None)  # O(batches * issues)
     if hit is None:
-        msg = f"skipped #{n} (in no batch)"
+        msg = f"skipped {ref(n)} (in no batch)"
     else:
         if hit["state"] != "planned" and not (hit["state"] == "parked" and not hit.get("worktree")):
-            raise ValueError(f"#{n} is in {hit['id']}, which is {hit['state']}")
+            raise ValueError(f"{ref(n)} is in {hit['id']}, which is {hit['state']}")
         hit["issues"] = [i for i in hit["issues"] if i != n]  # O(issues)
         if hit["issues"]:
-            msg = f"skipped #{n} ({hit['id']} keeps " + " ".join(f"#{i}" for i in hit["issues"]) + ")"
+            msg = f"skipped {ref(n)} ({hit['id']} keeps " + " ".join(ref(i) for i in hit["issues"]) + ")"
         else:
             data["batches"] = [b for b in data["batches"] if b is not hit]  # O(batches)
             for b in data["batches"]:  # O(batches * depends)
                 b["depends"] = [d for d in b.get("depends", []) if d != hit["id"]]
-            msg = f"skipped #{n} ({hit['id']} dropped)"
+            msg = f"skipped {ref(n)} ({hit['id']} dropped)"
     data["outside"] = [o for o in data.get("outside", []) if o.get("number") != n]  # O(outside)
     if n not in data["skipped"]:  # O(skipped)
         data["skipped"].append(n)
@@ -237,8 +254,8 @@ def status_lines(data: dict, all_: bool = False) -> list:
         elif s == "parked":
             nxt = (b.get("reason") or "-")[:40]
         else:
-            nxt = (b.get("version") or "-") + (" OPEN " + " ".join(f"#{i}" for i in b["open_issues"]) if b.get("open_issues") else "")
-        issues = " ".join(f"#{i}" for i in b.get("issues", []))
+            nxt = (b.get("version") or "-") + (" OPEN " + " ".join(ref(i) for i in b["open_issues"]) if b.get("open_issues") else "")
+        issues = " ".join(ref(i) for i in b.get("issues", []))
         lines.append(f"{b['id']} | {issues} | {s} | {b.get('lead') or '-'} | {'#%s' % b['pr'] if b.get('pr') else '-'} | {nxt}")
     lines.extend(left_out_lines(data))
     n = len(open_questions(data))

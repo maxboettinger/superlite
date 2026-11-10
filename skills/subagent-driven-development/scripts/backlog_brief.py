@@ -89,6 +89,19 @@ def lead_brief(batch, ctx):  # O(i + f + a)
     return "\n".join(out) + "\n"  # O(n)
 
 
+def carry_line(issues, carry):  # O(i)
+    """One brief line naming the carried issues in issue order, or None."""
+    parts = []  # O(1)
+    for t in issues:  # O(i)
+        n = t["number"]  # O(1)
+        if n in carry:  # O(1)
+            parts.append(f"{n if isinstance(n, str) else '#' + str(n)} ({carry[n]} round{'' if carry[n] == 1 else 's'})")  # O(1)
+    if not parts:  # O(1)
+        return None  # O(1)
+    return ("Carry-over: the batch cap left these issues out of earlier plan rounds: " + ", ".join(parts)  # O(i)
+            + ". Plan them before the other issues, unless one is an umbrella or tracking issue.")  # O(1)
+
+
 def triage_brief(issues, ctx):  # O(i)
     out = ["# Triage brief",
            f"You are the triage worker of {ctx['repo']}, read-only. Propose at most {ctx['max_batches']} batches from these open "
@@ -102,6 +115,9 @@ def triage_brief(issues, ctx):  # O(i)
         head = clean(i["number"]) if isinstance(i["number"], str) else f"#{int(i['number'])}"  # O(1)
         out.append(f"## {head} {clean(i.get('title', ''))}".rstrip())  # O(1)
         out += ["    " + CTRL.sub("", ln.rstrip("\r")) for ln in str(i.get("body") or "").splitlines()]  # O(body)
+    line = carry_line(issues, ctx.get("carry") or {})  # O(i)
+    if line:  # O(1)
+        out.append(line)  # O(1)
     out.append("Rules: no two batches share a file unless one depends on the other; list every repo-relative file a batch "
                "touches (at least one file per batch); depends names batches that must ship first; decisions lists each batch's major decisions, one "
                "AskUserQuestion call object {\"questions\": [...]} per decision (1 to 4 distinct questions per decision, question at most 300 characters, "
@@ -111,12 +127,14 @@ def triage_brief(issues, ctx):  # O(i)
                "description), "
                "any other violation rejects the whole proposal), "
                "recommended option first. Leave umbrella and tracking issues (whose acceptance is the run itself or other issues) "
-               "out of every batch.")  # O(1)
+               "out of every batch. A topic is at most 40 characters. The batch cap of " + str(ctx["max_batches"]) + " is a hard limit: "
+               "list every issue you leave out of every batch in left_out, each group with one short reason (at most 60 characters), "
+               "except issues left out only because of the batch cap of " + str(ctx["max_batches"]) + ": those get no left_out entry (plan names them itself).")  # O(1)
     out.append('End with Status: DONE, then one fenced json block: {"status": "DONE", "files": [], "tests": "", "findings": [], '
                '"summary": "<n> batches", "batches": [{"id": "B1", "topic": "<kebab words>", "issues": ' + ('["<KEY>"]' if jira else '[<n>]') + ', '
                               '"files": ["<path>"], "depends": [], "decisions": [{"questions": [{"question": "<1-300 chars>", '
                '"header": "<1-12 chars>", "options": [{"label": "<recommended first> (Recommended)", "description": "<trade-off>"}, '
-               '{"label": "...", "description": "..."}]}]}]}]}')  # O(1)
+               '{"label": "...", "description": "..."}]}]}]}], "left_out": [{"issues": ' + ('["<KEY>"]' if jira else '[<n>]') + ', "reason": "<why>"}]}')  # O(1)
     return "\n".join(out) + "\n"  # O(n)
 
 

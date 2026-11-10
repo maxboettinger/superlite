@@ -12,6 +12,11 @@ OUT = [{"number": 3, "title": "Three", "author": "eve"},
        {"number": 7, "title": "Seven", "reason": "not triaged (200 cap)"}]
 
 
+CAP_HINT = ("cap: a plan round holds at most 7 batches (sl backlog plan --max-batches N raises it, up to 20); "
+            "capped issues rank first in the next round")
+TRIAGE_HINT = "cap: a plan round triages only the first 200 open issues; the rest rank first in the next round"
+
+
 def data(**kw):
     d = {"outside": copy.deepcopy(OUT), "batches": [], "approved_ship": None, "admitted": [], "skipped": []}
     d.update(kw)
@@ -19,7 +24,7 @@ def data(**kw):
 
 
 def test_left_out_lines_group_by_reason():
-    assert bs.left_out_lines(data()) == ["not planned (cap): #5 #6", "not triaged (200 cap): #7"]
+    assert bs.left_out_lines(data()) == ["not planned (cap): #5 #6", "not triaged (200 cap): #7", CAP_HINT, TRIAGE_HINT]
 
 
 def test_admit_entries_skip_left_out():
@@ -43,14 +48,14 @@ def test_answer_refuses_left_out_admit():
 
 def test_status_no_batches_lists_left_out():
     assert bs.status_lines(data()) == ["backlog: 0 batches, 0 running, 0 shipped, ship not approved",
-                                       "not planned (cap): #5 #6", "not triaged (200 cap): #7"]
+                                       "not planned (cap): #5 #6", "not triaged (200 cap): #7", CAP_HINT, TRIAGE_HINT]
 
 
 def test_status_order_table_reasons_questions():
     b = {"id": "B1", "topic": "t", "issues": [1], "files": ["a.py"], "depends": [], "decisions": [], "state": "planned"}
     lines = bs.status_lines(data(batches=[b]))
     assert lines[2] == "B1 | #1 | planned | - | - | start"
-    assert lines[-3:] == ["not planned (cap): #5 #6", "not triaged (200 cap): #7",
+    assert lines[-5:] == ["not planned (cap): #5 #6", "not triaged (200 cap): #7", CAP_HINT, TRIAGE_HINT,
                           "questions: 2 open (sl backlog " + "decide --print)"]
 
 
@@ -72,5 +77,5 @@ def test_entries_without_reason_unchanged():
 def test_skip_drops_left_out_entry():
     d = data()
     assert bs.skip_issue(d, 5) == "skipped #5 (in no batch)"
-    assert bs.left_out_lines(d) == ["not planned (cap): #6", "not triaged (200 cap): #7"]
+    assert bs.left_out_lines(d) == ["not planned (cap): #6", "not triaged (200 cap): #7", CAP_HINT, TRIAGE_HINT]
     assert d["skipped"] == [5]

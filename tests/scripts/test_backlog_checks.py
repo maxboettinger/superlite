@@ -43,7 +43,7 @@ def test_proposal_is_normalised():
     ([bt("B1", [1], ["a.py"]), bt("B2", [1], ["b.py"])], "#1 is in B1 and B2"),
     ([bt("B1", [1], ["a.py"], ["B2"]), bt("B2", [2], ["b.py"], ["B1"])], "dependency cycle: B1 B2"),
     ([{**bt("B1", [1], ["a.py"]), "id": "X1"}], "batch 1: id must be B<n>"),
-    ([{**bt("B1", [1], ["a.py"]), "topic": "Bad Topic!"}], "B1: topic must be lowercase words joined by -"),
+    ([{**bt("B1", [1], ["a.py"]), "topic": "Bad Topic!"}], "B1: topic must be lowercase words joined by -, at most 40 characters"),
     ([bt("B1", [1], ["a.py"], decisions=[{"questions": []}])], "B1 decision 1: questions: 1 to 4 entries"),
     ([], "batches: 1 to 20 entries")])
 def test_one_error_rejects_the_whole_proposal(bad, err):

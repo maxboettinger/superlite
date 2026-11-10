@@ -47,7 +47,9 @@ def test_a_batch_not_shipped_is_listed_outside_the_round():
 
 def test_no_row_left_prints_no_table_and_keeps_left_out_lines():
     d = data(shipped("B1"), shipped("B2"), round=["B9"], outside=[{"number": 7, "title": "x", "reason": "not planned (cap)"}])
-    assert bs.status_lines(d) == [HEAD.format(2, 0, 2), COUNT.format(2), "not planned (cap): #7"]
+    assert bs.status_lines(d) == [HEAD.format(2, 0, 2), COUNT.format(2), "not planned (cap): #7",
+                                  "cap: a plan round holds at most 7 batches (sl backlog plan --max-batches N raises it, up to 20); "
+                                  "capped issues rank first in the next round"]
 
 
 def test_without_a_round_record_titles_pick_the_current_round():

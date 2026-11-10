@@ -1,6 +1,7 @@
 """sl backlog plan --issues takes GitHub numbers, and issues an earlier cap left out are ranked first (#433)."""
 import pytest
 
+import backlog_brief as bb
 from test_backlog_cli import bk, cli, load, BATCH, bl, bs  # noqa: F401  bk is the CLI fixture
 from test_backlog_jira_208 import jk  # noqa: F401  jk is the acli fixture
 
@@ -145,11 +146,8 @@ def test_carry_helpers():
     assert bl.carry_rounds(out) == {2: 4, 5: 1}
     assert bl.carry_rounds(None) == {}
     trusted = [{"number": 5}, {"number": 2}, {"number": 9}]
-    assert bl.carry_line(trusted, {2: 4, 5: 1}) == HEAD + "#5 (1 round), #2 (4 rounds)" + TAIL
-    assert bl.carry_line(trusted, {}) is None
-    assert bl.insert_line("# T\nA\nRules: x\nEnd\n", "C") == "# T\nA\nC\nRules: x\nEnd\n"
-    assert bl.insert_line("a\nb", "C") == "a\nb\nC\n"
-    assert bl.insert_line("a\n", None) == "a\n"
+    assert bb.carry_line(trusted, {2: 4, 5: 1}) == HEAD + "#5 (1 round), #2 (4 rounds)" + TAIL
+    assert bb.carry_line(trusted, {}) is None
 
 
 def test_help_names_github_numbers(capsys):

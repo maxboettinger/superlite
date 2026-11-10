@@ -283,7 +283,7 @@ def _shipped(p, sd, root, b, wt) -> list:  # O(size)
     ver = f" {b['version']}" if b.get("version") else ""
     out = [f"{bid} shipped{pr}{ver} summary={sd / 'backlog' / (bid + '.md')}"]
     if b.get("open_issues"):  # O(k)
-        out.append(f"{bid} OPEN " + " ".join(f"#{n}" for n in b["open_issues"]))  # O(k)
+        out.append(f"{bid} OPEN " + " ".join(bs.ref(n) for n in b["open_issues"]))  # O(k)
     rc, msg = _run(["maxapp", "ship", "-C", str(wt)], root)  # O(cmd)
     if rc:  # O(1)
         out.append(f"{bid} cleanup: {(msg.splitlines() or ['failed'])[-1][:120]}")  # O(len)

@@ -5,6 +5,7 @@ from test_plan_tools import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 import backlog as bl  # noqa: E402
 import backlog_state as bs  # noqa: E402
+import backlog_brief as real_brief  # noqa: E402
 
 ISSUES = [{"number": n, "title": t, "author": {"login": a}, "authorAssociation": r, "body": f"body {n}"}
           for n, t, a, r in ((1, "One", "max", "OWNER"), (2, "Two", "co", "COLLABORATOR"), (3, "Three", "eve", "NONE"))]
@@ -31,7 +32,13 @@ def bk(tmp_path, monkeypatch):
              "fleet_state": types.SimpleNamespace(is_on=lambda sd: False),
              "fleet_io": types.SimpleNamespace(send_brief=lambda sd, wid, brief, label="": log("send", wid, brief, label) or label, wait=wait)}
     if os.environ.get("SUPERLITE_REAL") != "1":
-        fakes["backlog_brief"] = types.SimpleNamespace(triage_brief=lambda issues, ctx: ns.issues.extend(issues) or "\n".join(f"- #{i['number']} {i['title']}" for i in issues))
+        def triage_brief(issues, ctx):
+            ns.issues.extend(issues)
+            ns.ctx = ctx
+            lines = [f"- #{i['number']} {i['title']}" for i in issues]
+            line = real_brief.carry_line(issues, ctx.get("carry") or {})
+            return "\n".join(lines + ([line] if line is not None else []))
+        fakes["backlog_brief"] = types.SimpleNamespace(triage_brief=triage_brief)
     for k, v in fakes.items():
         monkeypatch.setitem(sys.modules, k, v)
     return ns
