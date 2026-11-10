@@ -560,17 +560,41 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
         self.ws()  # O(len(s))
         return r if r is not None and self.i == len(self.s) else None  # O(1)
 
-    def expr(self) -> list[str] | None:  # O(len(s))
+    @staticmethod
+    def _cap(vals: list[str]) -> list[str]:  # O(64) | a name's values, or unknown when more than 64
+        return list(vals) if len(vals) <= 64 else [_UNK]  # O(64)
+
+    @staticmethod
+    def _cross(left: list[str], right: list[str], f) -> list[str]:  # O(64) | every pair joined by f, or unknown when more than 64 pairs
+        if len(left) * len(right) > 64:  # O(1)
+            return [_UNK]  # O(1)
+        return [f(x, y) for x in left for y in right]  # O(64)
+
+    def expr(self) -> list[str] | None:  # O(len(s)) | values of a sum: `prod` results joined by a string `+`
+        left = self.prod()  # O(len(s))
+        while left is not None:  # O(len(s))
+            self.ws()  # O(len(s))
+            if self.s[self.i:self.i + 1] == "+" and self.s[self.i + 1:self.i + 2] != "=":  # O(1)
+                self.i += 1  # O(1)
+                right = self.prod()  # O(len(s))
+                if right is None:  # O(1)
+                    return None  # O(1)
+                left = self._cross(left, right, lambda x, y: x if _UNK in x else x + y)  # plain concatenation  # O(64)
+            else:  # O(1)
+                break  # O(1)
+        return left  # O(1)
+
+    def prod(self) -> list[str] | None:  # O(len(s)) | terms joined by `/` (`//` excluded); binds tighter than `+`
         left = self.term()  # O(len(s))
         while left is not None:  # O(len(s))
             self.ws()  # O(len(s))
             c = self.s[self.i:self.i + 1]  # O(1)
-            if c == "/" and self.s[self.i:self.i + 2] != "//":  # a string `+` is not followed: the old guard did not  # O(1)
+            if c == "/" and self.s[self.i:self.i + 2] != "//":  # O(1)
                 self.i += 1  # O(1)
                 right = self.term()  # O(len(s))
                 if right is None:  # O(1)
                     return None  # O(1)
-                left = [_join1(x, y) for x in left for y in right][:64]  # O(64)
+                left = self._cross(left, right, _join1)  # O(64)
             else:  # O(1)
                 break  # O(1)
         return left  # O(1)
@@ -648,7 +672,7 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
         name = s[i:j]  # O(1)
         self.i = j  # O(1)
         if s[j:j + 1] != "(":  # O(1)
-            return list(self.names[name])[:64] if name in self.names else [_UNK]  # O(64)
+            return self._cap(self.names[name]) if name in self.names else [_UNK]  # O(64)
         args = self.args()  # O(len(s))
         if args is None:  # O(1)
             return None  # O(1)
@@ -656,7 +680,7 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
         if last in _PATH_CTORS or name in _JOINS:  # O(1)
             acc = args[0] if args else ["."]  # O(1)
             for a in args[1:]:  # O(len(args))
-                acc = [_join1(x, y) for x in acc for y in a][:64]  # O(64)
+                acc = self._cross(acc, a, _join1)  # O(64)
             return acc  # O(1)
         if name in ("str", "os.fspath", "fspath") and len(args) == 1:  # O(1)
             return args[0]  # O(1)
@@ -684,14 +708,14 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
             elif c == "{":  # O(1)
                 e = _scan_close(body, k)  # O(len(body))
                 expr = body[k + 1:e].strip()  # O(len(body))
-                piece = list(self.names[expr])[:64] if _IDENT.fullmatch(expr) and expr in self.names else [_UNK]  # O(64)
+                piece = self._cap(self.names[expr]) if _IDENT.fullmatch(expr) and expr in self.names else [_UNK]  # O(64)
                 k = e + 1  # O(1)
             else:  # O(1)
                 m = re.compile(r"[^{}\\]+|\\.?", re.S).match(body, k)  # O(len(body))
                 text = m.group(0) if m else c  # O(1)
                 k += len(text) if m else 1  # O(1)
                 piece = [text if "r" in pre else re.sub(r"\\(.)", r"\1", text, flags=re.S)]  # O(len(text))
-            out = [x + y for x in out for y in piece][:64]  # O(64)
+            out = self._cross(out, piece, lambda x, y: x + y)  # O(64)
         return out  # O(64)
 
 
