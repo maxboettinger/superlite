@@ -99,3 +99,8 @@ def test_brief_names_topic_limit_and_left_out():
     assert "at most 40 characters" in b and "left_out" in b and "batch cap of 3" in b
     j = bb.triage_brief([{"number": "PIX-1", "title": "t"}], {"repo": "r", "max_batches": 3})
     assert '"left_out": [{"issues": ["<KEY>"]' in j
+
+
+def test_brief_cap_cut_issues_get_no_left_out_entry():
+    brief = bb.triage_brief([{"number": 1, "title": "t"}], {"repo": "r", "max_batches": 3})
+    assert "only because of the batch cap" in brief and "no left_out entry" in brief
