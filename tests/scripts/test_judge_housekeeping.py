@@ -69,9 +69,10 @@ def test_rm_blocks_on_any_doubt(P):
     (s / "tmpdir").mkdir()
     (s / "tmpdir" / "f").write_text("x")
     os.symlink(s / "a.py", s / "link-E")
-    for cmd in ("rm src/a.py", "rm src/new.py", "rm src/a.py-E src/a.py", "rm src/*.py-E", "rm -r src/tmpdir",
+    for cmd in ("rm src/a.py", "rm src/new.py", "rm src/a.py-E src/a.py", "rm src/*.py-E",
                 "rm src/link-E"):
         assert j(P, cmd).kind == "code", cmd
+    assert j(P, "rm -r src/tmpdir") is None  # #421: a folder of untracked, unowned files
     assert j(P, "rm src/a.py-E", mode="human").kind == "human"
     st = P / ".superlite" / "stable.json"
     st.write_text(json.dumps({"plan": "/nope.md"}))
