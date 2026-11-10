@@ -64,9 +64,9 @@ def test_skip_issue_drops_it_and_an_emptied_batch():
 
 def test_skip_and_park_refuse_started_batches():
     d = data(b("B1", ["a.py"], "running"), b("B2", ["b.py"], "parked", worktree="/w/b2", reason="tui red"), b("B3", ["c.py"]))
-    for n, msg in ((1, "#1 is in B1, which is running"), (2, "#2 is in B2, which is parked")):
-        with pytest.raises(ValueError, match=msg):
-            bs.skip_issue(d, n)
+    with pytest.raises(ValueError, match="#1 is in B1, which is running"):
+        bs.skip_issue(d, 1)
+    assert bs.skip_issue(d, 2).startswith("skipped #2 (B2 dropped")
     with pytest.raises(ValueError, match="B1 is running; only a planned batch can be parked"):
         bs.park(d, "B1", "hold")
     for bad in ("", "x" * 201, "a\x1bb"):
@@ -74,7 +74,7 @@ def test_skip_and_park_refuse_started_batches():
             bs.park(d, "B3", bad)
     with pytest.raises(KeyError):
         bs.park(d, "B9", "hold")
-    assert d["skipped"] == [] and d["batches"][2]["state"] == "planned"
+    assert d["skipped"] == [2] and d["batches"][1]["state"] == "planned"
 
 def test_park_holds_a_planned_batch_from_plain_start():
     d = data(b("B1", ["a.py"]), b("B2", ["b.py"]))

@@ -185,12 +185,12 @@ def answer(data: dict, answers: dict, by: str, now: str) -> list:
     return errs
 
 
-def skip_issue(data: dict, n: int) -> str:
+def skip_issue(data: dict, n: "int | str") -> str:
     hit = next((b for b in data.get("batches", []) if n in b.get("issues", [])), None)  # O(batches * issues)
     if hit is None:
         msg = f"skipped {ref(n)} (in no batch)"
     else:
-        if hit["state"] != "planned" and not (hit["state"] == "parked" and not hit.get("worktree")):
+        if hit["state"] not in ("planned", "parked"):
             raise ValueError(f"{ref(n)} is in {hit['id']}, which is {hit['state']}")
         hit["issues"] = [i for i in hit["issues"] if i != n]  # O(issues)
         if hit["issues"]:
@@ -199,11 +199,46 @@ def skip_issue(data: dict, n: int) -> str:
             data["batches"] = [b for b in data["batches"] if b is not hit]  # O(batches)
             for b in data["batches"]:  # O(batches * depends)
                 b["depends"] = [d for d in b.get("depends", []) if d != hit["id"]]
-            msg = f"skipped {ref(n)} ({hit['id']} dropped)"
+            keep = f"; its worktree {hit['worktree']} stays" if hit["state"] == "parked" and hit.get("worktree") else ""
+            msg = f"skipped {ref(n)} ({hit['id']} dropped{keep})"
     data["outside"] = [o for o in data.get("outside", []) if o.get("number") != n]  # O(outside)
     if n not in data["skipped"]:  # O(skipped)
         data["skipped"].append(n)
     return msg
+
+
+NOTE_MAX = 2000
+NOTE_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def read_note(path: str) -> str:
+    try:
+        raw = Path(path).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        raise ValueError(f"--note {path} unreadable: {e}") from None
+    t = NOTE_CTRL.sub("", raw.replace("\r\n", "\n").replace("\r", "\n"))  # O(len)
+    t = "\n".join(ln.rstrip() for ln in t.split("\n")).strip()  # O(len)
+    if len(t) > NOTE_MAX:
+        raise ValueError(f"--note {path}: {len(t)} characters, at most 2000")
+    return t
+
+
+def set_note(data: dict, text: str, src: str, now: str) -> str:
+    if not text:
+        data.pop("note", None)
+        return "note: cleared; lead briefs carry no note"
+    data["note"] = {"text": text, "file": src, "time": now}
+    n = len(text.split("\n"))
+    return f"note: stored from {src} ({n} line{'' if n == 1 else 's'}); every lead brief from now on carries it"
+
+
+def note_line(data: dict):
+    nt = data.get("note")
+    if not isinstance(nt, dict) or not isinstance(nt.get("text"), str) or not nt["text"]:
+        return None
+    n = len(nt["text"].split("\n"))
+    return (f"note: {n} line{'' if n == 1 else 's'} from {nt.get('file')} ({nt.get('time')}) go into every lead brief "
+            "(sl backlog start --note FILE replaces it, an empty file clears it)")
 
 
 def park(data: dict, bid: str, reason: str) -> str:
@@ -232,8 +267,9 @@ def status_lines(data: dict, all_: bool = False) -> list:
     sh = f"ship approved ({ship['by']} {ship['time']})" if ship else "ship not approved"
     repo = f" {data['repo']}" if data.get("repo") else ""
     head = f"backlog{repo}: {len(bs)} batches, {run} running, {sum(1 for b in bs if b['state'] == 'shipped')} shipped, {sh}"
+    nl = note_line(data)
     if not bs:
-        return [head] + left_out_lines(data)
+        return [head] + left_out_lines(data) + ([nl] if nl else [])
     active = [b for b in bs if b["state"] in ACTIVE]
     rows = bs if all_ else [b for b in bs if in_round(data, b)]  # O(batches)
     lines = [head]  # O(1)
@@ -258,6 +294,8 @@ def status_lines(data: dict, all_: bool = False) -> list:
         issues = " ".join(ref(i) for i in b.get("issues", []))
         lines.append(f"{b['id']} | {issues} | {s} | {b.get('lead') or '-'} | {'#%s' % b['pr'] if b.get('pr') else '-'} | {nxt}")
     lines.extend(left_out_lines(data))
+    if nl:
+        lines.append(nl)
     n = len(open_questions(data))
     if n:
         lines.append(f"questions: {n} open (sl backlog decide --print)")

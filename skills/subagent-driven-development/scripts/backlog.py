@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506)."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
+import shlex  # O(1)
 import shutil  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
@@ -274,7 +275,7 @@ def _author(i: dict) -> str:
     return (a.get("login", "") if isinstance(a, dict) else str(a or ""))  # O(1)
 
 
-def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None, cap=None):
+def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None, cap=None, open_=None):
     """Run the triage worker; returns (proposal, None) or (None, error line list)."""
     import backlog_brief  # O(1)
     import fleet  # O(1)
@@ -282,7 +283,7 @@ def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_m
     import fleet_state  # O(1)
     brief = sd / "briefs" / "triage.md"
     brief.parent.mkdir(parents=True, exist_ok=True)
-    brief.write_text(backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": cap or MAX_BATCHES, "carry": carry or {}}))  # O(i)
+    brief.write_text(backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": cap or MAX_BATCHES, "carry": carry or {}, "open": open_ or []}))  # O(i)
     if not fleet_state.is_on(sd):  # O(w)
         fleet.main(["on", "--plan", str(sd)])
     w = fleet.spawn(sd, sd, tier, root, role="research")
@@ -339,6 +340,29 @@ def open_refusal(open_: list, busy: list) -> str:
     return head + (BUSY_HINT if busy else RESET_HINT)  # O(1)
 
 
+ADD_HINT = "; --add plans the --issues next to them"  # O(1) #505
+
+
+def open_batches(data: dict) -> list:
+    """The batches not shipped yet as {id, state, files}, in id order."""
+    rows = [{"id": b["id"], "state": b["state"], "files": list(b.get("files", []))} for b in data.get("batches", []) if b["state"] != "shipped"]  # O(b * files)
+    return sorted(rows, key=lambda b: _num(b["id"]))  # O(b log b)
+
+
+def overlap_lines(new: list, open_: list) -> list:
+    """One line per new batch and open batch that share files; says who holds the files."""
+    out = []  # O(1)
+    for n in new:  # O(new * open * files)
+        for o in open_:  # O(open * files)
+            both = sorted(set(n.get("files", [])) & set(o.get("files", [])))  # O(files)
+            if not both:  # O(1)
+                continue  # O(1)
+            shown = ", ".join(both[:3]) + (f" (+{len(both) - 3} more)" if len(both) > 3 else "")  # O(1)
+            tail = f"start holds {n['id']} until {o['id']} ships" if o["state"] in ("running", "needs_decision") else "whichever starts first holds the files"  # O(1)
+            out.append(f"overlap: {n['id']} shares {shown} with {o['id']} ({o['state']}): {tail}")  # O(1)
+    return out  # O(1)
+
+
 def _left_out(n, title: str, why: str, carry: dict) -> dict:
     """An outside[] entry for a left-out issue; a cap entry seen before counts its rounds."""
     e = {"number": n, "title": title, "reason": why}  # O(1)
@@ -356,8 +380,16 @@ def cmd_plan(a) -> int:
     d = bs.load(p)
     open_ = [b for b in d["batches"] if b["state"] != "shipped"]
     busy = [b for b in open_ if b["state"] in ("running", "needs_decision")]  # O(b) --reset never drops these
-    if open_ and (not a.reset or busy):  # O(1)
-        print(open_refusal(open_, busy))  # O(b)
+    add = bool(getattr(a, "add", False))  # O(1)
+    if add and getattr(a, "issues", None) is None:  # O(1)
+        print("BLOCKED: --add needs --issues")  # O(1)
+        return 2  # O(1)
+    if add and a.reset:  # O(1)
+        print("BLOCKED: --add and --reset exclude each other")  # O(1)
+        return 2  # O(1)
+    add = add and bool(open_)  # O(1) without open batches it is a plain pinned plan
+    if open_ and not add and (not a.reset or busy):  # O(1)
+        print(open_refusal(open_, busy) + (ADD_HINT if getattr(a, "issues", None) is not None else ""))  # O(b)
         return 2
     prop = None
     if proposal is not None:
@@ -385,6 +417,12 @@ def cmd_plan(a) -> int:
                 print(f"BLOCKED: --issues: {'#' + str(n) if isinstance(n, int) else n} is skipped")  # O(1)
                 return 2  # O(1)
         keys = pin if pin_jira else None  # O(1)
+        if add:  # O(1)
+            for b in open_:  # O(b * issues * pin)
+                hit = next((n for n in pin if n in b.get("issues", [])), None)  # O(issues * pin)
+                if hit is not None:  # O(1)
+                    print(f"BLOCKED: --issues: {bs.ref(hit)} is in {b['id']} ({b['state']})")  # O(1)
+                    return 2  # O(1)
     if jql is not None and not jql.strip():
         print("BLOCKED: --jql is empty")
         return 2
@@ -425,7 +463,7 @@ def cmd_plan(a) -> int:
         else:
             outside.append({"number": n, "title": i.get("title", ""), "author": _author(i)})
     if proposal is None:
-        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap)  # O(i)
+        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap, **({"open_": open_batches(d)} if add else {}))  # O(i)
         if err:
             print("\n".join(err))
             return 3
@@ -471,6 +509,20 @@ def cmd_plan(a) -> int:
     shown = {}
 
     def apply(data):
+        if add:  # O(1) open batches stay; only a pinned issue now in one of them refuses
+            clash = next(((n, b) for b in data["batches"] if b["state"] != "shipped" for n in pin if n in b.get("issues", [])), None)  # O(b * pin)
+            if clash:  # O(1)
+                raise RuntimeError("backlog changed while " + ("the proposal was checked" if proposal else "triage ran") + f" ({bs.ref(clash[0])} is in {clash[1]['id']} {clash[1]['state']})")
+            was = open_batches(data)  # O(b)
+            data["titles"] = {**(data.get("titles") or {}), **{str(t["number"]): t["title"] for t in trusted}}  # O(i)
+            data["outside"] = outside + [o for o in data["outside"] if not (isinstance(o, dict) and o.get("number") in pin)]  # O(outside * pin)
+            done = {n for b in data["batches"] if b["state"] == "shipped" for n in b.get("issues", [])}  # O(b * issues)
+            data["outside"] = [o for o in data["outside"] if not isinstance(o, dict) or o.get("number") not in done]  # O(outside)
+            new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
+            data["batches"] += new  # O(b)
+            data["round"] = (data["round"] if isinstance(data.get("round"), list) else [b["id"] for b in was]) + [x["id"] for x in new]  # O(b)
+            shown["lines"] = bs.status_lines(data) + overlap_lines(new, was)  # O(b)
+            return
         live = [b for b in data["batches"] if b["state"] != "shipped" and (not a.reset or b["state"] in ("running", "needs_decision"))]
         if live:  # a batch changed while the triage worker ran: never overwrite it
             raise RuntimeError("backlog changed while " + ("the proposal was checked" if proposal else "triage ran") + " (" + ", ".join(f"{b['id']} {b['state']}" for b in live) + ")")
@@ -555,6 +607,53 @@ def cmd_decide(a) -> int:
     return 0
 
 
+NOTE_HELP = "  --note FILE  standing note: FILE's text (at most 2000 characters) goes into every lead brief from now on; an empty file clears it (backlog.py)"  # O(1) #504
+
+
+def _start(argv: list) -> int:
+    """Route start: strip --note FILE, store it, hand the note and the open batches' files to the lead brief, then run it."""
+    import backlog_brief  # O(1)
+    import backlog_run  # O(1)
+    import backlog_state as bs  # O(1)
+    rest, f, i = [], None, 0  # O(1)
+    while i < len(argv):  # O(args)
+        x = argv[i]  # O(1)
+        if x == "--note":  # O(1)
+            if i + 1 >= len(argv):  # O(1)
+                print("BLOCKED: --note needs a FILE")  # O(1)
+                return 2  # O(1)
+            f, i = argv[i + 1], i + 2  # O(1)
+            continue  # O(1)
+        if x.startswith("--note="):  # O(1)
+            f, i = x[7:], i + 1  # O(1)
+            continue  # O(1)
+        rest.append(x)  # O(1)
+        i += 1  # O(1)
+    p = bs.path(_root())  # O(1)
+    if f is not None and not os.environ.get("SUPERLITE_FLEET_WORKER"):  # O(1)
+        try:  # O(1)
+            text = bs.read_note(f)  # O(len)
+        except ValueError as e:  # O(1)
+            print(f"BLOCKED: {e}")  # O(1)
+            return 2  # O(1)
+        src, res = str(Path(f).resolve()), {}  # O(1)
+        bs.update(p, lambda d: res.update(msg=bs.set_note(d, text, src, _now())))  # O(1)
+        print(res["msg"])  # O(1)
+        if text:  # O(1)
+            for b in bs.load(p)["batches"]:  # O(b)
+                if b["state"] in bs.ACTIVE and b.get("lead"):  # O(1)
+                    print(f"note: {b['id']} lead {b['lead']} started before this note; sl fleet send {b['lead']} --text \"$(cat {shlex.quote(src)})\" tells it")  # O(1)
+    data = bs.load(p)  # O(1)
+    nt = data.get("note")  # O(1)
+    backlog_brief.STANDING = {"note": nt["text"] if isinstance(nt, dict) and isinstance(nt.get("text"), str) else "", "owned": open_batches(data)}  # O(b)
+    try:  # O(1)
+        return backlog_run.main(["start"] + rest)  # O(start)
+    except SystemExit:  # O(1)
+        if any(x in ("-h", "--help") for x in rest):  # O(args)
+            print(NOTE_HELP)  # O(1)
+        raise  # O(1)
+
+
 def _main_only(name: str, fn) -> int:
     import backlog_state as bs  # O(1)
     if os.environ.get("SUPERLITE_FLEET_WORKER"):
@@ -571,7 +670,28 @@ def _main_only(name: str, fn) -> int:
 
 
 def cmd_skip(a) -> int:
-    return _main_only("skip", lambda bs, d: bs.skip_issue(d, a.issue))
+    seen = {}  # O(1)
+
+    def fn(bs, d):
+        hit = next((b for b in d.get("batches", []) if a.issue in b.get("issues", [])), None)  # O(b * issues)
+        msg = bs.skip_issue(d, a.issue)  # O(b)
+        if hit is not None and hit["state"] == "parked" and hit.get("lead") and not any(b["id"] == hit["id"] for b in d["batches"]):  # O(b)
+            seen.update(bid=hit["id"], lead=hit["lead"], repo=d.get("repo", ""))  # O(1)
+        return msg  # O(1)
+    rc = _main_only("skip", fn)
+    if rc == 0 and seen:  # O(1) an emptied parked batch: its lead and ship lock go too
+        import fleet  # O(1)
+        try:  # O(1)
+            fleet.stop(_root() / ".superlite", [seen["lead"]])  # O(w)
+            print(f"{seen['bid']} lead {seen['lead']} stopped")  # O(1)
+        except (Exception, SystemExit) as e:  # O(1)
+            print(f"{seen['bid']} lead {seen['lead']} not stopped: {e}; sl fleet stop {seen['lead']}")  # O(1)
+        try:  # O(1)
+            import ship_lock  # O(1)
+            ship_lock.release(ship_lock.lock_path(seen["repo"]), seen["bid"])  # O(1)
+        except (OSError, ValueError):  # O(1)
+            pass  # O(1)
+    return rc  # O(1)
 
 
 def cmd_park(a) -> int:
@@ -598,6 +718,8 @@ def _issue_arg(s: str):
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "start":
+        return _start(argv[1:])
     if argv and argv[0] in ROUTED:
         import backlog_run  # O(1)
         return backlog_run.main(argv)
@@ -614,6 +736,8 @@ def main(argv=None) -> int:
     pl.add_argument("--timeout-min", type=int, default=60)
     pl.add_argument("--reset", action="store_true", help="drop the planned and parked batches and plan every open issue again; "
                     "shipped batches stay; refused while a batch is running or needs_decision")  # O(1) #369
+    pl.add_argument("--add", action="store_true", help="with --issues: plan those issues as new batches next to the open batches; "
+                    "running batches and the ship approval stay")  # O(1) #505
     pl.add_argument("--proposal", metavar="FILE")
     src = pl.add_mutually_exclusive_group()
     src.add_argument("--jql", metavar="QUERY")
