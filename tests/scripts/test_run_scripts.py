@@ -328,7 +328,7 @@ def test_launch_probes_passes_review_focus_categories(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERLITE_PROBE_RUN", str(probe))
     monkeypatch.setattr(commit_task, "spawn_background", lambda cmd: seen.append(cmd))
     commit_task.launch_probes("abc1234", str(plan))
-    assert seen[0][-2:] == ["--categories", "deep,numeric,state"]
+    assert seen[0][-4:] == ["--categories", "deep,numeric,state", "--plan", str(plan)]
 
 
 def test_commit_rejects_syntax_error(tmp_path):
@@ -379,7 +379,7 @@ def test_commit_launches_probe_in_background_only_if_present(tmp_path):
         if marker.exists() and marker.read_text():
             break
         time.sleep(0.1)
-    assert marker.read_text() == f"--commit {r.stdout.strip()}"
+    assert marker.read_text() == f"--commit {r.stdout.strip()} --plan plan.md"
     # absent probe file: no launch, still commits
     marker.unlink()
     write(repo, "src/a.py", "X = 2\n")
