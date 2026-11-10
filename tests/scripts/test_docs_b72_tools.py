@@ -7,7 +7,7 @@ SCRIPTS = ROOT / "skills" / "subagent-driven-development" / "scripts"
 
 RT_OLD = "with `--background` (prints `summary: <path>` and a `wait:` line)"
 RT_NEXT = "with `--background` (prints `summary: <path>`, then the cue `next: tests still running; run the wait line below now, in the foreground (never as a background command), and do not end your turn until it reports.` and, last, the `wait:` line)"
-RT_SWIFT = "a Swift `--fast` run whose test-cmd.json template holds `{only_testing}` maps each test file to one shell-quoted `-only-testing:<Target>/<Suite>` id per suite it declares (`-only-testing:<Target>` when it declares none), the target taken from the unit and UI test targets of `*.xcodeproj/project.pbxproj` and the `.testTarget` names of `Package.swift` (at the root and one folder down; when neither lists one, from the folder: `Tests/<Target>/`, else the nearest folder ending `Tests`), and a path outside every test target runs the unfiltered `test` command with the stderr note `run_tests: <path> is not in a test target; running the unfiltered test command`; "
+RT_SWIFT = "a Swift `--fast` run whose test-cmd.json template holds `{only_testing}` maps each test file to one shell-quoted `-only-testing:<Target>/<Suite>` id per suite it declares (`-only-testing:<Target>` when it declares none, with the stderr note `run_tests: <path> declares no test suite; using -only-testing:<Target>`), the target read from target membership (the Sources-phase files and Xcode 16 synchronized folders of each `project.pbxproj`, the `Package.swift` test targets with their `path:`), else from the folder names; a path outside every test target runs the unfiltered `test` command with the stderr note `run_tests: <path> is not in a test target; running the unfiltered test command` (testcmd.py holds this one mapping for `testcmd.resolve` and `run_tests`, #431); "
 CT_NOTES = "a file another task owns prints `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` when its owners are outside the call and not running, at least one of them is committed and the file differs from the newest checkpoint; a file this task owns that a running sibling (busy in pool.json, outside this call) also owns and that differs from the newest checkpoint is held out with one `left uncommitted (shared with running T2; commit_task T1 again once it is done): F` note per task, a task left with nothing fails `Tn FAILED: nothing to commit; held for running T2: F`, and `--also` files and the Wave 0 task are never held; every stderr note prints once per call, not once per task; "
 AC_SKIP = "; `apply` writes no commit whose tree equals the commit it sits on (squash and `--no-squash`): each such entry prints `apply: skipped <title> (no change left)`, `applied N commit(s)` counts only the real commits, and with N = 0 HEAD and the index stay untouched while the checkpoints are still removed"
 BL_HEAD = "| `backlog` | Backlog mode CLI: `status [--all]`, `plan [--tier sonnet]"
@@ -59,7 +59,10 @@ def test_fleet_io_row_names_the_red_field():
 def test_quoted_strings_exist_in_code():
     rt = (SCRIPTS / "run_tests.py").read_text(encoding="utf-8")
     assert 'WAIT_CUE = "next: tests still running; run the wait line below now, in the foreground (never as a background command), and do not end your turn until it reports."' in rt
-    assert "is not in a test target; running the unfiltered test command" in rt and "-only-testing:{want}" in rt
+    tc = (SCRIPTS / "testcmd.py").read_text(encoding="utf-8")
+    for s in ("is not in a test target; running the unfiltered test command", "declares no test suite; using -only-testing:{tgt}", "-only-testing:{want}", "PBXSourcesBuildPhase", "fileSystemSynchronizedGroups"):
+        assert s in tc, s
+    assert 'print(f"run_tests: {n}"' in rt
     ct = (SCRIPTS / "commit_task.py").read_text(encoding="utf-8")
     for s in ("changed after its checkpoint; run commit_task ", " again once it is done): ", "nothing to commit; held for running "):
         assert s in ct, s
