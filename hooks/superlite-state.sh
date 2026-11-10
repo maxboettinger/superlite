@@ -123,3 +123,31 @@ _sl_exclude() {
   printf '.superlite/\n' >> "$x" 2>/dev/null
   return 0
 }
+
+# superlite_has_run: 0 when $SL_SD holds a run's own file (an orchestrator choice, a backlog, a plan's markers or an
+# inline flow); a folder that only keeps test summaries or incidents is not a run. Call after superlite_state. Builtins only.
+superlite_has_run() {
+  local m
+  [ -n "${SL_SD:-}" ] && [ -d "$SL_SD" ] || return 1
+  for m in orchestrator.json backlog.json stable.json prime.md pool.json inline-flow.json; do
+    [ -f "$SL_SD/$m" ] && return 0
+  done
+  return 1
+}
+
+# superlite_tools: SL_ROOT (the plugin root, forward slashes: $CLAUDE_PLUGIN_ROOT, else the folder above this file's
+# hooks/) and SL_PY (the Python a hook runs a script with: $SUPERLITE_PYTHON, else python, else python3).
+superlite_tools() {
+  local self
+  SL_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+  if [ -z "$SL_ROOT" ]; then
+    self="${BASH_SOURCE[0]//\\//}"
+    case "$self" in /*|?:/*) ;; *) self="${PWD//\\//}/$self" ;; esac
+    SL_ROOT="${self%/hooks/*}"
+  fi
+  SL_ROOT="${SL_ROOT//\\//}"
+  SL_PY="${SUPERLITE_PYTHON:-}"
+  if [ -z "$SL_PY" ]; then
+    if command -v python >/dev/null 2>&1; then SL_PY=python; else SL_PY=python3; fi
+  fi
+}
