@@ -39,16 +39,16 @@ class FakeStore:
     def is_green(self, store, layer, digest):
         return digest in self.green.get(layer, [])
 
-    def record_green(self, store, layer, digest, files):
+    def record_green(self, store, layer, digest, files, checkout=None):
         self.green.setdefault(layer, []).append(digest)
-        self.files[layer] = dict(files)
+        self.files[(layer, checkout)] = dict(files)
 
-    def changed_files(self, store, layer, files):
-        old = self.files.get(layer, {})
+    def changed_files(self, store, layer, files, checkout=None):
+        old = self.files.get((layer, checkout), {})
         return sorted(p for p in set(files) | set(old) if files.get(p) != old.get(p))
 
-    def has_manifest(self, store, layer):
-        return layer in self.files
+    def has_manifest(self, store, layer, checkout=None):
+        return (layer, checkout) in self.files
 
     def start_run(self, store, layer, digest, pid):
         self.locks[layer] = digest
