@@ -17,7 +17,7 @@ line, `#` comments) whose inbox triage reads over ssh (`$SUPERLITE_SSH` replaces
 when logged: home paths become `~`, e-mail addresses `<email>`, tokens `<secret>`. Stdlib only.
 
 Library: `add_auto(tool, reason, target, version) -> bool` logs one machine-found stop as an entry of kind `auto` (`finish`
-calls it per distinct stop, #140). Triage lists an auto group (signature = tool + reason, the target left out) only from
+calls it per distinct stop, #140). Triage lists an auto group (signature = tool + reason, a rule-block adds rule and target pattern) only from
 two entries on, and matches entry ids against the open issues and those closed within 30 days (#182).
 """
 # Complexity notation:
@@ -148,36 +148,89 @@ def tokens(text: str) -> set:  # O(w)
     return {t for t in re.findall(r"[a-z0-9_]+", text.lower()) if len(t) >= 3 and t not in STOP}  # O(w)
 
 
-def auto_sig(e: dict):  # O(1)
-    """(tool, reason) of an auto entry, else None: the target is left out, so one stop on many files is one group."""
+SUFFIX = re.compile(r"\s+\((?:rule ([^,()]*)(?:, cwd [^()]*)?|cwd [^()]*)\)\s*$")  # trailing `(rule R, cwd D)` | O(1)
+FLEET = re.compile(r"\s+\(fleet on\)\s*$")  # O(1)
+
+
+def split_target(target: str) -> tuple:  # O(w)
+    """(bare target, rule) of a logged rule-block target: the `(rule R, cwd D)` and `(fleet on)` suffixes come off."""
+    m = SUFFIX.search(target)  # O(w)
+    rule = (m.group(1) or "").strip() if m else ""  # O(1)
+    bare = target[:m.start()] if m else target  # O(w)
+    return FLEET.sub("", bare).strip(), rule  # O(w)
+
+
+def blocked_path(bare: str) -> str:  # O(w)
+    """The first path-like word (has a `/`, no redirect or heredoc mark) of a bare target, quotes and `;` stripped, else ''."""
+    for word in bare.split():  # O(w) iterations
+        word = word.strip("'\";,")  # O(1)
+        if "/" in word and word[0] not in "<>" and not word.startswith("2>"):  # O(1)
+            return word  # O(1)
+    return ""  # O(1)
+
+
+def target_pattern(bare: str) -> str:  # O(w)
+    """`dir/*` of the blocked path, else the first word of the command: many files in one folder are one pattern."""
+    path = blocked_path(bare)  # O(w)
+    if path:  # O(1)
+        return path.rsplit("/", 1)[0] + "/*"  # O(1)
+    return bare.split()[0] if bare.split() else ""  # O(w)
+
+
+def auto_sig(e: dict):  # O(w)
+    """(tool, reason) of an auto entry, else None; a rule-block adds (rule, target pattern), so unrelated blocks differ."""
     tool, reason = e.get("tool"), e.get("reason")  # O(1)
-    return (tool, reason) if e.get("kind") == "auto" and isinstance(tool, str) and tool and isinstance(reason, str) else None  # O(1)
+    if e.get("kind") != "auto" or not (isinstance(tool, str) and tool and isinstance(reason, str)):  # O(1)
+        return None  # O(1)
+    if reason != "rule-block":  # O(1)
+        return (tool, reason)  # O(1)
+    bare, rule = split_target(str(e.get("target") or ""))  # O(w)
+    return (tool, reason, rule, target_pattern(bare))  # O(w)
 
 
-def group(entries: list) -> list:  # O(i*g*w)
-    """Greedy grouping by word overlap (Jaccard >= 0.5 with a group's first entry); largest, then latest, first.
-    Auto entries group by `auto_sig` instead, and a group of fewer than AUTO_MIN of them is left out (a one-off waits)."""
-    groups, by_sig = [], {}  # O(1)
-    for e in sorted(entries, key=lambda e: e.get("date", "")):  # O(i log i) sort, then O(i) iterations
-        sig = auto_sig(e)  # O(1)
-        if sig:  # O(1)
-            if sig not in by_sig:  # O(1)
-                by_sig[sig] = {"tokens": set(), "entries": [], "auto": True}  # O(1)
-                groups.append(by_sig[sig])  # O(1)
-            by_sig[sig]["entries"].append(e)  # O(1)
+def names_path(text: str, path: str) -> bool:  # O(w)
+    """True when `text` holds `path` as a whole path (not inside a longer one)."""
+    return bool(path) and re.search(r"(?<![\w./~-])" + re.escape(path) + r"(?![\w/-]|\.\w)", text) is not None  # O(w)
+
+
+def split_groups(entries: list) -> tuple:  # O(i*g*w)
+    """(listed groups, held-back auto entries). Greedy grouping by word overlap (Jaccard >= 0.5 with a group's first
+    entry); largest, then latest, first. Auto entries group by `auto_sig`; a rule-block whose blocked path a hand-written
+    group names joins that group; an auto group of fewer than AUTO_MIN entries is held back (a one-off waits)."""
+    groups, by_sig, autos = [], {}, []  # O(1)
+    ordered = sorted(entries, key=lambda e: e.get("date", ""))  # O(i log i)
+    for e in ordered:  # O(i) iterations
+        if auto_sig(e):  # O(w)
+            autos.append(e)  # O(1)
             continue  # O(1)
         tk = tokens(e["text"])  # O(w)
         for g in groups:  # O(g) iterations
-            if g.get("auto"):  # an auto group takes only its own signature | O(1)
-                continue  # O(1)
             union = tk | g["tokens"]  # O(w)
             if union and len(tk & g["tokens"]) / len(union) >= 0.5:  # O(w)
                 g["entries"].append(e)  # O(1)
                 break  # O(1)
         else:  # O(1)
             groups.append({"tokens": tk, "entries": [e]})  # O(1)
+    hand = list(groups)  # the hand-written groups, before any auto group is added | O(g)
+    for e in autos:  # O(i) iterations
+        path = blocked_path(split_target(str(e.get("target") or ""))[0]) if e.get("reason") == "rule-block" else ""  # O(w)
+        home = next((g for g in hand if path and any(names_path(h["text"], path) for h in g["entries"] if not auto_sig(h))), None)  # O(g*w)
+        if home:  # O(1)
+            home["entries"].append(e)  # O(1)
+            continue  # O(1)
+        sig = auto_sig(e)  # O(w)
+        if sig not in by_sig:  # O(1)
+            by_sig[sig] = {"tokens": set(), "entries": [], "auto": True}  # O(1)
+            groups.append(by_sig[sig])  # O(1)
+        by_sig[sig]["entries"].append(e)  # O(1)
+    held = sorted((e for g in groups if g.get("auto") and len(g["entries"]) < AUTO_MIN for e in g["entries"]), key=lambda e: e["id"])  # O(i log i)
     groups = [g for g in groups if not g.get("auto") or len(g["entries"]) >= AUTO_MIN]  # O(g)
-    return sorted(groups, key=lambda g: (len(g["entries"]), g["entries"][-1].get("date", "")), reverse=True)  # O(g log g)
+    return sorted(groups, key=lambda g: (len(g["entries"]), max(e.get("date", "") for e in g["entries"])), reverse=True), held  # O(g log g + i)
+
+
+def group(entries: list) -> list:  # O(i*g*w)
+    """The listed groups of `split_groups`."""
+    return split_groups(entries)[0]  # O(i*g*w)
 
 
 def match_issue(tk: set, issues: list):  # O(t*w)
@@ -345,8 +398,9 @@ def cmd_triage(a) -> int:  # O(i*g*w + g*t*w) + h ssh processes + one gh process
     known = (issues or []) + (closed_issues(a) if issues is not None else [])  # open and recently closed: an id in either is filed | O(t) + spawn
     by_id = filed(entries, known) if known else {}  # O(i*t*w)
     entries = [e for e in entries if e["id"] not in by_id]  # O(i)
-    groups = group(entries)  # O(i*g*w)
-    print(f"feedback triage: {total} {'' if a.all else 'untriaged '}entries, {len(groups) + len({by_id[k] for k in by_id})} groups")  # O(1)
+    groups, held = split_groups(entries)  # O(i*g*w)
+    print(f"feedback triage: {total} {'' if a.all else 'untriaged '}entries, {len(groups) + len({by_id[k] for k in by_id})} groups"  # O(1)
+          + (f", {len(held)} held back" if held else ""))  # O(1)
     if by_id:  # O(1)
         for num in sorted(set(by_id.values())):  # O(t) iterations
             ids = [k for k in by_id if by_id[k] == num]  # O(i)
@@ -357,7 +411,7 @@ def cmd_triage(a) -> int:  # O(i*g*w + g*t*w) + h ssh processes + one gh process
         texts = list(dict.fromkeys(scrub(e["text"]) for e in es))  # O(i*w) scrub again: older or remote entries
         iss = match_issue(set().union(*(tokens(t) for t in texts)), issues or [])  # O(t*w)
         print(f"\n## {n}. ×{len(es)} {_vals(es, 'kind')}: {texts[0]}")  # O(w)
-        print(f"- seen: {es[0].get('date', '?')[:10]}..{es[-1].get('date', '?')[:10]} · versions {_vals(es, 'version')}"  # O(i)
+        print(f"- seen: {min(e.get('date', '?') for e in es)[:10]}..{max(e.get('date', '?') for e in es)[:10]} · versions {_vals(es, 'version')}"  # O(i)
               f" · harness {_vals(es, 'harness')} · projects {_vals(es, 'project')} · hosts {_vals(es, 'host')}")
         if issues is None:  # O(1)
             print("- issue: unmatched (open issues not read): check before filing")  # O(1)
@@ -366,6 +420,9 @@ def cmd_triage(a) -> int:  # O(i*g*w + g*t*w) + h ssh processes + one gh process
         if len(texts) > 1:  # O(1)
             print("- also: " + "; ".join(f'"{t}"' for t in texts[1:3]))  # O(w)
         print("- ids: " + " ".join(e["id"] for e in es))  # O(i)
+    if held:  # O(1)
+        print(f"\n## held back: {len(held)} one-off auto entries (an auto group is listed from {AUTO_MIN} entries on)")  # O(1)
+        print("- ids: " + " ".join(e["id"] for e in held))  # O(i)
     print("\nnext: draft one issue per new group (a comment on a matched one), ask Max to approve the batch, "  # O(1)
           "file it with gh, then `sl feedback mark <ids>` for every group filed, merged or dropped")
     return 0  # O(1)
