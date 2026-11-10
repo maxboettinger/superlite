@@ -14,6 +14,9 @@ rest. A stop record ends the wait in any Herdr state when it holds a status; one
 pane is UNKNOWN plus the last pane lines. A stop record whose transcript reads empty, or without the status its cut `last` line holds, is re-read for READ_MS (10 s), then reported UNKNOWN (transcript unread); the cut line is never the report. Its exit code is always 0. A report is written as `<id>.md` (the text) and `<id>.json` (`fleet_report.parse`);
 a one-turn worker (fixer, reviewer, research, layer) is stopped once its status is final.
 `send --brief` resends the brief once when Herdr reports agent_prompt_stalled; a second stall is the error.
+`send`, `send --brief` and `send --text` resend once after a stall, and after a slow Herdr reply ("timed out waiting for app response") unless the worker already shows `working`.
+A lead's stop records written by its own child sessions (a transcript outside the lead's worktree project folder) never count as the lead's stop.
+`send --text` to a lead whose newest own stop said only READY resends the brief file instead of the text.
 """
 # Complexity notation:
 # n = tasks in the plan, k = tasks in a message, w = workers, m = lines of metrics.jsonl, T = transcript lines, s = screen bytes
@@ -40,6 +43,7 @@ import state  # noqa: E402 | O(1)
 import task as taskmod  # noqa: E402 | O(1)
 import testcmd  # noqa: E402 | O(1)
 
+SLOW_MSG = "timed out waiting for app response"  # a Herdr reply that came late; the prompt may still have landed | O(1)
 STALLED = "agent_prompt_stalled"  # the one Herdr prompt error a second send can fix | O(1)
 STATUS_LINE = "Status: DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED"  # O(1)
 FINAL = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "APPROVED", "CHANGES_REQUESTED")  # a one-turn worker with one of these is stopped | O(1)
@@ -287,11 +291,32 @@ def _stops(sd):  # the stop records of metrics.jsonl in file order | O(m)
     return out  # O(1)
 
 
-def latest_stop(sd, wid, after_ms, stops=None):  # the newest stop record of WID at or after AFTER_MS; STOPS is a pre-read _stops list | O(m)
+def project_dir(path):  # the folder name Claude Code gives a project path | O(len)
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))  # O(len)
+
+
+def own_stop(rec, worker):  # False for a stop record a child session of the worker's worktree wrote | O(len)
+    wt = (worker or {}).get("worktree")  # O(1)
+    tr = rec.get("transcript")  # O(1)
+    if not wt or not tr:  # O(1)
+        return True  # O(1)
+    folder = Path(str(tr)).parent.name  # O(1)
+    for p in (str(wt), str(Path(wt).resolve())):  # O(1)
+        d = project_dir(p)  # O(len)
+        if folder == d or (len(d) > 200 and folder.startswith(d[:200])):  # O(len)
+            return True  # O(1)
+    return False  # O(1)
+
+
+def latest_stop(sd, wid, after_ms, stops=None):  # the newest own stop record of WID at or after AFTER_MS; STOPS is a pre-read _stops list | O(m + w)
     stops = _stops(sd) if stops is None else stops  # O(m)
+    try:  # O(1)
+        worker = fs.load(Path(sd))["workers"].get(wid)  # read once | O(w)
+    except (OSError, ValueError, KeyError):  # O(1)
+        worker = None  # O(1)
     found = None  # O(1)
     for e in stops:  # O(m) iterations
-        if e.get("agent_id") == wid and e["t"] >= after_ms and (found is None or e["t"] >= found["t"]):  # O(1)
+        if e.get("agent_id") == wid and e["t"] >= after_ms and (found is None or e["t"] >= found["t"]) and own_stop(e, worker if (worker or {}).get("role") == "lead" else None):  # O(len)
             found = e  # O(1)
     return found  # O(1)
 
@@ -343,6 +368,26 @@ def stopped(sd, wid, t_ms):  # the stop hook: label the pane reported unless the
     return pane_label(sd, wid, f"{wid} {label} reported, waiting for coordinator", 3000)  # O(w)
 
 
+def _prompt(name, msg):  # prompt NAME; one resend after a stall or a slow reply that did not land | O(len msg)
+    try:  # O(1)
+        hc.prompt(name, msg, ["working"], 15000)  # O(len msg)
+        return  # O(1)
+    except hc.HerdrError as e:  # O(1)
+        code, text = getattr(e, "code", ""), str(getattr(e, "message", "") or e)  # O(len)
+        if code == STALLED:  # O(1)
+            pass  # O(1)
+        elif SLOW_MSG in text:  # O(len)
+            try:  # O(1)
+                state = hc.agent_state(name)  # O(1)
+            except hc.HerdrError:  # O(1)
+                state = None  # O(1)
+            if state == "working":  # the prompt landed | O(1)
+                return  # O(1)
+        else:  # O(1)
+            raise  # O(1)
+    hc.prompt(name, msg, ["working"], 15000)  # resent once; a second failure propagates | O(len msg)
+
+
 def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
     sd = Path(sd)  # O(1)
     data = fs.load(sd)  # O(w)
@@ -351,7 +396,7 @@ def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
     tier = data["workers"][wid].get("tier", "sonnet")  # O(1)
     msg = task_message(plan, tasks, sl_path, superlite_root, tier)  # O(n + k*s)
     sent = now_ms()  # O(1)
-    hc.prompt(fs.name_of(sd, wid, data["workers"][wid]), msg, ["working"], 15000)  # O(len msg)
+    _prompt(fs.name_of(sd, wid, data["workers"][wid]), msg)  # O(len msg)
     label = ",".join(tasks)  # O(k)
     _busy(sd, wid, label, sent)  # O(w + pool bytes)
     pane_label(sd, wid, f"{wid} {label}")  # O(w)
@@ -388,12 +433,7 @@ def send_brief(sd, wid, brief, label=""):  # O(w + len brief path + pool bytes)
     label = label or path.stem  # O(1)
     sent = now_ms()  # O(1)
     name = fs.name_of(sd, wid, w)  # O(w)
-    try:  # O(1)
-        hc.prompt(name, msg, ["working"], 15000)  # O(len msg)
-    except hc.HerdrError as e:  # O(1)
-        if getattr(e, "code", "") != STALLED:  # a stall is the one error a second send can fix | O(1)
-            raise  # O(1)
-        hc.prompt(name, msg, ["working"], 15000)  # resent once; a second stall propagates, the worker stays ready | O(len msg)
+    _prompt(name, msg)  # O(len msg)
     _busy(sd, wid, label, sent)  # O(w + pool bytes)
     pane_label(sd, wid, f"{wid} {label}")  # O(w)
     print(f"{wid} {label} sent")  # O(1)
@@ -405,9 +445,16 @@ def send_text(sd, wid, text):  # O(w + len text)
     sd = Path(sd)  # O(1)
     name = fs.worker_name(sd, wid)  # KeyError for an unknown worker | O(w)
     sent = now_ms()  # O(1)
-    role = fs.load(sd)["workers"].get(wid, {}).get("role") or "implementer"  # O(w)
+    wrec = fs.load(sd)["workers"].get(wid, {})  # O(w)
+    role = wrec.get("role") or "implementer"  # O(1)
     contract = "" if role == "layer" else (fleet_report.REVIEW if role == "final-reviewer" else fleet_report.WORK)  # O(1)
-    hc.prompt(name, f"{text}\n\n{contract}" if contract else text, ["working"], 15000)  # O(len text)
+    msg = f"{text}\n\n{contract}" if contract else text  # O(len text)
+    brief = Path(str(wrec.get("lead_sd") or "")) / "briefs" / "lead.md"  # O(1)
+    last = latest_stop(sd, wid, int(wrec.get("sent") or 0)) if role == "lead" and wrec.get("lead_sd") and brief.is_file() else None  # O(m + w)
+    if last is not None and " ".join(str(last.get("last") or "").split()) == "READY":  # the lead stopped after READY alone: its brief never ran | O(len)
+        msg = fleet_report.brief_message("lead", str(brief.resolve()))  # O(1)
+        print(f"{wid} brief resent (its last stop said only READY)")  # O(1)
+    _prompt(name, msg)  # O(len msg)
     task = None  # O(1)
     with fs.locked(sd):  # O(1) plus wait
         data = fs.load(sd)  # O(w)

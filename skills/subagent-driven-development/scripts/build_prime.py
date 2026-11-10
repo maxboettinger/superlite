@@ -10,6 +10,7 @@ The prime kind is the tier's `prime` value in config/routing.json (sonnet: `slim
   full  rules + the whole plan + the spec sections named by --sections (needs --spec for them).
   mini  (haiku) into .superlite/prime-haiku.md: constraints, stub spec and the interfaces of that tier's tasks.
 
+`--plan` may be the run folder: stable.json, pool.json or plan.md names the plan file, else exit 2 (#508).
 Prints `sha256 size`. No timestamps; CRLF becomes LF, trailing spaces are
 stripped, and spec sections go in document order whatever order they are
 listed in. Stdlib only.
@@ -293,6 +294,12 @@ def main(argv=None):  # O(B + H^2 + out)
     a = ap.parse_args(argv)  # O(1)
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
     import orchestrator  # O(1)
+    if Path(a.plan).is_dir():  # a run folder names its plan file (#508) | O(d)
+        import state  # O(1)
+        found = orchestrator.plan_file(state.plan_dir(a.plan))  # O(file)
+        if found is None:  # O(1)
+            die(f"--plan {a.plan} is a run folder with no plan file (stable.json, pool.json or plan.md name none); pass the plan file")  # O(1)
+        a.plan = str(found)  # O(1)
     blocked = orchestrator.require(a.plan, "build_prime")  # human mode waits for approval | O(file)
     if blocked:  # O(1)
         return blocked  # O(1)
