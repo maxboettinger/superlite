@@ -1623,9 +1623,95 @@ def py_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*
     return warns  # O(w)
 
 
+TS_SKIP = {"node_modules", ".git", ".superlite", "dist", "build", "out", "coverage", ".next", ".turbo"}  # O(1)
+TS_EXT = (".ts", ".tsx", ".mts", ".cts")  # O(1)
+TS_DEP_KEYS = ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies")  # O(1)
+
+
+def ts_packages(root: Path) -> dict[str, dict]:  # O(F + M*s) | every named package.json under root to depth 3; {} under two packages (#404)
+    found: dict[str, dict] = {}  # O(1)
+    base = len(root.parts)  # O(1)
+    for cur, dirs, files in os.walk(root):  # O(F) iterations
+        dirs[:] = sorted(d for d in dirs if d not in TS_SKIP)  # O(d log d)
+        if len(Path(cur).parts) - base >= 3:  # O(1)
+            dirs[:] = []  # O(1)
+        if "package.json" not in files:  # O(1)
+            continue  # O(1)
+        manifest = Path(cur) / "package.json"  # O(1)
+        try:  # one broken manifest must not hide the others | O(1)
+            data = json.loads(manifest.read_text(encoding="utf-8", errors="replace"))  # O(s)
+        except (OSError, ValueError):  # O(1)
+            continue  # O(1)
+        if not isinstance(data, dict) or not isinstance(data.get("name"), str) or not data["name"]:  # O(1)
+            continue  # O(1)
+        deps = _Deps()  # O(1)
+        deps.order = []  # O(1)
+        for key in TS_DEP_KEYS:  # O(1) iterations
+            block = data.get(key)  # O(1)
+            for dep in (block if isinstance(block, dict) else {}):  # O(deps) iterations
+                if dep not in deps:  # O(1)
+                    deps.add(dep)  # O(1)
+                    deps.order.append(dep)  # O(1)
+        found[data["name"]] = {"dir": Path(cur), "deps": deps, "manifest": manifest.relative_to(root).as_posix()}  # O(d)
+    return found if len(found) >= 2 else {}  # O(1)
+
+
+def _ts_file(rel: str) -> bool:  # O(s) | a non-test TypeScript source path
+    parts = rel.replace("\\", "/").split("/")  # O(s)
+    name = parts[-1]  # O(1)
+    return name.endswith(TS_EXT) and ".test." not in name and ".spec." not in name and not {"__tests__", "tests", "test"} & set(parts[:-1])  # O(s)
+
+
+def _ts_owned(t: Task, root: Path) -> list[Path]:  # O(o*s) | the non-test TypeScript files a task owns
+    return [root / o.replace("\\", "/") for o in t.owns if _ts_file(o)]  # O(o*s)
+
+
+def ts_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*types*pkgs) | a seam name declared in a workspace package the consumer's package does not depend on (#404)
+    pkgs = ts_packages(root)  # O(F + M*s)
+    if not pkgs:  # O(1)
+        return []  # O(1)
+    pairs = _seam_pairs(plan)  # O(n*q*cands)
+    if not any(_ts_owned(t, root) for t, _s, _p, _q in pairs):  # O(pairs*o*s)
+        return []  # O(pairs)
+    owned = {t.id: sorted({n for n in (_target_of(f, pkgs) for f in _ts_owned(t, root)) if n}) for t in plan.tasks}  # O(n*o*P*d)
+    by_type: dict[str, set[str]] = {}  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        for item in t.produces:  # O(q) iterations
+            sig = parse_signature(item)  # O(s)
+            tname = sig["cls"] if sig and sig["cls"] else (item if re.fullmatch(r"[A-Z]\w*", item) else None)  # O(1)
+            if tname:  # O(1)
+                by_type.setdefault(tname, set()).update(owned[t.id])  # O(o)
+    texts: dict[str, str] = {}  # O(1)
+    for name, p in pkgs.items():  # O(P) iterations
+        chunks = []  # O(1)
+        for f in sorted(p["dir"].rglob("*")):  # O(files) iterations
+            rel = f.relative_to(p["dir"]).as_posix()  # O(d)
+            if f.suffix in TS_EXT and _ts_file(rel) and not TS_SKIP & set(f.relative_to(p["dir"]).parts) and _target_of(f, pkgs) == name:  # O(s + P*d)
+                chunks.append(f.read_text(encoding="utf-8", errors="replace"))  # O(size)
+        texts[name] = "\n".join(chunks)  # O(size)
+    warns: list[str] = []  # O(1)
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()  # O(1)
+    for t, sig, pid, psig in pairs:  # O(pairs) iterations
+        groups = [(psig["name"], set(owned.get(pid, [])))]  # O(1)
+        for ty in signature_types(psig):  # O(types) iterations
+            rx = re.compile(r"^\s*export\s+(default\s+)?(declare\s+)?(abstract\s+)?(class|interface|type|enum|const\s+enum|function)\s+" + re.escape(ty) + r"\b", re.M)  # O(s)
+            groups.append((ty, {n for n, x in texts.items() if rx.search(x)} | by_type.get(ty, set())))  # O(P*size)
+        for what, mods in groups:  # O(types) iterations
+            for importer in owned.get(t.id, []):  # O(o) iterations
+                deps = pkgs[importer]["deps"]  # O(1)
+                key = (t.id, importer, tuple(sorted(mods)))  # O(m)
+                if not mods or key in seen or any(m == importer or m in deps for m in mods):  # O(m)
+                    continue  # O(m)
+                seen.add(key)  # O(1)
+                order = ", ".join(getattr(deps, "order", sorted(deps))) or "none"  # O(deps)
+                warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {what} is declared in {', '.join(sorted(mods))}, "  # O(s)
+                             f"which package {importer} may not import ({pkgs[importer]['manifest']}) dependencies: {order}")  # O(deps)
+    return warns  # O(w)
+
+
 def import_issues(plan: Plan, root: Path) -> list[str]:  # O(swift + python) | every stack's seam import warnings, each check isolated
     out: list[str] = []  # O(1)
-    for check in (swift_import_issues, py_import_issues):  # O(1) iterations
+    for check in (swift_import_issues, py_import_issues, ts_import_issues):  # O(1) iterations
         try:  # O(1)
             out.extend(check(plan, root))  # O(check)
         except (OSError, ValueError, TypeError, AttributeError, KeyError, configparser.Error):  # O(1)
