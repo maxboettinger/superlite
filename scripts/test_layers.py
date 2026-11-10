@@ -113,8 +113,12 @@ def layer_hash(layer: str, root: Path) -> str:  # O(1)
     return hash_digests(layer_digests(layer, root))  # O(n * size)
 
 
-def stale_detail(state: Path, layer: str, digests: dict[str, str]) -> str:  # O(1)
-    changed = layer_store.changed_files(state, layer, digests) if layer_store.has_manifest(state, layer) else []  # O(n)
+def checkout_key(root: Path) -> str:  # O(1)
+    return str(Path(root).resolve())  # O(1)
+
+
+def stale_detail(state: Path, layer: str, digests: dict[str, str], checkout: str | None = None) -> str:  # O(1)
+    changed = layer_store.changed_files(state, layer, digests, checkout=checkout) if layer_store.has_manifest(state, layer, checkout=checkout) else []  # O(n)
     if not changed:  # O(1)
         return "no green stamp"  # O(1)
     return ", ".join(changed[:5]) + (f" (+{len(changed) - 5} more)" if len(changed) > 5 else "")  # O(1)
@@ -122,6 +126,7 @@ def stale_detail(state: Path, layer: str, digests: dict[str, str]) -> str:  # O(
 
 def layer_states(root: Path, state: Path) -> list[tuple[str, str, str]]:  # O(1)
     out = []  # O(1)
+    checkout = checkout_key(root)  # O(1)
     for layer in LAYERS:  # O(L)
         digests = layer_digests(layer, Path(root))  # O(n * size)
         digest = hash_digests(digests)  # O(n)
@@ -132,7 +137,7 @@ def layer_states(root: Path, state: Path) -> list[tuple[str, str, str]]:  # O(1)
         elif layer_store.running(state, layer, digest):  # O(1)
             out.append((layer, "running", "run in progress"))  # O(1)
         else:  # O(1)
-            out.append((layer, "stale", stale_detail(state, layer, digests)))  # O(n)
+            out.append((layer, "stale", stale_detail(state, layer, digests, checkout)))  # O(n)
     return out  # O(1)
 
 
@@ -142,7 +147,7 @@ def stale_layers(root: Path, state: Path) -> list[str]:  # O(1)
 
 def write_stamp(root: Path, state: Path, layer: str, digests: dict | None = None) -> None:  # digests taken before a run keep a file changed during it unstamped | O(1)
     digests = layer_digests(layer, Path(root)) if digests is None else digests  # O(n * size)
-    layer_store.record_green(state, layer, hash_digests(digests), digests)  # O(n)
+    layer_store.record_green(state, layer, hash_digests(digests), digests, checkout=checkout_key(root))  # O(n)
 
 
 def toplevel(cwd: str) -> Path:  # O(1)

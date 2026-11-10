@@ -52,9 +52,18 @@ def layer_entry(store: Path, layer: str) -> dict:  # O(1)
     return entry if isinstance(entry, dict) else {}  # O(1)
 
 
-def manifest_of(entry: dict) -> dict:  # O(1)
-    files = entry.get("files")  # O(1)
-    return files if isinstance(files, dict) else {}  # O(1)
+def _checkout_files(entry: dict, checkout: str | None) -> dict | None:  # O(1)
+    if checkout is None:  # O(1)
+        files = entry.get("files")  # O(1)
+    else:  # O(1)
+        checkouts = entry.get("checkouts")  # O(1)
+        files = checkouts.get(checkout) if isinstance(checkouts, dict) else None  # O(1)
+    return files if isinstance(files, dict) else None  # O(1)
+
+
+def manifest_of(entry: dict, checkout: str | None = None) -> dict:  # O(1)
+    files = _checkout_files(entry, checkout)  # O(1)
+    return {} if files is None else files  # O(1)
 
 
 def is_green(store: Path, layer: str, digest: str) -> bool:  # O(1)
@@ -99,24 +108,33 @@ def _locked(path: Path):  # O(1)
             os.close(fd)  # O(1)
 
 
-def record_green(store: Path, layer: str, digest: str, files: dict[str, str]) -> None:  # O(1)
+def record_green(store: Path, layer: str, digest: str, files: dict[str, str], checkout: str | None = None) -> None:  # O(1)
     with _lock(store):  # O(wait)
         data = read_json(store)  # O(size)
         layers = data.get("layers") if isinstance(data.get("layers"), dict) else {}  # O(1)
         entry = layers.get(layer) if isinstance(layers.get(layer), dict) else {}  # O(1)
         old = entry.get("green") if isinstance(entry.get("green"), list) else []  # O(1)
         green = [d for d in old if d != digest] + [digest]  # O(KEEP)
-        layers[layer] = {"green": green[-KEEP:], "files": dict(files)}  # O(files)
+        old_checkouts = entry.get("checkouts") if isinstance(entry.get("checkouts"), dict) else {}  # O(1)
+        checkouts = {k: v for k, v in old_checkouts.items() if isinstance(v, dict) and os.path.isdir(k)}  # O(checkouts)
+        new = {"green": green[-KEEP:]}  # O(1)
+        if checkout is None:  # O(1)
+            new["files"] = dict(files)  # O(files)
+        else:  # O(1)
+            checkouts[checkout] = dict(files)  # O(files)
+        if checkouts:  # O(1)
+            new["checkouts"] = checkouts  # O(1)
+        layers[layer] = new  # O(1)
         write_json(store, {"version": 1, "layers": layers})  # O(size)
 
 
-def changed_files(store: Path, layer: str, files: dict[str, str]) -> list[str]:  # O(1)
-    last = manifest_of(layer_entry(store, layer))  # O(size)
+def changed_files(store: Path, layer: str, files: dict[str, str], checkout: str | None = None) -> list[str]:  # O(1)
+    last = manifest_of(layer_entry(store, layer), checkout)  # O(size)
     return sorted(p for p in set(files) | set(last) if files.get(p) != last.get(p))  # O(n log n)
 
 
-def has_manifest(store: Path, layer: str) -> bool:  # O(1)
-    return isinstance(layer_entry(store, layer).get("files"), dict)  # O(size)
+def has_manifest(store: Path, layer: str, checkout: str | None = None) -> bool:  # O(1)
+    return _checkout_files(layer_entry(store, layer), checkout) is not None  # O(size)
 
 
 def lock_path(store: Path) -> Path:  # O(1)
