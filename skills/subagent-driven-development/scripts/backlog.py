@@ -175,29 +175,34 @@ def carry_rounds(outside) -> dict:
     return out  # O(1)
 
 
-def carry_line(trusted: list, carry: dict):
-    """One brief line naming the carried issues in trusted order, or None."""
-    parts = []  # O(1)
-    for t in trusted:  # O(i)
-        n = t["number"]  # O(1)
-        if n in carry:  # O(1)
-            parts.append(f"{n if isinstance(n, str) else '#' + str(n)} ({carry[n]} round{'' if carry[n] == 1 else 's'})")  # O(1)
-    if not parts:  # O(1)
-        return None  # O(1)
-    return ("Carry-over: the batch cap left these issues out of earlier plan rounds: " + ", ".join(parts)  # O(i)
-            + ". Plan them before the other issues, unless one is an umbrella or tracking issue.")  # O(1)
+JIRA_WORD = re.compile(r"(?i)\bjira\b")  # O(1)
 
 
-def insert_line(text: str, line) -> str:
-    """text with line before its first Rules: line, else after the last line."""
-    if not line:  # O(1)
-        return text  # O(1)
-    lines = text.split("\n")  # O(len)
-    if lines and lines[-1] == "":  # O(1)
-        lines.pop()  # O(1)
-    at = next((k for k, x in enumerate(lines) if x.startswith("Rules:")), len(lines))  # O(len)
-    lines.insert(at, line)  # O(len)
-    return "\n".join(lines) + "\n"  # O(len)
+def jira_named(root: Path) -> bool:
+    """True when root/AGENTS.md or root/CLAUDE.md names Jira (an unreadable file does not)."""
+    for f in ("AGENTS.md", "CLAUDE.md"):  # O(1)
+        try:  # O(1)
+            if JIRA_WORD.search((Path(root) / f).read_text(encoding="utf-8", errors="replace")):  # O(size)
+                return True  # O(1)
+        except OSError:  # O(1)
+            continue  # O(1)
+    return False  # O(1)
+
+
+def remembered_source(source, root: Path) -> tuple:
+    """(jql, line, err) of a plain plan: the remembered source, else a refusal when the docs name Jira."""
+    if isinstance(source, dict) and source.get("tracker") == "jira":  # O(1)
+        jql = source.get("jql")  # O(1)
+        if isinstance(jql, str) and jql.strip():  # O(1)
+            return jql, f'source: Jira --jql "{jql}" (remembered from the last plan; --github, --jql or --issues picks another)', None  # O(1)
+        return None, None, ('BLOCKED: the last plan read Jira issues by key and remembers no JQL; run sl backlog plan --jql "<query>", '
+                            '--issues KEYS or --github')  # O(1)
+    if isinstance(source, dict) and source.get("tracker") == "github":  # O(1)
+        return None, None, None  # O(1)
+    if jira_named(root):  # O(1)
+        return None, None, ('BLOCKED: no backlog source remembered and AGENTS.md or CLAUDE.md names Jira; run sl backlog plan --jql "<query>" '
+                            'for Jira issues or --github for GitHub issues (--issues pins single issues); a plain plan then reuses the choice')  # O(1)
+    return None, None, None  # O(1)
 
 
 def jira_issues(jql, keys) -> list:
@@ -269,7 +274,7 @@ def _author(i: dict) -> str:
     return (a.get("login", "") if isinstance(a, dict) else str(a or ""))  # O(1)
 
 
-def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None):
+def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None, cap=None):
     """Run the triage worker; returns (proposal, None) or (None, error line list)."""
     import backlog_brief  # O(1)
     import fleet  # O(1)
@@ -277,7 +282,7 @@ def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_m
     import fleet_state  # O(1)
     brief = sd / "briefs" / "triage.md"
     brief.parent.mkdir(parents=True, exist_ok=True)
-    brief.write_text(insert_line(backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": MAX_BATCHES}), carry))  # O(i)
+    brief.write_text(backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": cap or MAX_BATCHES, "carry": carry or {}}))  # O(i)
     if not fleet_state.is_on(sd):  # O(w)
         fleet.main(["on", "--plan", str(sd)])
     w = fleet.spawn(sd, sd, tier, root, role="research")
@@ -361,6 +366,11 @@ def cmd_plan(a) -> int:
             print(perr)
             return 2
     jql, keys, pin, pin_jira = getattr(a, "jql", None), None, None, False  # O(1)
+    cap = getattr(a, "max_batches", None)  # O(1)
+    if cap is not None and not 1 <= cap <= 20:  # O(1)
+        print("BLOCKED: --max-batches: 1 to 20")  # O(1)
+        return 2  # O(1)
+    github = bool(getattr(a, "github", False))  # O(1)
     if getattr(a, "issues", None) is not None:
         try:
             pin_jira, pin = pin_list(a.issues)  # O(len)
@@ -378,6 +388,15 @@ def cmd_plan(a) -> int:
     if jql is not None and not jql.strip():
         print("BLOCKED: --jql is empty")
         return 2
+    line = None  # O(1)
+    if jql is None and getattr(a, "issues", None) is None and not github:  # O(1) a plain plan reuses the remembered source
+        jql, line, err = remembered_source(d.get("source"), root)  # O(1)
+        if err:  # O(1)
+            print(err)  # O(1)
+            return 2  # O(1)
+    if line:  # O(1)
+        print(line)  # O(1)
+    cap = cap or MAX_BATCHES  # O(1)
     jira = jql is not None or keys is not None
     info = _gh(["repo", "view", "--json", "nameWithOwner,visibility"])
     if jira:
@@ -406,7 +425,7 @@ def cmd_plan(a) -> int:
         else:
             outside.append({"number": n, "title": i.get("title", ""), "author": _author(i)})
     if proposal is None:
-        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, *[x for x in [carry_line(trusted, carry)] if x])  # O(i)
+        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap)  # O(i)
         if err:
             print("\n".join(err))
             return 3
@@ -434,7 +453,7 @@ def cmd_plan(a) -> int:
         for b in batches:
             b["issues"] = [back[n] for n in b["issues"]]
     planned = {n for b in batches for n in b["issues"]}
-    why_out = "not planned (cap)" if len(prop["batches"]) >= MAX_BATCHES else "not planned (triage)"
+    why_out = "not planned (cap)" if len(prop["batches"]) >= cap else "not planned (triage)"
     outside += [_left_out(t["number"], t["title"], why_out, carry) for t in trusted if t["number"] not in planned]  # O(i)
     outside += [_left_out(i["number"], i.get("title", ""), f"not triaged ({ISSUE_LIMIT} cap)", carry)
                 for i in rest if i["number"] not in skipped]  # O(i)
@@ -450,6 +469,15 @@ def cmd_plan(a) -> int:
         data["outside"] = outside + ([o for o in data["outside"] if isinstance(o, dict) and isinstance(o.get("number"), (int, str))
                                      and o["number"] not in pin and isinstance(o["number"], str) == pin_jira] if pin else [])  # O(outside * pin)
         data["approved_ship"] = None
+        prev = data.get("source")  # O(1)
+        if jql is not None:  # O(1)
+            data["source"] = {"tracker": "jira", "jql": jql}  # O(1)
+        elif keys is not None:  # O(1)
+            old = prev.get("jql") if isinstance(prev, dict) and prev.get("tracker") == "jira" else None  # O(1)
+            data["source"] = {"tracker": "jira", "jql": old} if isinstance(old, str) and old.strip() else {"tracker": "jira"}  # O(1)
+        else:  # O(1)
+            data["source"] = {"tracker": "github"}  # O(1)
+        data["max_batches"] = cap  # O(1)
         new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
         data["batches"] += new  # O(b)
         data["round"] = [x["id"] for x in new]  # O(b)
@@ -576,6 +604,8 @@ def main(argv=None) -> int:
     pl.add_argument("--proposal", metavar="FILE")
     src = pl.add_mutually_exclusive_group()
     src.add_argument("--jql", metavar="QUERY")
+    src.add_argument("--github", action="store_true", help="read GitHub issues and remember GitHub as the source")  # O(1)
+    pl.add_argument("--max-batches", type=int, metavar="N", help="batches one plan round holds, 1 to 20 (default 7)")  # O(1)
     src.add_argument("--issues", metavar="LIST", help="pin the plan to these issues: GitHub numbers (362,#433) or Jira keys (PIX-1,PIX-2); the first item picks the source")  # O(1)
     pl.set_defaults(fn=cmd_plan)
     de = sub.add_parser("decide")

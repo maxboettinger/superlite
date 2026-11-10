@@ -11,7 +11,7 @@ def _run(monkeypatch, tmp_path, assoc):
     def gh(args):
         seen.append(args)
         return {"nameWithOwner": "o/r", "visibility": "PUBLIC"} if args[:2] == ["repo", "view"] else rows
-    def triage(sd, root, trusted, repo, tier, tmo):
+    def triage(sd, root, trusted, repo, tier, tmo, carry=None, cap=None):
         briefs.extend(t["number"] for t in trusted)
         return None, ["BLOCKED: stop"]
     (tmp_path / ".superlite").mkdir()
