@@ -127,12 +127,13 @@ def triage_brief(issues, ctx):  # O(i)
                "description), "
                "any other violation rejects the whole proposal), "
                "recommended option first. Leave umbrella and tracking issues (whose acceptance is the run itself or other issues) "
-               "out of every batch.")  # O(1)
+               "out of every batch. A topic is at most 40 characters. The batch cap of " + str(ctx["max_batches"]) + " is a hard limit: "
+               "list every issue you leave out in left_out, each group with one short reason (at most 60 characters).")  # O(1)
     out.append('End with Status: DONE, then one fenced json block: {"status": "DONE", "files": [], "tests": "", "findings": [], '
                '"summary": "<n> batches", "batches": [{"id": "B1", "topic": "<kebab words>", "issues": ' + ('["<KEY>"]' if jira else '[<n>]') + ', '
                               '"files": ["<path>"], "depends": [], "decisions": [{"questions": [{"question": "<1-300 chars>", '
                '"header": "<1-12 chars>", "options": [{"label": "<recommended first> (Recommended)", "description": "<trade-off>"}, '
-               '{"label": "...", "description": "..."}]}]}]}]}')  # O(1)
+               '{"label": "...", "description": "..."}]}]}]}], "left_out": [{"issues": ' + ('["<KEY>"]' if jira else '[<n>]') + ', "reason": "<why>"}]}')  # O(1)
     return "\n".join(out) + "\n"  # O(n)
 
 

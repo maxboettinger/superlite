@@ -444,7 +444,16 @@ def cmd_plan(a) -> int:
             where = f"\nproposal kept: {kept}"
         except (OSError, TypeError, ValueError, RecursionError):
             where = ""
-        print("BLOCKED: proposal rejected\n" + "\n".join(errs[:5]) + where + ("" if proposal is not None else f"\ntriage worker {prop.get('status', '?')}: {why or 'no summary'}"))
+        nb = len(prop["batches"]) if isinstance(prop.get("batches"), list) else 0  # O(1)
+        held = f" (the proposal holds {nb} batch{'' if nb == 1 else 'es'})"  # O(1)
+        print("BLOCKED: proposal rejected\n" + "\n".join(errs[:5]) + where + ("" if proposal is not None else f"\ntriage worker {prop.get('status', '?')}: {why or 'no summary'}{held}"))
+        if nb == 0:  # O(1) an empty proposal: name the way out
+            reasons = bc.left_out_reasons(prop, {t["number"] for t in trusted})  # O(q)
+            groups: dict = {}  # O(1)
+            for t in trusted:  # O(i)
+                groups.setdefault(f"not planned (triage: {reasons[t['number']]})" if t["number"] in reasons else "not planned (triage)", []).append(bs.ref(t["number"]))  # O(1)
+            print("\n".join(f"{r}: {' '.join(ns)}" for r, ns in groups.items()))  # O(i)
+            print("nothing to plan: sl backlog skip <issue> keeps an issue out of every later plan")  # O(1)
         if cuts:
             print("\n".join(cuts))
         return 3
@@ -453,8 +462,10 @@ def cmd_plan(a) -> int:
         for b in batches:
             b["issues"] = [back[n] for n in b["issues"]]
     planned = {n for b in batches for n in b["issues"]}
-    why_out = "not planned (cap)" if len(prop["batches"]) >= cap else "not planned (triage)"
-    outside += [_left_out(t["number"], t["title"], why_out, carry) for t in trusted if t["number"] not in planned]  # O(i)
+    why_out = "not planned (cap)" if len(prop["batches"]) >= cap else "not planned (triage)"  # O(1)
+    reasons = bc.left_out_reasons(prop, {t["number"] for t in trusted})  # O(q)
+    outside += [_left_out(t["number"], t["title"], f"not planned (triage: {reasons[t['number']]})" if t["number"] in reasons else why_out, carry)
+                for t in trusted if t["number"] not in planned]  # O(i)
     outside += [_left_out(i["number"], i.get("title", ""), f"not triaged ({ISSUE_LIMIT} cap)", carry)
                 for i in rest if i["number"] not in skipped]  # O(i)
     shown = {}
@@ -468,6 +479,8 @@ def cmd_plan(a) -> int:
         data["titles"] = {str(t["number"]): t["title"] for t in trusted}
         data["outside"] = outside + ([o for o in data["outside"] if isinstance(o, dict) and isinstance(o.get("number"), (int, str))
                                      and o["number"] not in pin and isinstance(o["number"], str) == pin_jira] if pin else [])  # O(outside * pin)
+        done = {n for b in data["batches"] if b["state"] == "shipped" for n in b.get("issues", [])}  # O(b * issues)
+        data["outside"] = [o for o in data["outside"] if not isinstance(o, dict) or o.get("number") not in done]  # O(outside)
         data["approved_ship"] = None
         prev = data.get("source")  # O(1)
         if jql is not None:  # O(1)
