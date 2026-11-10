@@ -274,7 +274,7 @@ def _author(i: dict) -> str:
     return (a.get("login", "") if isinstance(a, dict) else str(a or ""))  # O(1)
 
 
-def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None, cap=None):
+def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None, cap=None, open_=None):
     """Run the triage worker; returns (proposal, None) or (None, error line list)."""
     import backlog_brief  # O(1)
     import fleet  # O(1)
@@ -282,7 +282,7 @@ def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_m
     import fleet_state  # O(1)
     brief = sd / "briefs" / "triage.md"
     brief.parent.mkdir(parents=True, exist_ok=True)
-    brief.write_text(backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": cap or MAX_BATCHES, "carry": carry or {}}))  # O(i)
+    brief.write_text(backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": cap or MAX_BATCHES, "carry": carry or {}, "open": open_ or []}))  # O(i)
     if not fleet_state.is_on(sd):  # O(w)
         fleet.main(["on", "--plan", str(sd)])
     w = fleet.spawn(sd, sd, tier, root, role="research")
@@ -339,6 +339,29 @@ def open_refusal(open_: list, busy: list) -> str:
     return head + (BUSY_HINT if busy else RESET_HINT)  # O(1)
 
 
+ADD_HINT = "; --add plans the --issues next to them"  # O(1) #505
+
+
+def open_batches(data: dict) -> list:
+    """The batches not shipped yet as {id, state, files}, in id order."""
+    rows = [{"id": b["id"], "state": b["state"], "files": list(b.get("files", []))} for b in data.get("batches", []) if b["state"] != "shipped"]  # O(b * files)
+    return sorted(rows, key=lambda b: _num(b["id"]))  # O(b log b)
+
+
+def overlap_lines(new: list, open_: list) -> list:
+    """One line per new batch and open batch that share files; says who holds the files."""
+    out = []  # O(1)
+    for n in new:  # O(new * open * files)
+        for o in open_:  # O(open * files)
+            both = sorted(set(n.get("files", [])) & set(o.get("files", [])))  # O(files)
+            if not both:  # O(1)
+                continue  # O(1)
+            shown = ", ".join(both[:3]) + (f" (+{len(both) - 3} more)" if len(both) > 3 else "")  # O(1)
+            tail = f"start holds {n['id']} until {o['id']} ships" if o["state"] in ("running", "needs_decision") else "whichever starts first holds the files"  # O(1)
+            out.append(f"overlap: {n['id']} shares {shown} with {o['id']} ({o['state']}): {tail}")  # O(1)
+    return out  # O(1)
+
+
 def _left_out(n, title: str, why: str, carry: dict) -> dict:
     """An outside[] entry for a left-out issue; a cap entry seen before counts its rounds."""
     e = {"number": n, "title": title, "reason": why}  # O(1)
@@ -356,8 +379,16 @@ def cmd_plan(a) -> int:
     d = bs.load(p)
     open_ = [b for b in d["batches"] if b["state"] != "shipped"]
     busy = [b for b in open_ if b["state"] in ("running", "needs_decision")]  # O(b) --reset never drops these
-    if open_ and (not a.reset or busy):  # O(1)
-        print(open_refusal(open_, busy))  # O(b)
+    add = bool(getattr(a, "add", False))  # O(1)
+    if add and getattr(a, "issues", None) is None:  # O(1)
+        print("BLOCKED: --add needs --issues")  # O(1)
+        return 2  # O(1)
+    if add and a.reset:  # O(1)
+        print("BLOCKED: --add and --reset exclude each other")  # O(1)
+        return 2  # O(1)
+    add = add and bool(open_)  # O(1) without open batches it is a plain pinned plan
+    if open_ and not add and (not a.reset or busy):  # O(1)
+        print(open_refusal(open_, busy) + (ADD_HINT if getattr(a, "issues", None) is not None else ""))  # O(b)
         return 2
     prop = None
     if proposal is not None:
@@ -385,6 +416,12 @@ def cmd_plan(a) -> int:
                 print(f"BLOCKED: --issues: {'#' + str(n) if isinstance(n, int) else n} is skipped")  # O(1)
                 return 2  # O(1)
         keys = pin if pin_jira else None  # O(1)
+        if add:  # O(1)
+            for b in open_:  # O(b * issues * pin)
+                hit = next((n for n in pin if n in b.get("issues", [])), None)  # O(issues * pin)
+                if hit is not None:  # O(1)
+                    print(f"BLOCKED: --issues: {bs.ref(hit)} is in {b['id']} ({b['state']})")  # O(1)
+                    return 2  # O(1)
     if jql is not None and not jql.strip():
         print("BLOCKED: --jql is empty")
         return 2
@@ -425,7 +462,7 @@ def cmd_plan(a) -> int:
         else:
             outside.append({"number": n, "title": i.get("title", ""), "author": _author(i)})
     if proposal is None:
-        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap)  # O(i)
+        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap, open_batches(d) if add else [])  # O(i)
         if err:
             print("\n".join(err))
             return 3
@@ -471,6 +508,20 @@ def cmd_plan(a) -> int:
     shown = {}
 
     def apply(data):
+        if add:  # O(1) open batches stay; only a pinned issue now in one of them refuses
+            clash = next(((n, b) for b in data["batches"] if b["state"] != "shipped" for n in pin if n in b.get("issues", [])), None)  # O(b * pin)
+            if clash:  # O(1)
+                raise RuntimeError("backlog changed while " + ("the proposal was checked" if proposal else "triage ran") + f" ({bs.ref(clash[0])} is in {clash[1]['id']} {clash[1]['state']})")
+            was = open_batches(data)  # O(b)
+            data["titles"] = {**(data.get("titles") or {}), **{str(t["number"]): t["title"] for t in trusted}}  # O(i)
+            data["outside"] = outside + [o for o in data["outside"] if not (isinstance(o, dict) and o.get("number") in pin)]  # O(outside * pin)
+            done = {n for b in data["batches"] if b["state"] == "shipped" for n in b.get("issues", [])}  # O(b * issues)
+            data["outside"] = [o for o in data["outside"] if not isinstance(o, dict) or o.get("number") not in done]  # O(outside)
+            new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
+            data["batches"] += new  # O(b)
+            data["round"] = (data["round"] if isinstance(data.get("round"), list) else [b["id"] for b in was]) + [x["id"] for x in new]  # O(b)
+            shown["lines"] = bs.status_lines(data) + overlap_lines(new, was)  # O(b)
+            return
         live = [b for b in data["batches"] if b["state"] != "shipped" and (not a.reset or b["state"] in ("running", "needs_decision"))]
         if live:  # a batch changed while the triage worker ran: never overwrite it
             raise RuntimeError("backlog changed while " + ("the proposal was checked" if proposal else "triage ran") + " (" + ", ".join(f"{b['id']} {b['state']}" for b in live) + ")")
@@ -614,6 +665,8 @@ def main(argv=None) -> int:
     pl.add_argument("--timeout-min", type=int, default=60)
     pl.add_argument("--reset", action="store_true", help="drop the planned and parked batches and plan every open issue again; "
                     "shipped batches stay; refused while a batch is running or needs_decision")  # O(1) #369
+    pl.add_argument("--add", action="store_true", help="with --issues: plan those issues as new batches next to the open batches; "
+                    "running batches and the ship approval stay")  # O(1) #505
     pl.add_argument("--proposal", metavar="FILE")
     src = pl.add_mutually_exclusive_group()
     src.add_argument("--jql", metavar="QUERY")
