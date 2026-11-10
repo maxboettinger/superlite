@@ -7,6 +7,7 @@
     orchestrator.py bind [--plan P]
     orchestrator.py end [--plan P]
     orchestrator.py takeover [--plan P]
+    orchestrator.py resume [--plan P]
 
 State: `.superlite/orchestrator.json` {mode, approved, by, time}, in the folder `state.resolve` finds: the plan's git toplevel
 with --plan (the review plan's with `approve --review` and no --plan), else $SUPERLITE_STATE_DIR, the session's binding, ./.superlite.
@@ -33,6 +34,8 @@ import argparse  # O(1)
 import hashlib  # O(1)
 import json  # O(1)
 import os  # O(1)
+import re  # O(1)
+import subprocess  # O(1)
 import sys  # O(1)
 import time  # O(1)
 from datetime import datetime  # O(1)
@@ -160,6 +163,146 @@ def end(sd: Path) -> str:  # O(files)
 
 foreign_worktree = state.foreign_worktree  # the #199 check and state.resolve share one test (#224) | O(1)
 
+def plan_file(sd: Path, given: str | None = None) -> Path | None:  # O(1)
+    """The plan of the run in sd: --plan when it is a file, else stable.json, pool.json, sd/plan.md (the first that exists)."""
+    if given and Path(given).is_file():  # O(1)
+        return Path(given)  # O(1)
+    for name in ("stable.json", "pool.json"):  # O(1) iterations
+        try:  # O(1)
+            p = json.loads((sd / name).read_text(encoding="utf-8")).get("plan")  # O(file)
+        except (OSError, ValueError, AttributeError):  # O(1)
+            continue  # O(1)
+        if isinstance(p, str) and p and Path(p).is_file():  # O(1)
+            return Path(p)  # O(1)
+    return sd / "plan.md" if (sd / "plan.md").is_file() else None  # O(1)
+
+
+def changed_since(root: Path, ref: str, files: list[str]) -> list[str]:  # O(f) plus two git calls
+    """The files (regular files, or deleted ones) whose working-tree blob differs from ref's, sorted."""
+    if not files:  # O(1)
+        return []  # O(1)
+    want = set(files)  # O(f)
+    run = subprocess.run(["git", "-C", str(root), "ls-tree", "-r", "-z", ref, "--", *files], capture_output=True, text=True)  # O(f) git
+    if run.returncode:  # ref no longer exists (rebased, pruned): compare with HEAD | O(1)
+        run = subprocess.run(["git", "-C", str(root), "ls-tree", "-r", "-z", "HEAD", "--", *files], capture_output=True, text=True)  # O(f) git
+    out = run.stdout  # O(1)
+    old = {}  # O(1)
+    for ent in out.split("\0"):  # O(f) iterations
+        head, _, path = ent.partition("\t")  # O(1)
+        if path in want:  # O(1)
+            old[path] = head.split()[2]  # O(1)
+    live = sorted(f for f in want if (root / f).is_file())  # O(f)
+    now_ = {}  # O(1)
+    if live:  # O(1)
+        hashed = subprocess.run(["git", "-C", str(root), "hash-object", "--", *live],
+                                capture_output=True, text=True).stdout.split()  # O(f) git
+        now_ = dict(zip(live, hashed))  # O(f)
+    return sorted(f for f in want if now_.get(f) != old.get(f) and (f in now_ or f in old))  # O(f log f)
+
+
+def test_run_line(sd: Path) -> str:  # O(1)
+    """One line about the last test run recorded in sd/test-summary.json."""
+    f = sd / "test-summary.json"  # O(1)
+    if not f.is_file():  # O(1)
+        return f"last test run: none in {sd}"  # O(1)
+    try:  # O(1)
+        d = json.loads(f.read_text(encoding="utf-8"))  # O(file)
+        at = datetime.fromtimestamp(f.stat().st_mtime).strftime("%H:%M:%S")  # O(1)
+        line = f"last test run: {d['mode']}, {d['passed']} passed, {d['failed']} failed, ended {at}"  # O(1)
+        return line + (f", error: {d['error']}" if d.get("error") else "")  # O(1)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):  # O(1)
+        return f"last test run: unreadable {f}"  # O(1)
+
+
+def resume_lines(sd: Path, plan: Path) -> list[str]:  # O(t * f) plus git calls
+    """Per plan task, what a dead coordinator left behind: checkpoint, edits after it, uncommitted Owns files."""
+    import autocommit  # lazy: orchestrator is imported by every gated tool | O(1)
+    import plan_tools  # O(1)
+    root = state.git_root(sd)  # O(d)
+    tasks = plan_tools.Plan.load(str(plan)).tasks  # O(plan)
+    entries = []  # O(1)
+    try:  # O(1)
+        ck = json.loads((root / ".superlite" / "checkpoints.json").read_text(encoding="utf-8"))  # O(file)
+        if ck.get("plan") == autocommit.plan_key(str(plan)) and ck.get("entries"):  # O(1)
+            entries = [e for e in ck["entries"] if isinstance(e, dict)]  # O(e)
+    except (OSError, ValueError, AttributeError):  # O(1)
+        entries = []  # O(1)
+    shas, efiles = {}, {}  # O(1)
+    for e in entries:  # O(e) iterations
+        shas[e.get("task")] = e.get("sha", "")  # newest entry wins | O(1)
+        efiles.setdefault(e.get("task"), []).extend(e.get("files") or [])  # O(f)
+    try:  # O(1)
+        ledger = (sd / "progress.md").read_text(encoding="utf-8").splitlines()  # O(file)
+    except OSError:  # O(1)
+        ledger = []  # O(1)
+    for ln in ledger:  # O(lines) iterations
+        m = re.match(r"\s*[-*+]?\s*commit\s+([A-Z]{1,3}\d+[A-Za-z]?)\s+([0-9a-f]{7,40})", ln)  # O(1)
+        if m:  # O(1)
+            shas.setdefault(m.group(1), m.group(2))  # O(1)
+    if entries:  # O(1)
+        ref = entries[-1].get("sha", "")  # O(1)
+        head = f"resume: plan {plan}; checkpoint chain head {ref[:7]} ({entries[-1].get('task')}); files compared with it"  # O(1)
+    else:  # O(1)
+        ref = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()  # O(1)
+        head = f"resume: plan {plan}; no checkpoints; files compared with HEAD {ref[:7]}"  # O(1)
+    lines, clean, none, edited = [head], [], [], []  # O(1)
+    summ = sd / "test-summary.json"  # O(1)
+    try:  # O(1)
+        stamp = summ.stat().st_mtime if isinstance(json.loads(summ.read_text(encoding="utf-8")), dict) else None  # O(file)
+    except (OSError, ValueError):  # O(1)
+        stamp = None  # O(1)
+    for t in tasks:  # O(t) iterations
+        files = list(dict.fromkeys([*t.owns, *efiles.get(t.id, [])]))  # O(f)
+        ch = changed_since(root, ref, files)  # O(f) git
+        if stamp is not None and any((root / f).is_file() and (root / f).stat().st_mtime > stamp for f in ch):  # O(f)
+            edited.append(t.id)  # O(1)
+        sha = shas.get(t.id, "")[:7]  # O(1)
+        if sha and ch:  # O(1)
+            lines.append(f"{t.id} checkpointed {sha}: edited after the checkpoint: {', '.join(ch)}; keep: sl commit_task {t.id} --plan {plan}; "
+                         f"drop: git restore --source {sha} -- {' '.join(ch)}")  # O(f)
+        elif sha:  # O(1)
+            clean.append(t.id)  # O(1)
+        elif ch:  # O(1)
+            lines.append(f"{t.id} not checkpointed: uncommitted Owns files: {', '.join(ch)}; run its tests, then sl commit_task {t.id} --plan {plan}")  # O(f)
+        else:  # O(1)
+            none.append(t.id)  # O(1)
+    if clean:  # O(1)
+        lines.append("checkpointed, nothing edited after: " + " ".join(clean))  # O(t)
+    if none:  # O(1)
+        lines.append("no changes: " + " ".join(none))  # O(t)
+    lines.append(test_run_line(sd) + (f"; edited after it: {' '.join(edited)}" if edited else ""))  # O(t)
+    return lines  # O(1)
+
+
+def resume(sd: Path, given: str | None) -> int:  # O(t * f) the `resume` command
+    """Prune dead pool entries (unless another live session owns sd), then print the per-task report; exit 2 without a plan."""
+    other = state.live_owner(sd)  # O(d)
+    if other:  # O(1)
+        print(f"pool: not pruned: {sd} belongs to session {other}; take the run over first: sl orchestrator takeover --plan {sd}")  # O(1)
+    else:  # O(1)
+        import pool  # lazy | O(1)
+        try:  # O(1)
+            print(chr(10).join(pool.prune_file(str(sd / "pool.json"))))  # O(lines)
+        except SystemExit as e:  # a corrupt pool.json must not stop the report | O(1)
+            print(f"pool: not pruned: {e}")  # O(1)
+        except Exception as e:  # noqa: BLE001 any prune failure is one line | O(1)
+            print(f"pool: not pruned: {type(e).__name__}: {e}")  # O(1)
+    plan = plan_file(sd, given)  # O(1)
+    if plan is None:  # O(1)
+        print(f"resume: no plan found for {sd}; pass --plan <plan.md>")  # O(1)
+        return 2  # O(1)
+    if state.git_root(sd) is None:  # O(d)
+        print(f"resume: {sd} is in no git checkout")  # O(1)
+        return 2  # O(1)
+    try:  # O(1)
+        import plan_tools  # O(1)
+        plan_tools.Plan.load(str(plan))  # O(plan)
+    except Exception as err:  # noqa: BLE001 any load failure is one line | O(1)
+        print(f"resume: plan {plan} unreadable: {err}")  # O(1)
+        return 2  # O(1)
+    print(chr(10).join(resume_lines(sd, plan)))  # O(t * f)
+    return 0  # O(1)
+
 
 def main(argv=None):  # O(1)
     ap = argparse.ArgumentParser(description=__doc__.split(chr(10))[0])  # O(1)
@@ -176,7 +319,8 @@ def main(argv=None):  # O(1)
     b_ = sub.add_parser("bind")  # O(1)
     e_ = sub.add_parser("end")  # O(1)
     t_ = sub.add_parser("takeover")  # O(1)
-    for p in (s, a_, st, b_, e_, t_):  # O(1)
+    r_ = sub.add_parser("resume")  # O(1)
+    for p in (s, a_, st, b_, e_, t_, r_):  # O(1)
         p.add_argument("--plan", help="plan path (locates .superlite at its git toplevel); default: the session's binding, else ./.superlite")  # O(1)
     b_.add_argument("--force", action="store_true", help="take over a folder another live session owns")  # O(1)
     a = ap.parse_args(argv)  # O(1)
@@ -189,6 +333,8 @@ def main(argv=None):  # O(1)
         sd = state.plan_dir(review)  # O(d)
     else:  # a writer or reader following a foreign binding exits 2 inside resolve (#224) | O(d)
         sd = sl_dir(a.plan)  # O(d)
+    if a.cmd == "resume":  # O(1)
+        return resume(sd, a.plan)  # O(t * f)
     if a.cmd in ("end", "set", "takeover") and not a.plan:  # without --plan never act on another worktree's run (#199) | O(d)
         top = foreign_worktree(sd)  # O(d)
         if top:  # O(1)
