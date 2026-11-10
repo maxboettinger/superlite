@@ -223,6 +223,7 @@ def test_wait_keeps_waiting_on_an_unreported_stop_while_working(world, tmp_path,
 
 def test_wait_unreported_stop_on_idle_is_unknown_with_pane_tail(world, tmp_path, capsys):
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]
+    data = json.loads((world.sd / "fleet.json").read_text()); data["workers"]["W1"]["asked"] = sent; (world.sd / "fleet.json").write_text(json.dumps(data))  # already asked once: the second miss is UNKNOWN
     tr = tmp_path / "w1.jsonl"; rec(tr, user("task"), assistant("Verify runs in the background; waiting for it."), HOOK, assistant(LEFTOVERS))
     stop_at(world, tr, sent + 10, last="Verify runs in the background; waiting for it.")
     world.fh.screen = "Status: DONE (an older turn)\n⏺ Waiting for the verify run\n"; world.fh.states = [{"sl-proj-w1": "idle"}]

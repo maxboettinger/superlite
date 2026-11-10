@@ -70,7 +70,7 @@ def test_implementer_line_gains_findings_and_json_but_keeps_running(world, tmp_p
 
 def test_unknown_report_keeps_the_worker(world, tmp_path, capsys, stopped):
     setw(world, "W2", role="fixer", one_turn=True)
-    io.send_brief(world.sd, "W2", str(brief(world, "b.md")))
+    io.send_brief(world.sd, "W2", str(brief(world, "b.md"))); setw(world, "W2", asked=world.clock.t[0])  # already asked once: the second miss is UNKNOWN
     tr = tmp_path / "w2.jsonl"; rec(tr, user("fix"), assistant("I looked at it."))
     stop_record(world, "W2", tr); world.fh.states = [{"sl-proj-w2": "done"}]
     io.wait(world.sd, ["W2"], 5000)
