@@ -50,8 +50,8 @@ def test_only_testing_template_still_warns(tmp_path, capsys):
     config(tmp_path, {"language": "swift", "test": "xcodebuild test -scheme X {only_testing}"},
            "Tests/AppTests/Empty.swift")
     spec = testcmd.resolve(tmp_path, ["Tests/AppTests/Empty.swift"])
-    assert spec["command"] == "xcodebuild test -scheme X -only-testing:AppTests/Empty"
-    assert "testcmd: Tests/AppTests/Empty.swift declares no test suite; using -only-testing:AppTests/Empty" in capsys.readouterr().err
+    assert spec["command"] == "xcodebuild test -scheme X -only-testing:AppTests"
+    assert "testcmd: Tests/AppTests/Empty.swift declares no test suite; using -only-testing:AppTests" in capsys.readouterr().err
 
 
 def test_full_run_blanks_only_testing(tmp_path):
