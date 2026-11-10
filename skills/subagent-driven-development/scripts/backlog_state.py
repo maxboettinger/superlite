@@ -121,7 +121,7 @@ def ref(n) -> str:
 
 
 def left_out_lines(data: dict) -> list:
-    """One `<reason>: refs` line per reason; an issue already in a batch is not listed (#509); rounds above 1 show as `(N rounds)`; cap hints close the list."""
+    """One `<reason>: refs` line per reason; an issue already in a batch is not listed (#483); rounds above 1 show as `(N rounds)`; cap hints close the list."""
     held = {i for b in data.get("batches", []) for i in b.get("issues", [])}  # O(batches * issues)
     groups = {}
     for o in data.get("outside", []):  # O(outside)
@@ -134,8 +134,9 @@ def left_out_lines(data: dict) -> list:
         m = data.get("max_batches")
         m = m if isinstance(m, int) and not isinstance(m, bool) else 7  # O(1)
         lines.append(f"cap: a plan round holds at most {m} batches (sl backlog plan --max-batches N raises it, up to 20); capped issues rank first in the next round")  # O(1)
-    if any(r.startswith("not triaged (") and r.endswith(" cap)") for r in groups):  # O(groups)
-        lines.append("cap: a plan round triages only the first 200 open issues; the rest rank first in the next round")  # O(1)
+    ks = list(dict.fromkeys(m.group(1) for r in groups if (m := re.match(r"^not triaged \((\d+) cap\)$", r))))  # O(groups)
+    for k in ks:  # O(ks)
+        lines.append(f"cap: a plan round triages only the first {k} open issues; the rest rank first in the next round")  # O(1)
     return lines
 
 

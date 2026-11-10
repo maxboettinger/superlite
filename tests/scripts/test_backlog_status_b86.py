@@ -54,3 +54,9 @@ def test_skip_issue_refusal_drops_hash_for_jira_key():
     with pytest.raises(ValueError) as e:
         bs.skip_issue(d, "PIX-2")
     assert str(e.value).startswith("PIX-2 is in B1") and "#" not in str(e.value)
+
+
+def test_triage_cap_hint_uses_k_once_per_k():
+    d = {"outside": [{"number": 2, "reason": "not triaged (2 cap)"}, {"number": 3, "reason": "not triaged (2 cap)"}]}
+    assert [x for x in bs.left_out_lines(d) if x.startswith("cap:")] == [
+        "cap: a plan round triages only the first 2 open issues; the rest rank first in the next round"]
