@@ -1,0 +1,123 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-10T20:58:55",
+ "headline": {
+  "wall_min": {
+   "projected": 3.77,
+   "actual": 3.957
+  },
+  "cost_usd_agents": {
+   "projected": 0.576067,
+   "actual": 0.906708
+  },
+  "task_min": {
+   "projected": 6.579,
+   "actual": 6.295
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 5
+  }
+ },
+ "cost_split": {
+  "agents_usd": 0.906708,
+  "rework_usd": 0,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 0.906708
+ },
+ "concurrency": {
+  "peak": 2,
+  "projected_peak": 3
+ },
+ "critical_path": {
+  "actual": [
+   "T3",
+   "T4"
+  ],
+  "projected": [
+   "T3",
+   "T4"
+  ],
+  "projected_min": 3.77
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 4,
+   "cost_usd": 0.9067080000000001
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "passed": 4,
+   "failed": 0,
+   "skipped": 0,
+   "seconds": 23.9,
+   "mode": "fast",
+   "failures": [],
+   "skipped_tests": [],
+   "files": {
+    "tests/e2e/test_headless.py": [
+     4,
+     0
+    ]
+   },
+   "started": 1794341694.075777
+  },
+  "first_time_pass": 0,
+  "first_time_n": 0,
+  "rework_dispatches": 0,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 1.877,
+   "actual_min": 1.348,
+   "delta": {
+    "abs": -0.5287,
+    "pct": -28.2
+   },
+   "cost_usd": 0.313779,
+   "first_time_pass": null
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 1.373,
+   "actual_min": 1.51,
+   "delta": {
+    "abs": 0.137,
+    "pct": 10.0
+   },
+   "cost_usd": 0.13383,
+   "first_time_pass": null
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 1.436,
+   "actual_min": 1.51,
+   "delta": {
+    "abs": 0.074,
+    "pct": 5.2
+   },
+   "cost_usd": 0.133834,
+   "first_time_pass": null
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 1.893,
+   "actual_min": 1.927,
+   "delta": {
+    "abs": 0.0337,
+    "pct": 1.8
+   },
+   "cost_usd": 0.325265,
+   "first_time_pass": null
+  }
+ ]
+}
