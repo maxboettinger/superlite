@@ -1719,6 +1719,58 @@ def import_issues(plan: Plan, root: Path) -> list[str]:  # O(swift + python) | e
     return out  # O(w)
 
 
+def covers_entries(text: str) -> list[str]:  # O(s) one pass
+    """Split a Covers value at , · ; outside double quotes; entries are lowercased without spaces, backticks and §."""
+    out, cur, quoted = [], [], False  # O(1)
+    if text.count('"') % 2:  # O(s) an unmatched quote is dropped, its text still splits
+        i = text.rindex('"')  # O(s)
+        text = text[:i] + text[i + 1:]  # O(s)
+    for ch in text + ",":  # O(s)
+        if ch == '"':  # O(1)
+            quoted = not quoted  # O(1)
+        elif ch in ",·;" and not quoted:  # O(1)
+            e = "".join(cur).strip().strip("`§").strip().strip("`").lower()  # O(s)
+            if e:  # O(1)
+                out.append(e)  # O(1)
+            cur = []  # O(1)
+        else:  # O(1)
+            cur.append(ch)  # O(1)
+    return out  # O(1)
+
+
+def spec_gaps(spec_text: str, plan: "Plan") -> list[str]:  # O(S*(d+covers) + C) total
+    """Raw spec headings (levels 2-3) no task covers; a Covers entry naming a heading also covers every heading below it."""
+    lines = spec_text.replace("\r\n", "\n").split("\n")  # O(S)
+    flags, _ = scan_fences(lines)  # O(S)
+    plan_l = "\n".join(l for l in plan.text.lower().split("\n") if not l.startswith("**covers:**"))  # O(C) a Covers line names, it does not mention
+    covers = [c for t in plan.tasks for c in covers_entries(t.field_text("covers"))]  # O(n*k*s)
+
+    def named(num, title):  # O(covers) a Covers entry equals the title or holds the number
+        return any((title and c == title) or (num and (num == c or num.startswith(c + "."))) for c in covers)  # O(covers)
+
+    gaps, stack = [], []  # O(1) stack: (level, covered-by-name)
+    for ln, fenced in zip(lines, flags):  # O(S)
+        m = None if fenced else re.match(r"^(#{1,6})\s+(.*?)\s*#*$", ln)  # O(s)
+        if not m:  # O(1)
+            continue  # O(1)
+        level, raw = len(m.group(1)), m.group(2)  # O(1)
+        while stack and stack[-1][0] >= level:  # O(d) a heading closes its level and deeper
+            stack.pop()  # O(1)
+        nm = re.match(r"^(?:§\s*)?(\d+(?:\.\d+)*)\.?(?:\s+(.*))?$", raw)  # O(s)
+        num, title = (nm.group(1), nm.group(2) or "") if nm else (None, raw)  # O(1)
+        title = title.strip().strip("`").lower()  # O(1)
+        by_name = named(num, title)  # O(covers)
+        exempt = title in SPEC_SKIP or re.match(r"(?:intent|decisions|validation|acceptance|open|out of scope|out-of-scope)[ (:]", title)  # O(K)
+        if level in (2, 3) and not exempt:  # O(1)
+            covered = by_name or any(s[1] for s in stack) or bool(title and title in plan_l)  # O(d)
+            if not covered and num:  # O(1)
+                covered = bool(re.search(rf"(?:§|section\s+|sec\.\s*)\s*{re.escape(num)}\b", plan_l))  # O(C) regex
+            if not covered:  # O(1)
+                gaps.append(raw)  # O(1)
+        stack.append((level, by_name))  # O(1)
+    return gaps  # O(1)
+
+
 def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e*n + C*P + n*p + merge/simulate) total
     issues: list[str] = []  # O(1)
     warnings: list[str] = []  # O(1)
@@ -1927,25 +1979,8 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         else:  # O(1)
             stext = sp.read_text(encoding="utf-8-sig").replace("\r\n", "\n")  # O(S) file read
             sflags, _ = scan_fences(stext.split("\n"))  # O(S)
-            plan_l = plan.text.lower()  # O(C)
-            covers = [c.strip().strip("`§").strip().lower() for t in plan.tasks  # **Covers:** 2.1, Parser | O(n*k*s)
-                      for c in re.split(r"[,·;]", t.field_text("covers")) if c.strip()]
-            for ln, fenced in zip(stext.split("\n"), sflags):  # O(S) iterations; split repeated
-                m = None if fenced else re.match(r"^#{2,3}\s+(.*?)\s*#*$", ln)  # O(s)
-                if not m:  # O(1)
-                    continue  # O(1)
-                raw = m.group(1)  # O(1)
-                nm = re.match(r"^(?:§\s*)?(\d+(?:\.\d+)*)\.?\s+(.*)$", raw)  # O(s)
-                num, title = (nm.group(1), nm.group(2)) if nm else (None, raw)  # O(1)
-                title = title.strip().strip("`")  # O(1)
-                if title.lower() in SPEC_SKIP or re.match(r"(?:intent|decisions|validation|acceptance|open|out of scope|out-of-scope)[ (:]", title.lower()):  # O(K) a heading may extend an exempt one
-                    continue  # O(1)
-                covered = title.lower() in plan_l or any(  # O(C + covers) a Covers number also covers its subsections
-                    c == title.lower() or (num and (num == c or num.startswith(c + "."))) for c in covers)
-                if not covered and num:  # O(1)
-                    covered = bool(re.search(rf"(?:§|section\s+|sec\.\s*)\s*{re.escape(num)}\b", plan_l))  # O(C) regex
-                if not covered:  # O(1)
-                    issues.append(Issue(f"SPEC section {raw!r} has no task", scope="plan"))  # O(1)
+            for raw in spec_gaps(stext, plan):  # O(S + C) heading stack and Covers entries live in spec_gaps
+                issues.append(Issue(f"SPEC section {raw!r} has no task", scope="plan"))  # O(1)
     spec_off = False  # O(1)
     if getattr(args, "spec", None) and Path(args.spec).is_file():  # the spec may switch the coverage pass off | O(1)
         coverage = load_coverage()  # O(1)
