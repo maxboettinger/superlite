@@ -19,6 +19,7 @@ A repeated `##`/`###` heading inside a task that is followed by a task field is 
 from __future__ import annotations  # O(1)
 
 import argparse  # O(1)
+import configparser  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
 import json  # O(1)
@@ -1367,7 +1368,28 @@ def _swift_owned(plan: Plan, t: Task, root: Path) -> list[Path]:  # O(o*s) the n
     return out  # O(o)
 
 
-def import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s + n*q) one WARNING per (consumer, target, type)
+def _seam_pairs(plan: Plan) -> list[tuple[Task, dict, str, dict]]:  # O(n*q*cands) | (consumer, consumed signature, producer id, producer signature)
+    produced: dict[str, list[tuple[str, dict]]] = {}  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        for item in t.produces:  # O(q) iterations
+            sig = parse_signature(item)  # O(s)
+            if sig:  # O(1)
+                produced.setdefault(sig_key(sig), []).append((t.id, sig))  # O(1)
+    pairs: list[tuple[Task, dict, str, dict]] = []  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        for item in t.consumes:  # O(q) iterations
+            sig = parse_signature(item)  # O(s)
+            if not sig:  # O(1)
+                continue  # O(1)
+            ref = re.search(REF_TAIL, strip_ticks(item))  # O(s)
+            refs = re.findall(TASK_ID, ref.group(1)) if ref else []  # O(s)
+            cands = [c for c in produced.get(sig_key(sig), []) if not refs or c[0] in refs]  # O(cands*refs)
+            if cands:  # O(1)
+                pairs.append((t, sig, cands[0][0], cands[0][1]))  # O(1)
+    return pairs  # O(pairs)
+
+
+def swift_import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s + n*q) one WARNING per (consumer, target, type)
     """A consumed signature names a type declared in a module the consumer's SwiftPM target does not depend on (#388)."""  # O(1)
     targets = swift_targets(root)  # O(F + M*s)
     if not targets:  # O(1)
@@ -1381,45 +1403,234 @@ def import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s + n*q
                 m = SWIFT_DECL.match(ln)  # O(s)
                 if m and not ln.lstrip().startswith("//"):  # O(1)
                     mods.setdefault(m.group(1), set()).add(name)  # O(1)
-    produced: dict[str, list[tuple[str, dict]]] = {}  # O(1)
     for t in plan.tasks:  # O(n) iterations
         owned = [_target_of(f, targets) for f in _swift_owned(plan, t, root)]  # O(o*T*d)
         for item in t.produces:  # O(q) iterations
             sig = parse_signature(item)  # O(s)
-            if sig:  # O(1)
-                produced.setdefault(sig_key(sig), []).append((t.id, sig))  # O(1)
             tname = sig["cls"] if sig and sig["cls"] else (item if re.fullmatch(r"[A-Z]\w*", item) else None)  # O(1)
             if tname:  # O(1)
                 mods.setdefault(tname, set()).update(x for x in owned if x)  # O(o)
     warns: list[str] = []  # O(1)
     seen: set[tuple[str, str, str]] = set()  # O(1)
-    for t in plan.tasks:  # O(n) iterations
+    for t, sig, pid, psig in _seam_pairs(plan):  # O(pairs) iterations
         files = [(f, _target_of(f, targets)) for f in _swift_owned(plan, t, root)]  # O(o*T*d)
-        for item in t.consumes:  # O(q) iterations
-            sig = parse_signature(item)  # O(s)
-            if not sig:  # O(1)
+        for ty in signature_types(psig):  # O(types) iterations
+            declared = mods.get(ty)  # O(1)
+            if not declared:  # O(1)
                 continue  # O(1)
-            ref = re.search(REF_TAIL, strip_ticks(item))  # O(s)
-            refs = re.findall(TASK_ID, ref.group(1)) if ref else []  # O(s)
-            cands = [c for c in produced.get(sig_key(sig), []) if not refs or c[0] in refs]  # O(cands*refs)
-            if not cands:  # O(1)
-                continue  # O(1)
-            pid, psig = cands[0]  # O(1)
-            for ty in signature_types(psig):  # O(types) iterations
-                declared = mods.get(ty)  # O(1)
-                if not declared:  # O(1)
+            for _f, tg in files:  # O(o) iterations
+                if not tg or tg not in targets or (t.id, tg, ty) in seen:  # O(1)
                     continue  # O(1)
-                for _f, tg in files:  # O(o) iterations
-                    if not tg or tg not in targets or (t.id, tg, ty) in seen:  # O(1)
-                        continue  # O(1)
-                    deps = targets[tg]["deps"]  # O(1)
-                    if declared & (set(deps) | {tg}):  # O(deps)
-                        continue  # O(deps)
-                    seen.add((t.id, tg, ty))  # O(1)
-                    order = ", ".join(getattr(deps, "order", sorted(deps)))  # O(deps)
-                    warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {ty} is declared in {', '.join(sorted(declared))}, "  # O(s)
-                                 f"which target {tg} may not import ({targets[tg]['manifest']}) dependencies: {order}")  # O(deps)
+                deps = targets[tg]["deps"]  # O(1)
+                if declared & (set(deps) | {tg}):  # O(deps)
+                    continue  # O(deps)
+                seen.add((t.id, tg, ty))  # O(1)
+                order = ", ".join(getattr(deps, "order", sorted(deps)))  # O(deps)
+                warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {ty} is declared in {', '.join(sorted(declared))}, "  # O(s)
+                             f"which target {tg} may not import ({targets[tg]['manifest']}) dependencies: {order}")  # O(deps)
     return warns  # O(w)
+
+
+IL_LISTS = ("layers", "containers", "ignore_imports", "modules", "source_modules", "forbidden_modules", "protected_modules", "allowed_importers")  # O(1) | contract keys that hold lists
+
+
+def _il_list(v) -> list[str]:  # O(s) | an INI value's lines or a TOML list as clean strings
+    items = v.splitlines() if isinstance(v, str) else list(v or [])  # O(s)
+    return [str(x).strip() for x in items if str(x).strip() and not str(x).strip().startswith("#")]  # O(s)
+
+
+def _il_contract(raw: dict, name: str) -> dict:  # O(k*s) | one contract in the normal shape
+    out = {"name": str(raw.get("name") or name), "type": str(raw.get("type") or "").strip()}  # O(1)
+    for k in ("layers", "containers", "ignore_imports"):  # O(1) iterations
+        out[k] = _il_list(raw.get(k))  # O(s)
+    ap = raw.get("as_packages", True)  # O(1)
+    out["as_packages"] = ap if isinstance(ap, bool) else str(ap).strip().lower() not in ("false", "0", "no")  # O(1)
+    for k in IL_LISTS:  # O(1) iterations
+        if k not in out and k in raw:  # O(1)
+            out[k] = _il_list(raw[k])  # O(s)
+    return out  # O(1)
+
+
+def importlinter_config(root: Path) -> dict | None:  # O(files*s) | the first import-linter config in setup.cfg, .importlinter, pyproject.toml
+    for fname in ("setup.cfg", ".importlinter", "pyproject.toml"):  # O(1) iterations
+        p = root / fname  # O(1)
+        try:  # O(1)
+            if not p.is_file():  # O(1)
+                continue  # O(1)
+            if fname == "pyproject.toml":  # O(1)
+                import tomllib  # O(1) | absent before 3.11: the file is skipped
+                top = tomllib.loads(p.read_text(encoding="utf-8")).get("tool", {}).get("importlinter")  # O(s)
+                if not isinstance(top, dict):  # O(1)
+                    continue  # O(1)
+                roots = _il_list(top.get("root_packages") or top.get("root_package"))  # O(s)
+                contracts = [_il_contract(c, f"contract {i + 1}") for i, c in enumerate(top.get("contracts") or []) if isinstance(c, dict)]  # O(k*s)
+            else:  # O(1)
+                cp = configparser.ConfigParser(interpolation=None, strict=False, allow_no_value=True)  # O(1)
+                cp.read_string(p.read_text(encoding="utf-8"))  # O(s)
+                if not cp.has_section("importlinter"):  # O(1)
+                    continue  # O(1)
+                roots = _il_list(cp.get("importlinter", "root_packages", fallback=None) or cp.get("importlinter", "root_package", fallback=None))  # O(s)
+                contracts = [_il_contract(dict(cp.items(s)), s.split(":", 2)[-1]) for s in cp.sections() if s.startswith("importlinter:contract:")]  # O(k*s)
+            return {"file": fname, "roots": roots, "contracts": contracts}  # O(1)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError, ImportError, configparser.Error):  # O(1)
+            continue  # O(1) | a file that does not parse is skipped
+    return None  # O(1)
+
+
+def py_module(path: str, roots: list[str]) -> str | None:  # O(s) | dotted module of a .py path below a root package, None outside
+    parts = path.replace("\\", "/").split("/")  # O(s)
+    if not parts[-1].endswith(".py"):  # O(1)
+        return None  # O(1)
+    parts[-1] = parts[-1][:-3]  # O(1)
+    for i, seg in enumerate(parts):  # O(parts) iterations
+        if seg in roots:  # O(roots)
+            mod = [x for x in parts[i:] if x]  # O(parts)
+            if mod[-1] == "__init__":  # O(1)
+                mod = mod[:-1]  # O(parts)
+            return ".".join(mod)  # O(parts)
+    return None  # O(1)
+
+
+def _il_regex(expr: str) -> str:  # O(s) | wildcard module expression as a regex
+    segs = []  # O(1)
+    for seg in expr.strip().split("."):  # O(segs) iterations
+        segs.append(r"[^.]+(?:\.[^.]+)*" if seg == "**" else r"[^.]+" if seg == "*" else re.escape(seg))  # O(s)
+    return r"\.".join(segs)  # O(s)
+
+
+def module_within(expr: str, module: str, as_packages: bool = True) -> str | None:  # O(parts*s) | shortest prefix of module that matches expr whole
+    rx = re.compile(_il_regex(expr))  # O(s)
+    parts = module.split(".")  # O(s)
+    for n in range(1, len(parts) + 1):  # O(parts) iterations
+        if not as_packages and n < len(parts):  # O(1)
+            continue  # O(1)
+        if rx.fullmatch(".".join(parts[:n])):  # O(s)
+            return ".".join(parts[:n])  # O(s)
+    return None  # O(1)
+
+
+def _il_layer_at(entries: list[str], containers: list[str], module: str, ap: bool):  # O(L*C*s) | (container, layer index, item prefix, is "|" entry) or None
+    for c in (containers or [""]):  # O(C) iterations
+        cm = module_within(c, module, ap) if c else ""  # O(s)
+        if cm is None:  # O(1)
+            continue  # O(1)
+        for i, entry in enumerate(entries):  # O(L) iterations
+            indep = "|" in entry  # O(1)
+            for item in re.split(r"\|" if indep else ":", entry):  # O(items) iterations
+                item = item.strip().strip("()").strip()  # O(s)
+                m = module_within(f"{cm}.{item}" if cm else item, module, ap) if item else None  # O(s)
+                if m:  # O(1)
+                    return cm, i, m, indep  # O(1)
+    return None  # O(1)
+
+
+def contract_blocks(contract: dict, importer: str, imported: str) -> bool:  # O(L*C*s) | True when the contract forbids importer importing imported
+    ap = contract.get("as_packages", True)  # O(1)
+    for ln in contract.get("ignore_imports") or []:  # O(k) iterations
+        a, _, b = ln.partition("->")  # O(s)
+        if module_within(a.strip(), importer, False) and module_within(b.strip(), imported, False):  # O(s)
+            return False  # O(1)
+    kind = str(contract.get("type") or "").strip()  # O(1)
+    if kind == "layers":  # O(1)
+        entries, cons = contract.get("layers") or [], contract.get("containers") or []  # O(1)
+        a = _il_layer_at(entries, cons, importer, ap)  # O(L*C*s)
+        b = _il_layer_at(entries, cons, imported, ap)  # O(L*C*s)
+        if not a or not b or a[0] != b[0]:  # O(1)
+            return False  # O(1)
+        return b[1] < a[1] or (b[1] == a[1] and a[3] and a[2] != b[2])  # O(1)
+    if kind == "independence":  # O(1)
+        mods = contract.get("modules") or []  # O(1)
+        for x in mods:  # O(k) iterations
+            for y in mods:  # O(k) iterations
+                p, q = module_within(x, importer, ap), module_within(y, imported, ap)  # O(s)
+                if p and q and p != q and not (p.startswith(q + ".") or q.startswith(p + ".")):  # O(s)
+                    return True  # O(1)
+        return False  # O(1)
+    if kind == "forbidden":  # O(1)
+        return any(module_within(s, importer, ap) for s in contract.get("source_modules") or []) and any(  # O(k*s)
+            module_within(f, imported, ap) for f in contract.get("forbidden_modules") or [])  # O(k*s)
+    if kind == "protected":  # O(1)
+        for pm in contract.get("protected_modules") or []:  # O(k) iterations
+            p = module_within(pm, imported, ap)  # O(s)
+            if p and module_within(pm, importer, ap) != p and not any(  # O(s)
+                    module_within(x, importer, ap) for x in contract.get("allowed_importers") or []):  # O(k*s)
+                return True  # O(1)
+        return False  # O(1)
+    return False  # O(1)
+
+
+def _py_owned(t: Task, roots: list[str]) -> list[str]:  # O(o*s) | modules of the non-test .py files a task owns
+    out = []  # O(1)
+    for o in t.owns:  # O(o) iterations
+        q = o.replace("\\", "/")  # O(s)
+        parts = q.split("/")  # O(s)
+        base = parts[-1]  # O(1)
+        if not base.endswith(".py") or base == "conftest.py" or base.startswith("test_") or base.endswith("_test.py") or {"tests", "test"} & set(parts[:-1]):  # O(s)
+            continue  # O(1)
+        m = py_module(q, roots)  # O(s)
+        if m and m not in out:  # O(o)
+            out.append(m)  # O(1)
+    return out  # O(o)
+
+
+def _py_declared(root: Path, roots: list[str], ty: str) -> list[str]:  # O(files*s) | modules with a top-level `class ty` under root/<pkg> and root/src/<pkg>
+    out = []  # O(1)
+    rx = re.compile(rf"^class\s+{re.escape(ty)}\b", re.M)  # O(s)
+    for base in (root, root / "src"):  # O(1) iterations
+        for pkg in roots:  # O(roots) iterations
+            d = base / pkg  # O(1)
+            if not d.is_dir():  # O(1)
+                continue  # O(1)
+            for f in sorted(d.rglob("*.py")):  # O(files) iterations
+                m = py_module(f.relative_to(root).as_posix(), roots)  # O(s)
+                if m and m not in out and rx.search(f.read_text(encoding="utf-8", errors="replace")):  # O(size)
+                    out.append(m)  # O(1)
+    return out  # O(out)
+
+
+def py_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*types*mods*contracts) | a seam name declared where an import-linter contract bars the consumer's module (#404)
+    cfg = importlinter_config(root)  # O(files*s)
+    if not cfg or not cfg["contracts"]:  # O(1)
+        return []  # O(1)
+    roots = cfg["roots"]  # O(1)
+    owned = {t.id: _py_owned(t, roots) for t in plan.tasks}  # O(n*o*s)
+    by_type: dict[str, list[str]] = {}  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        for item in t.produces:  # O(q) iterations
+            sig = parse_signature(item)  # O(s)
+            tname = sig["cls"] if sig and sig["cls"] else (item if re.fullmatch(r"[A-Z]\w*", item) else None)  # O(1)
+            if tname:  # O(1)
+                by_type.setdefault(tname, []).extend(owned[t.id])  # O(o)
+    warns: list[str] = []  # O(1)
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()  # O(1)
+    for t, sig, pid, psig in _seam_pairs(plan):  # O(pairs) iterations
+        pre = ".".join(psig["module"] or [])  # O(s)
+        own = owned.get(pid, [])  # O(1)
+        mine = [m for m in own if pre and (m == pre or m.endswith("." + pre))] or own  # O(o*s)
+        groups = [(psig["name"], mine)]  # O(1)
+        for ty in signature_types(psig):  # O(types) iterations
+            groups.append((ty, sorted(set(_py_declared(root, roots, ty)) | set(by_type.get(ty, [])))))  # O(files*s)
+        for what, mods in groups:  # O(types) iterations
+            for importer in owned.get(t.id, []):  # O(o) iterations
+                key = (t.id, importer, tuple(sorted(mods)))  # O(m)
+                if not mods or key in seen or not all(any(contract_blocks(c, importer, m) for c in cfg["contracts"]) for m in mods):  # O(m*contracts*s)
+                    continue  # O(1)
+                seen.add(key)  # O(1)
+                first = sorted(mods)[0]  # O(m)
+                c = next(c for c in cfg["contracts"] if contract_blocks(c, importer, first))  # O(contracts*s)
+                warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {what} is declared in {', '.join(sorted(mods))}, "  # O(s)
+                             f"which {importer} may not import (import-linter contract \"{c['name']}\" in {cfg['file']})")  # O(s)
+    return warns  # O(w)
+
+
+def import_issues(plan: Plan, root: Path) -> list[str]:  # O(swift + python) | every stack's seam import warnings, each check isolated
+    out: list[str] = []  # O(1)
+    for check in (swift_import_issues, py_import_issues):  # O(1) iterations
+        try:  # O(1)
+            out.extend(check(plan, root))  # O(check)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError, configparser.Error):  # O(1)
+            continue  # O(1) | one stack failing never hides another's warnings
+    return out  # O(w)
 
 
 def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e*n + C*P + n*p + merge/simulate) total
