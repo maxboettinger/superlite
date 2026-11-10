@@ -3,7 +3,7 @@
 
     probe_run.py --adapter PATH [--root DIR] [--app-type T] [--probes DIR]
                  [--categories deep,numeric,...] [--files a,b | --commit SHA]
-                 [--timeout 10] [--workers N] [--out .superlite/probes/probe-results.json]
+                 [--timeout CAP] [--workers N] [--out .superlite/probes/probe-results.json]
                  [--log .superlite/incidents.jsonl] [--raises A,B] [--background]
     probe_run.py --plan PLAN_OR_.superlite_FOLDER [same options]
         --plan fills --root, --adapter, --out and --log from the run folder (explicit options win) and
@@ -31,7 +31,8 @@ How it works
   * Workers are persistent subprocesses (one thread of a ThreadPoolExecutor drives each). A worker
     imports the adapter once, runs probes, and keeps one server (started on port 0) for all of its
     server probes. The server is health-checked after every probe and restarted only if it died.
-  * A probe that does not answer within its category timeout (call 2 s, run 5 s, request 10 s) is a
+  * A probe that does not answer within its category timeout (call 2 s, run 5 s or 3 x the measured start-up + 1 s
+    (at most 60 s), request 10 s; --timeout caps them) is a
     hang: that worker's process tree is killed by PID and the worker is replaced. Only PIDs this
     runner started are ever killed; never by image name.
   * Sized probes step up (e.g. 100, 2000, 10000) and stop at the first failure.
@@ -58,6 +59,7 @@ import concurrent.futures as cf  # O(1)
 import contextlib  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
+import inspect  # O(1)
 import json  # O(1)
 import os  # O(1)
 import queue  # O(1)
@@ -79,6 +81,8 @@ if str(HERE) not in sys.path:  # O(len sys.path)
 
 IS_WIN = sys.platform == "win32"  # O(1)
 ENTRY_TIMEOUT = {"call": 2.0, "run": 5.0, "request": 10.0, "raw": 10.0}  # O(1)
+RUN_TIMEOUT_MAX = 60.0  # O(1)
+WARM_LIMIT = 60.0  # O(1)
 CATEGORY_ORDER = ["deep", "numeric", "encoding", "protocol", "file", "state"]  # O(1)
 APP_TYPES = {  # O(1)
     "library": ["deep", "numeric", "encoding", "state"],  # O(1)
@@ -191,6 +195,7 @@ class _WorkerState:  # O(1)
     port = None  # O(1)
     stop = None  # O(1)
     raises: tuple = ()  # O(1)
+    run_kw = False  # O(1)
 
 
 def _start_server(st: _WorkerState) -> None:  # O(1) + server start
@@ -299,7 +304,7 @@ def _exec_one(st: _WorkerState, entry: str, item, expect, timeout: float):  # O(
                 res, text = ("err", type(e).__name__), ""  # O(1)
         elif entry == "run":  # O(1)
             try:  # O(1)
-                rc, out, err = ad.run(*item)  # O(adapter run) + process spawn
+                rc, out, err = ad.run(*item, timeout=timeout) if st.run_kw else ad.run(*item)  # O(adapter run) + process spawn
             except expected as e:  # O(1)
                 return ("err", type(e).__name__), None  # O(1)
             except Exception as e:  # O(1) | named in raises=
@@ -333,6 +338,9 @@ def _exec_one(st: _WorkerState, entry: str, item, expect, timeout: float):  # O(
             if bad:  # O(1)
                 return res, {"status": "wrong-status", "detail": bad, "http": status}  # O(1)
     except BaseException as e:  # O(1) | noqa: BLE001 - any unexpected exception is a crash
+        if isinstance(e, subprocess.TimeoutExpired):  # the adapter's own subprocess timeout is a hang, not a crash | O(1)
+            return None, {"status": "hang", "detail": f"adapter timed out after {e.timeout:g}s", "timeout": timeout,  # O(1)
+                          "frames": [(f.filename, f.lineno) for f in traceback.extract_tb(e.__traceback__)][::-1]}  # O(stack depth)
         if getattr(e, "probe_setup_error", False):  # the adapter's own verdict: the plan's entry is wrong, the code under test is not | O(1)
             return None, {"status": "setup-error", "exc": type(e).__name__, "detail": str(e)[:200], "frames": []}  # O(1)
         frames = [(f.filename, f.lineno) for f in traceback.extract_tb(e.__traceback__)][::-1]  # O(stack depth)
@@ -355,6 +363,7 @@ def _step(st: _WorkerState, msg: dict, modules: dict) -> dict:  # O(items * exec
     probe = next(p for p in modules[path].PROBES if p["name"] == msg["name"])  # O(P_m) linear scan of module probes per step
     entry, size, timeout = probe["entry"], msg["size"], msg["timeout"]  # O(1)
     out = {"status": "pass", "detail": "", "size": size}  # O(1)
+    os.environ["SUPERLITE_PROBE_TIMEOUT"] = str(timeout)  # O(1)
     faulthandler.dump_traceback_later(max(0.2, timeout * 0.8), file=sys.stderr)  # O(1)
     t0 = time.perf_counter()  # O(1)
     inp = None  # O(1)
@@ -402,6 +411,19 @@ def _step(st: _WorkerState, msg: dict, modules: dict) -> dict:  # O(items * exec
     return out  # O(1)
 
 
+def _warm(st: _WorkerState, timeout: float) -> dict:  # O(adapter run) + process spawn
+    os.environ["SUPERLITE_PROBE_TIMEOUT"] = str(timeout)  # O(1)
+    t0 = time.perf_counter()  # O(1)
+    try:  # O(1)
+        if st.run_kw:  # O(1)
+            st.adapter.run(st.ctx.good_args, st.ctx.good_stdin, timeout=timeout)  # O(adapter run) + process spawn
+        else:  # O(1)
+            st.adapter.run(st.ctx.good_args, st.ctx.good_stdin)  # O(adapter run) + process spawn
+    except BaseException as e:  # O(1) | noqa: BLE001
+        return {"ok": False, "elapsed": round(time.perf_counter() - t0, 3), "error": f"{type(e).__name__}: {e}"[:200]}  # O(1)
+    return {"ok": True, "elapsed": round(time.perf_counter() - t0, 3)}  # O(1)
+
+
 def worker_main(a) -> int:  # O(steps * step cost) total, steps = messages received
     proto_in = os.fdopen(os.dup(0), "r", encoding="utf-8")  # O(1)
     proto_out = os.fdopen(os.dup(1), "w", encoding="utf-8")  # O(1)
@@ -430,6 +452,10 @@ def worker_main(a) -> int:  # O(steps * step cost) total, steps = messages recei
         st.adapter = load_module(adapter_path)  # O(adapter size) import
         st.raises = tuple(n for n in (getattr(a, "raises", None) or "").split(",") if n)  # O(len raises)
         ad = st.adapter  # O(1)
+        try:  # O(1)
+            st.run_kw = "timeout" in inspect.signature(ad.run).parameters  # O(params)
+        except Exception:  # O(1)
+            st.run_kw = False  # O(1)
         st.ctx = types.SimpleNamespace(  # O(1)
             adapter=ad, tmp=tmp, good_input=getattr(ad, "GOOD_INPUT", "1"),  # O(1)
             good_args=list(getattr(ad, "GOOD_ARGS", [])), good_stdin=getattr(ad, "GOOD_STDIN", ""),  # O(1)
@@ -451,7 +477,7 @@ def worker_main(a) -> int:  # O(steps * step cost) total, steps = messages recei
         if msg.get("op") == "quit":  # O(1)
             break  # O(1)
         try:  # O(1)
-            rep = _step(st, msg, modules)  # O(step cost)
+            rep = _warm(st, float(msg["timeout"])) if msg.get("op") == "warm" else _step(st, msg, modules)  # O(step cost)
         except BaseException as e:  # O(1) | noqa: BLE001
             rep = {"status": "error", "detail": f"worker failure: {type(e).__name__}: {e}"[:200],  # O(1)
                    "size": msg.get("size")}  # O(1)
@@ -472,6 +498,7 @@ class Cfg:  # O(1)
         self.server_ports: set[int] = set()  # O(1)
         self.workers_started = 0  # O(1)
         self.raises: list[str] = []  # O(1)
+        self.run_timeout = None  # O(1)
 
     def in_repo(self, filename: str) -> bool:  # O(parts) + resolve syscall
         try:  # O(1)
@@ -520,7 +547,7 @@ class Worker:  # O(1) + process spawn + wait for ready <=60s
         else:  # O(1)
             kw["start_new_session"] = True  # O(1)
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",  # O(1)
-                   SUPERLITE_PROBE_TIMEOUT=str(min(cfg.timeout, ENTRY_TIMEOUT["run"])))  # O(1)
+                   SUPERLITE_PROBE_TIMEOUT=str(timeout_for({"entry": "run"}, cfg)))  # O(1)
         self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,  # O(1) + process spawn
                                   stderr=self.errf, text=True, encoding="utf-8", bufsize=1,  # O(1)
                                   cwd=str(cfg.root), env=env, **kw)  # O(1)
@@ -609,6 +636,21 @@ class Worker:  # O(1) + process spawn + wait for ready <=60s
             rep["frames"] = rep.get("frames", []) + frames_from_text(self._stderr_tail(off))  # O(stderr bytes from off) file read + parse
         return rep  # O(1)
 
+    def warm(self, timeout: float) -> dict:  # O(1) blocks <=timeout + 5s
+        try:  # O(1)
+            self.p.stdin.write(json.dumps({"op": "warm", "timeout": timeout}) + "\n")  # O(1)
+            self.p.stdin.flush()  # O(1)
+            rep = self.q.get(timeout=timeout + 5)  # O(1) blocks <=timeout + 5s
+        except queue.Empty:  # O(1)
+            self._kill()  # O(1) + kill
+            return {"ok": False, "elapsed": timeout, "error": f"no answer within {timeout:g}s"}  # O(1)
+        except OSError:  # O(1)
+            rep = None  # O(1)
+        if rep is None:  # O(1)
+            self._kill()  # O(1)
+            return {"ok": False, "elapsed": 0.0, "error": "worker process exited"}  # O(1)
+        return rep  # O(1)
+
     def close(self, kill: bool = False):  # O(1) + wait <=4s + rmtree O(tmp files)
         if not kill:  # O(1)
             try:  # O(1)
@@ -692,8 +734,26 @@ class Lease:  # O(1)
             self.w = None  # O(1)
 
 
+def run_timeout_from(start: float) -> float:  # O(1)
+    return min(RUN_TIMEOUT_MAX, max(ENTRY_TIMEOUT["run"], round(3 * start + 1, 1)))  # O(1)
+
+
 def timeout_for(meta: dict, cfg: Cfg) -> float:  # O(1)
-    return min(ENTRY_TIMEOUT[meta["entry"]], cfg.timeout)  # O(1)
+    base = ENTRY_TIMEOUT[meta["entry"]]  # O(1)
+    if meta["entry"] == "run" and getattr(cfg, "run_timeout", None):  # O(1)
+        base = cfg.run_timeout  # O(1)
+    cap = getattr(cfg, "timeout", None)  # O(1)
+    return min(base, cap) if cap else base  # O(1)
+
+
+def calibrate_run(w: Worker, cfg: Cfg) -> dict:  # O(1) + two adapter run calls, <=2 * (WARM_LIMIT + 5) s
+    first = w.warm(WARM_LIMIT)  # O(1) + adapter run
+    second = w.warm(WARM_LIMIT) if first.get("ok") else first  # O(1) + adapter run
+    if not (first.get("ok") and second.get("ok")):  # O(1)
+        return {"error": (second if first.get("ok") else first).get("error", "warm-up failed"),  # O(1)
+                "timeout": timeout_for({"entry": "run"}, cfg)}  # O(1)
+    cfg.run_timeout = run_timeout_from(second["elapsed"])  # O(1)
+    return {"first": first["elapsed"], "second": second["elapsed"], "timeout": timeout_for({"entry": "run"}, cfg)}  # O(1)
 
 
 def run_probe(pool: Pool, cfg: Cfg, meta: dict) -> dict:  # O(z * step) total, z = size steps
@@ -1320,6 +1380,16 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
                  if p["category"] == cat and entries.get(p["entry"])]  # O(1)
         order = {p["id"]: i for i, p in enumerate(tasks)}  # O(p)
         done: list[dict] = []  # O(1)
+        if any(p["entry"] == "run" for p in tasks):  # O(p)
+            w = pool.acquire()  # O(1) + worker spawn
+            results["run_warmup"] = calibrate_run(w, cfg)  # O(1) + two adapter run calls
+            if w.dead:  # O(1)
+                w.close(kill=True)  # O(1)
+            elif cfg.run_timeout and cfg.run_timeout != ENTRY_TIMEOUT["run"]:  # O(1) | new workers get the measured timeout in their env
+                w.close()  # O(1) + wait <=4s
+                w.dead = True  # O(1)
+            else:  # O(1)
+                pool.release(w)  # O(1)
         t_run = time.time()  # O(1)
         if tasks:  # O(1)
             with cf.ThreadPoolExecutor(max_workers=min(nworkers, len(tasks))) as ex:  # O(1) + thread start
@@ -1428,7 +1498,7 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
 
     results["stats"] = {  # O(w + ports log ports)
         "elapsed": round(time.time() - t_start, 3), "run_seconds": results_run_seconds,  # O(1)
-        "probes_run": len(done),  # O(1)
+        "probes_run": len(done), "run_timeout": timeout_for({"entry": "run"}, cfg),  # O(1)
         "workers_started": cfg.workers_started, "server_starts": sum(cfg.server_starts.values()),  # O(1)
         "server_ports": sorted(cfg.server_ports), "killed_pids": cfg.killed_pids,  # O(1)
         "failure_groups": len(results["failures"]),  # O(1)
@@ -1465,7 +1535,7 @@ def main(argv: list[str] | None = None) -> int:  # O(argv) + run
     ap.add_argument("--categories", help="comma list; overrides --app-type")  # O(1)
     ap.add_argument("--files", help="comma list of files under test, relative to --root")  # O(1)
     ap.add_argument("--commit", help="probe only the files this commit touched")  # O(1)
-    ap.add_argument("--timeout", type=float, default=10.0, help="cap on per-probe timeouts (s)")  # O(1)
+    ap.add_argument("--timeout", type=float, default=None, help="cap on per-probe timeouts (s), default none")  # O(1)
     ap.add_argument("--workers", type=int, default=0, help="default: CPU count")  # O(1)
     ap.add_argument("--out", default=None, help="results file, relative to --root (default <run folder>/probes/probe-results.json)")  # O(1)
     ap.add_argument("--log", default=None, help="incident log (default <run folder>/incidents.jsonl)")  # O(1)

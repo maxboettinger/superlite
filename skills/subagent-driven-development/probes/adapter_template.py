@@ -16,6 +16,9 @@ Define only the entry kinds the project has; probes for a missing kind are skipp
                              .shutdown() is accepted too. The runner starts one per worker,
                              health-checks it after every probe, and restarts it only if it died.
 
+Generated adapters take expected errors from the Probe entry's `raises=`; a hand-written one lists
+them in EXPECTED_ERRORS. The runner measures a run= entry's start-up and sets SUPERLITE_PROBE_TIMEOUT per probe.
+
 Optional knobs: EXPECTED_ERRORS, GOOD_INPUT, GOOD_ARGS, GOOD_STDIN, GOOD_PATH (a stateless valid
 use of each entry, used by the state probes), and health() -> bool.
 """
@@ -35,9 +38,12 @@ GOOD_PATH = "/"  # O(1)
 
 PORT = None  # O(1) set by the runner set by the runner
 
-# The runner passes the per-probe timeout so a CLI that hangs is stopped with its own children.
-TIMEOUT = float(os.environ.get("SUPERLITE_PROBE_TIMEOUT", "5"))  # O(1) env lookup
 CLI = [sys.executable, "-m", "your_package"]  # O(1) edit: how to start the CLI
+
+
+def _timeout():  # O(1)
+    # The runner sets this per probe (a run= entry's measured start-up included) so a CLI that hangs is stopped with its own children.
+    return float(os.environ.get("SUPERLITE_PROBE_TIMEOUT", "5"))  # O(1) env lookup at call time
 
 
 def call(text):  # O(E(n))
@@ -47,7 +53,7 @@ def call(text):  # O(E(n))
 
 def run(args, stdin):  # O(n + o) + process spawn
     p = subprocess.run(CLI + list(args), input=stdin if isinstance(stdin, bytes) else stdin.encode("utf-8", "surrogateescape"),  # O(n + o) + process spawn
-                       capture_output=True, timeout=TIMEOUT)  # O(1)
+                       capture_output=True, timeout=_timeout())  # O(1)
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")  # O(o)
 
 
@@ -60,7 +66,7 @@ def start_server():  # O(1) + thread spawn
 
 
 def request(method, path, body):  # O(n + o) + network round trip
-    conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=TIMEOUT)  # O(1)
+    conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=_timeout())  # O(1)
     try:  # O(1)
         if isinstance(body, str):  # O(1)
             body = body.encode("utf-8", "surrogateescape")  # O(n)
