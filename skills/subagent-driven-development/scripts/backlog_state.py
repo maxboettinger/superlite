@@ -190,7 +190,7 @@ def skip_issue(data: dict, n: int) -> str:
         msg = f"skipped {ref(n)} (in no batch)"
     else:
         if hit["state"] != "planned" and not (hit["state"] == "parked" and not hit.get("worktree")):
-            raise ValueError(f"#{n} is in {hit['id']}, which is {hit['state']}")
+            raise ValueError(f"{ref(n)} is in {hit['id']}, which is {hit['state']}")
         hit["issues"] = [i for i in hit["issues"] if i != n]  # O(issues)
         if hit["issues"]:
             msg = f"skipped {ref(n)} ({hit['id']} keeps " + " ".join(ref(i) for i in hit["issues"]) + ")"

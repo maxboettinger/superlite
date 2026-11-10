@@ -46,3 +46,11 @@ def test_status_row_jira_keys():
 def test_worker_reason_text_does_not_trigger_cap_hints():
     d = {"outside": [{"number": 2, "reason": "not planned (triage: see planned (cap) and not triaged (x cap))"}]}
     assert bs.left_out_lines(d) == ["not planned (triage: see planned (cap) and not triaged (x cap)): #2"]
+
+
+def test_skip_issue_refusal_drops_hash_for_jira_key():
+    import pytest
+    d = {"batches": [batch("B1", ["a.py"], state="running", issues=["PIX-2"])], "outside": [], "skipped": []}
+    with pytest.raises(ValueError) as e:
+        bs.skip_issue(d, "PIX-2")
+    assert str(e.value).startswith("PIX-2 is in B1") and "#" not in str(e.value)
