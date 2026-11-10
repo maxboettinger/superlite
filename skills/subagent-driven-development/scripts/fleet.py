@@ -48,6 +48,8 @@ SHELL_MSG = "not an available shell"  # O(1)
 PASS_THROUGH = ("CLAUDE_CODE_PLUGIN_CACHE_DIR",)  # O(1)
 SLOW_MSG = "timed out waiting for app response"  # O(1)
 STALL_WAIT_MS = 30000  # O(1) herdr's own prompt window is a fixed 5 s; a slow start gets this long to show working or blocked
+LEAN_FLAGS = ("--strict-mcp-config", "--no-chrome", "--disable-slash-commands")  # O(1)
+LEAN_DENY = ("Artifact", "ArtifactComments", "ArtifactData", "ListAgents", "ReadNotifications", "ReportFindings")  # O(1)
 SCREEN_ROWS = 1000  # O(1) spawn reads the whole pane: the fullscreen TUI pins the prompt to the bottom, READY and the trust dialog sit above it
 
 
@@ -234,8 +236,20 @@ def _retry_account(sd, model, env, avoid):  # O(a * e + w): another account than
     return choose_account(sd, model, env)  # O(a * e + w)
 
 
+def lean_argv(argv):  # O(n) a copy of argv with the lean flags before the deny list and the lean names added to it, each once
+    a = list(argv)  # O(n)
+    flags = [f for f in LEAN_FLAGS if f not in a]  # O(n)
+    if "--disallowedTools" not in a:  # O(n)
+        return a + flags + ["--disallowedTools", *LEAN_DENY]  # O(n)
+    i = a.index("--disallowedTools")  # O(n)
+    j = next((k for k in range(i + 1, len(a)) if a[k].startswith("--")), len(a))  # the deny list ends at the next option | O(n)
+    names = [n for n in LEAN_DENY if n not in a[i + 1:j]]  # O(n)
+    return a[:i] + flags + a[i:j] + names + a[j:]  # O(n)
+
+
 def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer"):  # O(a * e + w) plus herdr calls
-    """One worker; a start that stays slow is retried once on another account."""
+    """One worker; a start that stays slow is retried once on another account.
+    Every worker starts lean (#377): no MCP servers, Chrome, skills or slash commands; Artifact, ListAgents, ReadNotifications and ReportFindings denied (LEAN_FLAGS, LEAN_DENY)."""
     try:  # O(1)
         return _spawn(sd, plan, tier, project, cfg, env, role, None)  # O(a * e + w)
     except _Slow as first:  # O(1)
@@ -269,7 +283,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus
             fs.register_agent(name, shared)  # other sessions count this worker on its claude-profile account | O(1)
     except hc.HerdrError as e:  # O(1)
         _blocked(sd, wid, account, f"startup: {e.message or e.code}{tail}")  # O(1)
-    argv = list(launch["argv"])  # O(1)
+    argv = lean_argv(launch["argv"])  # O(n)
     try:  # a state dir outside the project (a worktree run) is not readable by default | O(1)
         sd.resolve().relative_to(Path(project).resolve())  # O(len)
     except ValueError:  # O(1)
