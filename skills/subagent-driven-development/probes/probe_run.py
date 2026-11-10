@@ -4,7 +4,11 @@
     probe_run.py --adapter PATH [--root DIR] [--app-type T] [--probes DIR]
                  [--categories deep,numeric,...] [--files a,b | --commit SHA]
                  [--timeout 10] [--workers N] [--out .superlite/probes/probe-results.json]
-                 [--log .superlite/incidents.jsonl] [--background]
+                 [--log .superlite/incidents.jsonl] [--raises A,B] [--background]
+    probe_run.py --plan PLAN_OR_.superlite_FOLDER [same options]
+        --plan fills --root, --adapter, --out and --log from the run folder (explicit options win) and
+        reads the Probe entries' `raises=` names; --raises adds names for a hand-written adapter.
+        A raised exception whose class (or a base) matches a name is a rejection, like EXPECTED_ERRORS.
 
 Results file (--out, default <root>/.superlite/probes/probe-results.json):
     {"files": [...], "selected_categories": [...], "categories": {cat: {"status", "cached", "probes",
@@ -51,6 +55,7 @@ from __future__ import annotations  # O(1)
 import argparse  # O(1)
 import ast  # O(1)
 import concurrent.futures as cf  # O(1)
+import contextlib  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
 import json  # O(1)
@@ -185,6 +190,7 @@ class _WorkerState:  # O(1)
     server_starts = 0  # O(1)
     port = None  # O(1)
     stop = None  # O(1)
+    raises: tuple = ()  # O(1)
 
 
 def _start_server(st: _WorkerState) -> None:  # O(1) + server start
@@ -262,10 +268,20 @@ def _bad_status(status: int, expect) -> str | None:  # O(k log k) k = expected s
     return None  # O(1)
 
 
+def named_raise(e: BaseException, names) -> bool:  # O(mro * k) k = names
+    """True when a class in e's MRO is named in `names` (bare, qualified or module-dotted)."""  # O(1)
+    for c in type(e).__mro__:  # O(mro) iterations
+        mod = getattr(c, "__module__", "")  # O(1)
+        if {c.__name__, c.__qualname__, f"{mod}.{c.__qualname__}"} & set(names):  # O(k) set build + intersect
+            return True  # O(1)
+    return False  # O(1)
+
+
 def _exec_one(st: _WorkerState, entry: str, item, expect, timeout: float):  # O(adapter call + input + output bytes) total
     """Return (normalized_result, problem|None). problem = dict(status, detail, ...)."""  # O(1)
     ad = st.adapter  # O(1)
     expected = tuple(getattr(ad, "EXPECTED_ERRORS", (ValueError,)))  # O(k) k = expected error types
+    named = st.raises  # O(1)
     try:  # O(1)
         if entry in ("request", "raw") and (st.port is None or not _healthy(st)):  # O(1)
             if st.port is not None:  # O(1)
@@ -277,10 +293,18 @@ def _exec_one(st: _WorkerState, entry: str, item, expect, timeout: float):  # O(
                 res, text = ("ok", repr(r)[:500]), repr(r)  # O(len result) repr twice
             except expected as e:  # O(1)
                 res, text = ("err", type(e).__name__), ""  # O(1)
+            except Exception as e:  # O(1) | a domain error named in the Probe entry's raises= is a rejection
+                if not named_raise(e, named):  # O(mro * k)
+                    raise  # O(1)
+                res, text = ("err", type(e).__name__), ""  # O(1)
         elif entry == "run":  # O(1)
             try:  # O(1)
                 rc, out, err = ad.run(*item)  # O(adapter run) + process spawn
             except expected as e:  # O(1)
+                return ("err", type(e).__name__), None  # O(1)
+            except Exception as e:  # O(1) | named in raises=
+                if not named_raise(e, named):  # O(mro * k)
+                    raise  # O(1)
                 return ("err", type(e).__name__), None  # O(1)
             out = out.decode("utf-8", "replace") if isinstance(out, bytes) else str(out)  # O(len out) decode
             err = err.decode("utf-8", "replace") if isinstance(err, bytes) else str(err)  # O(len err) decode
@@ -293,6 +317,10 @@ def _exec_one(st: _WorkerState, entry: str, item, expect, timeout: float):  # O(
             try:  # O(1)
                 status, js = ad.request(*item)  # O(adapter request) + network I/O
             except expected as e:  # O(1)
+                return ("err", type(e).__name__), None  # O(1)
+            except Exception as e:  # O(1) | named in raises=
+                if not named_raise(e, named):  # O(mro * k)
+                    raise  # O(1)
                 return ("err", type(e).__name__), None  # O(1)
             res, text = ("status", status), "" if js is None else json.dumps(js, default=str)  # O(len js) json.dumps
             bad = _bad_status(status, expect)  # O(1)
@@ -400,6 +428,7 @@ def worker_main(a) -> int:  # O(steps * step cost) total, steps = messages recei
         if str(adapter_path.parent) not in sys.path:  # O(1)
             sys.path.insert(1, str(adapter_path.parent))  # O(1)
         st.adapter = load_module(adapter_path)  # O(adapter size) import
+        st.raises = tuple(n for n in (getattr(a, "raises", None) or "").split(",") if n)  # O(len raises)
         ad = st.adapter  # O(1)
         st.ctx = types.SimpleNamespace(  # O(1)
             adapter=ad, tmp=tmp, good_input=getattr(ad, "GOOD_INPUT", "1"),  # O(1)
@@ -442,6 +471,7 @@ class Cfg:  # O(1)
         self.server_starts: dict[int, int] = {}  # O(1)
         self.server_ports: set[int] = set()  # O(1)
         self.workers_started = 0  # O(1)
+        self.raises: list[str] = []  # O(1)
 
     def in_repo(self, filename: str) -> bool:  # O(parts) + resolve syscall
         try:  # O(1)
@@ -482,6 +512,8 @@ class Worker:  # O(1) + process spawn + wait for ready <=60s
         self.errf = tempfile.NamedTemporaryFile(prefix="probe-worker-", suffix=".err", delete=False)  # O(1)
         cmd = [project_python(getattr(cfg, "out_root", cfg.root)), "-X", "utf8", str(HERE / "probe_run.py"), "--worker",  # O(1) project interpreter: the project's .venv, not a --commit checkout's
                "--root", str(cfg.root), "--adapter", str(cfg.adapter)]  # O(1)
+        if getattr(cfg, "raises", []):  # O(1)
+            cmd += ["--raises", ",".join(cfg.raises)]  # O(k)
         kw: dict = {}  # O(1)
         if IS_WIN:  # O(1)
             kw["creationflags"] = 0x08000000 | 0x00000200  # O(1) | CREATE_NO_WINDOW | NEW_PROCESS_GROUP
@@ -707,7 +739,6 @@ def group_key(res: dict, cfg: Cfg) -> tuple[str, tuple[str, int] | None]:  # O(f
 REGRESSION_TEMPLATE = '''"""Generated by probe_run.py: {category} {kind} ({key}).
 Minimal input shrunk from {orig_size}; probe {probe_id}. Fix the code, keep this test."""
 import importlib.util
-import json
 import pathlib
 import socket
 import sys
@@ -719,6 +750,7 @@ ENTRY = {entry!r}
 INPUT = {input_text}
 EXPECT = {expect!r}
 TIMEOUT = {timeout!r}
+RAISES = {raises!r}
 TRACE = "Traceback (most recent call last)"
 
 
@@ -729,6 +761,13 @@ def _load():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _named(e):
+    for c in type(e).__mro__:
+        if {{c.__name__, c.__qualname__, f"{{c.__module__}}.{{c.__qualname__}}"}} & set(RAISES):
+            return True
+    return False
 
 
 def _server(ad):
@@ -770,6 +809,10 @@ def _problem(ad):
                 return f"status {{status}}"
     except expected:
         return None
+    except Exception as e:
+        if _named(e):
+            return None
+        raise
     finally:
         if stop:
             threading.Thread(target=stop, daemon=True).start()
@@ -812,7 +855,7 @@ def _copy_adapter(cfg: Cfg, outdir: Path) -> None:  # O(adapter bytes) read + wr
             if not re.search(r"^\s*from pathlib import .*\bPath\b", "".join(lines[:i]), re.M):  # O(bytes)
                 lines.insert(i, "from pathlib import Path\n")  # O(lines)
             break  # O(1)
-    text = "".join(lines)  # O(bytes)
+    text = "# ruff: noqa\n# flake8: noqa\n" + "".join(lines)  # O(bytes)
     dest = outdir / "_probe_adapter.py"  # O(1)
     if not dest.exists() or dest.read_text(encoding="utf-8", errors="replace") != text:  # O(bytes)
         dest.write_text(text, encoding="utf-8")  # O(bytes)
@@ -839,7 +882,7 @@ def _write_regression(cfg: Cfg, group: dict, rep: dict) -> str | None:  # O(t lo
         category=cat, kind=group["kind"], key=group["key"].replace('"', "'"),  # O(1)
         orig_size=group.get("size"), probe_id=group["probe"],  # O(1)
         entry=meta["entry"], input_text=rep["input"], expect=expect,  # O(1)
-        timeout=timeout_for(meta, cfg), test_name=f"probe_{cat}_{n}")  # O(1)
+        timeout=timeout_for(meta, cfg), raises=tuple(getattr(cfg, "raises", [])), test_name=f"probe_{cat}_{n}")  # O(1)
     def body(t):  # O(len t)
         return t[t.index("ROOT ="):t.index("def test_")]  # O(len t) two index scans
 
@@ -1067,36 +1110,98 @@ def remove_checkout(tree: Path, repo: Path | None) -> None:  # O(tree files) + 2
     shutil.rmtree(tree.parent, ignore_errors=True)  # O(tree files) rmtree
 
 
-def stale_adapter(adapter: Path) -> bool:  # O(adapter bytes + plan bytes)
-    """True when a generated adapter's recorded Probe entries differ from the plan it was built from now (#177).
-    A hand-written adapter (no ENTRIES and PLAN constants), a missing plan or a copy of this file without the
-    scripts folder is never stale: the check only ever stops a run it is sure about."""
+def adapter_consts(adapter: Path) -> dict:  # O(adapter bytes)
+    """The adapter's top-level ENTRIES and PLAN literals; {} on any error (a hand-written adapter has none)."""  # O(1)
     try:  # O(1)
         consts = {}  # O(1)
         for node in ast.parse(adapter.read_text(encoding="utf-8", errors="replace")).body:  # O(adapter bytes)
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
                     and node.targets[0].id in ("ENTRIES", "PLAN"):  # O(1)
                 consts[node.targets[0].id] = ast.literal_eval(node.value)  # O(len literal)
+        return consts  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return {}  # O(1)
+
+
+@contextlib.contextmanager  # O(1)
+def _load_script(name: str, private: str):  # O(module size)
+    """Yield scripts/<name>.py loaded by path under a private module name; sys.path and sys.modules are restored on exit."""  # O(1)
+    saved = list(sys.path)  # the scripts put their folder first on sys.path | O(len sys.path)
+    try:  # O(1)
+        spec = importlib.util.spec_from_file_location(private, HERE.parent / "scripts" / f"{name}.py")  # O(1)
+        mod = importlib.util.module_from_spec(spec)  # O(1)
+        sys.modules[private] = mod  # its dataclasses look their module up here | O(1)
+        spec.loader.exec_module(mod)  # O(module size)
+        yield mod  # O(1)
+    finally:  # O(1)
+        sys.path[:] = saved  # O(len sys.path)
+        sys.modules.pop(private, None)  # O(1)
+
+
+def plan_raises(plan: Path) -> list[str]:  # O(plan bytes)
+    """Exception names from every Probe entry's `raises=` part, first-seen order; [] when unreadable."""  # O(1)
+    try:  # O(1)
+        with _load_script("pt_review", "_superlite_pt_review") as pt:  # O(module size)
+            entries = pt.parse_plan(plan).probe_entries  # O(plan bytes)
+        names: list[str] = []  # O(1)
+        for entry in entries:  # O(entries)
+            for part in entry.split("·"):  # O(len entry)
+                key, _, val = part.partition("=")  # O(len part)
+                if key.strip().lower() != "raises":  # O(1)
+                    continue  # O(1)
+                for n in val.replace("`", " ").replace(",", " ").split():  # O(len val)
+                    if n not in names:  # O(names)
+                        names.append(n)  # O(1)
+        return names  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return []  # O(1)
+
+
+def stale_adapter(adapter: Path) -> bool:  # O(adapter bytes + plan bytes)
+    """True when a generated adapter's recorded Probe entries differ from the plan it was built from now (#177).
+    A hand-written adapter (no ENTRIES and PLAN constants), a missing plan or a copy of this file without the
+    scripts folder is never stale: the check only ever stops a run it is sure about."""
+    try:  # O(1)
+        consts = adapter_consts(adapter)  # O(adapter bytes)
         plan = Path(consts["PLAN"])  # O(1)
         if not plan.is_file():  # O(1)
             return False  # O(1)
-        saved = list(sys.path)  # pt_review puts the scripts folder first on sys.path | O(len sys.path)
-        try:  # O(1)
-            spec = importlib.util.spec_from_file_location("_superlite_pt_review", HERE.parent / "scripts" / "pt_review.py")  # O(1)
-            mod = importlib.util.module_from_spec(spec)  # O(1)
-            sys.modules[spec.name] = mod  # its dataclasses look their module up here | O(1)
-            spec.loader.exec_module(mod)  # O(module size)
-            return mod.plan_entries(mod.parse_plan(plan)) != consts["ENTRIES"]  # O(plan bytes)
-        finally:  # O(1)
-            sys.path[:] = saved  # O(len sys.path)
-            sys.modules.pop("_superlite_pt_review", None)  # O(1)
+        with _load_script("pt_review", "_superlite_pt_review") as pt:  # O(module size)
+            return pt.plan_entries(pt.parse_plan(plan)) != consts["ENTRIES"]  # O(plan bytes)
     except Exception:  # noqa: BLE001 | no verdict: probe as before | O(1)
         return False  # O(1)
 
 
+def run_folder(plan: Path) -> Path:  # O(d)
+    """The .superlite folder a --plan path (file or folder) belongs to."""  # O(1)
+    try:  # O(1)
+        with _load_script("state", "_superlite_state") as st:  # O(module size)
+            return st.plan_dir(plan)  # O(d)
+    except Exception:  # noqa: BLE001 | O(1)
+        if plan.name == ".superlite":  # O(1)
+            return plan  # O(1)
+        return plan / ".superlite" if plan.is_dir() else plan.parent / ".superlite"  # O(1)
+
+
 def run_main(a) -> int:  # O(checkout + _run_main) total; one git checkout per --commit run
-    root = Path(a.root or os.getcwd()).resolve()  # O(1)
-    adapter = Path(a.adapter).resolve() if a.adapter else root / ".superlite" / "probes" / "adapter.py"  # O(1)
+    folder, plan = None, None  # O(1)
+    if a.plan:  # O(1)
+        plan = Path(a.plan).resolve()  # O(1)
+        if not plan.exists():  # O(1)
+            print(f"probe_run: --plan not found: {a.plan}", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        folder = run_folder(plan)  # O(module size)
+    root = Path(a.root or (folder.parent if folder else os.getcwd())).resolve()  # O(1)
+    base = folder or root / ".superlite"  # O(1)
+    if a.out is None:  # O(1)
+        a.out = str(base / "probes" / "probe-results.json") if folder else ".superlite/probes/probe-results.json"  # O(1)
+    if a.log is None:  # O(1)
+        a.log = str(base / "incidents.jsonl") if folder else ".superlite/incidents.jsonl"  # O(1)
+    adapter = Path(a.adapter).resolve() if a.adapter else base / "probes" / "adapter.py"  # O(1)
+    a.raises_all = [n for n in (a.raises or "").split(",") if n]  # O(len raises)
+    for n in plan_raises(plan) if plan and plan.is_file() else plan_raises(Path(adapter_consts(adapter).get("PLAN", ""))):  # O(plan bytes)
+        if n not in a.raises_all:  # O(k)
+            a.raises_all.append(n)  # O(1)
     if not adapter.is_file():  # O(1)
         print(f"probe_run: adapter not found: {adapter}", file=sys.stderr)  # O(1)
         return 2  # O(1)
@@ -1142,6 +1247,7 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
     cache_path = root / ".superlite" / "probes" / "cache.json"  # O(1)
     cfg = Cfg(work, adapter, probes_dir, a.timeout)  # O(1)
     cfg.out_root = root  # O(1)
+    cfg.raises = list(getattr(a, "raises_all", []))  # O(k)
 
     if a.commit:  # O(1)
         try:  # O(1)
@@ -1175,7 +1281,7 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
     results: dict = {"version": 1, "root": str(root), "adapter": cfg.rel(str(adapter)),  # O(1)
                      **({"commit": a.commit} if a.commit else {}),  # O(1)
                      "files": files, "selected_categories": selected, "categories": {},  # O(1)
-                     "probes": [], "failures": [], "load_errors": load_errors}  # O(1)
+                     "probes": [], "failures": [], "load_errors": load_errors, "raises": cfg.raises}  # O(1)
     try:  # O(1)
         try:  # O(1)
             w0 = pool.acquire()  # O(1) + worker spawn
@@ -1361,9 +1467,10 @@ def main(argv: list[str] | None = None) -> int:  # O(argv) + run
     ap.add_argument("--commit", help="probe only the files this commit touched")  # O(1)
     ap.add_argument("--timeout", type=float, default=10.0, help="cap on per-probe timeouts (s)")  # O(1)
     ap.add_argument("--workers", type=int, default=0, help="default: CPU count")  # O(1)
-    ap.add_argument("--out", default=".superlite/probes/probe-results.json",  # O(1)
-                    help="results file, relative to --root")  # O(1)
-    ap.add_argument("--log", default=".superlite/incidents.jsonl")  # O(1)
+    ap.add_argument("--out", default=None, help="results file, relative to --root (default <run folder>/probes/probe-results.json)")  # O(1)
+    ap.add_argument("--log", default=None, help="incident log (default <run folder>/incidents.jsonl)")  # O(1)
+    ap.add_argument("--plan", help="plan file or .superlite folder: sets the run folder, root, adapter, out, log and raises=")  # O(1)
+    ap.add_argument("--raises", help="comma list of exception names to treat as rejections (adds to the plan's raises=)")  # O(1)
     ap.add_argument("--background", action="store_true", help="detach and return at once")  # O(1)
     ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)  # O(1)
     a = ap.parse_args(argv)  # O(1)
