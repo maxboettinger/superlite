@@ -185,7 +185,7 @@ def answer(data: dict, answers: dict, by: str, now: str) -> list:
     return errs
 
 
-def skip_issue(data: dict, n: int) -> str:
+def skip_issue(data: dict, n: "int | str") -> str:
     hit = next((b for b in data.get("batches", []) if n in b.get("issues", [])), None)  # O(batches * issues)
     if hit is None:
         msg = f"skipped {ref(n)} (in no batch)"

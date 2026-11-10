@@ -83,3 +83,9 @@ def test_status_shows_note():
         assert lines[-2] == line and lines[-1].startswith("questions:")
     else:
         assert lines[-1] == line
+
+
+def test_skip_issue_signature_takes_int_or_str():
+    import inspect
+    ann = inspect.signature(bs.skip_issue).parameters["n"].annotation
+    assert "str" in str(ann) and "int" in str(ann)
