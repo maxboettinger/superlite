@@ -45,14 +45,14 @@ def test_only_testing_two_xctest_suites_in_one_file(tmp_path):
 
 def test_no_suite_falls_back_with_warning(tmp_path, capsys):
     rel = _write(tmp_path, "Tests/KitTests/Helpers.swift", "struct Fixture {}\n")
-    assert testcmd.only_testing([rel], tmp_path) == "-only-testing:KitTests/Helpers"
+    assert testcmd.only_testing([rel], tmp_path) == "-only-testing:KitTests"
     err = capsys.readouterr().err
-    assert "Tests/KitTests/Helpers.swift" in err and "declares no test suite" in err
+    assert "Tests/KitTests/Helpers.swift declares no test suite; using -only-testing:KitTests" in err
 
 
 def test_missing_file_falls_back(tmp_path, capsys):
     out = testcmd.only_testing(["Tests/KitTests/Gone.swift"], tmp_path)
-    assert out == "-only-testing:KitTests/Gone"
+    assert out == "-only-testing:KitTests"
     assert "declares no test suite" in capsys.readouterr().err
 
 

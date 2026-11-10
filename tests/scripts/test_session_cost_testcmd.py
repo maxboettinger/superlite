@@ -117,7 +117,7 @@ def test_expand_fast_paths_maps_with_related_template(tmp_path, monkeypatch):
 def test_swift_fast_keeps_only_testing(tmp_path):
     (tmp_path / "Tests" / "CoreTests").mkdir(parents=True)
     p = tmp_path / "Tests" / "CoreTests" / "LibraryTests.swift"
-    p.write_text("x\n", encoding="utf-8")
+    p.write_text("final class LibraryTests: XCTestCase {\n    func testA() {}\n}\n", encoding="utf-8")
     (tmp_path / ".superlite").mkdir()
     (tmp_path / ".superlite" / "test-cmd.json").write_text(json.dumps({
         "language": "swift", "test": "xcodebuild test -scheme X",

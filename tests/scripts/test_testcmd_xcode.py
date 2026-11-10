@@ -39,13 +39,13 @@ def test_xcodebuild_both_frameworks_summed():
 
 def test_only_testing_placeholder(tmp_path):
     p = "Packages/Kit/Tests/CoreTests/LibraryTests.swift"
-    assert testcmd.only_testing([p]) == "-only-testing:CoreTests/LibraryTests"
+    assert testcmd.only_testing([p], tmp_path) == "-only-testing:CoreTests"
     (tmp_path / ".superlite").mkdir()
     (tmp_path / ".superlite/test-cmd.json").write_text(json.dumps(
         {"language": "swift", "test": "xcodebuild test -scheme X",
          "test_file": "xcodebuild test -scheme X {only_testing}"}))
     r = testcmd.resolve(tmp_path, [p])
-    assert r["command"] == "xcodebuild test -scheme X -only-testing:CoreTests/LibraryTests"
+    assert r["command"] == "xcodebuild test -scheme X -only-testing:CoreTests"
     assert r["isolate"] is True
 
 
