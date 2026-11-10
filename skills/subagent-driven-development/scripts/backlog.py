@@ -463,7 +463,7 @@ def cmd_plan(a) -> int:
         else:
             outside.append({"number": n, "title": i.get("title", ""), "author": _author(i)})
     if proposal is None:
-        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap, open_batches(d) if add else [])  # O(i)
+        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap, **({"open_": open_batches(d)} if add else {}))  # O(i)
         if err:
             print("\n".join(err))
             return 3
