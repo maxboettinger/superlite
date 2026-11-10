@@ -20,6 +20,8 @@ A start that fails with `not an available shell` (a freed pane) is retried once 
 `spawn --for-dispatch` also stops the ready implementers an earlier dispatch dropped from pool.json (#424).
 A stalled prime waits up to STALL_WAIT_MS for a late start, then is resent once; a start that stays slow is retried once on another account (#428).
 `--for-dispatch` ends with one `review: Tn (<why>); run ... fleet spawn --for-review Tn --plan P` line per committed task that matches a review reason and has no review yet (#422).
+A primed worker whose pane shows the folder trust dialog gets Down, Enter and the prime once more; one-turn roles and leads check the screen once after the start; a dialog that stays open is named in the BLOCKED line (#514).
+`spawn --for-dispatch|--for-review|--package` accept the run folder as `--plan`: it becomes the plan file stable.json, pool.json or plan.md names, else exit 2 (#508).
 While the run's fleet.json says off, `spawn` (both forms) starts nothing: `BLOCKED: fleet is off in <state dir>; run sl fleet on [--plan P] first ...`, exit 3 (#355).
 """
 
@@ -136,6 +138,16 @@ def _pool_drop(sd, wid):  # O(w); caller already holds fs.locked(sd)
         data = pool.load(p)  # O(w)
         if pool.remove(data, wid):  # O(w)
             pool.save(p, data)  # O(w)
+
+
+def _trust_open(screen):  # O(s)
+    """True when the folder trust dialog is on screen and no READY line is (a ready pane that shows the text is not blocked)."""
+    return TRUST in screen and not _is_ready(screen)  # O(s)
+
+
+def _accept_trust(name):  # O(1)
+    hc.send_keys(name, ["Down", "Enter"])  # O(1)
+    hc.wait_state(name, ["idle"], 60000)  # O(1)
 
 
 def _is_ready(screen):  # O(s)
@@ -324,8 +336,15 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus
             if e.code != "agent_not_ready" or TRUST not in screen:  # O(s)
                 shell = SHELL_MSG in (getattr(e, "message", "") or "")  # O(len)
                 fail(f"startup: {e.message if shell else first_line(screen, e)}{retried}", screen, slow=_slow(e))  # O(s)
-            hc.send_keys(name, ["Down", "Enter"])  # O(1)
-            hc.wait_state(name, ["idle"], 60000)  # O(1)
+            _accept_trust(name)  # O(1)
+        if not launch["prime"]:  # a one-turn worker may stand on the trust dialog too (#514) | O(1)
+            seen = ""  # a failed read is an empty screen, as in fleet_lead | O(1)
+            try:  # O(1)
+                seen = hc.read_screen(name, SCREEN_ROWS)  # O(s)
+            except hc.HerdrError:  # O(1)
+                pass  # O(1)
+            if _trust_open(seen):  # O(s)
+                _accept_trust(name)  # O(1)
         if launch["prime"]:  # a one-turn worker gets its brief as the first message, no prime | O(1)
             ask = f"Read {sd.resolve() / prime}, then reply READY"  # O(1)
             try:  # O(1)
@@ -335,6 +354,10 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus
                     raise  # O(1)
                 st = _late_prime(name) or hc.prompt(name, ask, ["idle", "done", "blocked"], 180000)  # a late start is waited for, else resent once; a second stall is slow | O(s)
             screen = hc.read_screen(name, SCREEN_ROWS)  # O(s)
+            if _trust_open(screen):  # the dialog came up after the first prime: accept it, send the same prime once more | O(s)
+                _accept_trust(name)  # O(1)
+                st = hc.prompt(name, ask, ["idle", "done", "blocked"], 180000)  # O(1)
+                screen = hc.read_screen(name, SCREEN_ROWS)  # O(s)
     except hc.HerdrError as e:  # a failed key, wait or prime call must not leave a raw traceback | O(1)
         fail(f"startup: {e.code}: {e.message}", slow=_slow(e))  # O(1)
     if launch["prime"] and (st == "blocked" or not _is_ready(screen)):  # O(s)
@@ -345,6 +368,8 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus
         except (hc.HerdrError, KeyError):  # O(1)
             pass  # O(1)
         gone = "" if (sd / prime).is_file() else f"; no {sd.resolve() / prime}"  # the prime vanished while the worker started | O(1)
+        if _trust_open(screen):  # O(s)
+            fail(f"no READY: the folder trust dialog is still open in {cwd}; accept it once per account (start claude there on account {account}), then rerun", screen, named=False)  # O(s)
         fail("no READY" + size + gone, screen, named=False)  # O(s)
     if launch["pool"]:  # the pool entry first: a concurrent round must not see a ready worker outside the pool | O(1)
         _register_pool(sd, wid, model, account)  # O(w)
@@ -679,6 +704,13 @@ def main(argv=None):  # O(w) plus command cost
             hint = "sl fleet on" + (f" --plan {a.plan}" if a.plan else "")  # O(1) the same --plan resolves the same state dir
             print(f"BLOCKED: fleet is off in {sd}; run {hint} first (a worktree run keeps its own fleet.json)")  # O(1)
             return 3  # O(1) before dispatch: no task marked, no pane, no worker id
+        if (a.for_dispatch or a.for_review is not None or a.package) and a.plan and Path(a.plan).is_dir():  # a run folder names its plan file (#508) | O(d)
+            import orchestrator  # noqa: E402 | O(1) lazy
+            found = orchestrator.plan_file(state.plan_dir(a.plan))  # O(file)
+            if found is None:  # O(1)
+                print(f"error: --plan {a.plan} is a run folder with no plan file (stable.json, pool.json or plan.md name none); pass the plan file", file=sys.stderr)  # O(1)
+                return 2  # O(1) before dispatch: no pane, no worker id
+            a.plan = str(found)  # O(1)
         if a.for_dispatch:  # O(1)
             return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent)  # O(R * (spawn + send))
         if a.for_review is not None or a.package:  # O(1)
