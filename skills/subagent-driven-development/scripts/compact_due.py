@@ -1,103 +1,117 @@
-"""Session compact due check and host-neutral nudge text.
+"""Hint that a session's context grew past the point where automatic compaction should already have run.
 
-    compact_due.is_due(sl_dir, now, window_s=1800) -> bool
-    compact_due.nudge_line() -> str
-    compact_due.mark(sl_dir) -> None
+    compact_due.context_tokens(transcript_path) -> int | None
+    compact_due.is_due(sl_dir, tokens, sid=None, threshold=500000) -> bool
+    compact_due.nudge_line(tokens) -> str
+    compact_due.mark(sl_dir, sid=None) -> None
 
-Due when now - stamp >= window_s (seconds), where stamp is last-compact mtime if
-present, else the earliest launch t from metrics.jsonl (epoch ms, converted to
-seconds; else 0). Stdlib only.
+With an auto-compact window set (`sl setup` offers 400,000 tokens) Claude Code compacts by itself and the context never
+reaches the threshold. A main-conversation request above it means no such window is active, so the agent is asked once
+per session to tell the user how to set one. The size is the input side of the last main-conversation request in the
+transcript (input, cache read and cache write tokens), read from the file's last 256 KB only.
+
+CLI (hooks/compact-nudge): compact_due.py <sl_dir>, the hook's JSON on stdin (session_id, transcript_path). Prints the
+hint and exits 0 when due, else exits 1. Stdlib only.
 """
 # Complexity notation:
-#   L = metrics.jsonl lines, B = file bytes
+#   T = bytes of the transcript tail read (at most 256 KB), L = lines in it
 from __future__ import annotations
 
 import json  # O(1)
+import os  # O(1)
 from pathlib import Path  # O(1)
 
-__all__ = ["is_due", "nudge_line", "mark"]
+__all__ = ["context_tokens", "is_due", "nudge_line", "mark"]
 
-_DEFAULT_WINDOW_S = 1800.0  # 30 min
+_THRESHOLD = 500_000
+_TAIL_BYTES = 262_144
+_INPUT_FIELDS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 
 
-def _launch_t(sl: Path) -> float:  # O(L)
-    """Earliest launch timestamp in metrics.jsonl, in seconds, or 0."""
-    path = sl / "metrics.jsonl"  # O(1)
-    earliest: float | None = None  # O(1)
+def context_tokens(transcript_path: str) -> int | None:  # O(T)
+    """Input-side tokens of the last main-conversation request in the transcript's tail, or None when none is found."""
+    if not transcript_path:  # O(1)
+        return None  # O(1)
     try:  # O(1)
-        text = path.read_text(encoding="utf-8", errors="replace")  # O(B)
-    except OSError:  # O(1)
-        return 0.0  # O(1)
-    for ln in text.splitlines():  # O(L)
-        ln = ln.strip()  # O(1)
-        if not ln:  # O(1)
-            continue  # O(1)
-        try:  # O(1)
-            e = json.loads(ln)  # O(w)
-        except ValueError:  # O(1)
-            continue  # O(1)
-        if isinstance(e, dict) and e.get("ev") == "launch" and isinstance(e.get("t"), (int, float)):  # O(1)
-            t = float(e["t"]) / 1000.0  # metrics t is epoch ms | O(1)
-            earliest = t if earliest is None else min(earliest, t)  # O(1)
-    return 0.0 if earliest is None else earliest  # O(1)
-
-
-def _stamp_name(sid: str | None) -> str:  # O(1)
-    safe = "".join(c for c in (sid or "") if c.isalnum() or c in "-_.")  # O(|sid|)
-    return "last-compact." + safe if safe else "last-compact"  # O(1)
-
-
-def _compact_mtime(sl: Path, sid: str | None = None) -> float | None:  # O(1)
-    path = sl / _stamp_name(sid)  # O(1)
-    try:  # O(1)
-        return path.stat().st_mtime  # O(1)
+        with open(os.path.expanduser(transcript_path), "rb") as f:  # O(1)
+            size = f.seek(0, os.SEEK_END)  # O(1)
+            start = max(0, size - _TAIL_BYTES)  # O(1)
+            f.seek(start)  # O(1)
+            data = f.read()  # O(T)
     except OSError:  # O(1)
         return None  # O(1)
+    lines = data.split(b"\n")  # O(T)
+    if start > 0:  # the first line of a tail is cut somewhere in the middle | O(1)
+        lines = lines[1:]  # O(L)
+    for raw in reversed(lines):  # O(L) iterations
+        if b'"usage"' not in raw:  # O(len)
+            continue  # O(1)
+        try:  # O(1)
+            e = json.loads(raw.decode("utf-8", errors="replace"))  # O(len)
+        except ValueError:  # O(1)
+            continue  # O(1)
+        if not isinstance(e, dict) or e.get("isSidechain"):  # a subagent's request is not this context | O(1)
+            continue  # O(1)
+        msg = e.get("message")  # O(1)
+        usage = msg.get("usage") if isinstance(msg, dict) else None  # O(1)
+        if not isinstance(usage, dict):  # O(1)
+            continue  # O(1)
+        vals = [usage.get(k) for k in _INPUT_FIELDS]  # O(1)
+        if not any(isinstance(v, int) and not isinstance(v, bool) for v in vals):  # O(1)
+            continue  # O(1)
+        return sum(v for v in vals if isinstance(v, int) and not isinstance(v, bool))  # O(1)
+    return None  # O(1)
 
 
-def is_due(sl_dir: str, now: float, window_s: float = _DEFAULT_WINDOW_S, sid: str | None = None) -> bool:  # O(L)
-    """True when the window has elapsed since the last compact (per session when sid is given).
+def _marker_name(sid: str | None) -> str:  # O(|sid|)
+    safe = "".join(c for c in (sid or "") if c.isalnum() or c in "-_")  # O(|sid|)
+    return "compact-hint." + safe if safe else "compact-hint"  # O(1)
 
-    A session seen for the first time gets its stamp and is not due.
-    """
-    sl = Path(sl_dir)  # O(1)
-    stamp = _compact_mtime(sl, sid)  # O(1)
-    if stamp is None and _stamp_name(sid) != "last-compact":  # O(1)
-        mark(sl_dir, sid)  # O(1)
+
+def is_due(sl_dir: str, tokens: int | None, sid: str | None = None, threshold: int = _THRESHOLD) -> bool:  # O(1)
+    """True when the context is above the threshold and this session was not told yet."""
+    if tokens is None or tokens <= threshold:  # O(1)
         return False  # O(1)
-    if stamp is None:  # O(1)
-        stamp = _launch_t(sl)  # O(L)
-    return (now - stamp) >= window_s  # O(1)
+    return not (Path(sl_dir) / _marker_name(sid)).exists()  # O(1)
 
 
 def mark(sl_dir: str, sid: str | None = None) -> None:  # O(1)
-    """Stamp last-compact (per session when sid is given) now, so the nudge shows once per window."""
+    """Remember that this session was told, so the hint shows once per session."""
     try:  # O(1)
-        (Path(sl_dir) / _stamp_name(sid)).write_text("", encoding="utf-8")  # O(1)
+        (Path(sl_dir) / _marker_name(sid)).write_text("", encoding="utf-8")  # O(1)
     except OSError:  # O(1)
         pass  # O(1)
 
 
-def nudge_line() -> str:  # O(1)
-    """Host-neutral line asking the agent to tell the user to compact."""
+def nudge_line(tokens: int) -> str:  # O(1)
+    """Host-neutral line asking the agent to tell the user how to turn on automatic compaction."""
     return (  # O(1)
-        "Session context is stale: tell the user to run /compact when convenient, "
-        "then continue the current work."
+        f"Session context is at about {tokens // 1000}k tokens and no auto-compact window is active below that, so "
+        "this session compacts only near the model's limit. Tell the user once, in one line: run `/autocompact 400k` "
+        "(or `sl setup`, which offers the same as a setting) and superlite sessions compact and continue by "
+        "themselves. Then continue the current work."
     )
 
 
-if __name__ == "__main__":  # O(L) CLI for hooks
-    import os  # O(1)
+if __name__ == "__main__":  # O(T) CLI for hooks
     import sys  # O(1)
-    import time  # O(1)
 
     sl = sys.argv[1] if len(sys.argv) > 1 else ""  # O(1)
     if not sl:  # O(1)
-        proj = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()  # O(1)
-        sl = str(Path(proj) / ".superlite")  # O(1)
-    sid = sys.argv[2] if len(sys.argv) > 2 else None  # O(1)
-    if is_due(sl, time.time(), sid=sid):  # O(L)
-        print(nudge_line(), flush=True)  # O(1)
+        sys.exit(1)  # O(1)
+    try:  # O(1)
+        inp = json.loads(sys.stdin.read() or "{}")  # O(input)
+    except ValueError:  # O(1)
+        inp = {}  # O(1)
+    if not isinstance(inp, dict):  # O(1)
+        inp = {}  # O(1)
+    sid = inp.get("session_id") if isinstance(inp.get("session_id"), str) else None  # O(1)
+    path = inp.get("transcript_path") if isinstance(inp.get("transcript_path"), str) else ""  # O(1)
+    if (Path(sl) / _marker_name(sid)).exists():  # told already: do not read the transcript | O(1)
+        sys.exit(1)  # O(1)
+    tokens = context_tokens(path)  # O(T)
+    if is_due(sl, tokens, sid):  # O(1)
+        print(nudge_line(tokens), flush=True)  # O(1)
         mark(sl, sid)  # O(1)
         sys.exit(0)  # O(1)
     sys.exit(1)  # O(1) not due

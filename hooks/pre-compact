@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# PreCompact (auto and manual): print the summary instructions for a session that runs superlite (main or a batch lead).
+# Claude Code reads this stdout as plain instructions for the compaction summary and cuts it at 10,000 characters, so the
+# text stays short and static; the run state comes back after compaction (hooks/session-start). Never blocks: silent and
+# exit 0 with SUPERLITE_NO_AUTOCOMPACT=1, for a fleet worker, without a run, or when anything fails.
+
+if [ "${SUPERLITE_NO_AUTOCOMPACT:-}" = "1" ]; then
+  exit 0
+fi
+if [ -n "${SUPERLITE_FLEET_WORKER:-}" ] && [ "${SUPERLITE_FLEET_ROLE:-}" != lead ]; then
+  exit 0
+fi
+
+input=""
+IFS= read -r -d '' input || true
+
+. "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
+superlite_state || exit 0
+superlite_has_run || exit 0
+superlite_tools
+
+text="$("$SL_PY" "$SL_ROOT/skills/subagent-driven-development/scripts/compact_text.py" instructions 2>/dev/null)" || exit 0
+[ -n "$text" ] || exit 0
+printf '%s\n' "$text"
+exit 0

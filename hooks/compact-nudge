@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# UserPromptSubmit nudge: when a superlite session is due for compact, emit an additionalContext line asking the
-# agent to tell the user to run /compact. The CLI stamps last-compact after printing, so it shows once per window.
-# Silent when SUPERLITE_NO_AUTOCOMPACT=1, when there is no state folder, or when not due. Exit 0 always (fail open).
+# UserPromptSubmit hint: when the main conversation of a session with a run grew past 500k tokens, no auto-compact
+# window is active (with one, Claude Code would have compacted already), so emit an additionalContext line asking the
+# agent to tell the user how to set one (`/autocompact 400k` or `sl setup`). compact_due.py reads the size from the
+# transcript's tail and marks the session, so the hint shows once per session.
+# Silent when SUPERLITE_NO_AUTOCOMPACT=1, for a fleet worker or lead (no user reads there), without a run, or when not
+# due. Exit 0 always (fail open).
 
 if [ "${SUPERLITE_NO_AUTOCOMPACT:-}" = "1" ]; then
+  exit 0
+fi
+if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then
   exit 0
 fi
 
@@ -12,27 +18,10 @@ IFS= read -r -d '' input || true
 
 . "${BASH_SOURCE[0]%/*}/superlite-state.sh" 2>/dev/null || exit 0
 superlite_state || exit 0
-sl_dir="$SL_SD"
-[ -n "$sl_dir" ] && [ -d "$sl_dir" ] || exit 0
+superlite_has_run || exit 0
+superlite_tools
 
-root="${CLAUDE_PLUGIN_ROOT:-}"
-if [ -z "$root" ]; then
-  self="${BASH_SOURCE[0]//\\//}"
-  case "$self" in /*|?:/*) ;; *) self="${PWD//\\//}/$self" ;; esac
-  root="${self%/hooks/*}"
-fi
-root="${root//\\//}"
-py="${SUPERLITE_PYTHON:-}"
-if [ -z "$py" ]; then
-  if command -v python >/dev/null 2>&1; then py=python; else py=python3; fi
-fi
-script="$root/skills/subagent-driven-development/scripts/compact_due.py"
-
-sid=""
-re='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'
-[[ $input =~ $re ]] && sid="${BASH_REMATCH[1]}"
-
-line="$("$py" "$script" "$sl_dir" "$sid" 2>/dev/null)" || exit 0
+line="$(printf '%s' "$input" | "$SL_PY" "$SL_ROOT/skills/subagent-driven-development/scripts/compact_due.py" "$SL_SD" 2>/dev/null)" || exit 0
 [ -n "$line" ] || exit 0
 
 esc="$line"

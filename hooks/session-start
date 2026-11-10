@@ -39,13 +39,8 @@ if [ -n "$sid" ] && [[ $input =~ $re_clear ]] && [[ ${CLAUDE_PID:-} =~ ^[0-9]+$ 
   fi  # O(1)
 fi  # O(1)
 
-# After /compact the nudge window restarts: touch last-compact.<sid> in the session's state folder, only if it exists.
+# A compaction (manual, automatic or idle): the continuation text is added to the context further down.
 re_compact='"source"[[:space:]]*:[[:space:]]*"compact"'  # O(1)
-if [ -n "$sid" ] && [[ $input =~ $re_compact ]] && . "${0%/*}/superlite-state.sh" 2>/dev/null; then  # O(input)
-  if superlite_state 2>/dev/null && [ -n "$SL_SD" ] && [ -d "$SL_SD" ]; then  # O(1)
-    : > "$SL_SD/last-compact.$sid" 2>/dev/null || true  # O(1)
-  fi  # O(1)
-fi  # O(1)
 
 # A new session (startup or /clear) ends any inline-flow marker (#148); /compact keeps it.
 re_new='"source"[[:space:]]*:[[:space:]]*"(startup|clear)"'  # O(1)
@@ -109,6 +104,20 @@ if [ -f "$root/package.json" ]; then  # O(1)
 fi  # O(1)
 content="${content}"$'
 '"superlite ${version} at ${root}: run its tools as ${root}/skills/subagent-driven-development/scripts/sl <tool>; never search for another copy."  # O(s)
+
+# After a compaction a session with a run (main or a batch lead; a worker left above) is told how to go on and shown the
+# run state (compact_text.py: `sl status` lines, capped). Off with SUPERLITE_NO_AUTOCOMPACT=1; any failure adds nothing.
+if [[ $input =~ $re_compact ]] && [ "${SUPERLITE_NO_AUTOCOMPACT:-}" != 1 ] && . "${0%/*}/superlite-state.sh" 2>/dev/null; then  # O(input)
+  if superlite_state 2>/dev/null && superlite_has_run; then  # O(1)
+    superlite_tools  # O(1)
+    more=$("$SL_PY" "$SL_ROOT/skills/subagent-driven-development/scripts/compact_text.py" continuation "$SL_SD" 2>/dev/null) || more=""  # O(state) + one process
+    if [ -n "$more" ]; then  # O(1)
+      content="${content}"$'
+
+'"${more}"  # O(s)
+    fi  # O(1)
+  fi  # O(1)
+fi  # O(1)
 
 escaped=$(escape_for_json "$content")  # O(s) + subshell
 lead_note=""  # O(1)

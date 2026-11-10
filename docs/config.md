@@ -13,6 +13,8 @@ In `skills/subagent-driven-development/config/`:
 ## Environment
 
 - `CLAUDE_CODE_FORK_SUBAGENT=0` (settings `env`): turns off Claude Code's per-agent status summaries, which ask each background agent's model every 30 s for a status line, sending the agent's transcript, or a few hundred characters of notes when the server serves the short mode, and are invisible to `metrics.jsonl`. `/superlite:setup` offers it; `budget:` prints `SUMMARIES ON` without it. See the README's Configuration section.
+- `autoCompactWindow` (user settings, e.g. `400000`; `sl setup` offers it): the context size at which Claude Code compacts by itself. Models with a 1M window otherwise compact only near their limit (about 967k tokens). `/autocompact 400k` saves the same for the current model, `claude --autocompact 400k` sets it for one launch. Around each compaction superlite's hooks supply the summary instructions and the continuation text ([hooks](hooks.md)).
+- `SUPERLITE_NO_AUTOCOMPACT=1`: turns off superlite's part in compaction: the summary instructions (`pre-compact`), the continuation text after a compaction (`session-start`) and the hint to set a window (`compact-nudge`). Claude Code's own compaction is not affected.
 - `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h`: the implementer's cache TTL, also set by its frontmatter.
 - `SUPERLITE_HERDR_BIN`: the `herdr` binary for fleet mode; default `herdr` on PATH.
 - `SUPERLITE_CLAUDE_PROFILE_BIN`: the `claude-profile` binary used to read account usage; default `claude-profile` on PATH. Missing means the first allowed account is used; account names then cannot be resolved to a config dir, so pass config dir paths instead.

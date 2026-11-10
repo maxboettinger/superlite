@@ -48,10 +48,65 @@ def test_empty_folder(tmp_path):
     assert "Project state: empty folder" in run_hook(tmp_path)
 
 
-def test_compact_source_touches_session_stamp(tmp_path):
+def test_compact_source_writes_no_stamp(tmp_path):
     stdin = json.dumps({"session_id": "s1", "source": "compact"})
     run_hook(tmp_path, stdin)
     assert not (tmp_path / ".superlite").exists()
     (tmp_path / ".superlite").mkdir()
     run_hook(tmp_path, stdin)
-    assert (tmp_path / ".superlite" / "last-compact.s1").is_file()
+    assert list((tmp_path / ".superlite").iterdir()) == []   # the 30-minute nudge and its stamp are gone
+
+
+MODE_FILE = "orchestrator" + ".json"
+COMPACT = json.dumps({"session_id": "s1", "source": "compact"})
+
+
+def _run_dir(tmp_path):
+    (tmp_path / ".superlite").mkdir()
+    (tmp_path / ".superlite" / MODE_FILE).write_text(
+        json.dumps({"mode": "ai", "time": "2026-11-10T10:00:00", "by": "user"}), encoding="utf-8")
+
+
+def test_compact_source_adds_continuation_and_state_for_a_run(tmp_path):
+    _run_dir(tmp_path)
+    ctx = run_hook(tmp_path, COMPACT)
+    assert "compacted automatically" in ctx
+    assert "orchestrator: AI" in ctx
+    skill = (ROOT / "skills" / "using-superlite" / "SKILL.md").read_text(encoding="utf-8")
+    assert skill.replace("\r", "").rstrip("\n") in ctx          # the bootstrap text stays
+    assert ctx.index("compacted automatically") > ctx.index("Project state:")   # and comes first
+
+
+def test_compact_source_without_a_run_adds_nothing(tmp_path):
+    (tmp_path / ".superlite").mkdir()
+    assert "compacted automatically" not in run_hook(tmp_path, COMPACT)
+
+
+def test_startup_and_clear_get_no_continuation(tmp_path):
+    _run_dir(tmp_path)
+    for source in ("startup", "clear"):
+        ctx = run_hook(tmp_path, json.dumps({"session_id": "s1", "source": source}))
+        assert "compacted automatically" not in ctx
+
+
+def test_compact_continuation_respects_opt_out(tmp_path):
+    _run_dir(tmp_path)
+    assert "compacted automatically" not in run_hook(tmp_path, COMPACT, SUPERLITE_NO_AUTOCOMPACT="1")
+
+
+def test_compact_worker_keeps_its_short_note(tmp_path):
+    _run_dir(tmp_path)
+    ctx = run_hook(tmp_path, COMPACT, SUPERLITE_FLEET_WORKER="W2", SUPERLITE_FLEET_ROLE="implementer")
+    assert ctx.startswith("You are superlite fleet worker W2") and "compacted automatically" not in ctx
+
+
+def test_compact_batch_lead_gets_the_continuation(tmp_path):
+    _run_dir(tmp_path)
+    ctx = run_hook(tmp_path, COMPACT, SUPERLITE_FLEET_WORKER="W4", SUPERLITE_FLEET_ROLE="lead")
+    assert ctx.startswith("You are superlite batch lead W4") and "compacted automatically" in ctx
+
+
+def test_compact_continuation_survives_a_missing_python(tmp_path):
+    _run_dir(tmp_path)
+    ctx = run_hook(tmp_path, COMPACT, SUPERLITE_PYTHON=str(tmp_path / "no-such-python"))
+    assert "Project state:" in ctx and "compacted automatically" not in ctx

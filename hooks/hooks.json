@@ -88,6 +88,17 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact\"",
+            "shell": "bash"
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [
