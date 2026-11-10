@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -18,6 +18,8 @@ MAX_BATCHES = 7  # O(1)
 ISSUE_LIMIT = 200  # O(1)
 ROUTED = ("start", "wait", "answer")  # O(1)
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-[1-9][0-9]*$")  # O(1)
+GH_RE = re.compile(r"^#?[1-9][0-9]*$")  # O(1)
+CAP_RE = re.compile(r"^not (?:planned \(cap\)|triaged \(\d+ cap\))$")  # O(1)
 ACLI_TIMEOUT = 300  # O(1)
 BLOCKS = ("paragraph", "heading", "codeBlock", "blockquote", "listItem", "tableRow", "panel", "rule")  # O(1)
 MAX_DEPTH = 100  # O(1)
@@ -132,6 +134,72 @@ def jira_keys(text: str) -> list:
     return keys  # O(1)
 
 
+def pin_list(text: str) -> tuple:
+    """--issues list: (False, [GitHub numbers]) or (True, [Jira keys]); the first item picks the source."""
+    items = [x for x in re.split(r"[,\s]+", text or "") if x]  # O(len)
+    if not items:  # O(1)
+        return False, []  # O(1)
+    if GH_RE.fullmatch(items[0]):  # O(1)
+        nums: list = []  # O(1)
+        for item in items:  # O(len)
+            if not GH_RE.fullmatch(item):  # O(1)
+                raise ValueError(f"not a GitHub issue number: {item}")  # O(1)
+            if int(item.lstrip("#")) not in nums:  # O(nums)
+                nums.append(int(item.lstrip("#")))  # O(1)
+        return False, nums  # O(1)
+    if KEY_RE.fullmatch(items[0].upper()):  # O(1)
+        return True, jira_keys(text)  # O(len)
+    raise ValueError(f"not a GitHub issue number or Jira key: {items[0]}")  # O(1)
+
+
+def pinned_issues(issues: list, nums: list) -> list:
+    """The fetched issues of nums, in nums order; a number not among them raises."""
+    by = {i["number"]: i for i in issues}  # O(i)
+    for n in nums:  # O(nums)
+        if n not in by:  # O(1)
+            raise RuntimeError(f"GitHub issue #{n} not found among the open issues")  # O(1)
+    return [by[n] for n in nums]  # O(nums)
+
+
+def carry_rounds(outside) -> dict:
+    """{number: rounds} of the issues an earlier cap left out."""
+    out: dict = {}  # O(1)
+    for o in outside if isinstance(outside, list) else []:  # O(outside)
+        if not isinstance(o, dict) or not isinstance(o.get("reason"), str) or not CAP_RE.fullmatch(o["reason"]):  # O(1)
+            continue  # O(1)
+        n = o.get("number")  # O(1)
+        if isinstance(n, bool) or not isinstance(n, (int, str)):  # O(1)
+            continue  # O(1)
+        r = o.get("rounds")  # O(1)
+        out[n] = r if isinstance(r, int) and not isinstance(r, bool) and r >= 1 else 1  # O(1)
+    return out  # O(1)
+
+
+def carry_line(trusted: list, carry: dict):
+    """One brief line naming the carried issues in trusted order, or None."""
+    parts = []  # O(1)
+    for t in trusted:  # O(i)
+        n = t["number"]  # O(1)
+        if n in carry:  # O(1)
+            parts.append(f"{n if isinstance(n, str) else '#' + str(n)} ({carry[n]} round{'' if carry[n] == 1 else 's'})")  # O(1)
+    if not parts:  # O(1)
+        return None  # O(1)
+    return ("Carry-over: the batch cap left these issues out of earlier plan rounds: " + ", ".join(parts)  # O(i)
+            + ". Plan them before the other issues, unless one is an umbrella or tracking issue.")  # O(1)
+
+
+def insert_line(text: str, line) -> str:
+    """text with line before its first Rules: line, else after the last line."""
+    if not line:  # O(1)
+        return text  # O(1)
+    lines = text.split("\n")  # O(len)
+    if lines and lines[-1] == "":  # O(1)
+        lines.pop()  # O(1)
+    at = next((k for k, x in enumerate(lines) if x.startswith("Rules:")), len(lines))  # O(len)
+    lines.insert(at, line)  # O(len)
+    return "\n".join(lines) + "\n"  # O(len)
+
+
 def jira_issues(jql, keys) -> list:
     if keys:  # O(1)
         jql = "key in (" + ", ".join(keys) + ")"  # O(keys)
@@ -201,7 +269,7 @@ def _author(i: dict) -> str:
     return (a.get("login", "") if isinstance(a, dict) else str(a or ""))  # O(1)
 
 
-def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int):
+def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None):
     """Run the triage worker; returns (proposal, None) or (None, error line list)."""
     import backlog_brief  # O(1)
     import fleet  # O(1)
@@ -209,7 +277,7 @@ def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_m
     import fleet_state  # O(1)
     brief = sd / "briefs" / "triage.md"
     brief.parent.mkdir(parents=True, exist_ok=True)
-    brief.write_text(backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": MAX_BATCHES}))  # O(i)
+    brief.write_text(insert_line(backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": MAX_BATCHES}), carry))  # O(i)
     if not fleet_state.is_on(sd):  # O(w)
         fleet.main(["on", "--plan", str(sd)])
     w = fleet.spawn(sd, sd, tier, root, role="research")
@@ -266,6 +334,14 @@ def open_refusal(open_: list, busy: list) -> str:
     return head + (BUSY_HINT if busy else RESET_HINT)  # O(1)
 
 
+def _left_out(n, title: str, why: str, carry: dict) -> dict:
+    """An outside[] entry for a left-out issue; a cap entry seen before counts its rounds."""
+    e = {"number": n, "title": title, "reason": why}  # O(1)
+    if CAP_RE.fullmatch(why) and carry.get(n, 0) + 1 >= 2:  # O(1)
+        e["rounds"] = carry.get(n, 0) + 1  # O(1)
+    return e  # O(1)
+
+
 def cmd_plan(a) -> int:
     import backlog_checks as bc  # O(1)
     import backlog_state as bs  # O(1)
@@ -284,16 +360,21 @@ def cmd_plan(a) -> int:
         if perr:
             print(perr)
             return 2
-    jql, keys = getattr(a, "jql", None), None
+    jql, keys, pin, pin_jira = getattr(a, "jql", None), None, None, False  # O(1)
     if getattr(a, "issues", None) is not None:
         try:
-            keys = jira_keys(a.issues)
+            pin_jira, pin = pin_list(a.issues)  # O(len)
         except ValueError as e:
             print(f"BLOCKED: --issues: {e}")
             return 2
-        if not keys:
+        if not pin:
             print("BLOCKED: --issues is empty")
             return 2
+        for n in pin:  # O(pin * skipped)
+            if n in d["skipped"]:  # O(skipped)
+                print(f"BLOCKED: --issues: {'#' + str(n) if isinstance(n, int) else n} is skipped")  # O(1)
+                return 2  # O(1)
+        keys = pin if pin_jira else None  # O(1)
     if jql is not None and not jql.strip():
         print("BLOCKED: --jql is empty")
         return 2
@@ -303,6 +384,14 @@ def cmd_plan(a) -> int:
         issues = jira_issues(jql, keys)
     else:
         issues = _gh(["api", "--paginate", "repos/{owner}/{repo}/issues?state=open&per_page=100", "--jq", ISSUES_JQ])
+        if pin is not None:  # O(1)
+            try:  # O(1)
+                issues = pinned_issues(issues, pin)  # O(i)
+            except RuntimeError as e:  # O(1)
+                print(f"BLOCKED: {e}")  # O(1)
+                return 3  # O(1)
+    carry = carry_rounds(d["outside"])  # O(outside)
+    issues = sorted(issues, key=lambda i: -carry.get(i["number"], 0))  # O(i log i)
     rest = issues[ISSUE_LIMIT:]
     issues = issues[:ISSUE_LIMIT]
     admitted, skipped = set(d["admitted"]), set(d["skipped"])
@@ -317,7 +406,7 @@ def cmd_plan(a) -> int:
         else:
             outside.append({"number": n, "title": i.get("title", ""), "author": _author(i)})
     if proposal is None:
-        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min)
+        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, *[x for x in [carry_line(trusted, carry)] if x])  # O(i)
         if err:
             print("\n".join(err))
             return 3
@@ -346,8 +435,8 @@ def cmd_plan(a) -> int:
             b["issues"] = [back[n] for n in b["issues"]]
     planned = {n for b in batches for n in b["issues"]}
     why_out = "not planned (cap)" if len(prop["batches"]) >= MAX_BATCHES else "not planned (triage)"
-    outside += [{"number": t["number"], "title": t["title"], "reason": why_out} for t in trusted if t["number"] not in planned]  # O(i)
-    outside += [{"number": i["number"], "title": i.get("title", ""), "reason": f"not triaged ({ISSUE_LIMIT} cap)"}
+    outside += [_left_out(t["number"], t["title"], why_out, carry) for t in trusted if t["number"] not in planned]  # O(i)
+    outside += [_left_out(i["number"], i.get("title", ""), f"not triaged ({ISSUE_LIMIT} cap)", carry)
                 for i in rest if i["number"] not in skipped]  # O(i)
     shown = {}
 
@@ -358,7 +447,8 @@ def cmd_plan(a) -> int:
         data["batches"] = [b for b in data["batches"] if b["state"] == "shipped"]
         data["repo"] = info["nameWithOwner"]
         data["titles"] = {str(t["number"]): t["title"] for t in trusted}
-        data["outside"] = outside
+        data["outside"] = outside + ([o for o in data["outside"] if isinstance(o, dict) and isinstance(o.get("number"), (int, str))
+                                     and o["number"] not in pin and isinstance(o["number"], str) == pin_jira] if pin else [])  # O(outside * pin)
         data["approved_ship"] = None
         new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
         data["batches"] += new  # O(b)
@@ -486,7 +576,7 @@ def main(argv=None) -> int:
     pl.add_argument("--proposal", metavar="FILE")
     src = pl.add_mutually_exclusive_group()
     src.add_argument("--jql", metavar="QUERY")
-    src.add_argument("--issues", metavar="KEYS")
+    src.add_argument("--issues", metavar="LIST", help="pin the plan to these issues: GitHub numbers (362,#433) or Jira keys (PIX-1,PIX-2); the first item picks the source")  # O(1)
     pl.set_defaults(fn=cmd_plan)
     de = sub.add_parser("decide")
     de.add_argument("--print", action="store_true")
