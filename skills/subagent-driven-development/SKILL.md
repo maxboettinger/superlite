@@ -15,7 +15,7 @@ Shorthand: `SUPERLITE` = plugin root, two levels above this skill's "Base direct
 
 ## Setup
 
-- Run root: a worktree (`"$SL" worktree ensure <topic>`; plan header `**Worktree:** none`: in place, branch `superlite/<topic>` off the default branch). Write the start SHA to `.superlite/progress.md` (`- start <sha>`). `commit_task` excludes `.superlite/` in `.git/info/exclude` itself.
+- Run root: a worktree (`"$SL" worktree ensure <topic>`; plan header `**Worktree:** none`: in place, branch `superlite/<topic>` off the default branch). Write the start SHA to `.superlite/progress.md` (`- start <sha>`). `commit_task` excludes `.superlite/` in `.git/info/exclude` itself. Resuming another session's run: `"$SL" orchestrator takeover --plan $PLAN` first.
 - Wave 0 is not yours: `lint --stable` builds `.superlite/briefs/wave0.md` and prints `START FIRST:` with the Agent line for `superlite:implementer-haiku` (T0; `wave0 --plan $PLAN` reprints). Send it first; stub owners wait (`WAIT FOR T0:`) for `commit_task T0`. `Ruling: skip T0` or `**Wave0:** none` mutes it. Then `"$SL" plan_tools adapter --plan $PLAN`.
 
 Fleet mode (user asks): `"$SL" fleet on` before the first dispatch, then `fleet.md`: every role a worker, never in-process; missing or BLOCKED: report BLOCKED.
@@ -30,7 +30,7 @@ Order: plan -> `"$SL" plan_tools prune --plan $PLAN` -> `"$SL" plan_tools lint -
 
 Each dispatch round, run the `THEN LOG` line lint prints (appends `unblocked:` to `.superlite/progress.md`). `finish` checks it against `lint-log.jsonl`.
 
-Dispatched tasks are frozen: keep blocks byte-identical, else lint says `FROZEN:` (restore; a real change is a follow-up). `MISSED TARGET:` warns: split or stub those tasks, or `Ruling: accept predicted <N> min - <why sequential> - <cost>`.
+Dispatched tasks are frozen: keep blocks byte-identical, else lint says `FROZEN:` (restore them). `MISSED TARGET:` warns: split or stub those tasks, or `Ruling: accept predicted <N> min - <why sequential> - <cost>`.
 
 ## The scheduling loop
 
@@ -93,7 +93,7 @@ flowchart TB
 
 ## Measure and budget
 
-`lint` and `dispatch` print `budget:` lines (`**Budget-usd:**`: cap). At `WARN` finish in-flight work; at `OVER CAP` no extra review rounds, no fix rounds beyond the first, then `commit_task` and finish. `LATE:` names the task to unblock first.
+`lint` and `dispatch` print `budget:` lines (`**Budget-usd:**`: cap). At `WARN` finish in-flight work; at `OVER CAP` no extra review rounds, no fix rounds beyond the first, then `commit_task` and finish.
 
 ## Freeze, rulings, finish
 
@@ -101,7 +101,7 @@ Green: freeze. Archive `incidents.jsonl`, `progress.md` by the plan. Run `"$SL" 
 
 ## Stop conditions
 
-Ask only for: an irreversible or destructive operation; a security-sensitive action; an outward side effect (merge, push, publish); a plan so broken all paths are guesses.
+Ask only for an irreversible, destructive, security-sensitive or outward step (merge, push, publish), or a plan so broken all paths are guesses.
 
 **AI orchestrator** (`sl orchestrator status`; also user away, "decide yourself"): never end your turn to wait. Take the safe path: defer outward or destructive actions, read a broken plan conservatively, record the ruling, list what you deferred. **Human orchestrator**: nothing is built, dispatched or written but the review plan before the human's approving reply; ask in plain text, end the turn, then `"$SL" orchestrator approve --review PATH` and the machine plan; `lint --stable`, `dispatch`, `wave0`, `build_prime` refuse before (`orchestrator.md`).
 
