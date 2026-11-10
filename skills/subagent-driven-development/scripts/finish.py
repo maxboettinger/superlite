@@ -22,6 +22,8 @@ import json  # O(1)
 from datetime import datetime, timedelta  # O(1)
 import re  # O(1)
 import sys  # O(1)
+import time  # O(1)
+from collections import Counter  # O(1)
 from pathlib import Path  # O(1)
 
 DEFAULT_LEDGER = ".superlite/progress.md"  # O(1)
@@ -327,6 +329,58 @@ def checkpoint_note(ledger):  # O(files) + git spawns; [] unless this run took h
             "to discard the checkpoints: `sl autocommit clean`"]
 
 
+def _ended(d):  # O(1) a summary's end time (started + seconds); None when it has none
+    st, sec = d.get("started"), d.get("seconds")  # O(1)
+    if any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in (st, sec)):  # O(1)
+        return None  # O(1)
+    return st + sec  # O(1)
+
+
+def _fail_ids(d):  # O(F)
+    return {str(x).split(": ", 1)[0] for x in d.get("failures") or []}  # O(F)
+
+
+def packet_lines(sl_dir):  # O(S*F + F log F)
+    """Say so when the review packet predates a full run that changed the test results (#416); [] otherwise."""
+    try:  # O(1)
+        mtime = (Path(sl_dir) / "review-packet.md").stat().st_mtime  # O(1)
+        runs = [(e, d) for d in load_run_summaries(sl_dir) if isinstance(d, dict) and (e := _ended(d)) is not None]  # O(S)
+        full = [(e, d) for e, d in runs if d.get("mode") == "full" and not d.get("recorded") and e > mtime]  # O(S)
+        if not full:  # O(1)
+            return []  # O(1)
+        end, last = max(full, key=lambda x: x[0])  # O(S)
+        before = [(e, d) for e, d in runs if e <= mtime]  # O(S)
+        old = _fail_ids(max(before, key=lambda x: x[0])[1]) if before else set()  # O(S + F)
+        new = _fail_ids(last)  # O(F)
+        green, red = sorted(old - new), sorted(new - old)  # O(F log F)
+        if not green and not red:  # O(1)
+            return []  # O(1)
+        clock = lambda t: time.strftime("%H:%M:%S", time.localtime(t))  # O(1)
+        changes = [f"- green since the packet: {i}" for i in green] + [f"- red since the packet: {i}" for i in red]  # O(F)
+        out = [f"review packet: older than the last full run (packet {clock(mtime)}, full run done {clock(end)}: "  # O(1)
+               f"{last.get('passed')} passed, {last.get('failed')} failed); rebuild it with `sl plan_tools packet` before trusting its test findings"]
+        out += changes[:5]  # O(1)
+        if len(changes) > 5:  # O(1)
+            out.append(f"- (+{len(changes) - 5} more)")  # O(1)
+        return out  # O(1)
+    except (OSError, TypeError, ValueError, AttributeError):  # O(1)
+        return []  # O(1)
+
+
+def bulk_close_line(incidents):  # O(I)
+    """The `sl incident resolve --kind K` offer with the open kinds and agents, one per (file, line); None for none."""
+    last = {(e["file"], e["line"]): e for e in incidents}  # O(I)
+    if not last:  # O(1)
+        return None  # O(1)
+    kinds = Counter(e.get("kind") or "unknown" for e in last.values())  # O(I)
+    tools = Counter(t for e in last.values() if (t := e.get("agent") or e.get("tool")))  # O(I)
+    parts = ["open by kind: " + ", ".join(f"{k}={n}" for k, n in sorted(kinds.items()))]  # O(k log k)
+    if tools:  # O(1)
+        parts.append("by agent: " + ", ".join(f"{k}={n}" for k, n in sorted(tools.items())))  # O(t log t)
+    return ("- close all of one kind or tool: sl incident resolve --kind K --reason \"TEXT\" "  # O(1)
+            f"({'; '.join(parts)})")
+
+
 def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # O(R*w + I*w + C + G)
     rulings, commits, tests = read_ledger(ledger)  # O(R*w)
     incidents = open_incidents(log, load_run_summaries(sl_dir or Path(ledger).parent))  # O(I*w + I*S*F)
@@ -352,6 +406,7 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
         out.append(f"tests ({mode}): {p} passed, {f} failed, {s} skipped in {sec}s")  # O(1)
     else:  # O(1)
         out.append("tests: none recorded")  # O(1)
+    out += packet_lines(sl_dir or Path(ledger).parent)  # O(S*F)
     out.append("")  # O(1)
     out.append(unblocked_report(ledger, lint_log))  # see unblocked_report
     out.append("")  # O(1)
@@ -388,6 +443,7 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     out += group_incidents(incidents)  # O(I + G log G)
     if incidents:  # the close form for one an obsolete or fixed one (#116) | O(1)
         out.append("- close one: sl incident resolve --file F --line N --ruling \"TEXT\" (file and line as listed)")  # O(1)
+        out.append(bulk_close_line(incidents))  # O(I)
     return "\n".join(out) + "\n"  # O(R + C + G + I) join
 
 
