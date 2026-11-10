@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506)."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506)."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -17,7 +17,7 @@ from pathlib import Path  # O(1)
 TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")  # O(1)
 MAX_BATCHES = 7  # O(1)
 ISSUE_LIMIT = 200  # O(1)
-ROUTED = ("start", "wait", "answer")  # O(1)
+ROUTED = ("start", "wait", "answer", "tell")  # O(1)
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-[1-9][0-9]*$")  # O(1)
 GH_RE = re.compile(r"^#?[1-9][0-9]*$")  # O(1)
 CAP_RE = re.compile(r"^not (?:planned \(cap\)|triaged \(\d+ cap\))$")  # O(1)
@@ -561,6 +561,23 @@ def cmd_decide(a) -> int:
     root = _root()
     p = bs.path(root)
     d = bs.load(p)
+    if a.approve_ship:
+        if a.source is None:
+            print("BLOCKED: --approve-ship needs --source prompt")
+            return 2
+        res = {}
+
+        def approve(data):
+            try:
+                res["msg"] = bs.approve_ship(data, a.source, _now())
+            except ValueError as e:
+                res["err"] = str(e)
+        bs.update(p, approve)
+        if "err" in res:
+            print(f"refused: {res['err']}")
+            return 2
+        print(res["msg"])
+        return 0
     if a.print:
         if not a.batch:
             print(json.dumps({"questions": bs.open_questions(d)}, indent=2))
@@ -584,16 +601,21 @@ def cmd_decide(a) -> int:
         print("BLOCKED: decide needs --print or --file")
         return 2
     try:
-        answers = json.loads(Path(a.file).read_text())["answers"]
+        obj = json.loads(Path(a.file).read_text())
+        answers = obj["answers"]
         assert isinstance(answers, dict)
     except (OSError, ValueError, KeyError, AssertionError):
         print(f"BLOCKED: {a.file} is not {{\"answers\": {{question: answer}}}}")
+        return 2
+    by, err = bc.answer_by(obj, answers)
+    if err:
+        print(f"BLOCKED: {err}")
         return 2
     res = {}
 
     def apply(data):
         c = copy.deepcopy(data)
-        errs = bs.answer(c, answers, "AskUserQuestion", _now())
+        errs = bs.answer(c, answers, by, _now())
         res["errs"] = errs
         if not errs:
             data.clear()
@@ -603,7 +625,8 @@ def cmd_decide(a) -> int:
     if res["errs"]:
         print("\n".join(res["errs"]))
         return 2
-    print(f"recorded {len(answers)} answers, {res['open']} open")
+    ruled = sum(1 for v in by.values() if v == "main")
+    print(f"recorded {len(answers)} answers" + (f" ({ruled} ruled by main)" if ruled else "") + f", {res['open']} open")
     return 0
 
 
@@ -642,7 +665,7 @@ def _start(argv: list) -> int:
         if text:  # O(1)
             for b in bs.load(p)["batches"]:  # O(b)
                 if b["state"] in bs.ACTIVE and b.get("lead"):  # O(1)
-                    print(f"note: {b['id']} lead {b['lead']} started before this note; sl fleet send {b['lead']} --text \"$(cat {shlex.quote(src)})\" tells it")  # O(1)
+                    print(f"note: {b['id']} lead {b['lead']} started before this note; sl backlog tell {b['id']} --text \"$(cat {shlex.quote(src)})\" tells it")  # O(1)
     data = bs.load(p)  # O(1)
     nt = data.get("note")  # O(1)
     backlog_brief.STANDING = {"note": nt["text"] if isinstance(nt, dict) and isinstance(nt.get("text"), str) else "", "owned": open_batches(data)}  # O(b)
@@ -749,6 +772,8 @@ def main(argv=None) -> int:
     de.add_argument("--print", action="store_true")
     de.add_argument("--batch")
     de.add_argument("--file")
+    de.add_argument("--approve-ship", action="store_true", help="record a ship approval the user's prompt gave (needs --source prompt)")
+    de.add_argument("--source")
     de.set_defaults(fn=cmd_decide)
     sk = sub.add_parser("skip")
     sk.add_argument("issue", type=_issue_arg)
