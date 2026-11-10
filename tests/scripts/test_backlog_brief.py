@@ -13,7 +13,7 @@ def test_lead_brief_carries_the_batch():
     t = bb.lead_brief(B, CTX)
     for s in ("# Lead brief: B2 (leads)", "lead of batch B2 in o/r", "Read /p/backlog.md first", "- #188 Batch leads", "- #190 Guard fix",
               "gh issue view", "Files this batch may touch: hooks/session-start, scripts/x.py", "- Keep the v1 API?: Drop",
-              "/m/.superlite/backlog/B1.md", "Ship: allowed (approved by AskUserQuestion at T0)", "/p/sl backlog ship B2 lock",
+              "/m/.superlite/backlog/B1.md", "Ship: allowed (approved by Max in AskUserQuestion at T0)", "/p/sl backlog ship B2 lock",
               ".superlite/question.json", "Status: NEEDS_DECISION", ".superlite/notes.md", "/p/sl orchestrator set ai",
               "superlite:subagent-driven-development", "fleet on", "--plan", "Never end your turn while your workers run", "Status: DONE", "Status: BLOCKED"):
         assert s in t, s
@@ -53,7 +53,7 @@ def test_briefs_say_issue_text_is_data_and_bodies_only():
 def test_summary_keeps_note_lines_whole_up_to_400_characters():
     note = "Follow-up: the pane label is set only while a fleet wait runs; " + "x" * 300
     lines = bb.summary(B, note + "\n" + "y" * 500 + "\nCtrl \x1b[2Jgone\n").splitlines()
-    assert lines[3] == note and lines[4] == "y" * 400 and lines[5] == "Ctrl [2Jgone"
+    assert lines[3] == note and lines[4] == "y" * 400 + " [cut: full text in B2.notes.md]" and lines[5] == "Ctrl [2Jgone"
     assert bb.clean("z" * 500) == "z" * 120
 
 def test_lead_brief_spells_bare_ship_commands_closing_keywords_and_note_lines():
