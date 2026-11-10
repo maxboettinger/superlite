@@ -1573,19 +1573,25 @@ def _py_owned(t: Task, roots: list[str]) -> list[str]:  # O(o*s) | modules of th
     return out  # O(o)
 
 
-def _py_declared(root: Path, roots: list[str], ty: str) -> list[str]:  # O(files*s) | modules with a top-level `class ty` under root/<pkg> and root/src/<pkg>
-    out = []  # O(1)
-    rx = re.compile(rf"^class\s+{re.escape(ty)}\b", re.M)  # O(s)
+def _py_classes(root: Path, roots: list[str]) -> dict[str, list[str]]:  # O(files*s) | type -> modules with a top-level `class type` under root/<pkg> and root/src/<pkg>, one scan
+    out: dict[str, list[str]] = {}  # O(1)
+    seen: set[Path] = set()  # O(1)
     for base in (root, root / "src"):  # O(1) iterations
         for pkg in roots:  # O(roots) iterations
             d = base / pkg  # O(1)
             if not d.is_dir():  # O(1)
                 continue  # O(1)
             for f in sorted(d.rglob("*.py")):  # O(files) iterations
+                if f in seen:  # O(1)
+                    continue  # O(1)
+                seen.add(f)  # O(1)
                 m = py_module(f.relative_to(root).as_posix(), roots)  # O(s)
-                if m and m not in out and rx.search(f.read_text(encoding="utf-8", errors="replace")):  # O(size)
-                    out.append(m)  # O(1)
-    return out  # O(out)
+                if not m:  # O(1)
+                    continue  # O(1)
+                for ty in re.findall(r"^class\s+(\w+)", f.read_text(encoding="utf-8", errors="replace"), re.M):  # O(size)
+                    if m not in out.setdefault(ty, []):  # O(m)
+                        out[ty].append(m)  # O(1)
+    return out  # O(types)
 
 
 def py_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*types*mods*contracts) | a seam name declared where an import-linter contract bars the consumer's module (#404)
@@ -1601,15 +1607,17 @@ def py_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*
             tname = sig["cls"] if sig and sig["cls"] else (item if re.fullmatch(r"[A-Z]\w*", item) else None)  # O(1)
             if tname:  # O(1)
                 by_type.setdefault(tname, []).extend(owned[t.id])  # O(o)
+    pairs = _seam_pairs(plan)  # O(n*q*cands)
+    classes = _py_classes(root, roots) if pairs else {}  # O(files*s) once per run
     warns: list[str] = []  # O(1)
     seen: set[tuple[str, str, tuple[str, ...]]] = set()  # O(1)
-    for t, sig, pid, psig in _seam_pairs(plan):  # O(pairs) iterations
+    for t, sig, pid, psig in pairs:  # O(pairs) iterations
         pre = ".".join(psig["module"] or [])  # O(s)
         own = owned.get(pid, [])  # O(1)
         mine = [m for m in own if pre and (m == pre or m.endswith("." + pre))] or own  # O(o*s)
         groups = [(psig["name"], mine)]  # O(1)
         for ty in signature_types(psig):  # O(types) iterations
-            groups.append((ty, sorted(set(_py_declared(root, roots, ty)) | set(by_type.get(ty, [])))))  # O(files*s)
+            groups.append((ty, sorted(set(classes.get(ty, [])) | set(by_type.get(ty, [])))))  # O(m log m)
         for what, mods in groups:  # O(types) iterations
             for importer in owned.get(t.id, []):  # O(o) iterations
                 key = (t.id, importer, tuple(sorted(mods)))  # O(m)
@@ -1681,14 +1689,16 @@ def ts_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*
             tname = sig["cls"] if sig and sig["cls"] else (item if re.fullmatch(r"[A-Z]\w*", item) else None)  # O(1)
             if tname:  # O(1)
                 by_type.setdefault(tname, set()).update(owned[t.id])  # O(o)
-    texts: dict[str, str] = {}  # O(1)
-    for name, p in pkgs.items():  # O(P) iterations
-        chunks = []  # O(1)
-        for f in sorted(p["dir"].rglob("*")):  # O(files) iterations
-            rel = f.relative_to(p["dir"]).as_posix()  # O(d)
-            if f.suffix in TS_EXT and _ts_file(rel) and not TS_SKIP & set(f.relative_to(p["dir"]).parts) and _target_of(f, pkgs) == name:  # O(s + P*d)
-                chunks.append(f.read_text(encoding="utf-8", errors="replace"))  # O(size)
-        texts[name] = "\n".join(chunks)  # O(size)
+    chunks: dict[str, list[str]] = {}  # O(1)
+    for cur, dirs, files in os.walk(root):  # O(F) iterations, one pruned walk for every package
+        dirs[:] = sorted(d for d in dirs if d not in TS_SKIP)  # O(d log d)
+        for fn in sorted(files):  # O(files) iterations
+            f = Path(cur) / fn  # O(1)
+            if f.suffix in TS_EXT and _ts_file(f.relative_to(root).as_posix()):  # O(s)
+                name = _target_of(f, pkgs)  # O(P*d)
+                if name:  # O(1)
+                    chunks.setdefault(name, []).append(f.read_text(encoding="utf-8", errors="replace"))  # O(size)
+    texts = {name: "\n".join(c) for name, c in chunks.items()}  # O(size)
     warns: list[str] = []  # O(1)
     seen: set[tuple[str, str, tuple[str, ...]]] = set()  # O(1)
     for t, sig, pid, psig in pairs:  # O(pairs) iterations
@@ -1742,7 +1752,7 @@ def spec_gaps(spec_text: str, plan: "Plan") -> list[str]:  # O(S*(d+covers) + C)
     """Raw spec headings (levels 2-3) no task covers; a Covers entry naming a heading also covers every heading below it."""
     lines = spec_text.replace("\r\n", "\n").split("\n")  # O(S)
     flags, _ = scan_fences(lines)  # O(S)
-    plan_l = "\n".join(l for l in plan.text.lower().split("\n") if not l.startswith("**covers:**"))  # O(C) a Covers line names, it does not mention
+    plan_l = plan.text.lower()  # O(C) a plain mention, a Covers line included, covers the heading itself, never its children
     covers = [c for t in plan.tasks for c in covers_entries(t.field_text("covers"))]  # O(n*k*s)
 
     def named(num, title):  # O(covers) a Covers entry equals the title or holds the number
@@ -1978,7 +1988,6 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
             issues.append(Issue(f"spec not found: {args.spec}", scope="plan"))  # O(1)
         else:  # O(1)
             stext = sp.read_text(encoding="utf-8-sig").replace("\r\n", "\n")  # O(S) file read
-            sflags, _ = scan_fences(stext.split("\n"))  # O(S)
             for raw in spec_gaps(stext, plan):  # O(S + C) heading stack and Covers entries live in spec_gaps
                 issues.append(Issue(f"SPEC section {raw!r} has no task", scope="plan"))  # O(1)
     spec_off = False  # O(1)

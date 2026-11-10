@@ -185,3 +185,23 @@ def test_swift_388_unchanged(tmp_path):
     got = plan_tools.import_issues(plan, root)
     assert got == ["WARNING: IMPORT: T2 consumes FailedCardPreview(_ error: LakeError) from T1, but LakeError is declared in Lake, "
                    "which target AreaHealth may not import (Packages/Kit/Package.swift) dependencies: Core, Metrics, Dashboard, Charts"]
+
+
+def test_py_declarations_scanned_once(tmp_path, monkeypatch):
+    write(tmp_path / "pyproject.toml", PYPROJECT)
+    write(tmp_path / "shop/core/models.py", "class Order: ...\nclass Receipt: ...\n")
+    text = PLAN.replace("**Produces:** load(order: Order) -> Receipt", "**Produces:** load(order: Order) -> Receipt, save(order: Order) -> Receipt")
+    text = text.replace("**Consumes:** load(order: Order) -> Receipt (T1)", "**Consumes:** load(order: Order) -> Receipt (T1), save(order: Order) -> Receipt (T1)")
+    write(tmp_path / "plan.md", text.format(t1="shop/web/views.py", t2="shop/core/other.py"))
+    plan = plan_tools.Plan.load(str(tmp_path / "plan.md"))
+    reads = []
+    orig = Path.read_text
+
+    def spy(self, *a, **k):
+        if self.name == "models.py":
+            reads.append(self)
+        return orig(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", spy)
+    plan_tools.py_import_issues(plan, tmp_path)
+    assert len(reads) <= 1
