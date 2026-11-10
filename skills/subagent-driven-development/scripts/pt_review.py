@@ -20,7 +20,7 @@ also runs standalone. Stdlib only. Incidents are read straight from the JSONL fo
 Plan conventions read here (per task section `### Tn ...`):
   **Owns:** a.py, tests/test_a.py          **Consumes:** f(x) -> y (T1)
   **Produces:** pkg.mod.f(a: int, b=1) -> str  ·  Class.method(ref: str) -> list[str]
-      a default naming a constant (`tid=TID`) matches the code's default by name; any other non-literal default is not compared
+      a default naming a constant (`tid=TID`) must be a name in the code too (a literal or a call there is a mismatch); any other non-literal default is not compared
   **Probe entry:** call=pkg.mod.fn · run=python -m pkg · serve=pkg.server.create_server(Workbook())
   Data contract lines (any line, anchored at the start, bullets allowed):
       POST /api/cells {"ref":"A1"} -> 200 {cells: dict, note?: str}
@@ -493,6 +493,23 @@ def _dotted(expr: str | None) -> list[str] | None:  # O(m) total
     return parts[::-1]  # O(m)
 
 
+def _literal_or_call(src: str | None) -> bool:  # O(m) total
+    """True when a default's source is a call or a literal (`None`, `-1`, `'x'`, `re.compile('T')`)."""  # O(1)
+    if not src or not src.strip():  # O(1)
+        return False  # O(1)
+    try:  # O(m)
+        node = ast.parse(src.strip(), mode="eval").body  # O(m)
+    except SyntaxError:  # O(m)
+        return False  # O(1)
+    if isinstance(node, ast.Call):  # O(1)
+        return True  # O(1)
+    try:  # O(m)
+        ast.literal_eval(src.strip())  # O(m)
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):  # O(m)
+        return False  # O(1)
+    return True  # O(1)
+
+
 def _same_default(planned: str, real_repr: str | None, real_src: str | None = None) -> bool:  # O(m) total
     try:  # O(m)
         return repr(ast.literal_eval(planned)) == real_repr  # literal: compare values | O(m)
@@ -501,6 +518,8 @@ def _same_default(planned: str, real_repr: str | None, real_src: str | None = No
     pn, rn = _dotted(planned), _dotted(real_src)  # O(m)
     if pn and rn:  # a name against a name: compare by the last component | O(1)
         return pn[-1] == rn[-1]  # O(1)
+    if pn and _literal_or_call(real_src):  # a planned name against a literal or a call: mismatch | O(m)
+        return False  # O(1)
     return True  # not comparable: skipped | O(1)
 
 

@@ -1,4 +1,4 @@
-"""#402: a Produces default that names a module constant matches by name, else is skipped when not a literal."""
+"""#402: a Produces default that names a module constant matches by name; #432: a literal or a call in the code is a mismatch."""
 from __future__ import annotations
 
 import importlib.util
@@ -81,8 +81,8 @@ def check(root: Path, produces: str) -> tuple[list[str], int]:
     ("metrics.TID", "re.compile('x')", "TID", True),
     ("TID", "re.compile('x')", "metrics.TID", True),
     ("TID", "re.compile('x')", None, True),
-    ("TID", "re.compile('x')", "id_re()", True),
-    ("TID", "None", "None", True),
+    ("TID", "re.compile('x')", "id_re()", False),
+    ("TID", "None", "None", False),
     ("TID", "re.compile('x')", "OTHER", False),
     ("Path('.')", "PosixPath('.')", "Path('.')", True),
     ("0", "8080", "8080", False),
@@ -139,8 +139,10 @@ def test_literal_default_still_compared(tmp_path):
     assert msgs[0].endswith("parameter 'port' default is 8080, planned 0")
 
 
-def test_planned_name_for_literal_source_is_skipped(tmp_path):
-    assert check(tmp_path, "pkg.core.serve(port: int = PORT) -> None") == ([], 1)
+def test_planned_name_for_literal_source_is_a_mismatch(tmp_path):
+    msgs, _n = check(tmp_path, "pkg.core.serve(port: int = PORT) -> None")
+    assert len(msgs) == 1
+    assert msgs[0].endswith("parameter 'port' default is 8080, planned PORT")
 
 
 def test_read_real_reports_default_source(tmp_path):
