@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "skills" / "subagent-driven-development" / "script
 import fleet_report as fr  # noqa: E402
 
 RED = "tests (fast): 0 passed, 1 failed"
-GOOD = {"status": "DONE", "files": ["src/a.py"], "tests": "3 passed", "findings": [], "summary": "ok"}
+GOOD = {"status": "DONE", "files": ["src/a.py"], "tests": "3 passed", "findings": [], "summary": "ok", "concerns": []}
 
 
 def block(obj):
@@ -34,7 +34,7 @@ def test_empty_json_red_takes_the_red_run_line():
 def test_bold_bullet_line_without_json():
     assert fr.parse("Status: DONE\n- **Red run:** none - no test\n") == {
         "status": "DONE", "files": [], "tests": "", "red": "none - no test", "findings": [], "summary": "",
-        "valid": False}
+        "concerns": [], "valid": False}
 
 
 def test_last_red_run_line_counts():
