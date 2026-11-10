@@ -38,7 +38,8 @@ def test_unknown_without_match(tmp_path):
     assert "metrics" in r.stderr.split()
 
 
-def test_status_hint(tmp_path):
-    r = _sl(tmp_path, "status")
-    assert r.returncode == 2
-    assert "try: sl orchestrator status; sl metrics" in r.stderr
+def test_status_is_a_tool(tmp_path):
+    r = _sl(tmp_path, "status", "--plan", str(tmp_path / ".superlite"))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines()[0].startswith("run: ")
+    assert "unknown tool" not in r.stderr
