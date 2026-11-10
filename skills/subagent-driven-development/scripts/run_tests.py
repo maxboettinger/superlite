@@ -10,6 +10,9 @@ Every exit path leaves a summary: a usage error, an unknown task, a missing pyte
 A no-result stop keeps its command, exit and output in `.superlite/no-result-*.log` (newest 20) and its incident carries them as `target`, `command`, `exit`, `log`.
 An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change except files owned by unfinished sibling tasks (kept at base, named on the line), a `--full` tree the task's own files.
 
+An isolated tree links `.superlite/` to the project's, so a test command finds its scripts there. Before each run, every overlaid file whose bytes changed since the tree's last run gets a fresh mtime (`.superlite/trees/<task>.digests.json`), so a build tool sees the edit (#507).
+`--also F [F ...]` (needs `--task`; relative paths read from the caller's cwd) records `Ruling: Tn also commits F` in the ledger before the run, so the tree holds F and commit_task commits it; a red tree run names up to 5 changed files the tree lacks and suggests it.
+
 Prints `passed failed skipped seconds` (errors count as failed). Each failing
 test becomes a `test-failure` incident; on a --full run each test file whose
 tests all pass becomes a `verified` incident (once per distinct entry). With `--task Tn` each
@@ -51,6 +54,7 @@ Stdlib only.
 #   sk = skipped tests, I = lines in the incident log (B = its bytes), d = depth of a dotted classname,
 #   p = pytest path args, O = bytes of pytest output, c = length of an incident context, w = width of one line
 import argparse  # O(1)
+import hashlib  # O(1)
 import importlib.util  # O(1)
 import json  # O(1)
 import os  # O(1)
@@ -105,6 +109,9 @@ def project_root(start):  # O(d) stats, d = depth of start
     return None  # O(1)
 
 
+ALSO_RULING = "declared before the test run (run_tests --also)"  # the ledger text of an --also claim
+
+
 def to_root(a, argv, cwd, root):  # O(len argv + p) rewrite --fast paths against cwd, then chdir to root
     """Relative --fast paths are rewritten (in a.fast and in argv) so they stay valid from the root."""
     def fix(chunk):  # O(len chunk)
@@ -120,6 +127,17 @@ def to_root(a, argv, cwd, root):  # O(len argv + p) rewrite --fast paths against
         i = argv.index("--fast") + 1  # O(len argv)
         argv[i:i + len(a.fast)] = [fix(c) for c in a.fast]  # O(p)
         a.fast = argv[i:i + len(a.fast)]  # O(p)
+    if a.also and "--also" in argv:  # every --also chunk stays valid from the root, a trailing / kept | O(len argv)
+        in_also, fixed = False, []  # O(1)
+        for k, x in enumerate(argv):  # O(len argv) iterations
+            if x == "--also":  # O(1)
+                in_also = True  # O(1)
+            elif x.startswith("--"):  # O(1)
+                in_also = False  # O(1)
+            elif in_also:  # O(1)
+                argv[k] = x if os.path.isabs(x) else os.path.relpath(os.path.join(cwd, x), root).replace(os.sep, "/") + ("/" if x.endswith("/") else "")  # O(len)
+                fixed.append(argv[k])  # O(1)
+        a.also = fixed  # O(n)
     os.chdir(root)  # O(1)
     print(f"run_tests: running from {root}", file=sys.stderr)  # O(1)
 
@@ -635,6 +653,48 @@ def _link_dir(src, dst):  # O(d) symlink dst to src (relative); True when the li
     return True  # O(1)
 
 
+def refresh_mtimes(tree, task, paths):  # O(P * size) touch the overlaid files whose bytes changed since the last run; returns the count touched
+    tree = Path(tree)  # O(1)
+    store = tree.parent / f"{task}.digests.json"  # O(1)
+    try:  # O(1)
+        old = json.loads(store.read_text(encoding="utf-8"))  # O(size)
+        old = old if isinstance(old, dict) else {}  # O(1)
+    except (OSError, ValueError):  # O(1)
+        old = {}  # O(1)
+    new, touched = {}, 0  # O(1)
+    for p in paths:  # O(P) iterations
+        f = tree / p  # O(1)
+        if not f.is_file():  # O(1)
+            continue  # O(1)
+        try:  # O(1)
+            new[p] = hashlib.sha256(f.read_bytes()).hexdigest()  # O(size)
+            if old.get(p) != new[p]:  # new or changed: a build tool must see a newer file (#507) | O(1)
+                os.utime(f, None)  # O(1)
+                touched += 1  # O(1)
+        except OSError:  # O(1)
+            new.pop(p, None)  # O(1)
+    try:  # O(1)
+        store.write_text(json.dumps(new), encoding="utf-8")  # O(P)
+    except OSError:  # O(1)
+        pass  # O(1)
+    return touched  # O(1)
+
+
+def outside_tree(root, overlay):  # O(f * o) + two spawns: changed files of the main tree that are not in the task's tree
+    copy, delete = trees.own_changes(root, trees.base_commit(root), ["**/*"])  # O(f)
+    have = set(overlay)  # O(f)
+    return sorted((set(copy) | set(delete)) - have)  # O(f log f)
+
+
+def also_claims(a):  # O(c + k) ledger rulings for the --also files this run declares
+    for raw in a.also:  # O(k) iterations
+        f = Path(raw).as_posix() if not os.path.isabs(raw) else os.path.relpath(raw, Path.cwd()).replace(os.sep, "/") + ("/" if raw.endswith("/") else "")  # O(len)
+        if ct.also_owned(a.ledger).get(f) == a.task:  # already claimed by this task | O(c)
+            continue  # O(1)
+        ct.append_ledger(a.ledger, f"- Ruling: {a.task} also commits {f} - {a.ruling}")  # O(1)
+        print(f"run_tests: {a.task} also commits {f} (ledger ruling; commit_task {a.task} commits it)", file=sys.stderr)  # O(1)
+
+
 def package_dirs(tree):  # O(F log F) the tree's package folders (posix, sorted), outside node_modules; [] on a git error
     try:  # O(1)
         names = trees.split_z(trees.git(tree, "ls-files", "-co", "--exclude-standard", "-z"))  # O(F)
@@ -769,6 +829,8 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--timeout", type=float, default=None, help=f"--wait limit in seconds (default {DEFAULT_WAIT:.0f})")  # O(1)
     ap.add_argument("--limit", type=float, default=DEFAULT_LIMIT, help="wall-clock seconds before the test command tree is killed (default %(default)g; 0 = none)")  # O(1)
     ap.add_argument("--task", default=None, help="task id: compiled stacks run in .superlite/trees/<task> (own files only); incidents carry it and a green run closes its red ones")  # O(1)
+    ap.add_argument("--also", nargs="+", action="extend", default=[], metavar="F", help="declare files this --task commits besides its Owns, before the run (ledger ruling; needs --task)")  # O(1)
+    ap.add_argument("--ruling", default=ALSO_RULING, help=argparse.SUPPRESS)  # O(1)
     ap.add_argument("--plan", default=None, help=f"plan for --task Owns (default: the plan in .superlite/stable.json, else {nt.DEFAULT_PLAN})")  # O(1)
     ap.add_argument("--record", action="store_true", help="record a result run outside run_tests (needs --passed and --command), no test run")  # O(1)
     ap.add_argument("--passed", type=int, default=None, help="--record: tests that passed")  # O(1)
@@ -996,6 +1058,10 @@ def stable_plan():  # O(S) the plan path `plan_tools lint --stable` recorded, el
 def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     paths = [p for chunk in (a.fast or []) for p in nt.csv(chunk)]  # O(p)
     label = "fast" if paths else "full"  # O(1)
+    if a.also and not a.task:  # O(1)
+        return usage_error(a, label, "--also needs --task Tn")  # O(summary size)
+    if a.also:  # the claim is recorded before any runner or tree, so the tree below holds the file | O(c + k)
+        also_claims(a)  # O(c + k)
     if paths:  # O(1)
         try:  # O(1)
             paths = expand_fast_paths(paths)  # O(p)
@@ -1050,12 +1116,27 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                 tree = trees.prepare(".", a.task, overlay if paths else info[a.task]["owns"])  # a --full run tests the task's own files | O(f * o) + git checkout
             except (RuntimeError, OSError) as err:  # O(1)
                 return usage_error(a, label, f"isolated tree for {a.task} not prepared: {err}")  # O(summary size)
+            _link_dir(Path.cwd() / ".superlite", Path(tree) / ".superlite")  # the tree reaches the root's .superlite/ (#511) | O(d)
+            try:  # O(1)
+                overlay_now = json.loads(trees.overlay_file(".", a.task).read_text(encoding="utf-8"))  # O(f)
+            except (OSError, ValueError):  # O(1)
+                overlay_now = []  # O(1)
+            refresh_mtimes(tree, a.task, overlay_now)  # O(P * size)
             announce_tree(tree, a.task, bool(paths), held)  # O(f)
             link_node_modules(Path.cwd(), tree, spec)  # O(d)
             tree_gone = node_install_line(tree, spec)  # a tree without node_modules fails like the root | O(m + f)
             if tree_gone:  # O(1)
                 return usage_error(a, label, tree_gone)  # O(summary size)
-        return run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
+        rc = run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
+        if tree and rc == 1:  # a red tree run names the changed files the tree lacks (#517) | O(f)
+            try:  # O(1)
+                out = outside_tree(".", overlay_now)  # O(f log f)
+            except (RuntimeError, OSError):  # O(1)
+                out = []  # O(1)
+            if out:  # O(1)
+                more = f" (+{len(out) - 5} more)" if len(out) > 5 else ""  # O(1)
+                print(f"run_tests: {len(out)} changed file(s) not in {a.task}'s tree: {', '.join(out[:5])}{more}; if {a.task} needs one, rerun with --also F", file=sys.stderr)  # O(1)
+        return rc  # O(1)
 
     with tempfile.TemporaryDirectory() as tmp:  # O(1) mkdtemp
         xml_path = Path(tmp) / "junit.xml"  # O(1)
