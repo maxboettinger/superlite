@@ -7,8 +7,12 @@
 # go for it, looks good, lgtm, proceed, ship it, do it) and none of: not, don't, dont, no, wait,
 # stop, but, change, instead (case-insensitive, whole words). Only this hook writes the file.
 # Bash builtins only (each external process costs ~250 ms on Windows). Never blocks: exit 0 always.
+# stdin is bounded three ways: a terminal exits at once, the read gives up after 5 s, input is cut at 1 MiB.
 
-IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
+[ -t 0 ] && exit 0   # a terminal is never hook input
+IFS= read -r -d '' -t 5 input   # builtin; status ignored (1 at EOF, >128 on timeout)
+[ ${#input} -le 1048576 ] || input="${input:0:1048576}"
+[ -n "$input" ] || exit 0   # nothing arrived (silent pipe): no reply to record
 [ -n "${SUPERLITE_FLEET_WORKER:-}" ] && exit 0   # a fleet pane prompt is never a human reply
 
 # jstr KEY: first JSON string value for KEY, decoded, into REPLY (empty if absent).
