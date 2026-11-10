@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Find or create the run's own git worktree, so a change never starts in a shared checkout.
 
-    worktree.py ensure TOPIC [--repo DIR]     print the absolute path of the run folder
+    worktree.py ensure TOPIC [--repo DIR] [--branch NAME]     print the absolute path of the run folder
     worktree.py inplace --reason TEXT         opt the marked inline flow out of the main-checkout write refusal
     --plan P (anywhere): accepted and ignored (every lead brief passes it to every sl call, #336)
 
 From a linked worktree the tool returns that worktree. Otherwise it returns (or creates)
-`<main root>/.claude/worktrees/superlite-<slug>` on branch `superlite/<slug>`. The main checkout's
+`<main root>/.claude/worktrees/superlite-<slug>` on branch `superlite/<slug>`. With `--branch NAME` the branch is NAME as given and the folder `superlite-<slug of NAME>` (reused when it exists).
+The main checkout's
 branch and files are never changed. No repository, a bare one, or no commit yet: the start folder.
 Exit 2 when a plain folder sits at the target path. A new worktree gets a stderr line naming the ignored
 top-level entries of the main checkout it lacks (`.env`, `.venv/`; names only, nothing is copied).
@@ -31,6 +32,10 @@ MARKER = "inline-flow.json"  # in the state folder: written by hooks/mark-inline
 
 class Taken(Exception):  # O(1)
     """A plain folder (not a worktree) sits at the target path."""
+
+
+class BadBranch(Exception):  # O(1)
+    """The --branch name is not a valid branch name."""
 
 
 def git(root, *args):  # O(output) + process spawn
@@ -101,27 +106,46 @@ def missing_line(names):  # O(1)
     return "worktree: ignored in the main checkout, missing here: " + ", ".join(names[:SHOWN]) + more  # O(1)
 
 
-def ensure(topic, start):  # O(w) + spawns
-    """-> (run folder, state): created / exists / linked / no-repo."""
+def listed_branch(top, target):  # O(w) + spawn
+    """-> None when no registered worktree sits at `target`, else its short branch name ('' when detached)."""
+    found = None  # O(1)
+    here = False  # O(1)
+    for ln in git(top, "worktree", "list", "--porcelain")[1].splitlines():  # O(w)
+        if ln.startswith("worktree "):  # O(1)
+            here = Path(ln[9:]).resolve() == target.resolve()  # O(1)
+            found = "" if here else found  # O(1)
+        elif here and ln.startswith("branch refs/heads/"):  # O(1)
+            found = ln[18:]  # O(1)
+    return found  # O(1)
+
+
+def ensure(topic, start, branch=None):  # O(w) + spawns
+    """-> (run folder, state): created / exists / linked / no-repo. `branch` names the branch and the folder (superlite-<slug of branch>)."""
     start = Path(start).resolve()  # O(1)
     if no_repo_reason(start):  # O(1) + spawns
         return start, "no-repo"  # O(1)
     top = Path(git(start, "rev-parse", "--show-toplevel")[1])  # O(1) + spawn
     if git(top, "rev-parse", "--is-bare-repository")[1] == "true":  # O(1) + spawn
         return start, "no-repo"  # O(1)
+    if branch is not None:  # O(1)
+        rc, out, _ = git(top, "check-ref-format", "--branch", branch)  # O(1) + spawn
+        if rc or out != branch:  # O(1)
+            raise BadBranch(f"invalid branch name: {branch}")  # O(1)
     if is_linked(top):  # O(1)
         return top, "linked"  # O(1)
-    s = slug(topic)  # O(n)
+    s = slug(topic if branch is None else branch)  # O(n)
     target = top / PARENT / f"superlite-{s}"  # O(1)
-    listed = git(top, "worktree", "list", "--porcelain")[1].splitlines()  # O(w)
-    if any(ln.startswith("worktree ") and Path(ln[9:]).resolve() == target.resolve() for ln in listed):  # O(w)
+    br = f"superlite/{s}" if branch is None else branch  # O(1)
+    other = listed_branch(top, target)  # O(w) + spawn
+    if other is not None:  # O(1)
         if target.is_dir():  # O(1)
-            return target, "exists"  # O(1)
+            if branch is None or other == branch:  # O(1)
+                return target, "exists"  # O(1)
+            raise Taken(f"{target} is a worktree on {other or 'a detached HEAD'}, not {branch}")  # O(1)
         git(top, "worktree", "prune")  # O(w) + spawn: folder was deleted, drop the stale registration
     if target.exists() or target.is_symlink():  # O(1)
         raise Taken(f"{target} exists and is not a git worktree")  # O(1)
     add_exclude(top, PARENT, f"{PARENT}/superlite-{s}/x")  # O(e) + spawns
-    br = f"superlite/{s}"  # O(1)
     if git(top, "show-ref", "--verify", "-q", f"refs/heads/{br}")[0] == 0:  # O(1) + spawn
         rc, _, err = git(top, "worktree", "add", str(target), br)  # O(files) + spawn
     else:  # O(1)
@@ -151,13 +175,14 @@ def main(argv=None):  # O(w) + spawns
     import autocommit  # O(1) lazy, as trees.main
     argv, plan = autocommit.split_plan(list(sys.argv[1:] if argv is None else argv))  # --plan P / --plan=P removed, value ignored | O(len argv)
     if plan == "":  # O(1) --plan without a value
-        print("usage: worktree ensure TOPIC [--repo DIR] | inplace --reason TEXT [--plan P]", file=sys.stderr)  # O(1)
+        print("usage: worktree ensure TOPIC [--repo DIR] [--branch NAME] | inplace --reason TEXT [--plan P]", file=sys.stderr)  # O(1)
         return 2  # O(1)
     ap = argparse.ArgumentParser(prog="worktree", epilog="--plan P (anywhere): accepted and ignored; lead briefs pass it to every sl call (#336)")  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
     e = sub.add_parser("ensure")  # O(1)
     e.add_argument("topic")  # O(1)
     e.add_argument("--repo", default=".")  # O(1)
+    e.add_argument("--branch", metavar="NAME", default=None)  # O(1)
     i = sub.add_parser("inplace")  # O(1)
     i.add_argument("--reason", required=True)  # O(1)
     a = ap.parse_args(argv)  # O(args)
@@ -173,8 +198,8 @@ def main(argv=None):  # O(w) + spawns
         print(f"worktree: in place - {reason}; edits in this checkout are no longer refused")  # O(r)
         return 0  # O(1)
     try:  # O(1)
-        path, state = ensure(a.topic, Path(a.repo))  # O(w) + spawns
-    except Taken as ex:  # O(1)
+        path, state = ensure(a.topic, Path(a.repo), a.branch)  # O(w) + spawns
+    except (Taken, BadBranch) as ex:  # O(1)
         print(f"worktree: {ex}", file=sys.stderr)  # O(1)
         return 2  # O(1)
     except RuntimeError as ex:  # O(1)
@@ -182,6 +207,10 @@ def main(argv=None):  # O(w) + spawns
         return 1  # O(1)
     if state == "no-repo":  # O(1)
         print(f"worktree: {no_repo_reason(path) or 'bare repository'}; using {path.as_posix()} as is", file=sys.stderr)  # O(1)
+    elif state == "linked" and a.branch is not None:  # O(1)
+        cur = git(path, "rev-parse", "--abbrev-ref", "HEAD")[1]  # O(1) + spawn
+        if cur != a.branch:  # O(1)
+            print(f"worktree: linked worktree is on {cur}, not {a.branch}; --branch ignored", file=sys.stderr)  # O(1)
     elif state == "created":  # O(1)
         line = missing_line(missing_ignored(path.parents[len(PARENT.split("/"))], path))  # the main root above <PARENT>/<name> | O(i) + spawn
         if line:  # O(1)
