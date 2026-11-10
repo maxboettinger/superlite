@@ -58,7 +58,7 @@ def test_second_stall_blocks_and_other_errors_are_not_resent(world, capsys):
     def stalled(n, t, u, ms): seen.append(t); raise world.fh.HerdrError("agent_prompt_stalled", "stalled")
     world.fh.prompt = stalled
     with pytest.raises(SystemExit) as e: fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
-    assert e.value.code == 3 and len(seen) == 2 and "agent_prompt_stalled" in capsys.readouterr().out
+    assert e.value.code == 3 and len(seen) == 4 and "agent_prompt_stalled" in capsys.readouterr().out
     def gone(n, t, u, ms): seen.append(t); raise world.fh.HerdrError("agent_not_found", "gone")
     world.fh.prompt = gone; seen.clear()
     with pytest.raises(SystemExit): fleet.spawn(world.sd, world.plan, "sonnet", world.proj)

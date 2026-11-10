@@ -16,6 +16,8 @@ Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-d
 `--plan P` (or `--plan=P`) is checked first, for every subcommand: a path that is neither file nor folder, or whose state folder cannot be
 created, prints `error: --plan P: <reason>; ...` on stderr and exits 2, creating nothing (#372).
 A start that fails with `not an available shell` (a freed pane) is retried once after SHELL_PAUSE_S.
+`spawn --for-dispatch` also stops the ready implementers an earlier dispatch dropped from pool.json (#424).
+A stalled prime waits up to STALL_WAIT_MS for a late start, then is resent once; a start that stays slow is retried once on another account (#428).
 While the run's fleet.json says off, `spawn` (both forms) starts nothing: `BLOCKED: fleet is off in <state dir>; run sl fleet on [--plan P] first ...`, exit 3 (#355).
 """
 
@@ -44,6 +46,8 @@ TRUST = "Yes, I trust this folder"  # O(1)
 SHELL_PAUSE_S = 3.0  # O(1)
 SHELL_MSG = "not an available shell"  # O(1)
 PASS_THROUGH = ("CLAUDE_CODE_PLUGIN_CACHE_DIR",)  # O(1)
+SLOW_MSG = "timed out waiting for app response"  # O(1)
+STALL_WAIT_MS = 30000  # O(1) herdr's own prompt window is a fixed 5 s; a slow start gets this long to show working or blocked
 SCREEN_ROWS = 1000  # O(1) spawn reads the whole pane: the fullscreen TUI pins the prompt to the bottom, READY and the trust dialog sit above it
 
 
@@ -62,8 +66,32 @@ def worker_env(sd, wid, agent, config_dir, base_env):  # O(1)
     return env  # O(1)
 
 
-def _blocked(sd, wid, account, why, screen=None, named=True):  # O(s)
-    """Print the BLOCKED line, keep the screen, exit 3."""
+class _Slow(Exception):  # O(1)
+    """A start that stayed slow on the first try: `spawn` runs it once more on another account."""
+
+    def __init__(self, wid, account, why):  # O(1)
+        super().__init__(why)  # O(1)
+        self.wid, self.account, self.why = wid, account, why  # O(1)
+
+
+def _slow(e):  # O(len)
+    return e.code in ("agent_prompt_stalled", "timeout") or SLOW_MSG in (getattr(e, "message", "") or "")  # O(len)
+
+
+def _late_prime(name):  # O(1) plus herdr wait: the state of a prime that started after herdr's stall window, else None
+    try:  # O(1)
+        st = hc.wait_state(name, ["working", "blocked"], STALL_WAIT_MS)  # O(1)
+    except hc.HerdrError as e:  # O(s)
+        if e.code != "timeout":  # O(1)
+            raise  # O(1)
+        return "idle" if _is_ready(hc.read_screen(name, SCREEN_ROWS)) else None  # O(s)
+    if st == "working":  # O(1)
+        return hc.wait_state(name, ["idle", "done", "blocked"], 180000)  # O(1)
+    return "blocked" if st == "blocked" else None  # O(1)
+
+
+def _keep(sd, wid, why, screen, label):  # O(s)
+    """Keep the screen of a worker that did not start and log it."""
     if screen is not None:  # O(1)
         d = Path(sd) / "fleet" / "screens"  # O(1)
         d.mkdir(parents=True, exist_ok=True)  # O(1)
@@ -71,9 +99,14 @@ def _blocked(sd, wid, account, why, screen=None, named=True):  # O(s)
     try:  # O(1)
         import incident  # O(1)
         incident.append(Path(sd) / "incidents.jsonl", [incident.make_entry(  # O(1)
-            "fleet.py", 0, f"fleet spawn blocked: {why}"[:150], agent=wid, kind="workaround")])
+            "fleet.py", 0, f"{label}: {why}"[:150], agent=wid, kind="workaround")])
     except Exception:  # noqa: BLE001 | O(1)
         pass  # O(1)
+
+
+def _blocked(sd, wid, account, why, screen=None, named=True):  # O(s)
+    """Print the BLOCKED line, keep the screen, exit 3."""
+    _keep(sd, wid, why, screen, "fleet spawn blocked")  # O(s)
     print(f"BLOCKED: {wid} account {account} {why}" if named else f"BLOCKED: {wid} {why}")  # O(1)
     raise SystemExit(3)  # O(1)
 
@@ -112,7 +145,7 @@ def _is_ready(screen):  # O(s)
     return False  # O(1)
 
 
-def choose_account(sd, model, env):  # O(a * e + w) plus herdr and usage calls
+def choose_account(sd, model, env, avoid=None):  # O(a * e + w) plus herdr and usage calls
     """The account a new worker starts on: (account, its config dir, the claude-profile account other sessions count it on).
 
     Exit 3 with a `BLOCKED: ...` line when no account has headroom or no config dir is known."""
@@ -120,6 +153,7 @@ def choose_account(sd, model, env):  # O(a * e + w) plus herdr and usage calls
     data = fs.load(sd)  # O(w)
     usage, listing = ac.read_usage(env), ac.read_listing(env)  # O(1) plus subprocess time
     entries = data.get("accounts") or [a["name"] for a in (usage.get("accounts") or listing.get("accounts") or [])] or ["current"]  # O(a)
+    entries = [e for e in entries if ac.entry_name(e) != avoid]  # the account of a slow first try | O(a)
     allowed = [ac.entry_name(e) for e in entries]  # config dir paths go by basename | O(a)
     entry_of = {ac.entry_name(e): e for e in entries}  # O(a)
     alias = ac.aliases(listing, entries, env)  # `current` and config dir entries -> the claude-profile account they use | O(a * e)
@@ -190,7 +224,25 @@ def open_pane(sd, wid, cwd, env, record):  # O(w + p) plus herdr calls
     return pane  # O(1)
 
 
+def _retry_account(sd, model, env, avoid):  # O(a * e + w): another account than `avoid`, else the same one
+    try:  # O(1)
+        with contextlib.redirect_stdout(io.StringIO()):  # O(1)
+            return choose_account(sd, model, env, avoid=avoid)  # O(a * e + w)
+    except SystemExit as e:  # no other account has headroom | O(1)
+        if e.code != 3:  # O(1)
+            raise  # O(1)
+    return choose_account(sd, model, env)  # O(a * e + w)
+
+
 def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer"):  # O(a * e + w) plus herdr calls
+    """One worker; a start that stays slow is retried once on another account."""
+    try:  # O(1)
+        return _spawn(sd, plan, tier, project, cfg, env, role, None)  # O(a * e + w)
+    except _Slow as first:  # O(1)
+        return _spawn(sd, plan, tier, project, cfg, env, role, first)  # O(a * e + w)
+
+
+def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus herdr calls
     import fleet_roles  # noqa: E402 | O(1)
     sd = Path(sd)  # O(1)
     base = dict(os.environ) if env is None else env  # O(env)
@@ -202,7 +254,10 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer"):  # O
         flag = "--tier haiku " if model == "haiku" else ""  # O(1)
         print(f"BLOCKED: no {sd.resolve() / prime}; run build_prime {flag}--plan PLAN first")  # O(1)
         raise SystemExit(3)  # O(1)
-    account, cdir, shared = choose_account(sd, model, base)  # O(a * e + w)
+    tail = "" if after is None else f"; retried after {after.wid} on {after.account}"  # O(1)
+    account, cdir, shared = choose_account(sd, model, base) if after is None else _retry_account(sd, model, base, after.account)  # O(a * e + w)
+    if after is not None:  # O(1)
+        print(f"{after.wid} account {after.account} {after.why}; retrying on account {account}", file=sys.stderr)  # O(1)
     wid = fs.next_id(sd)  # O(w)
     name = fs.agent_name(sd, wid)  # herdr rejects `W1`; every herdr agent call below uses this name | O(1)
     wenv = {**worker_env(sd, wid, agent, cdir, base), **fleet_roles.env(role)}  # O(1)
@@ -213,19 +268,22 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer"):  # O
         with contextlib.suppress(OSError):  # the registry only spreads accounts; an unwritable one must not stop a spawn | O(1)
             fs.register_agent(name, shared)  # other sessions count this worker on its claude-profile account | O(1)
     except hc.HerdrError as e:  # O(1)
-        _blocked(sd, wid, account, f"startup: {e.message or e.code}")  # O(1)
+        _blocked(sd, wid, account, f"startup: {e.message or e.code}{tail}")  # O(1)
     argv = list(launch["argv"])  # O(1)
     try:  # a state dir outside the project (a worktree run) is not readable by default | O(1)
         sd.resolve().relative_to(Path(project).resolve())  # O(len)
     except ValueError:  # O(1)
         argv += ["--add-dir", str(sd.resolve())]  # O(1)
-    def fail(why, screen=None, named=True):  # O(s + w)
+    def fail(why, screen=None, named=True, slow=False):  # O(s + w)
         fs.set_state(sd, wid, "blocked")  # O(w)
         try:  # O(1)
             hc.close_pane(pane)  # O(1)
         except hc.HerdrError:  # O(1)
             pass  # O(1)
-        _blocked(sd, wid, account, why, screen, named)  # O(s)
+        if slow and after is None:  # the caller starts it once more on another account | O(1)
+            _keep(sd, wid, why, screen, "fleet spawn retry")  # O(s)
+            raise _Slow(wid, account, why)  # O(1)
+        _blocked(sd, wid, account, why + tail, screen, named)  # O(s)
 
     def first_line(screen, e):  # O(s)
         return next((x.strip() for x in screen.splitlines() if x.strip()), e.message or e.code)  # O(s)
@@ -249,7 +307,7 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer"):  # O
                 pass  # O(1)
             if e.code != "agent_not_ready" or TRUST not in screen:  # O(s)
                 shell = SHELL_MSG in (getattr(e, "message", "") or "")  # O(len)
-                fail(f"startup: {e.message if shell else first_line(screen, e)}{retried}", screen)  # O(s)
+                fail(f"startup: {e.message if shell else first_line(screen, e)}{retried}", screen, slow=_slow(e))  # O(s)
             hc.send_keys(name, ["Down", "Enter"])  # O(1)
             hc.wait_state(name, ["idle"], 60000)  # O(1)
         if launch["prime"]:  # a one-turn worker gets its brief as the first message, no prime | O(1)
@@ -259,10 +317,10 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer"):  # O
             except hc.HerdrError as e:  # O(1)
                 if e.code != "agent_prompt_stalled":  # a stall is the one error a second send can fix | O(1)
                     raise  # O(1)
-                st = hc.prompt(name, ask, ["idle", "done", "blocked"], 180000)  # resent once; a second stall is the BLOCKED below | O(1)
+                st = _late_prime(name) or hc.prompt(name, ask, ["idle", "done", "blocked"], 180000)  # a late start is waited for, else resent once; a second stall is slow | O(s)
             screen = hc.read_screen(name, SCREEN_ROWS)  # O(s)
     except hc.HerdrError as e:  # a failed key, wait or prime call must not leave a raw traceback | O(1)
-        fail(f"startup: {e}")  # O(1)
+        fail(f"startup: {e.code}: {e.message}", slow=_slow(e))  # O(1)
     if launch["prime"] and (st == "blocked" or not _is_ready(screen)):  # O(s)
         size = ""  # read before `fail` closes the pane | O(1)
         try:  # O(1)
@@ -272,10 +330,10 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer"):  # O
             pass  # O(1)
         gone = "" if (sd / prime).is_file() else f"; no {sd.resolve() / prime}"  # the prime vanished while the worker started | O(1)
         fail("no READY" + size + gone, screen, named=False)  # O(s)
+    if launch["pool"]:  # the pool entry first: a concurrent round must not see a ready worker outside the pool | O(1)
+        _register_pool(sd, wid, model, account)  # O(w)
     fs.set_state(sd, wid, "ready")  # O(w)
     _launch_line(sd, wid, agent, model, account, pane)  # O(1)
-    if launch["pool"]:  # O(1)
-        _register_pool(sd, wid, model, account)  # O(w)
     print(f"{wid} account={account} pane={pane} agent={agent}" + ("" if role == "implementer" else f" role={role}"))  # O(1)
     return {"id": wid, "account": account, "pane_id": pane, "agent": agent, "model": model, "role": role}  # O(1)
 
@@ -290,6 +348,14 @@ def _spawn_quiet(sd, plan, tier, project):  # O(spawn) -> (worker dict, None) or
             raise  # O(1)
         lines = [x.strip() for x in buf.getvalue().splitlines() if x.strip()]  # O(s)
         return None, "; ".join(x[len("BLOCKED: "):] if x.startswith("BLOCKED: ") else x for x in lines) or "spawn blocked"  # O(s)
+
+
+def _dropped_ready(sd):  # O(w): ready implementers pool.json no longer lists (an earlier dispatch evicted them)
+    p = Path(sd) / "pool.json"  # O(1)
+    if not p.exists():  # O(1)
+        return []  # O(1)
+    listed = {a.get("id") for a in pool.load(p).get("agents") or []}  # O(w)
+    return [k for k, v in fs.workers(sd).items() if v.get("state") == "ready" and (v.get("role") or "implementer") == "implementer" and k not in listed]  # O(w)
 
 
 def for_dispatch(sd, plan, project):  # O(R * (spawn + send)): one dispatch round, a line after the other
@@ -319,7 +385,9 @@ def for_dispatch(sd, plan, project):  # O(R * (spawn + send)): one dispatch roun
     lines, evict = dp.run(plan, pp, sd / "progress.md", cap=sys.maxsize)  # every ready task goes out, no cap of 10 | O(dispatch)
     dp.render([], evict)  # the `evict=` lines on stderr; the dispatch lines themselves become the worker lines below | O(a)
     state_of = {k: v.get("state") for k, v in fs.workers(sd).items()}  # O(w)
-    for wid in stop(sd, [k for k in evict if state_of.get(k) == "ready"]):  # an evicted busy worker finishes its task | O(w) plus herdr calls
+    ids = [k for k in evict if state_of.get(k) == "ready"]  # an evicted busy worker finishes its task | O(w)
+    ids += [k for k in _dropped_ready(sd) if k not in ids]  # #424: dropped by an earlier round | O(w)
+    for wid in stop(sd, ids):  # O(w) plus herdr calls
         print(f"stopped {wid}")  # O(1)
     sl, root = str(fio.HERE / "sl"), str(fio.HERE.parents[2])  # O(1)
     blocked = False  # O(1)

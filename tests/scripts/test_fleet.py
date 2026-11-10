@@ -174,7 +174,7 @@ def test_prime_error_is_blocked_not_traceback(world, capsys):
     def boom(*a, **k): raise world.fh.HerdrError("agent_prompt_stalled", "stalled")
     world.fh.prompt = boom
     with pytest.raises(SystemExit) as e: fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
-    assert e.value.code == 3 and "BLOCKED: W1" in capsys.readouterr().out and ("close_pane", "w6:p1") in world.fh.calls
+    assert e.value.code == 3 and "BLOCKED: W2" in capsys.readouterr().out and ("close_pane", "w6:p1") in world.fh.calls
     assert json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]["state"] == "blocked"
 
 @pytest.mark.skipif(REAL, reason="argv is read from the in-process fake")
