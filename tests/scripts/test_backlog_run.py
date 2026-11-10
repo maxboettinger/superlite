@@ -262,3 +262,7 @@ def test_start_after_a_crash_cleans_the_park_reason_in_the_header(bk, capsys, mo
     assert run(capsys, "start", "B1")[0] == 0
     text = brief_of(wt)
     assert "\x1b" not in text and "Previous lead W7: parked (lead?[2J pane gone);" in text
+
+def test_wait_open_line_jira_key(bk, capsys):
+    running(bk, merged=True, pr=201, version="1.5.8", open_issues=["PIX-9"]); bk.stops["W1"] = {"t": 2000, "last": "Status: DONE"}
+    assert run(capsys, "wait", "--timeout", "0")[1].endswith("B1 OPEN PIX-9\n")

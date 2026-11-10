@@ -38,7 +38,7 @@ def no_api(bk):
 def test_jql_plans_batches_with_keys(jk, capsys):
     rc, out = cli(capsys, "plan", "--jql", "project = PIX")
     d = load(jk)
-    assert rc == 0 and "B1 | #PIX-1 #PIX-2 | planned" in out
+    assert rc == 0 and "B1 | PIX-1 PIX-2 | planned" in out
     assert d["batches"][0]["issues"] == ["PIX-1", "PIX-2"] and d["titles"] == {"PIX-1": "One", "PIX-2": "Two"} and d["outside"] == []
     assert jk.acli == [["jira", "workitem", "search", "--jql", "project = PIX", "--fields", "key,summary,description", "--paginate", "--json"]]
     assert jk.issues == [{"number": "PIX-1", "title": "One", "body": "body one"}, {"number": "PIX-2", "title": "Two", "body": ""}]
@@ -96,7 +96,7 @@ def test_proposal_file_with_jql(jk, capsys):
 def test_skip_takes_a_key(jk, capsys, monkeypatch):
     monkeypatch.delenv("SUPERLITE_FLEET_WORKER", raising=False)
     assert cli(capsys, "plan", "--jql", "x")[0] == 0
-    assert cli(capsys, "skip", "pix-2") == (0, "skipped #PIX-2 (B1 keeps #PIX-1)\n")
+    assert cli(capsys, "skip", "pix-2") == (0, "skipped PIX-2 (B1 keeps PIX-1)\n")
     assert "PIX-2" in load(jk)["skipped"]
     jk.issues.clear()
     jk.batches = [{**JB, "issues": ["PIX-1"]}]
