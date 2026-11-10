@@ -130,11 +130,11 @@ def left_out_lines(data: dict) -> list:
             tag = f" ({r} rounds)" if isinstance(r, int) and not isinstance(r, bool) and r > 1 else ""  # O(1)
             groups.setdefault(_title(o["reason"]), []).append(ref(o["number"]) + tag)  # O(1)
     lines = [f"{r}: {' '.join(ns)}" for r, ns in groups.items()]  # O(groups)
-    if any("planned (cap)" in r for r in groups):  # O(groups)
+    if any(r.startswith("not planned (cap)") for r in groups):  # O(groups)
         m = data.get("max_batches")
         m = m if isinstance(m, int) and not isinstance(m, bool) else 7  # O(1)
         lines.append(f"cap: a plan round holds at most {m} batches (sl backlog plan --max-batches N raises it, up to 20); capped issues rank first in the next round")  # O(1)
-    if any("triaged (" in r and " cap)" in r for r in groups):  # O(groups)
+    if any(r.startswith("not triaged (") and r.endswith(" cap)") for r in groups):  # O(groups)
         lines.append("cap: a plan round triages only the first 200 open issues; the rest rank first in the next round")  # O(1)
     return lines
 

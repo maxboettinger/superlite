@@ -41,3 +41,8 @@ def test_status_row_jira_keys():
     d = {"batches": [batch("B1", ["a.py"], state="shipped", issues=["PIX-1"], version="1.0", open_issues=["PIX-1"])], "outside": []}
     out = "\n".join(bs.status_lines(d))
     assert "| PIX-1 |" in out and "1.0 OPEN PIX-1" in out
+
+
+def test_worker_reason_text_does_not_trigger_cap_hints():
+    d = {"outside": [{"number": 2, "reason": "not planned (triage: see planned (cap) and not triaged (x cap))"}]}
+    assert bs.left_out_lines(d) == ["not planned (triage: see planned (cap) and not triaged (x cap)): #2"]
