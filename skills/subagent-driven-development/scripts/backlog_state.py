@@ -190,7 +190,7 @@ def skip_issue(data: dict, n: "int | str") -> str:
     if hit is None:
         msg = f"skipped {ref(n)} (in no batch)"
     else:
-        if hit["state"] in ACTIVE:
+        if hit["state"] not in ("planned", "parked"):
             raise ValueError(f"{ref(n)} is in {hit['id']}, which is {hit['state']}")
         hit["issues"] = [i for i in hit["issues"] if i != n]  # O(issues)
         if hit["issues"]:

@@ -89,3 +89,11 @@ def test_skip_issue_signature_takes_int_or_str():
     import inspect
     ann = inspect.signature(bs.skip_issue).parameters["n"].annotation
     assert "str" in str(ann) and "int" in str(ann)
+
+
+def test_skip_shipped_refused_and_batch_kept():
+    d = data(b("B1", ["a.py"], "shipped", issues=[1]), b("B2", ["b.py"], depends=["B1"]))
+    with pytest.raises(ValueError, match="#1 is in B1, which is shipped"):
+        bs.skip_issue(d, 1)
+    assert [x["id"] for x in d["batches"]] == ["B1", "B2"] and d["batches"][1]["depends"] == ["B1"]
+    assert 1 not in d["skipped"]
