@@ -3,8 +3,12 @@
 
     probe_run.py --adapter PATH [--root DIR] [--app-type T] [--probes DIR]
                  [--categories deep,numeric,...] [--files a,b | --commit SHA]
-                 [--timeout 10] [--workers N] [--out .superlite/probes/probe-results.json]
-                 [--log .superlite/incidents.jsonl] [--background]
+                 [--timeout CAP] [--workers N] [--out .superlite/probes/probe-results.json]
+                 [--log .superlite/incidents.jsonl] [--raises A,B] [--background]
+    probe_run.py --plan PLAN_OR_.superlite_FOLDER [same options]
+        --plan fills --root, --adapter, --out and --log from the run folder (explicit options win) and
+        reads the Probe entries' `raises=` names; --raises adds names for a hand-written adapter.
+        A raised exception whose class (or a base) matches a name is a rejection, like EXPECTED_ERRORS.
 
 Results file (--out, default <root>/.superlite/probes/probe-results.json):
     {"files": [...], "selected_categories": [...], "categories": {cat: {"status", "cached", "probes",
@@ -27,7 +31,8 @@ How it works
   * Workers are persistent subprocesses (one thread of a ThreadPoolExecutor drives each). A worker
     imports the adapter once, runs probes, and keeps one server (started on port 0) for all of its
     server probes. The server is health-checked after every probe and restarted only if it died.
-  * A probe that does not answer within its category timeout (call 2 s, run 5 s, request 10 s) is a
+  * A probe that does not answer within its category timeout (call 2 s, run 5 s or 3 x the measured start-up + 1 s
+    (at most 60 s), request 10 s; --timeout caps them) is a
     hang: that worker's process tree is killed by PID and the worker is replaced. Only PIDs this
     runner started are ever killed; never by image name.
   * Sized probes step up (e.g. 100, 2000, 10000) and stop at the first failure.
@@ -51,8 +56,10 @@ from __future__ import annotations  # O(1)
 import argparse  # O(1)
 import ast  # O(1)
 import concurrent.futures as cf  # O(1)
+import contextlib  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
+import inspect  # O(1)
 import json  # O(1)
 import os  # O(1)
 import queue  # O(1)
@@ -74,6 +81,8 @@ if str(HERE) not in sys.path:  # O(len sys.path)
 
 IS_WIN = sys.platform == "win32"  # O(1)
 ENTRY_TIMEOUT = {"call": 2.0, "run": 5.0, "request": 10.0, "raw": 10.0}  # O(1)
+RUN_TIMEOUT_MAX = 60.0  # O(1)
+WARM_LIMIT = 60.0  # O(1)
 CATEGORY_ORDER = ["deep", "numeric", "encoding", "protocol", "file", "state"]  # O(1)
 APP_TYPES = {  # O(1)
     "library": ["deep", "numeric", "encoding", "state"],  # O(1)
@@ -185,6 +194,8 @@ class _WorkerState:  # O(1)
     server_starts = 0  # O(1)
     port = None  # O(1)
     stop = None  # O(1)
+    raises: tuple = ()  # O(1)
+    run_kw = False  # O(1)
 
 
 def _start_server(st: _WorkerState) -> None:  # O(1) + server start
@@ -262,10 +273,20 @@ def _bad_status(status: int, expect) -> str | None:  # O(k log k) k = expected s
     return None  # O(1)
 
 
+def named_raise(e: BaseException, names) -> bool:  # O(mro * k) k = names
+    """True when a class in e's MRO is named in `names` (bare, qualified or module-dotted)."""  # O(1)
+    for c in type(e).__mro__:  # O(mro) iterations
+        mod = getattr(c, "__module__", "")  # O(1)
+        if {c.__name__, c.__qualname__, f"{mod}.{c.__qualname__}"} & set(names):  # O(k) set build + intersect
+            return True  # O(1)
+    return False  # O(1)
+
+
 def _exec_one(st: _WorkerState, entry: str, item, expect, timeout: float):  # O(adapter call + input + output bytes) total
     """Return (normalized_result, problem|None). problem = dict(status, detail, ...)."""  # O(1)
     ad = st.adapter  # O(1)
     expected = tuple(getattr(ad, "EXPECTED_ERRORS", (ValueError,)))  # O(k) k = expected error types
+    named = st.raises  # O(1)
     try:  # O(1)
         if entry in ("request", "raw") and (st.port is None or not _healthy(st)):  # O(1)
             if st.port is not None:  # O(1)
@@ -277,10 +298,18 @@ def _exec_one(st: _WorkerState, entry: str, item, expect, timeout: float):  # O(
                 res, text = ("ok", repr(r)[:500]), repr(r)  # O(len result) repr twice
             except expected as e:  # O(1)
                 res, text = ("err", type(e).__name__), ""  # O(1)
+            except Exception as e:  # O(1) | a domain error named in the Probe entry's raises= is a rejection
+                if not named_raise(e, named):  # O(mro * k)
+                    raise  # O(1)
+                res, text = ("err", type(e).__name__), ""  # O(1)
         elif entry == "run":  # O(1)
             try:  # O(1)
-                rc, out, err = ad.run(*item)  # O(adapter run) + process spawn
+                rc, out, err = ad.run(*item, timeout=timeout) if st.run_kw else ad.run(*item)  # O(adapter run) + process spawn
             except expected as e:  # O(1)
+                return ("err", type(e).__name__), None  # O(1)
+            except Exception as e:  # O(1) | named in raises=
+                if not named_raise(e, named):  # O(mro * k)
+                    raise  # O(1)
                 return ("err", type(e).__name__), None  # O(1)
             out = out.decode("utf-8", "replace") if isinstance(out, bytes) else str(out)  # O(len out) decode
             err = err.decode("utf-8", "replace") if isinstance(err, bytes) else str(err)  # O(len err) decode
@@ -294,6 +323,10 @@ def _exec_one(st: _WorkerState, entry: str, item, expect, timeout: float):  # O(
                 status, js = ad.request(*item)  # O(adapter request) + network I/O
             except expected as e:  # O(1)
                 return ("err", type(e).__name__), None  # O(1)
+            except Exception as e:  # O(1) | named in raises=
+                if not named_raise(e, named):  # O(mro * k)
+                    raise  # O(1)
+                return ("err", type(e).__name__), None  # O(1)
             res, text = ("status", status), "" if js is None else json.dumps(js, default=str)  # O(len js) json.dumps
             bad = _bad_status(status, expect)  # O(1)
             if bad:  # O(1)
@@ -305,6 +338,9 @@ def _exec_one(st: _WorkerState, entry: str, item, expect, timeout: float):  # O(
             if bad:  # O(1)
                 return res, {"status": "wrong-status", "detail": bad, "http": status}  # O(1)
     except BaseException as e:  # O(1) | noqa: BLE001 - any unexpected exception is a crash
+        if isinstance(e, subprocess.TimeoutExpired):  # the adapter's own subprocess timeout is a hang, not a crash | O(1)
+            return None, {"status": "hang", "detail": f"adapter timed out after {e.timeout:g}s", "timeout": timeout,  # O(1)
+                          "frames": [(f.filename, f.lineno) for f in traceback.extract_tb(e.__traceback__)][::-1]}  # O(stack depth)
         if getattr(e, "probe_setup_error", False):  # the adapter's own verdict: the plan's entry is wrong, the code under test is not | O(1)
             return None, {"status": "setup-error", "exc": type(e).__name__, "detail": str(e)[:200], "frames": []}  # O(1)
         frames = [(f.filename, f.lineno) for f in traceback.extract_tb(e.__traceback__)][::-1]  # O(stack depth)
@@ -327,6 +363,7 @@ def _step(st: _WorkerState, msg: dict, modules: dict) -> dict:  # O(items * exec
     probe = next(p for p in modules[path].PROBES if p["name"] == msg["name"])  # O(P_m) linear scan of module probes per step
     entry, size, timeout = probe["entry"], msg["size"], msg["timeout"]  # O(1)
     out = {"status": "pass", "detail": "", "size": size}  # O(1)
+    os.environ["SUPERLITE_PROBE_TIMEOUT"] = str(timeout)  # O(1)
     faulthandler.dump_traceback_later(max(0.2, timeout * 0.8), file=sys.stderr)  # O(1)
     t0 = time.perf_counter()  # O(1)
     inp = None  # O(1)
@@ -374,6 +411,19 @@ def _step(st: _WorkerState, msg: dict, modules: dict) -> dict:  # O(items * exec
     return out  # O(1)
 
 
+def _warm(st: _WorkerState, timeout: float) -> dict:  # O(adapter run) + process spawn
+    os.environ["SUPERLITE_PROBE_TIMEOUT"] = str(timeout)  # O(1)
+    t0 = time.perf_counter()  # O(1)
+    try:  # O(1)
+        if st.run_kw:  # O(1)
+            st.adapter.run(st.ctx.good_args, st.ctx.good_stdin, timeout=timeout)  # O(adapter run) + process spawn
+        else:  # O(1)
+            st.adapter.run(st.ctx.good_args, st.ctx.good_stdin)  # O(adapter run) + process spawn
+    except BaseException as e:  # O(1) | noqa: BLE001
+        return {"ok": False, "elapsed": round(time.perf_counter() - t0, 3), "error": f"{type(e).__name__}: {e}"[:200]}  # O(1)
+    return {"ok": True, "elapsed": round(time.perf_counter() - t0, 3)}  # O(1)
+
+
 def worker_main(a) -> int:  # O(steps * step cost) total, steps = messages received
     proto_in = os.fdopen(os.dup(0), "r", encoding="utf-8")  # O(1)
     proto_out = os.fdopen(os.dup(1), "w", encoding="utf-8")  # O(1)
@@ -400,7 +450,12 @@ def worker_main(a) -> int:  # O(steps * step cost) total, steps = messages recei
         if str(adapter_path.parent) not in sys.path:  # O(1)
             sys.path.insert(1, str(adapter_path.parent))  # O(1)
         st.adapter = load_module(adapter_path)  # O(adapter size) import
+        st.raises = tuple(n for n in (getattr(a, "raises", None) or "").split(",") if n)  # O(len raises)
         ad = st.adapter  # O(1)
+        try:  # O(1)
+            st.run_kw = "timeout" in inspect.signature(ad.run).parameters  # O(params)
+        except Exception:  # O(1)
+            st.run_kw = False  # O(1)
         st.ctx = types.SimpleNamespace(  # O(1)
             adapter=ad, tmp=tmp, good_input=getattr(ad, "GOOD_INPUT", "1"),  # O(1)
             good_args=list(getattr(ad, "GOOD_ARGS", [])), good_stdin=getattr(ad, "GOOD_STDIN", ""),  # O(1)
@@ -422,7 +477,7 @@ def worker_main(a) -> int:  # O(steps * step cost) total, steps = messages recei
         if msg.get("op") == "quit":  # O(1)
             break  # O(1)
         try:  # O(1)
-            rep = _step(st, msg, modules)  # O(step cost)
+            rep = _warm(st, float(msg["timeout"])) if msg.get("op") == "warm" else _step(st, msg, modules)  # O(step cost)
         except BaseException as e:  # O(1) | noqa: BLE001
             rep = {"status": "error", "detail": f"worker failure: {type(e).__name__}: {e}"[:200],  # O(1)
                    "size": msg.get("size")}  # O(1)
@@ -442,6 +497,8 @@ class Cfg:  # O(1)
         self.server_starts: dict[int, int] = {}  # O(1)
         self.server_ports: set[int] = set()  # O(1)
         self.workers_started = 0  # O(1)
+        self.raises: list[str] = []  # O(1)
+        self.run_timeout = None  # O(1)
 
     def in_repo(self, filename: str) -> bool:  # O(parts) + resolve syscall
         try:  # O(1)
@@ -482,13 +539,15 @@ class Worker:  # O(1) + process spawn + wait for ready <=60s
         self.errf = tempfile.NamedTemporaryFile(prefix="probe-worker-", suffix=".err", delete=False)  # O(1)
         cmd = [project_python(getattr(cfg, "out_root", cfg.root)), "-X", "utf8", str(HERE / "probe_run.py"), "--worker",  # O(1) project interpreter: the project's .venv, not a --commit checkout's
                "--root", str(cfg.root), "--adapter", str(cfg.adapter)]  # O(1)
+        if getattr(cfg, "raises", []):  # O(1)
+            cmd += ["--raises", ",".join(cfg.raises)]  # O(k)
         kw: dict = {}  # O(1)
         if IS_WIN:  # O(1)
             kw["creationflags"] = 0x08000000 | 0x00000200  # O(1) | CREATE_NO_WINDOW | NEW_PROCESS_GROUP
         else:  # O(1)
             kw["start_new_session"] = True  # O(1)
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",  # O(1)
-                   SUPERLITE_PROBE_TIMEOUT=str(min(cfg.timeout, ENTRY_TIMEOUT["run"])))  # O(1)
+                   SUPERLITE_PROBE_TIMEOUT=str(timeout_for({"entry": "run"}, cfg)))  # O(1)
         self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,  # O(1) + process spawn
                                   stderr=self.errf, text=True, encoding="utf-8", bufsize=1,  # O(1)
                                   cwd=str(cfg.root), env=env, **kw)  # O(1)
@@ -577,6 +636,21 @@ class Worker:  # O(1) + process spawn + wait for ready <=60s
             rep["frames"] = rep.get("frames", []) + frames_from_text(self._stderr_tail(off))  # O(stderr bytes from off) file read + parse
         return rep  # O(1)
 
+    def warm(self, timeout: float) -> dict:  # O(1) blocks <=timeout + 5s
+        try:  # O(1)
+            self.p.stdin.write(json.dumps({"op": "warm", "timeout": timeout}) + "\n")  # O(1)
+            self.p.stdin.flush()  # O(1)
+            rep = self.q.get(timeout=timeout + 5)  # O(1) blocks <=timeout + 5s
+        except queue.Empty:  # O(1)
+            self._kill()  # O(1) + kill
+            return {"ok": False, "elapsed": timeout, "error": f"no answer within {timeout:g}s"}  # O(1)
+        except OSError:  # O(1)
+            rep = None  # O(1)
+        if rep is None:  # O(1)
+            self._kill()  # O(1)
+            return {"ok": False, "elapsed": 0.0, "error": "worker process exited"}  # O(1)
+        return rep  # O(1)
+
     def close(self, kill: bool = False):  # O(1) + wait <=4s + rmtree O(tmp files)
         if not kill:  # O(1)
             try:  # O(1)
@@ -660,8 +734,26 @@ class Lease:  # O(1)
             self.w = None  # O(1)
 
 
+def run_timeout_from(start: float) -> float:  # O(1)
+    return min(RUN_TIMEOUT_MAX, max(ENTRY_TIMEOUT["run"], round(3 * start + 1, 1)))  # O(1)
+
+
 def timeout_for(meta: dict, cfg: Cfg) -> float:  # O(1)
-    return min(ENTRY_TIMEOUT[meta["entry"]], cfg.timeout)  # O(1)
+    base = ENTRY_TIMEOUT[meta["entry"]]  # O(1)
+    if meta["entry"] == "run" and getattr(cfg, "run_timeout", None):  # O(1)
+        base = cfg.run_timeout  # O(1)
+    cap = getattr(cfg, "timeout", None)  # O(1)
+    return min(base, cap) if cap else base  # O(1)
+
+
+def calibrate_run(w: Worker, cfg: Cfg) -> dict:  # O(1) + two adapter run calls, <=2 * (WARM_LIMIT + 5) s
+    first = w.warm(WARM_LIMIT)  # O(1) + adapter run
+    second = w.warm(WARM_LIMIT) if first.get("ok") else first  # O(1) + adapter run
+    if not (first.get("ok") and second.get("ok")):  # O(1)
+        return {"error": (second if first.get("ok") else first).get("error", "warm-up failed"),  # O(1)
+                "timeout": timeout_for({"entry": "run"}, cfg)}  # O(1)
+    cfg.run_timeout = run_timeout_from(second["elapsed"])  # O(1)
+    return {"first": first["elapsed"], "second": second["elapsed"], "timeout": timeout_for({"entry": "run"}, cfg)}  # O(1)
 
 
 def run_probe(pool: Pool, cfg: Cfg, meta: dict) -> dict:  # O(z * step) total, z = size steps
@@ -707,7 +799,6 @@ def group_key(res: dict, cfg: Cfg) -> tuple[str, tuple[str, int] | None]:  # O(f
 REGRESSION_TEMPLATE = '''"""Generated by probe_run.py: {category} {kind} ({key}).
 Minimal input shrunk from {orig_size}; probe {probe_id}. Fix the code, keep this test."""
 import importlib.util
-import json
 import pathlib
 import socket
 import sys
@@ -719,6 +810,7 @@ ENTRY = {entry!r}
 INPUT = {input_text}
 EXPECT = {expect!r}
 TIMEOUT = {timeout!r}
+RAISES = {raises!r}
 TRACE = "Traceback (most recent call last)"
 
 
@@ -729,6 +821,13 @@ def _load():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _named(e):
+    for c in type(e).__mro__:
+        if {{c.__name__, c.__qualname__, f"{{c.__module__}}.{{c.__qualname__}}"}} & set(RAISES):
+            return True
+    return False
 
 
 def _server(ad):
@@ -770,6 +869,10 @@ def _problem(ad):
                 return f"status {{status}}"
     except expected:
         return None
+    except Exception as e:
+        if _named(e):
+            return None
+        raise
     finally:
         if stop:
             threading.Thread(target=stop, daemon=True).start()
@@ -812,7 +915,7 @@ def _copy_adapter(cfg: Cfg, outdir: Path) -> None:  # O(adapter bytes) read + wr
             if not re.search(r"^\s*from pathlib import .*\bPath\b", "".join(lines[:i]), re.M):  # O(bytes)
                 lines.insert(i, "from pathlib import Path\n")  # O(lines)
             break  # O(1)
-    text = "".join(lines)  # O(bytes)
+    text = "# ruff: noqa\n# flake8: noqa\n" + "".join(lines)  # O(bytes)
     dest = outdir / "_probe_adapter.py"  # O(1)
     if not dest.exists() or dest.read_text(encoding="utf-8", errors="replace") != text:  # O(bytes)
         dest.write_text(text, encoding="utf-8")  # O(bytes)
@@ -839,7 +942,7 @@ def _write_regression(cfg: Cfg, group: dict, rep: dict) -> str | None:  # O(t lo
         category=cat, kind=group["kind"], key=group["key"].replace('"', "'"),  # O(1)
         orig_size=group.get("size"), probe_id=group["probe"],  # O(1)
         entry=meta["entry"], input_text=rep["input"], expect=expect,  # O(1)
-        timeout=timeout_for(meta, cfg), test_name=f"probe_{cat}_{n}")  # O(1)
+        timeout=timeout_for(meta, cfg), raises=tuple(getattr(cfg, "raises", [])), test_name=f"probe_{cat}_{n}")  # O(1)
     def body(t):  # O(len t)
         return t[t.index("ROOT ="):t.index("def test_")]  # O(len t) two index scans
 
@@ -1067,36 +1170,98 @@ def remove_checkout(tree: Path, repo: Path | None) -> None:  # O(tree files) + 2
     shutil.rmtree(tree.parent, ignore_errors=True)  # O(tree files) rmtree
 
 
-def stale_adapter(adapter: Path) -> bool:  # O(adapter bytes + plan bytes)
-    """True when a generated adapter's recorded Probe entries differ from the plan it was built from now (#177).
-    A hand-written adapter (no ENTRIES and PLAN constants), a missing plan or a copy of this file without the
-    scripts folder is never stale: the check only ever stops a run it is sure about."""
+def adapter_consts(adapter: Path) -> dict:  # O(adapter bytes)
+    """The adapter's top-level ENTRIES and PLAN literals; {} on any error (a hand-written adapter has none)."""  # O(1)
     try:  # O(1)
         consts = {}  # O(1)
         for node in ast.parse(adapter.read_text(encoding="utf-8", errors="replace")).body:  # O(adapter bytes)
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
                     and node.targets[0].id in ("ENTRIES", "PLAN"):  # O(1)
                 consts[node.targets[0].id] = ast.literal_eval(node.value)  # O(len literal)
+        return consts  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return {}  # O(1)
+
+
+@contextlib.contextmanager  # O(1)
+def _load_script(name: str, private: str):  # O(module size)
+    """Yield scripts/<name>.py loaded by path under a private module name; sys.path and sys.modules are restored on exit."""  # O(1)
+    saved = list(sys.path)  # the scripts put their folder first on sys.path | O(len sys.path)
+    try:  # O(1)
+        spec = importlib.util.spec_from_file_location(private, HERE.parent / "scripts" / f"{name}.py")  # O(1)
+        mod = importlib.util.module_from_spec(spec)  # O(1)
+        sys.modules[private] = mod  # its dataclasses look their module up here | O(1)
+        spec.loader.exec_module(mod)  # O(module size)
+        yield mod  # O(1)
+    finally:  # O(1)
+        sys.path[:] = saved  # O(len sys.path)
+        sys.modules.pop(private, None)  # O(1)
+
+
+def plan_raises(plan: Path) -> list[str]:  # O(plan bytes)
+    """Exception names from every Probe entry's `raises=` part, first-seen order; [] when unreadable."""  # O(1)
+    try:  # O(1)
+        with _load_script("pt_review", "_superlite_pt_review") as pt:  # O(module size)
+            entries = pt.parse_plan(plan).probe_entries  # O(plan bytes)
+        names: list[str] = []  # O(1)
+        for entry in entries:  # O(entries)
+            for part in entry.split("·"):  # O(len entry)
+                key, _, val = part.partition("=")  # O(len part)
+                if key.strip().lower() != "raises":  # O(1)
+                    continue  # O(1)
+                for n in val.replace("`", " ").replace(",", " ").split():  # O(len val)
+                    if n not in names:  # O(names)
+                        names.append(n)  # O(1)
+        return names  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return []  # O(1)
+
+
+def stale_adapter(adapter: Path) -> bool:  # O(adapter bytes + plan bytes)
+    """True when a generated adapter's recorded Probe entries differ from the plan it was built from now (#177).
+    A hand-written adapter (no ENTRIES and PLAN constants), a missing plan or a copy of this file without the
+    scripts folder is never stale: the check only ever stops a run it is sure about."""
+    try:  # O(1)
+        consts = adapter_consts(adapter)  # O(adapter bytes)
         plan = Path(consts["PLAN"])  # O(1)
         if not plan.is_file():  # O(1)
             return False  # O(1)
-        saved = list(sys.path)  # pt_review puts the scripts folder first on sys.path | O(len sys.path)
-        try:  # O(1)
-            spec = importlib.util.spec_from_file_location("_superlite_pt_review", HERE.parent / "scripts" / "pt_review.py")  # O(1)
-            mod = importlib.util.module_from_spec(spec)  # O(1)
-            sys.modules[spec.name] = mod  # its dataclasses look their module up here | O(1)
-            spec.loader.exec_module(mod)  # O(module size)
-            return mod.plan_entries(mod.parse_plan(plan)) != consts["ENTRIES"]  # O(plan bytes)
-        finally:  # O(1)
-            sys.path[:] = saved  # O(len sys.path)
-            sys.modules.pop("_superlite_pt_review", None)  # O(1)
+        with _load_script("pt_review", "_superlite_pt_review") as pt:  # O(module size)
+            return pt.plan_entries(pt.parse_plan(plan)) != consts["ENTRIES"]  # O(plan bytes)
     except Exception:  # noqa: BLE001 | no verdict: probe as before | O(1)
         return False  # O(1)
 
 
+def run_folder(plan: Path) -> Path:  # O(d)
+    """The .superlite folder a --plan path (file or folder) belongs to."""  # O(1)
+    try:  # O(1)
+        with _load_script("state", "_superlite_state") as st:  # O(module size)
+            return st.plan_dir(plan)  # O(d)
+    except Exception:  # noqa: BLE001 | O(1)
+        if plan.name == ".superlite":  # O(1)
+            return plan  # O(1)
+        return plan / ".superlite" if plan.is_dir() else plan.parent / ".superlite"  # O(1)
+
+
 def run_main(a) -> int:  # O(checkout + _run_main) total; one git checkout per --commit run
-    root = Path(a.root or os.getcwd()).resolve()  # O(1)
-    adapter = Path(a.adapter).resolve() if a.adapter else root / ".superlite" / "probes" / "adapter.py"  # O(1)
+    folder, plan = None, None  # O(1)
+    if a.plan:  # O(1)
+        plan = Path(a.plan).resolve()  # O(1)
+        if not plan.exists():  # O(1)
+            print(f"probe_run: --plan not found: {a.plan}", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        folder = run_folder(plan)  # O(module size)
+    root = Path(a.root or (folder.parent if folder else os.getcwd())).resolve()  # O(1)
+    base = folder or root / ".superlite"  # O(1)
+    if a.out is None:  # O(1)
+        a.out = str(base / "probes" / "probe-results.json") if folder else ".superlite/probes/probe-results.json"  # O(1)
+    if a.log is None:  # O(1)
+        a.log = str(base / "incidents.jsonl") if folder else ".superlite/incidents.jsonl"  # O(1)
+    adapter = Path(a.adapter).resolve() if a.adapter else base / "probes" / "adapter.py"  # O(1)
+    a.raises_all = [n for n in (a.raises or "").split(",") if n]  # O(len raises)
+    for n in plan_raises(plan) if plan and plan.is_file() else plan_raises(Path(adapter_consts(adapter).get("PLAN", ""))):  # O(plan bytes)
+        if n not in a.raises_all:  # O(k)
+            a.raises_all.append(n)  # O(1)
     if not adapter.is_file():  # O(1)
         print(f"probe_run: adapter not found: {adapter}", file=sys.stderr)  # O(1)
         return 2  # O(1)
@@ -1142,6 +1307,7 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
     cache_path = root / ".superlite" / "probes" / "cache.json"  # O(1)
     cfg = Cfg(work, adapter, probes_dir, a.timeout)  # O(1)
     cfg.out_root = root  # O(1)
+    cfg.raises = list(getattr(a, "raises_all", []))  # O(k)
 
     if a.commit:  # O(1)
         try:  # O(1)
@@ -1175,7 +1341,7 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
     results: dict = {"version": 1, "root": str(root), "adapter": cfg.rel(str(adapter)),  # O(1)
                      **({"commit": a.commit} if a.commit else {}),  # O(1)
                      "files": files, "selected_categories": selected, "categories": {},  # O(1)
-                     "probes": [], "failures": [], "load_errors": load_errors}  # O(1)
+                     "probes": [], "failures": [], "load_errors": load_errors, "raises": cfg.raises}  # O(1)
     try:  # O(1)
         try:  # O(1)
             w0 = pool.acquire()  # O(1) + worker spawn
@@ -1214,6 +1380,16 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
                  if p["category"] == cat and entries.get(p["entry"])]  # O(1)
         order = {p["id"]: i for i, p in enumerate(tasks)}  # O(p)
         done: list[dict] = []  # O(1)
+        if any(p["entry"] == "run" for p in tasks):  # O(p)
+            w = pool.acquire()  # O(1) + worker spawn
+            results["run_warmup"] = calibrate_run(w, cfg)  # O(1) + two adapter run calls
+            if w.dead:  # O(1)
+                w.close(kill=True)  # O(1)
+            elif cfg.run_timeout and cfg.run_timeout != ENTRY_TIMEOUT["run"]:  # O(1) | new workers get the measured timeout in their env
+                w.close()  # O(1) + wait <=4s
+                w.dead = True  # O(1)
+            else:  # O(1)
+                pool.release(w)  # O(1)
         t_run = time.time()  # O(1)
         if tasks:  # O(1)
             with cf.ThreadPoolExecutor(max_workers=min(nworkers, len(tasks))) as ex:  # O(1) + thread start
@@ -1322,7 +1498,7 @@ def _run_main(a, root: Path, work: Path, adapter: Path) -> int:  # O(c*p + f*byt
 
     results["stats"] = {  # O(w + ports log ports)
         "elapsed": round(time.time() - t_start, 3), "run_seconds": results_run_seconds,  # O(1)
-        "probes_run": len(done),  # O(1)
+        "probes_run": len(done), "run_timeout": timeout_for({"entry": "run"}, cfg),  # O(1)
         "workers_started": cfg.workers_started, "server_starts": sum(cfg.server_starts.values()),  # O(1)
         "server_ports": sorted(cfg.server_ports), "killed_pids": cfg.killed_pids,  # O(1)
         "failure_groups": len(results["failures"]),  # O(1)
@@ -1359,11 +1535,12 @@ def main(argv: list[str] | None = None) -> int:  # O(argv) + run
     ap.add_argument("--categories", help="comma list; overrides --app-type")  # O(1)
     ap.add_argument("--files", help="comma list of files under test, relative to --root")  # O(1)
     ap.add_argument("--commit", help="probe only the files this commit touched")  # O(1)
-    ap.add_argument("--timeout", type=float, default=10.0, help="cap on per-probe timeouts (s)")  # O(1)
+    ap.add_argument("--timeout", type=float, default=None, help="cap on per-probe timeouts (s), default none")  # O(1)
     ap.add_argument("--workers", type=int, default=0, help="default: CPU count")  # O(1)
-    ap.add_argument("--out", default=".superlite/probes/probe-results.json",  # O(1)
-                    help="results file, relative to --root")  # O(1)
-    ap.add_argument("--log", default=".superlite/incidents.jsonl")  # O(1)
+    ap.add_argument("--out", default=None, help="results file, relative to --root (default <run folder>/probes/probe-results.json)")  # O(1)
+    ap.add_argument("--log", default=None, help="incident log (default <run folder>/incidents.jsonl)")  # O(1)
+    ap.add_argument("--plan", help="plan file or .superlite folder: sets the run folder, root, adapter, out, log and raises=")  # O(1)
+    ap.add_argument("--raises", help="comma list of exception names to treat as rejections (adds to the plan's raises=)")  # O(1)
     ap.add_argument("--background", action="store_true", help="detach and return at once")  # O(1)
     ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)  # O(1)
     a = ap.parse_args(argv)  # O(1)
