@@ -19,6 +19,7 @@ A repeated `##`/`###` heading inside a task that is followed by a task field is 
 from __future__ import annotations  # O(1)
 
 import argparse  # O(1)
+import configparser  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
 import json  # O(1)
@@ -1367,7 +1368,28 @@ def _swift_owned(plan: Plan, t: Task, root: Path) -> list[Path]:  # O(o*s) the n
     return out  # O(o)
 
 
-def import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s + n*q) one WARNING per (consumer, target, type)
+def _seam_pairs(plan: Plan) -> list[tuple[Task, dict, str, dict]]:  # O(n*q*cands) | (consumer, consumed signature, producer id, producer signature)
+    produced: dict[str, list[tuple[str, dict]]] = {}  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        for item in t.produces:  # O(q) iterations
+            sig = parse_signature(item)  # O(s)
+            if sig:  # O(1)
+                produced.setdefault(sig_key(sig), []).append((t.id, sig))  # O(1)
+    pairs: list[tuple[Task, dict, str, dict]] = []  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        for item in t.consumes:  # O(q) iterations
+            sig = parse_signature(item)  # O(s)
+            if not sig:  # O(1)
+                continue  # O(1)
+            ref = re.search(REF_TAIL, strip_ticks(item))  # O(s)
+            refs = re.findall(TASK_ID, ref.group(1)) if ref else []  # O(s)
+            cands = [c for c in produced.get(sig_key(sig), []) if not refs or c[0] in refs]  # O(cands*refs)
+            if cands:  # O(1)
+                pairs.append((t, sig, cands[0][0], cands[0][1]))  # O(1)
+    return pairs  # O(pairs)
+
+
+def swift_import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s + n*q) one WARNING per (consumer, target, type)
     """A consumed signature names a type declared in a module the consumer's SwiftPM target does not depend on (#388)."""  # O(1)
     targets = swift_targets(root)  # O(F + M*s)
     if not targets:  # O(1)
@@ -1381,45 +1403,382 @@ def import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s + n*q
                 m = SWIFT_DECL.match(ln)  # O(s)
                 if m and not ln.lstrip().startswith("//"):  # O(1)
                     mods.setdefault(m.group(1), set()).add(name)  # O(1)
-    produced: dict[str, list[tuple[str, dict]]] = {}  # O(1)
     for t in plan.tasks:  # O(n) iterations
         owned = [_target_of(f, targets) for f in _swift_owned(plan, t, root)]  # O(o*T*d)
         for item in t.produces:  # O(q) iterations
             sig = parse_signature(item)  # O(s)
-            if sig:  # O(1)
-                produced.setdefault(sig_key(sig), []).append((t.id, sig))  # O(1)
             tname = sig["cls"] if sig and sig["cls"] else (item if re.fullmatch(r"[A-Z]\w*", item) else None)  # O(1)
             if tname:  # O(1)
                 mods.setdefault(tname, set()).update(x for x in owned if x)  # O(o)
     warns: list[str] = []  # O(1)
     seen: set[tuple[str, str, str]] = set()  # O(1)
-    for t in plan.tasks:  # O(n) iterations
+    for t, sig, pid, psig in _seam_pairs(plan):  # O(pairs) iterations
         files = [(f, _target_of(f, targets)) for f in _swift_owned(plan, t, root)]  # O(o*T*d)
-        for item in t.consumes:  # O(q) iterations
-            sig = parse_signature(item)  # O(s)
-            if not sig:  # O(1)
+        for ty in signature_types(psig):  # O(types) iterations
+            declared = mods.get(ty)  # O(1)
+            if not declared:  # O(1)
                 continue  # O(1)
-            ref = re.search(REF_TAIL, strip_ticks(item))  # O(s)
-            refs = re.findall(TASK_ID, ref.group(1)) if ref else []  # O(s)
-            cands = [c for c in produced.get(sig_key(sig), []) if not refs or c[0] in refs]  # O(cands*refs)
-            if not cands:  # O(1)
-                continue  # O(1)
-            pid, psig = cands[0]  # O(1)
-            for ty in signature_types(psig):  # O(types) iterations
-                declared = mods.get(ty)  # O(1)
-                if not declared:  # O(1)
+            for _f, tg in files:  # O(o) iterations
+                if not tg or tg not in targets or (t.id, tg, ty) in seen:  # O(1)
                     continue  # O(1)
-                for _f, tg in files:  # O(o) iterations
-                    if not tg or tg not in targets or (t.id, tg, ty) in seen:  # O(1)
-                        continue  # O(1)
-                    deps = targets[tg]["deps"]  # O(1)
-                    if declared & (set(deps) | {tg}):  # O(deps)
-                        continue  # O(deps)
-                    seen.add((t.id, tg, ty))  # O(1)
-                    order = ", ".join(getattr(deps, "order", sorted(deps)))  # O(deps)
-                    warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {ty} is declared in {', '.join(sorted(declared))}, "  # O(s)
-                                 f"which target {tg} may not import ({targets[tg]['manifest']}) dependencies: {order}")  # O(deps)
+                deps = targets[tg]["deps"]  # O(1)
+                if declared & (set(deps) | {tg}):  # O(deps)
+                    continue  # O(deps)
+                seen.add((t.id, tg, ty))  # O(1)
+                order = ", ".join(getattr(deps, "order", sorted(deps)))  # O(deps)
+                warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {ty} is declared in {', '.join(sorted(declared))}, "  # O(s)
+                             f"which target {tg} may not import ({targets[tg]['manifest']}) dependencies: {order}")  # O(deps)
     return warns  # O(w)
+
+
+IL_LISTS = ("layers", "containers", "ignore_imports", "modules", "source_modules", "forbidden_modules", "protected_modules", "allowed_importers")  # O(1) | contract keys that hold lists
+
+
+def _il_list(v) -> list[str]:  # O(s) | an INI value's lines or a TOML list as clean strings
+    items = v.splitlines() if isinstance(v, str) else list(v or [])  # O(s)
+    return [str(x).strip() for x in items if str(x).strip() and not str(x).strip().startswith("#")]  # O(s)
+
+
+def _il_contract(raw: dict, name: str) -> dict:  # O(k*s) | one contract in the normal shape
+    out = {"name": str(raw.get("name") or name), "type": str(raw.get("type") or "").strip()}  # O(1)
+    for k in ("layers", "containers", "ignore_imports"):  # O(1) iterations
+        out[k] = _il_list(raw.get(k))  # O(s)
+    ap = raw.get("as_packages", True)  # O(1)
+    out["as_packages"] = ap if isinstance(ap, bool) else str(ap).strip().lower() not in ("false", "0", "no")  # O(1)
+    for k in IL_LISTS:  # O(1) iterations
+        if k not in out and k in raw:  # O(1)
+            out[k] = _il_list(raw[k])  # O(s)
+    return out  # O(1)
+
+
+def importlinter_config(root: Path) -> dict | None:  # O(files*s) | the first import-linter config in setup.cfg, .importlinter, pyproject.toml
+    for fname in ("setup.cfg", ".importlinter", "pyproject.toml"):  # O(1) iterations
+        p = root / fname  # O(1)
+        try:  # O(1)
+            if not p.is_file():  # O(1)
+                continue  # O(1)
+            if fname == "pyproject.toml":  # O(1)
+                import tomllib  # O(1) | absent before 3.11: the file is skipped
+                top = tomllib.loads(p.read_text(encoding="utf-8")).get("tool", {}).get("importlinter")  # O(s)
+                if not isinstance(top, dict):  # O(1)
+                    continue  # O(1)
+                roots = _il_list(top.get("root_packages") or top.get("root_package"))  # O(s)
+                contracts = [_il_contract(c, f"contract {i + 1}") for i, c in enumerate(top.get("contracts") or []) if isinstance(c, dict)]  # O(k*s)
+            else:  # O(1)
+                cp = configparser.ConfigParser(interpolation=None, strict=False, allow_no_value=True)  # O(1)
+                cp.read_string(p.read_text(encoding="utf-8"))  # O(s)
+                if not cp.has_section("importlinter"):  # O(1)
+                    continue  # O(1)
+                roots = _il_list(cp.get("importlinter", "root_packages", fallback=None) or cp.get("importlinter", "root_package", fallback=None))  # O(s)
+                contracts = [_il_contract(dict(cp.items(s)), s.split(":", 2)[-1]) for s in cp.sections() if s.startswith("importlinter:contract:")]  # O(k*s)
+            return {"file": fname, "roots": roots, "contracts": contracts}  # O(1)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError, ImportError, configparser.Error):  # O(1)
+            continue  # O(1) | a file that does not parse is skipped
+    return None  # O(1)
+
+
+def py_module(path: str, roots: list[str]) -> str | None:  # O(s) | dotted module of a .py path below a root package, None outside
+    parts = path.replace("\\", "/").split("/")  # O(s)
+    if not parts[-1].endswith(".py"):  # O(1)
+        return None  # O(1)
+    parts[-1] = parts[-1][:-3]  # O(1)
+    for i, seg in enumerate(parts):  # O(parts) iterations
+        if seg in roots:  # O(roots)
+            mod = [x for x in parts[i:] if x]  # O(parts)
+            if mod[-1] == "__init__":  # O(1)
+                mod = mod[:-1]  # O(parts)
+            return ".".join(mod)  # O(parts)
+    return None  # O(1)
+
+
+def _il_regex(expr: str) -> str:  # O(s) | wildcard module expression as a regex
+    segs = []  # O(1)
+    for seg in expr.strip().split("."):  # O(segs) iterations
+        segs.append(r"[^.]+(?:\.[^.]+)*" if seg == "**" else r"[^.]+" if seg == "*" else re.escape(seg))  # O(s)
+    return r"\.".join(segs)  # O(s)
+
+
+def module_within(expr: str, module: str, as_packages: bool = True) -> str | None:  # O(parts*s) | shortest prefix of module that matches expr whole
+    rx = re.compile(_il_regex(expr))  # O(s)
+    parts = module.split(".")  # O(s)
+    for n in range(1, len(parts) + 1):  # O(parts) iterations
+        if not as_packages and n < len(parts):  # O(1)
+            continue  # O(1)
+        if rx.fullmatch(".".join(parts[:n])):  # O(s)
+            return ".".join(parts[:n])  # O(s)
+    return None  # O(1)
+
+
+def _il_layer_at(entries: list[str], containers: list[str], module: str, ap: bool):  # O(L*C*s) | (container, layer index, item prefix, is "|" entry) or None
+    for c in (containers or [""]):  # O(C) iterations
+        cm = module_within(c, module, ap) if c else ""  # O(s)
+        if cm is None:  # O(1)
+            continue  # O(1)
+        for i, entry in enumerate(entries):  # O(L) iterations
+            indep = "|" in entry  # O(1)
+            for item in re.split(r"\|" if indep else ":", entry):  # O(items) iterations
+                item = item.strip().strip("()").strip()  # O(s)
+                m = module_within(f"{cm}.{item}" if cm else item, module, ap) if item else None  # O(s)
+                if m:  # O(1)
+                    return cm, i, m, indep  # O(1)
+    return None  # O(1)
+
+
+def contract_blocks(contract: dict, importer: str, imported: str) -> bool:  # O(L*C*s) | True when the contract forbids importer importing imported
+    ap = contract.get("as_packages", True)  # O(1)
+    for ln in contract.get("ignore_imports") or []:  # O(k) iterations
+        a, _, b = ln.partition("->")  # O(s)
+        if module_within(a.strip(), importer, False) and module_within(b.strip(), imported, False):  # O(s)
+            return False  # O(1)
+    kind = str(contract.get("type") or "").strip()  # O(1)
+    if kind == "layers":  # O(1)
+        entries, cons = contract.get("layers") or [], contract.get("containers") or []  # O(1)
+        a = _il_layer_at(entries, cons, importer, ap)  # O(L*C*s)
+        b = _il_layer_at(entries, cons, imported, ap)  # O(L*C*s)
+        if not a or not b or a[0] != b[0]:  # O(1)
+            return False  # O(1)
+        return b[1] < a[1] or (b[1] == a[1] and a[3] and a[2] != b[2])  # O(1)
+    if kind == "independence":  # O(1)
+        mods = contract.get("modules") or []  # O(1)
+        for x in mods:  # O(k) iterations
+            for y in mods:  # O(k) iterations
+                p, q = module_within(x, importer, ap), module_within(y, imported, ap)  # O(s)
+                if p and q and p != q and not (p.startswith(q + ".") or q.startswith(p + ".")):  # O(s)
+                    return True  # O(1)
+        return False  # O(1)
+    if kind == "forbidden":  # O(1)
+        return any(module_within(s, importer, ap) for s in contract.get("source_modules") or []) and any(  # O(k*s)
+            module_within(f, imported, ap) for f in contract.get("forbidden_modules") or [])  # O(k*s)
+    if kind == "protected":  # O(1)
+        for pm in contract.get("protected_modules") or []:  # O(k) iterations
+            p = module_within(pm, imported, ap)  # O(s)
+            if p and module_within(pm, importer, ap) != p and not any(  # O(s)
+                    module_within(x, importer, ap) for x in contract.get("allowed_importers") or []):  # O(k*s)
+                return True  # O(1)
+        return False  # O(1)
+    return False  # O(1)
+
+
+def _py_owned(t: Task, roots: list[str]) -> list[str]:  # O(o*s) | modules of the non-test .py files a task owns
+    out = []  # O(1)
+    for o in t.owns:  # O(o) iterations
+        q = o.replace("\\", "/")  # O(s)
+        parts = q.split("/")  # O(s)
+        base = parts[-1]  # O(1)
+        if not base.endswith(".py") or base == "conftest.py" or base.startswith("test_") or base.endswith("_test.py") or {"tests", "test"} & set(parts[:-1]):  # O(s)
+            continue  # O(1)
+        m = py_module(q, roots)  # O(s)
+        if m and m not in out:  # O(o)
+            out.append(m)  # O(1)
+    return out  # O(o)
+
+
+def _py_classes(root: Path, roots: list[str]) -> dict[str, list[str]]:  # O(files*s) | type -> modules with a top-level `class type` under root/<pkg> and root/src/<pkg>, one scan
+    out: dict[str, list[str]] = {}  # O(1)
+    seen: set[Path] = set()  # O(1)
+    for base in (root, root / "src"):  # O(1) iterations
+        for pkg in roots:  # O(roots) iterations
+            d = base / pkg  # O(1)
+            if not d.is_dir():  # O(1)
+                continue  # O(1)
+            for f in sorted(d.rglob("*.py")):  # O(files) iterations
+                if f in seen:  # O(1)
+                    continue  # O(1)
+                seen.add(f)  # O(1)
+                m = py_module(f.relative_to(root).as_posix(), roots)  # O(s)
+                if not m:  # O(1)
+                    continue  # O(1)
+                for ty in re.findall(r"^class\s+(\w+)", f.read_text(encoding="utf-8", errors="replace"), re.M):  # O(size)
+                    if m not in out.setdefault(ty, []):  # O(m)
+                        out[ty].append(m)  # O(1)
+    return out  # O(types)
+
+
+def py_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*types*mods*contracts) | a seam name declared where an import-linter contract bars the consumer's module (#404)
+    cfg = importlinter_config(root)  # O(files*s)
+    if not cfg or not cfg["contracts"]:  # O(1)
+        return []  # O(1)
+    roots = cfg["roots"]  # O(1)
+    owned = {t.id: _py_owned(t, roots) for t in plan.tasks}  # O(n*o*s)
+    by_type: dict[str, list[str]] = {}  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        for item in t.produces:  # O(q) iterations
+            sig = parse_signature(item)  # O(s)
+            tname = sig["cls"] if sig and sig["cls"] else (item if re.fullmatch(r"[A-Z]\w*", item) else None)  # O(1)
+            if tname:  # O(1)
+                by_type.setdefault(tname, []).extend(owned[t.id])  # O(o)
+    pairs = _seam_pairs(plan)  # O(n*q*cands)
+    classes = _py_classes(root, roots) if pairs else {}  # O(files*s) once per run
+    warns: list[str] = []  # O(1)
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()  # O(1)
+    for t, sig, pid, psig in pairs:  # O(pairs) iterations
+        pre = ".".join(psig["module"] or [])  # O(s)
+        own = owned.get(pid, [])  # O(1)
+        mine = [m for m in own if pre and (m == pre or m.endswith("." + pre))] or own  # O(o*s)
+        groups = [(psig["name"], mine)]  # O(1)
+        for ty in signature_types(psig):  # O(types) iterations
+            groups.append((ty, sorted(set(classes.get(ty, [])) | set(by_type.get(ty, [])))))  # O(m log m)
+        for what, mods in groups:  # O(types) iterations
+            for importer in owned.get(t.id, []):  # O(o) iterations
+                key = (t.id, importer, tuple(sorted(mods)))  # O(m)
+                if not mods or key in seen or not all(any(contract_blocks(c, importer, m) for c in cfg["contracts"]) for m in mods):  # O(m*contracts*s)
+                    continue  # O(1)
+                seen.add(key)  # O(1)
+                first = sorted(mods)[0]  # O(m)
+                c = next(c for c in cfg["contracts"] if contract_blocks(c, importer, first))  # O(contracts*s)
+                warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {what} is declared in {', '.join(sorted(mods))}, "  # O(s)
+                             f"which {importer} may not import (import-linter contract \"{c['name']}\" in {cfg['file']})")  # O(s)
+    return warns  # O(w)
+
+
+TS_SKIP = {"node_modules", ".git", ".superlite", "dist", "build", "out", "coverage", ".next", ".turbo"}  # O(1)
+TS_EXT = (".ts", ".tsx", ".mts", ".cts")  # O(1)
+TS_DEP_KEYS = ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies")  # O(1)
+
+
+def ts_packages(root: Path) -> dict[str, dict]:  # O(F + M*s) | every named package.json under root to depth 3; {} under two packages (#404)
+    found: dict[str, dict] = {}  # O(1)
+    base = len(root.parts)  # O(1)
+    for cur, dirs, files in os.walk(root):  # O(F) iterations
+        dirs[:] = sorted(d for d in dirs if d not in TS_SKIP)  # O(d log d)
+        if len(Path(cur).parts) - base >= 3:  # O(1)
+            dirs[:] = []  # O(1)
+        if "package.json" not in files:  # O(1)
+            continue  # O(1)
+        manifest = Path(cur) / "package.json"  # O(1)
+        try:  # one broken manifest must not hide the others | O(1)
+            data = json.loads(manifest.read_text(encoding="utf-8", errors="replace"))  # O(s)
+        except (OSError, ValueError):  # O(1)
+            continue  # O(1)
+        if not isinstance(data, dict) or not isinstance(data.get("name"), str) or not data["name"]:  # O(1)
+            continue  # O(1)
+        deps = _Deps()  # O(1)
+        deps.order = []  # O(1)
+        for key in TS_DEP_KEYS:  # O(1) iterations
+            block = data.get(key)  # O(1)
+            for dep in (block if isinstance(block, dict) else {}):  # O(deps) iterations
+                if dep not in deps:  # O(1)
+                    deps.add(dep)  # O(1)
+                    deps.order.append(dep)  # O(1)
+        found[data["name"]] = {"dir": Path(cur), "deps": deps, "manifest": manifest.relative_to(root).as_posix()}  # O(d)
+    return found if len(found) >= 2 else {}  # O(1)
+
+
+def _ts_file(rel: str) -> bool:  # O(s) | a non-test TypeScript source path
+    parts = rel.replace("\\", "/").split("/")  # O(s)
+    name = parts[-1]  # O(1)
+    return name.endswith(TS_EXT) and ".test." not in name and ".spec." not in name and not {"__tests__", "tests", "test"} & set(parts[:-1])  # O(s)
+
+
+def _ts_owned(t: Task, root: Path) -> list[Path]:  # O(o*s) | the non-test TypeScript files a task owns
+    return [root / o.replace("\\", "/") for o in t.owns if _ts_file(o)]  # O(o*s)
+
+
+def ts_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*types*pkgs) | a seam name declared in a workspace package the consumer's package does not depend on (#404)
+    pkgs = ts_packages(root)  # O(F + M*s)
+    if not pkgs:  # O(1)
+        return []  # O(1)
+    pairs = _seam_pairs(plan)  # O(n*q*cands)
+    if not any(_ts_owned(t, root) for t, _s, _p, _q in pairs):  # O(pairs*o*s)
+        return []  # O(pairs)
+    owned = {t.id: sorted({n for n in (_target_of(f, pkgs) for f in _ts_owned(t, root)) if n}) for t in plan.tasks}  # O(n*o*P*d)
+    by_type: dict[str, set[str]] = {}  # O(1)
+    for t in plan.tasks:  # O(n) iterations
+        for item in t.produces:  # O(q) iterations
+            sig = parse_signature(item)  # O(s)
+            tname = sig["cls"] if sig and sig["cls"] else (item if re.fullmatch(r"[A-Z]\w*", item) else None)  # O(1)
+            if tname:  # O(1)
+                by_type.setdefault(tname, set()).update(owned[t.id])  # O(o)
+    chunks: dict[str, list[str]] = {}  # O(1)
+    for cur, dirs, files in os.walk(root):  # O(F) iterations, one pruned walk for every package
+        dirs[:] = sorted(d for d in dirs if d not in TS_SKIP)  # O(d log d)
+        for fn in sorted(files):  # O(files) iterations
+            f = Path(cur) / fn  # O(1)
+            if f.suffix in TS_EXT and _ts_file(f.relative_to(root).as_posix()):  # O(s)
+                name = _target_of(f, pkgs)  # O(P*d)
+                if name:  # O(1)
+                    chunks.setdefault(name, []).append(f.read_text(encoding="utf-8", errors="replace"))  # O(size)
+    texts = {name: "\n".join(c) for name, c in chunks.items()}  # O(size)
+    warns: list[str] = []  # O(1)
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()  # O(1)
+    for t, sig, pid, psig in pairs:  # O(pairs) iterations
+        groups = [(psig["name"], set(owned.get(pid, [])))]  # O(1)
+        for ty in signature_types(psig):  # O(types) iterations
+            rx = re.compile(r"^\s*export\s+(default\s+)?(declare\s+)?(abstract\s+)?(class|interface|type|enum|const\s+enum|function)\s+" + re.escape(ty) + r"\b", re.M)  # O(s)
+            groups.append((ty, {n for n, x in texts.items() if rx.search(x)} | by_type.get(ty, set())))  # O(P*size)
+        for what, mods in groups:  # O(types) iterations
+            for importer in owned.get(t.id, []):  # O(o) iterations
+                deps = pkgs[importer]["deps"]  # O(1)
+                key = (t.id, importer, tuple(sorted(mods)))  # O(m)
+                if not mods or key in seen or any(m == importer or m in deps for m in mods):  # O(m)
+                    continue  # O(m)
+                seen.add(key)  # O(1)
+                order = ", ".join(getattr(deps, "order", sorted(deps))) or "none"  # O(deps)
+                warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {what} is declared in {', '.join(sorted(mods))}, "  # O(s)
+                             f"which package {importer} may not import ({pkgs[importer]['manifest']}) dependencies: {order}")  # O(deps)
+    return warns  # O(w)
+
+
+def import_issues(plan: Plan, root: Path) -> list[str]:  # O(swift + python) | every stack's seam import warnings, each check isolated
+    out: list[str] = []  # O(1)
+    for check in (swift_import_issues, py_import_issues, ts_import_issues):  # O(1) iterations
+        try:  # O(1)
+            out.extend(check(plan, root))  # O(check)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError, configparser.Error):  # O(1)
+            continue  # O(1) | one stack failing never hides another's warnings
+    return out  # O(w)
+
+
+def covers_entries(text: str) -> list[str]:  # O(s) one pass
+    """Split a Covers value at , · ; outside double quotes; entries are lowercased without spaces, backticks and §."""
+    out, cur, quoted = [], [], False  # O(1)
+    if text.count('"') % 2:  # O(s) an unmatched quote is dropped, its text still splits
+        i = text.rindex('"')  # O(s)
+        text = text[:i] + text[i + 1:]  # O(s)
+    for ch in text + ",":  # O(s)
+        if ch == '"':  # O(1)
+            quoted = not quoted  # O(1)
+        elif ch in ",·;" and not quoted:  # O(1)
+            e = "".join(cur).strip().strip("`§").strip().strip("`").lower()  # O(s)
+            if e:  # O(1)
+                out.append(e)  # O(1)
+            cur = []  # O(1)
+        else:  # O(1)
+            cur.append(ch)  # O(1)
+    return out  # O(1)
+
+
+def spec_gaps(spec_text: str, plan: "Plan") -> list[str]:  # O(S*(d+covers) + C) total
+    """Raw spec headings (levels 2-3) no task covers; a Covers entry naming a heading also covers every heading below it."""
+    lines = spec_text.replace("\r\n", "\n").split("\n")  # O(S)
+    flags, _ = scan_fences(lines)  # O(S)
+    plan_l = plan.text.lower()  # O(C) a plain mention, a Covers line included, covers the heading itself, never its children
+    covers = [c for t in plan.tasks for c in covers_entries(t.field_text("covers"))]  # O(n*k*s)
+
+    def named(num, title):  # O(covers) a Covers entry equals the title or holds the number
+        return any((title and c == title) or (num and (num == c or num.startswith(c + "."))) for c in covers)  # O(covers)
+
+    gaps, stack = [], []  # O(1) stack: (level, covered-by-name)
+    for ln, fenced in zip(lines, flags):  # O(S)
+        m = None if fenced else re.match(r"^(#{1,6})\s+(.*?)\s*#*$", ln)  # O(s)
+        if not m:  # O(1)
+            continue  # O(1)
+        level, raw = len(m.group(1)), m.group(2)  # O(1)
+        while stack and stack[-1][0] >= level:  # O(d) a heading closes its level and deeper
+            stack.pop()  # O(1)
+        nm = re.match(r"^(?:§\s*)?(\d+(?:\.\d+)*)\.?(?:\s+(.*))?$", raw)  # O(s)
+        num, title = (nm.group(1), nm.group(2) or "") if nm else (None, raw)  # O(1)
+        title = title.strip().strip("`").lower()  # O(1)
+        by_name = named(num, title)  # O(covers)
+        exempt = title in SPEC_SKIP or re.match(r"(?:intent|decisions|validation|acceptance|open|out of scope|out-of-scope)[ (:]", title)  # O(K)
+        if level in (2, 3) and not exempt:  # O(1)
+            covered = by_name or any(s[1] for s in stack) or bool(title and title in plan_l)  # O(d)
+            if not covered and num:  # O(1)
+                covered = bool(re.search(rf"(?:§|section\s+|sec\.\s*)\s*{re.escape(num)}\b", plan_l))  # O(C) regex
+            if not covered:  # O(1)
+                gaps.append(raw)  # O(1)
+        stack.append((level, by_name))  # O(1)
+    return gaps  # O(1)
 
 
 def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e*n + C*P + n*p + merge/simulate) total
@@ -1629,26 +1988,8 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
             issues.append(Issue(f"spec not found: {args.spec}", scope="plan"))  # O(1)
         else:  # O(1)
             stext = sp.read_text(encoding="utf-8-sig").replace("\r\n", "\n")  # O(S) file read
-            sflags, _ = scan_fences(stext.split("\n"))  # O(S)
-            plan_l = plan.text.lower()  # O(C)
-            covers = [c.strip().strip("`§").strip().lower() for t in plan.tasks  # **Covers:** 2.1, Parser | O(n*k*s)
-                      for c in re.split(r"[,·;]", t.field_text("covers")) if c.strip()]
-            for ln, fenced in zip(stext.split("\n"), sflags):  # O(S) iterations; split repeated
-                m = None if fenced else re.match(r"^#{2,3}\s+(.*?)\s*#*$", ln)  # O(s)
-                if not m:  # O(1)
-                    continue  # O(1)
-                raw = m.group(1)  # O(1)
-                nm = re.match(r"^(?:§\s*)?(\d+(?:\.\d+)*)\.?\s+(.*)$", raw)  # O(s)
-                num, title = (nm.group(1), nm.group(2)) if nm else (None, raw)  # O(1)
-                title = title.strip().strip("`")  # O(1)
-                if title.lower() in SPEC_SKIP or re.match(r"(?:intent|decisions|validation|acceptance|open|out of scope|out-of-scope)[ (:]", title.lower()):  # O(K) a heading may extend an exempt one
-                    continue  # O(1)
-                covered = title.lower() in plan_l or any(  # O(C + covers) a Covers number also covers its subsections
-                    c == title.lower() or (num and (num == c or num.startswith(c + "."))) for c in covers)
-                if not covered and num:  # O(1)
-                    covered = bool(re.search(rf"(?:§|section\s+|sec\.\s*)\s*{re.escape(num)}\b", plan_l))  # O(C) regex
-                if not covered:  # O(1)
-                    issues.append(Issue(f"SPEC section {raw!r} has no task", scope="plan"))  # O(1)
+            for raw in spec_gaps(stext, plan):  # O(S + C) heading stack and Covers entries live in spec_gaps
+                issues.append(Issue(f"SPEC section {raw!r} has no task", scope="plan"))  # O(1)
     spec_off = False  # O(1)
     if getattr(args, "spec", None) and Path(args.spec).is_file():  # the spec may switch the coverage pass off | O(1)
         coverage = load_coverage()  # O(1)
