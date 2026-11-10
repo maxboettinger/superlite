@@ -35,8 +35,8 @@ def test_questions_and_answers():
     d = data(b("B2", ["a.py"], decisions=[Q]), outside=[{"number": 7, "title": "Add\nX", "author": "eve"}, {"number": 8, "title": "Y", "author": "mal"}])
     a7, a8 = "Admit outside issue #7 (Add X, by eve) into the backlog?", "Admit outside issue #8 (Y, by mal) into the backlog?"
     qs = bs.open_questions(d)
-    assert [q["question"] for q in qs] == [bs.SHIP_Q, a7, a8, "B2: Keep the v1 API?"] and bs.open_questions(data()) == []
-    assert [o["label"] for o in qs[0]["options"]] == ["Approve shipping", "Not yet"] and (qs[1]["header"], qs[3]["header"]) == ("#7", "API")
+    assert [q["question"] for q in qs] == [a7, a8, "B2: Keep the v1 API?", bs.SHIP_Q] and bs.open_questions(data()) == []
+    assert [o["label"] for o in qs[3]["options"]] == ["Approve shipping (Recommended)", "Not yet"] and (qs[0]["header"], qs[2]["header"]) == ("#7", "API")
     assert bs.answer(d, {bs.SHIP_Q: "sure"}, "AskUserQuestion", "T") == ["ship: answer must be Approve shipping or Not yet"]
     errs = bs.answer(d, {bs.SHIP_Q: "Approve shipping", a7: "Admit", a8: "Skip", "B2: Keep the v1 API?": "Drop, and log it", "B9: x?": "y"}, "AskUserQuestion", "T")
     assert errs == ["no open question: B9: x?"] and d["approved_ship"] == {"by": "AskUserQuestion", "time": "T"}

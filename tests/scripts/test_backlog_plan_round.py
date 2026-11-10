@@ -23,7 +23,7 @@ def test_reset_plan_clears_ship_approval(bk, capsys):
     rc, out = cli(capsys, "plan", "--reset")
     assert rc == 0 and load(bk)["approved_ship"] is None
     assert out.splitlines()[0].endswith("ship not approved")
-    assert questions(capsys)[0]["question"] == bs.SHIP_Q
+    assert questions(capsys)[-1]["question"] == bs.SHIP_Q
 
 
 def test_next_round_plan_clears_ship_approval(bk, capsys):

@@ -368,3 +368,18 @@ def left_out_reasons(obj: object, known: set) -> dict:
             if n is not None and n in known and n not in out:  # O(1)
                 out[n] = r
     return out
+
+
+BY_ERR = 'by: "user", "main" or a {question: "user"|"main"} map'
+
+
+def answer_by(obj: dict, answers: dict) -> tuple[dict, str]:
+    by = obj.get("by", "user") if isinstance(obj, dict) else "user"  # O(1)
+    if isinstance(by, str) and by in ("user", "main"):  # O(1)
+        return {q: by for q in answers}, ""  # O(answers)
+    if not isinstance(by, dict) or any(v not in ("user", "main") for v in by.values()):  # O(by)
+        return {}, BY_ERR  # O(1)
+    for q in by:  # O(by)
+        if q not in answers:
+            return {}, f"by: no answer for {q}"  # O(1)
+    return {q: by.get(q, "user") for q in answers}, ""  # O(answers)
