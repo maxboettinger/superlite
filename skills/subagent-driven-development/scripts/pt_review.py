@@ -21,6 +21,7 @@ Plan conventions read here (per task section `### Tn ...`):
   **Owns:** a.py, tests/test_a.py          **Consumes:** f(x) -> y (T1)
   **Produces:** pkg.mod.f(a: int, b=1) -> str  ·  Class.method(ref: str) -> list[str]
       a default naming a constant (`tid=TID`) must be a name in the code too (a literal or a call there is a mismatch); any other non-literal default is not compared
+      a class item `pkg.errors.ParseError(Exception)` lists its bases, checked against the class's MRO; a class without a signature of its own is checked by existence and bases only
   **Probe entry:** call=pkg.mod.fn · run=python -m pkg · serve=pkg.server.create_server(Workbook())
   Data contract lines (any line, anchored at the start, bullets allowed):
       POST /api/cells {"ref":"A1"} -> 200 {cells: dict, note?: str}
@@ -437,11 +438,27 @@ def norm_ann(s: str | None) -> str | None:  # O(m) total
         return s.strip()  # O(m)
 
 
+def _base_names(args_src: str) -> list[str] | None:  # bare names only, read as a base list | O(m + p) total
+    try:  # O(m)
+        params = _params_from_src(args_src)  # O(m)
+    except SyntaxError:  # O(m)
+        return None  # O(m)
+    if not params or any(x["kind"] != "POSITIONAL_OR_KEYWORD" or x["default"] is not None or x["ann"] for x in params):  # O(p)
+        return None  # O(p)
+    return [x["name"] for x in params]  # O(p)
+
+
 def compare_sig(p: Planned, real: dict) -> list[str]:  # O(p^2 + p*m) total
     """Differences between a planned signature and the real one (empty = match)."""  # O(m)
     if not real.get("ok"):  # O(m)
         return [f"{p.qual}: {real.get('error', 'cannot read the real signature')}"]  # O(m)
     if real.get("declared"):  # declared-only: parameters are not compared | O(1)
+        return []  # O(1)
+    bases = real.get("bases")  # O(1)
+    names = _base_names(p.args_src) if bases is not None and p.args_src is not None else None  # O(m)
+    if names and (real.get("params") is None or all(n in bases for n in names)):  # O(p * b)
+        return [f"{p.qual}: base class '{n}' not in its bases ({', '.join(bases)})" for n in names if n not in bases]  # O(p * b)
+    if real.get("params") is None:  # existence only | O(1)
         return []  # O(1)
     msgs: list[str] = []  # O(m)
     if p.args_src is not None:  # O(m)
@@ -566,7 +583,22 @@ for mod_name, chain in json.loads(sys.argv[1]):
                 obj = getattr(obj, name)
             except AttributeError:
                 raise AttributeError("%s not found in %s" % (".".join(chain[:i + 1]), mod_name))
-        sig = inspect.signature(obj)
+        bases = [c.__name__ for c in inspect.getmro(obj)[1:]] if inspect.isclass(obj) else None
+        try:
+            sig = inspect.signature(obj)
+        except ValueError:
+            if bases is None:
+                raise
+            sig = None
+        if sig is None:
+            r = {"ok": True, "params": None, "returns": None, "bases": bases, "file": None, "line": 0}
+            try:
+                r["file"] = inspect.getsourcefile(obj)
+                r["line"] = inspect.getsourcelines(obj)[1]
+            except (TypeError, OSError):
+                pass
+            out.append(r)
+            continue
         params = list(sig.parameters.values())
         srcs = default_srcs(obj)
         if inspect.isclass(parent) and params and params[0].name in ("self", "cls"):
@@ -576,7 +608,7 @@ for mod_name, chain in json.loads(sys.argv[1]):
             {"name": p.name, "kind": p.kind.name, "has_default": p.default is not p.empty,
              "default": repr(p.default) if p.default is not p.empty else None, "ann": ann(p.annotation),
              "default_src": srcs.get(p.name) if p.default is not p.empty else None}
-            for p in params], "returns": ann(sig.return_annotation), "file": None, "line": 0}
+            for p in params], "returns": ann(sig.return_annotation), "bases": bases, "file": None, "line": 0}
         try:
             r["file"] = inspect.getsourcefile(obj)
             r["line"] = inspect.getsourcelines(obj)[1]
