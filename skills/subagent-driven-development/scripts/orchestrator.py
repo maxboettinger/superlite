@@ -214,6 +214,46 @@ def test_run_line(sd: Path) -> str:  # O(1)
         return f"last test run: unreadable {f}"  # O(1)
 
 
+def compare_ref(root: Path, ref: str) -> str:  # O(1) git
+    """ref when it still names a commit, else HEAD's full sha."""
+    ok = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], capture_output=True, text=True)  # O(1) git
+    if ref and ok.returncode == 0:  # O(1)
+        return ref  # O(1)
+    return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()  # O(1) git
+
+
+def task_test_run(sd: Path, files: list[str]) -> dict | None:  # O(s * f)
+    """The newest test summary (by mtime) in sd whose files map names one of files: mode, passed, failed in those files, ended."""
+    want = {f.replace("\\", "/").removeprefix("./") for f in files}  # O(f)
+    best = None  # O(1)
+    for p in [*sd.glob("test-summary.json"), *sd.glob("test-summary-*.json")]:  # O(s) iterations
+        try:  # O(1)
+            d = json.loads(p.read_text(encoding="utf-8"))  # O(file)
+            mt = p.stat().st_mtime  # O(1)
+        except (OSError, ValueError):  # O(1)
+            continue  # O(1)
+        if not isinstance(d, dict) or not isinstance(d.get("files"), dict):  # O(1)
+            continue  # O(1)
+        hit = [v for k, v in d["files"].items() if isinstance(k, str) and k.replace("\\", "/").removeprefix("./") in want]  # O(f)
+        if not hit:  # O(1)
+            continue  # O(1)
+        if not all(isinstance(v, (list, tuple)) and len(v) == 2 and all(type(n) is int for n in v) for v in hit):  # O(f)
+            continue  # O(1)
+        if best is None or mt > best["ended"]:  # O(1)
+            best = {"mode": d.get("mode", "?"), "passed": sum(v[0] for v in hit), "failed": sum(v[1] for v in hit), "ended": mt}  # O(f)
+    return best  # O(1)
+
+
+def task_test_line(tid: str, run: dict | None, changed: list[str], root: Path) -> str:  # O(f)
+    """One line: the last test run that named the task's files, and which changed files were edited after it."""
+    if run is None:  # O(1)
+        return f"{tid} last test run: none covers its files"  # O(1)
+    at = datetime.fromtimestamp(run["ended"]).strftime("%H:%M:%S")  # O(1)
+    late = [f for f in changed if (root / f).is_file() and (root / f).stat().st_mtime > run["ended"]]  # O(f)
+    tail = f"; edited after it: {', '.join(late)}" if late else "; nothing edited after it"  # O(f)
+    return f"{tid} last test run: {run['mode']}, {run['passed']} passed, {run['failed']} failed in its files, ended {at}{tail}"  # O(1)
+
+
 def resume_lines(sd: Path, plan: Path) -> list[str]:  # O(t * f) plus git calls
     """Per plan task, what a dead coordinator left behind: checkpoint, edits after it, uncommitted Owns files."""
     import autocommit  # lazy: orchestrator is imported by every gated tool | O(1)
@@ -241,36 +281,39 @@ def resume_lines(sd: Path, plan: Path) -> list[str]:  # O(t * f) plus git calls
             shas.setdefault(m.group(1), m.group(2))  # O(1)
     if entries:  # O(1)
         ref = entries[-1].get("sha", "")  # O(1)
-        head = f"resume: plan {plan}; checkpoint chain head {ref[:7]} ({entries[-1].get('task')}); files compared with it"  # O(1)
+        head = (f"resume: plan {plan}; checkpointed tasks compared with their own checkpoint, "
+                f"the others with the chain head {ref[:7]} ({entries[-1].get('task')})")  # O(1)
     else:  # O(1)
         ref = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()  # O(1)
-        head = f"resume: plan {plan}; no checkpoints; files compared with HEAD {ref[:7]}"  # O(1)
-    lines, clean, none, edited = [head], [], [], []  # O(1)
-    summ = sd / "test-summary.json"  # O(1)
-    try:  # O(1)
-        stamp = summ.stat().st_mtime if isinstance(json.loads(summ.read_text(encoding="utf-8")), dict) else None  # O(file)
-    except (OSError, ValueError):  # O(1)
-        stamp = None  # O(1)
+        if shas:  # O(1)
+            head = (f"resume: plan {plan}; no checkpoint chain; checkpointed tasks compared with their own checkpoint, "
+                    f"the others with HEAD {ref[:7]}")  # O(1)
+        else:  # O(1)
+            head = f"resume: plan {plan}; no checkpoints; files compared with HEAD {ref[:7]}"  # O(1)
+    lines, clean, none = [head], [], []  # O(1)
     for t in tasks:  # O(t) iterations
         files = list(dict.fromkeys([*t.owns, *efiles.get(t.id, [])]))  # O(f)
-        ch = changed_since(root, ref, files)  # O(f) git
-        if stamp is not None and any((root / f).is_file() and (root / f).stat().st_mtime > stamp for f in ch):  # O(f)
-            edited.append(t.id)  # O(1)
-        sha = shas.get(t.id, "")[:7]  # O(1)
+        full = shas.get(t.id, "")  # O(1)
+        tref = compare_ref(root, full) if full else ref  # O(1) git
+        ch = changed_since(root, tref, files)  # O(f) git
+        sha = full[:7]  # O(1)
         if sha and ch:  # O(1)
-            lines.append(f"{t.id} checkpointed {sha}: edited after the checkpoint: {', '.join(ch)}; keep: sl commit_task {t.id} --plan {plan}; "
-                         f"drop: git restore --source {sha} -- {' '.join(ch)}")  # O(f)
+            gone = f" (gone; compared with HEAD {tref[:7]})" if tref != full else ""  # O(1)
+            lines.append(f"{t.id} checkpointed {sha}{gone}: edited after the checkpoint: {', '.join(ch)}; keep: sl commit_task {t.id} --plan {plan}; "
+                         f"drop: git restore --source {tref[:7]} -- {' '.join(ch)}")  # O(f)
         elif sha:  # O(1)
             clean.append(t.id)  # O(1)
         elif ch:  # O(1)
             lines.append(f"{t.id} not checkpointed: uncommitted Owns files: {', '.join(ch)}; run its tests, then sl commit_task {t.id} --plan {plan}")  # O(f)
         else:  # O(1)
             none.append(t.id)  # O(1)
+        if ch:  # O(1)
+            lines.append(task_test_line(t.id, task_test_run(sd, files), ch, root))  # O(s * f)
     if clean:  # O(1)
         lines.append("checkpointed, nothing edited after: " + " ".join(clean))  # O(t)
     if none:  # O(1)
         lines.append("no changes: " + " ".join(none))  # O(t)
-    lines.append(test_run_line(sd) + (f"; edited after it: {' '.join(edited)}" if edited else ""))  # O(t)
+    lines.append(test_run_line(sd))  # O(1)
     return lines  # O(1)
 
 

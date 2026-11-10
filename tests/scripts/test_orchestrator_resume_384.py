@@ -92,21 +92,23 @@ def clean_env(monkeypatch, tmp_path):
 def test_resume_lines_name_each_task_state(tmp_path):
     root, plan, sd, c1 = repo(tmp_path)
     assert orchestrator.resume_lines(sd, plan) == [
-        f"resume: plan {plan}; checkpoint chain head {c1[:7]} (T1); files compared with it",
+        f"resume: plan {plan}; checkpointed tasks compared with their own checkpoint, the others with the chain head {c1[:7]} (T1)",
         f"T1 checkpointed {c1[:7]}: edited after the checkpoint: src/a.py; keep: sl commit_task T1 --plan {plan}; "
         f"drop: git restore --source {c1[:7]} -- src/a.py",
+        "T1 last test run: none covers its files",
         f"T2 not checkpointed: uncommitted Owns files: src/b.py; run its tests, then sl commit_task T2 --plan {plan}",
+        "T2 last test run: none covers its files",
         "no changes: T3",
-        f"last test run: fast, 5 passed, 0 failed, ended {ended(sd)}; edited after it: T1 T2",
+        f"last test run: fast, 5 passed, 0 failed, ended {ended(sd)}",
     ]
 
 
 def test_clean_checkpoint_is_listed_once(tmp_path):
     root, plan, sd, c1 = repo(tmp_path, edit_after=False)
     lines = orchestrator.resume_lines(sd, plan)
-    assert lines[2:4] == ["checkpointed, nothing edited after: T1", "no changes: T3"]
+    assert lines[3:5] == ["checkpointed, nothing edited after: T1", "no changes: T3"]
     assert not any(ln.startswith("T1 ") for ln in lines)
-    assert lines[-1] == f"last test run: fast, 5 passed, 0 failed, ended {ended(sd)}; edited after it: T2"
+    assert lines[-1] == f"last test run: fast, 5 passed, 0 failed, ended {ended(sd)}"
 
 
 def test_without_checkpoints_compares_with_head(tmp_path):
@@ -126,7 +128,9 @@ def test_checkpoints_of_another_plan_are_ignored(tmp_path):
     st["plan"] = str(root / "docs" / "plans" / "old.md")
     (sd / "checkpoints.json").write_text(json.dumps(st), encoding="utf-8")
     head = git(root, "rev-parse", "HEAD")
-    assert orchestrator.resume_lines(sd, plan)[0] == f"resume: plan {plan}; no checkpoints; files compared with HEAD {head[:7]}"
+    assert orchestrator.resume_lines(sd, plan)[0] == (
+        f"resume: plan {plan}; no checkpoint chain; checkpointed tasks compared with their own checkpoint, "
+        f"the others with HEAD {head[:7]}")
 
 
 def test_changed_since_compares_blobs(tmp_path):
@@ -221,7 +225,8 @@ def test_cli_resume_leaves_another_live_sessions_pool(tmp_path, monkeypatch, cap
     out = capsys.readouterr().out.splitlines()
     assert out[0] == (f"pool: not pruned: {sd} belongs to session other; "
                       f"take the run over first: sl orchestrator takeover --plan {sd}")
-    assert out[1] == f"resume: plan {plan}; checkpoint chain head {c1[:7]} (T1); files compared with it"
+    assert out[1] == (f"resume: plan {plan}; checkpointed tasks compared with their own checkpoint, "
+                      f"the others with the chain head {c1[:7]} (T1)")
 
 
 def test_cli_resume_without_a_plan(tmp_path, monkeypatch, capsys):
