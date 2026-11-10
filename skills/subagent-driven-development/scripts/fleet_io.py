@@ -18,8 +18,11 @@ a one-turn worker (fixer, reviewer, research, layer) is stopped once its status 
 # Complexity notation:
 # n = tasks in the plan, k = tasks in a message, w = workers, m = lines of metrics.jsonl, T = transcript lines, s = screen bytes
 import argparse  # O(1)
+import contextlib  # O(1)
 import importlib  # O(1)
+import io as _io  # O(1)
 import json  # O(1)
+import re  # O(1)
 import sys  # O(1)
 import tempfile  # O(1)
 import time  # O(1)
@@ -88,6 +91,118 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
         out += [f"Verify: `{sl_path} run_tests --fast {' '.join(tests)} --task {tasks[0]} --background`, then run the printed `wait:` line in the foreground."]  # O(o)
     out += ["", f"Reply in at most 200 words, starting with `{STATUS_LINE}` (pick one), then files changed, the test command and its result line, and open questions."]  # O(1)
     return "\n".join(out) + "\n"  # O(out)
+
+RISK = ("deep", "numeric", "state", "protocol")  # the Review Focus categories that make a task worth a review | O(1)
+LEDGER_COMMIT = re.compile(r"^\s*[-*+]?\s*commit\s+([A-Z]{1,3}\d+[A-Za-z]?)\s+[0-9a-f]{7,40}")  # as commit_task.COMMIT_LINE | O(1)
+
+
+def ledger_commits(ledger):  # {task: its `commit Tn <sha> ...` lines, oldest first} | O(lines)
+    out = {}  # O(1)
+    try:  # O(1)
+        text = Path(ledger).read_text(encoding="utf-8", errors="replace")  # O(bytes)
+    except OSError:  # O(1)
+        return out  # O(1)
+    for ln in text.splitlines():  # O(lines) iterations
+        m = LEDGER_COMMIT.match(ln)  # O(1) regex
+        if m:  # O(1)
+            out.setdefault(m.group(1), []).append(ln.strip().lstrip("-*+ ").strip())  # O(len)
+    return out  # O(1)
+
+
+def review_reasons(plan, tid):  # why TID is worth a package review; KeyError for a task the plan lacks | O(L + e + k*s)
+    pl = pt.Plan.load(str(plan))  # O(L)
+    task = pl.by_id[tid]  # KeyError | O(1)
+    why = []  # O(1)
+    if (task.complexity or 0) >= 5:  # O(s)
+        why.append(f"Complexity {task.complexity}")  # O(1)
+    try:  # a plan without a taskgraph block has no seams; its exit must not end a dispatch round | O(1)
+        seams = nt.taskgraph_full(str(plan))["seams"]  # O(e)
+    except SystemExit:  # O(1)
+        seams = []  # O(1)
+    for seam in seams:  # O(e) iterations
+        if tid in seam.split("\u2194"):  # O(len)
+            why.append(f"seam {seam}")  # O(1)
+    parts = {seg.lower() for o in task.owns for seg in re.split(r"[/.]", o)}  # O(k*s*A)
+    hard = sorted({c for pkg, cases in pt.review_focus_cases(pl).items() if pkg in parts for c in cases} & set(RISK))  # O(L + pkgs)
+    if hard:  # O(1)
+        why.append(f"Review Focus {', '.join(hard)}")  # O(1)
+    return why  # O(1)
+
+
+def _sections(pl):  # [(package name, [task ids])] of the plan's unfenced `## ` headings | O(L + n)
+    heads = [(i, re.sub(r"\s*\([^()]*\)\s*$", "", re.sub(r"(?i)^package:\s*", "", ln[3:].strip())).strip())  # O(L*s)
+             for i, ln in enumerate(pl.lines) if not pl.fenced[i] and re.match(r"^## (?!#)", ln)]  # O(L)
+    out = [(name, []) for _, name in heads]  # O(h)
+    for t in pl.tasks:  # O(n) iterations
+        above = [k for k, (i, _) in enumerate(heads) if i <= t.line]  # O(h)
+        if above:  # O(1)
+            out[above[-1]][1].append(t.id)  # O(1)
+    return out  # O(1)
+
+
+def _pkg_key(name):  # O(s)
+    return re.sub(r"\s*\([^()]*\)\s*$", "", str(name).strip()).strip().lower()  # O(s)
+
+
+def package_tasks(plan, name):  # the task ids of the plan section NAME, in plan order | O(L + n*h)
+    want = _pkg_key(name)  # O(s)
+    return [t for sec, ids in _sections(pt.Plan.load(str(plan))) if _pkg_key(sec) == want for t in ids]  # O(h + n)
+
+
+def package_names(plan):  # the section names of the plan that hold tasks, heading case kept | O(L + n*h)
+    return [sec for sec, ids in _sections(pt.Plan.load(str(plan))) if ids]  # O(h)
+
+
+def _hotspots(sd, files):  # the stdout of `incident hotspots` for FILES, or why it failed | O(B + i log i)
+    import incident  # lazy: only a review brief needs it | O(module)
+    buf = _io.StringIO()  # O(1)
+    try:  # O(1)
+        with contextlib.redirect_stdout(buf):  # O(1)
+            incident.main(["hotspots", "--files", ",".join(files), "--log", str(Path(sd) / "incidents.jsonl")])  # O(B + i log i)
+    except (Exception, SystemExit) as e:  # O(1)
+        return f"(hotspots failed: {e})"  # O(1)
+    return buf.getvalue().strip() or "(none)"  # O(out)
+
+
+def review_brief(sd, plan, tasks, sl_path, superlite_root, package=None):  # the package-reviewer's brief | O(L + e + k*s + B)
+    sd = Path(sd)  # O(1)
+    plan_p = Path(plan).resolve()  # O(1)
+    pl = pt.Plan.load(str(plan_p))  # O(L)
+    root = state.git_root(sd) or sd.parent  # O(d)
+    commits = ledger_commits(sd / "progress.md")  # O(lines)
+    files = list(dict.fromkeys(o for t in tasks for o in pl.by_id[t].owns))  # O(k*o)
+    ids = ", ".join(tasks)  # O(k)
+    if package:  # O(1)
+        why = f"Why: every committed task of package {package}"  # O(1)
+    else:  # O(1)
+        why = "Why: " + "; ".join(f"{t}: {'; '.join(review_reasons(plan_p, t)) or 'asked for'}" for t in tasks)  # O(k*(L + e))
+    lines = [f"# Review: {ids}" + (f" (package {package})" if package else ""), "", f"SUPERLITE={superlite_root}", f"PLAN={plan_p}", f"Root: {root}",  # O(1)
+             f"sl (type it literally in every command): {sl_path}", why, "", "Commits:"]  # O(1)
+    for t in tasks:  # O(k) iterations
+        lines += [f"- {c}" for c in commits.get(t, [])]  # O(c)
+    if not any(commits.get(t) for t in tasks):  # O(k)
+        lines.append("- (no commit line in progress.md)")  # O(1)
+    lines += ["Diffs: `git show <sha>` for each commit above, in Root."]  # O(1)
+    lines += [f"Spec slice: `{sl_path} task {t} --plan {plan_p}`" for t in tasks]  # O(k)
+    lines += [f"Files in scope: {', '.join(files)}", "",  # O(o)
+              f"Incident hotspots (`{sl_path} incident hotspots --files {','.join(files)}`):", _hotspots(sd, files), ""]  # O(B + i log i)
+    adapter = sd / "probes" / "adapter.py"  # O(1)
+    lines.append(f"Probe adapter: {adapter if adapter.is_file() else 'none'}")  # O(1)
+    return "\n".join(lines) + "\n"  # O(out)
+
+
+def review_hints(sd, plan):  # [(task, reasons)] for committed tasks that match a review reason and no worker has reviewed | O(n*(L + e) + w)
+    sd = Path(sd)  # O(1)
+    pl = pt.Plan.load(str(plan))  # O(L)
+    covered = {t for w in (fs.load(sd).get("workers") or {}).values() for t in (w.get("review") or [])}  # O(w*k)
+    out = []  # O(1)
+    for tid in ledger_commits(sd / "progress.md"):  # O(c) iterations
+        if tid not in pl.by_id or tid in covered:  # O(1)
+            continue  # O(1)
+        why = review_reasons(plan, tid)  # O(L + e + k*s)
+        if why:  # O(1)
+            out.append((tid, why))  # O(1)
+    return sorted(out, key=lambda x: pt.nkey(x[0]))  # O(n log n)
 
 
 def last_assistant_text(transcript):  # O(T)
