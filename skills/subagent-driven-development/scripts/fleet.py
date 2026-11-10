@@ -4,6 +4,7 @@
     fleet.py on [--accounts A,B] [--plan P] | off | status [--all]
     fleet.py spawn [--role R] [--tier T] --plan P | stop [IDS...] [--all]
     fleet.py spawn --for-dispatch --plan P    (one dispatch round: dispatch, spawn, send)
+    fleet.py spawn --for-review Tn [Tm ...] | --package X --plan P    (write the review brief, start a package-reviewer, send it)
     fleet.py report IDS... [--plan P]    (print a worker's last report, or a report by label; read-only)
     fleet.py send | keys | wait     (delegated to fleet_io)
     fleet.py run --layer headless|tui|evals     (delegated to fleet_layer)
@@ -18,6 +19,7 @@ created, prints `error: --plan P: <reason>; ...` on stderr and exits 2, creating
 A start that fails with `not an available shell` (a freed pane) is retried once after SHELL_PAUSE_S.
 `spawn --for-dispatch` also stops the ready implementers an earlier dispatch dropped from pool.json (#424).
 A stalled prime waits up to STALL_WAIT_MS for a late start, then is resent once; a start that stays slow is retried once on another account (#428).
+`--for-dispatch` ends with one `review: Tn (<why>); run ... fleet spawn --for-review Tn --plan P` line per committed task that matches a review reason and has no review yet (#422).
 While the run's fleet.json says off, `spawn` (both forms) starts nothing: `BLOCKED: fleet is off in <state dir>; run sl fleet on [--plan P] first ...`, exit 3 (#355).
 """
 
@@ -441,7 +443,66 @@ def for_dispatch(sd, plan, project):  # O(R * (spawn + send)): one dispatch roun
                 why += "; rerun sl fleet spawn --for-dispatch"  # O(1)
             print(f"BLOCKED: {tasks} not sent ({why})")  # O(1)
             blocked = True  # the next line still goes out | O(1)
+    try:  # a hint failure must not fail the round | O(1)
+        for tid, reasons in fio.review_hints(sd, plan):  # O(n) iterations
+            print(f"review: {tid} ({'; '.join(reasons)}); run {sl} fleet spawn --for-review {tid} --plan {plan}")  # O(k)
+    except (ValueError, OSError, KeyError) as e:  # O(1)
+        print(f"warning: no review hints ({e})", file=sys.stderr)  # O(1)
     return 3 if blocked else 0  # O(1)
+
+
+def for_review(sd, plan, project, tasks, package=None):  # O(L + e + spawn + send): a package-reviewer for TASKS (or PACKAGE's committed tasks), brief written and sent
+    import fleet_io as fio  # noqa: E402 | O(1) lazy
+    sd = Path(sd)  # O(1)
+    pp = sd / "pool.json"  # O(1)
+    plan = plan or (pool.load(pp).get("plan") if pp.exists() else None) or fio.nt.DEFAULT_PLAN  # as for_dispatch | O(pool bytes)
+    tasks = list(dict.fromkeys(tasks or []))  # O(k)
+    if tasks and package:  # O(1)
+        print("error: --for-review takes task ids or --package, not both", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    if not tasks and not package:  # O(1)
+        print("error: --for-review needs task ids or --package", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    commits = fio.ledger_commits(sd / "progress.md")  # O(lines)
+    try:  # O(1)
+        if package:  # O(1)
+            ids = fio.package_tasks(plan, package)  # O(L + n*h)
+            if not ids:  # O(1)
+                print(f"error: unknown package {package} (packages: {', '.join(fio.package_names(plan))})", file=sys.stderr)  # O(L)
+                return 2  # O(1)
+            tasks = [t for t in ids if commits.get(t)]  # O(n)
+            if not tasks:  # O(1)
+                print(f"BLOCKED: no committed task in package {package}")  # O(1)
+                return 3  # O(1)
+        else:  # O(1)
+            by_id = fio.pt.Plan.load(str(plan)).by_id  # O(L)
+            for t in tasks:  # O(k) iterations
+                if t not in by_id:  # O(1)
+                    print(f"error: unknown task {t}", file=sys.stderr)  # O(1)
+                    return 2  # O(1)
+            for t in tasks:  # O(k) iterations
+                if not commits.get(t):  # O(1)
+                    print(f"BLOCKED: {t} has no commit line in progress.md; run commit_task {t} first")  # O(1)
+                    return 3  # O(1)
+    except OSError as e:  # an unreadable plan | O(1)
+        print(f"error: {e}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    label = "review-" + (re.sub(r"[^a-z0-9]+", "-", package.lower()).strip("-") if package else ",".join(tasks))  # O(len)
+    f = sd / "briefs" / (label.replace(",", "-") + ".md")  # O(1)
+    f.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+    f.write_text(fio.review_brief(sd, plan, tasks, str(fio.HERE / "sl"), str(fio.HERE.parents[2]), package), encoding="utf-8")  # O(L + e + B)
+    w = spawn(sd, plan, None, project, role="package-reviewer")  # prints its own Wn or BLOCKED line; exit 3 stays | O(a * e + w)
+    try:  # O(1)
+        fio.send_brief(sd, w["id"], str(f), label)  # prints `Wn review-.. sent` | O(w + len)
+    except (fio.hc.HerdrError, OSError, KeyError) as e:  # O(1)
+        stop(sd, [w["id"]])  # close the reviewer just spawned, so a rerun does not leave two | O(w)
+        print(f"BLOCKED: {label} not sent ({getattr(e, 'message', '') or getattr(e, 'code', '') or e})")  # O(1)
+        return 3  # O(1)
+    with fs.locked(sd):  # O(1) plus wait
+        data = fs.load(sd)  # O(w)
+        data["workers"][w["id"]]["review"] = tasks  # O(1)
+        fs.save(sd, data)  # O(w)
+    return 0  # O(1)
 
 
 def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr calls
@@ -565,6 +626,8 @@ def main(argv=None):  # O(w) plus command cost
     s.add_argument("--role", default="implementer")  # O(1) checked by fleet_roles, which names the valid roles
     s.add_argument("--tier", default=None)  # O(1) the implementer's default is sonnet, a fixer's tier is 1/2/3
     s.add_argument("--plan")  # O(1)
+    s.add_argument("--for-review", nargs="*", default=None)  # O(1) task ids, commas or spaces
+    s.add_argument("--package")  # O(1) alone it means --for-review of the package's committed tasks
     s.add_argument("--for-dispatch", action="store_true")  # O(1) run dispatch, spawn per `fresh` line, send each line's tasks
     s = sub.add_parser("stop", help="close workers")  # O(1)
     s.add_argument("ids", nargs="*")  # O(1)
@@ -618,6 +681,9 @@ def main(argv=None):  # O(w) plus command cost
             return 3  # O(1) before dispatch: no task marked, no pane, no worker id
         if a.for_dispatch:  # O(1)
             return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent)  # O(R * (spawn + send))
+        if a.for_review is not None or a.package:  # O(1)
+            ids = [x for v in a.for_review or [] for x in re.split(r"[,\s]+", v) if x]  # O(len)
+            return for_review(sd, a.plan, state.git_root(sd) or sd.parent, ids, a.package)  # O(L + e + spawn + send)
         try:  # O(1)
             spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role)  # O(w)
         except ValueError as e:  # an unknown role or tier | O(1)
