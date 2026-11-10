@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506)."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -606,6 +606,53 @@ def cmd_decide(a) -> int:
     return 0
 
 
+NOTE_HELP = "  --note FILE  standing note: FILE's text (at most 2000 characters) goes into every lead brief from now on; an empty file clears it (backlog.py)"  # O(1) #504
+
+
+def _start(argv: list) -> int:
+    """Route start: strip --note FILE, store it, hand the note and the open batches' files to the lead brief, then run it."""
+    import backlog_brief  # O(1)
+    import backlog_run  # O(1)
+    import backlog_state as bs  # O(1)
+    rest, f, i = [], None, 0  # O(1)
+    while i < len(argv):  # O(args)
+        x = argv[i]  # O(1)
+        if x == "--note":  # O(1)
+            if i + 1 >= len(argv):  # O(1)
+                print("BLOCKED: --note needs a FILE")  # O(1)
+                return 2  # O(1)
+            f, i = argv[i + 1], i + 2  # O(1)
+            continue  # O(1)
+        if x.startswith("--note="):  # O(1)
+            f, i = x[7:], i + 1  # O(1)
+            continue  # O(1)
+        rest.append(x)  # O(1)
+        i += 1  # O(1)
+    p = bs.path(_root())  # O(1)
+    if f is not None and not os.environ.get("SUPERLITE_FLEET_WORKER"):  # O(1)
+        try:  # O(1)
+            text = bs.read_note(f)  # O(len)
+        except ValueError as e:  # O(1)
+            print(f"BLOCKED: {e}")  # O(1)
+            return 2  # O(1)
+        src, res = str(Path(f).resolve()), {}  # O(1)
+        bs.update(p, lambda d: res.update(msg=bs.set_note(d, text, src, _now())))  # O(1)
+        print(res["msg"])  # O(1)
+        if text:  # O(1)
+            for b in bs.load(p)["batches"]:  # O(b)
+                if b["state"] in bs.ACTIVE and b.get("lead"):  # O(1)
+                    print(f"note: {b['id']} lead {b['lead']} started before this note; sl fleet send {b['lead']} --text \"$(cat {src})\" tells it")  # O(1)
+    data = bs.load(p)  # O(1)
+    nt = data.get("note")  # O(1)
+    backlog_brief.STANDING = {"note": nt["text"] if isinstance(nt, dict) and isinstance(nt.get("text"), str) else "", "owned": open_batches(data)}  # O(b)
+    try:  # O(1)
+        return backlog_run.main(["start"] + rest)  # O(start)
+    except SystemExit:  # O(1)
+        if any(x in ("-h", "--help") for x in rest):  # O(args)
+            print(NOTE_HELP)  # O(1)
+        raise  # O(1)
+
+
 def _main_only(name: str, fn) -> int:
     import backlog_state as bs  # O(1)
     if os.environ.get("SUPERLITE_FLEET_WORKER"):
@@ -622,7 +669,28 @@ def _main_only(name: str, fn) -> int:
 
 
 def cmd_skip(a) -> int:
-    return _main_only("skip", lambda bs, d: bs.skip_issue(d, a.issue))
+    seen = {}  # O(1)
+
+    def fn(bs, d):
+        hit = next((b for b in d.get("batches", []) if a.issue in b.get("issues", [])), None)  # O(b * issues)
+        msg = bs.skip_issue(d, a.issue)  # O(b)
+        if hit is not None and hit["state"] == "parked" and hit.get("lead") and not any(b["id"] == hit["id"] for b in d["batches"]):  # O(b)
+            seen.update(bid=hit["id"], lead=hit["lead"], repo=d.get("repo", ""))  # O(1)
+        return msg  # O(1)
+    rc = _main_only("skip", fn)
+    if rc == 0 and seen:  # O(1) an emptied parked batch: its lead and ship lock go too
+        import fleet  # O(1)
+        try:  # O(1)
+            fleet.stop(_root() / ".superlite", [seen["lead"]])  # O(w)
+            print(f"{seen['bid']} lead {seen['lead']} stopped")  # O(1)
+        except (Exception, SystemExit):  # O(1)
+            pass  # O(1)
+        try:  # O(1)
+            import ship_lock  # O(1)
+            ship_lock.release(ship_lock.lock_path(seen["repo"]), seen["bid"])  # O(1)
+        except (OSError, ValueError):  # O(1)
+            pass  # O(1)
+    return rc  # O(1)
 
 
 def cmd_park(a) -> int:
@@ -649,6 +717,8 @@ def _issue_arg(s: str):
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "start":
+        return _start(argv[1:])
     if argv and argv[0] in ROUTED:
         import backlog_run  # O(1)
         return backlog_run.main(argv)
