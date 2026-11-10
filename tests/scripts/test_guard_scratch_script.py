@@ -67,7 +67,7 @@ def _w(s, body, arg):
     "p = Path('.') / sys.argv[1]\np.write_text('x')",
     "p = Path('docs/plans') / '../../src/a.py'\np.write_text('x')",
     "p = Path(sys.argv[1]) / 'a.py'\np.write_text('x')",
-    "p = 'docs/plans/' + sys.argv[1]\np.write_text('x')",
+    "p = 'docs/plans/../../' + sys.argv[1]\np.write_text('x')",
 ])
 def test_composed_path_not_literal_blocked(proj, scratch, body):
     assert bash(proj, _w(scratch, body, "src/a.py")).returncode == 2

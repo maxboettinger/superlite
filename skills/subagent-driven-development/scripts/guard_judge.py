@@ -19,6 +19,7 @@ A block's or group's heredoc, here-string or pipe reaches every command inside i
 A variable's value is used only when bash would not split it (default IFS or the IFS the command sets) and a value with a
 glob is judged as a glob in every mode; `~+`, `~-` and `~` follow PWD, OLDPWD and HOME, `~user` is unknown, and PWD is the
 directory the current command runs in.
+`rm -r` and `rmdir` also pass a folder that holds only untracked, unowned single-link files; every block prints a `Refused command:` line naming the innermost command it came from.
 `NAME=(words)` is an array assignment: its words run nothing, its substitutions and redirects are judged, NAME is unknown.
 A loop is walked again while its variables change (still changing after MAX_DIRS rounds: those variables are unknown), and
 a name first assigned in a block or after `&&`/`||` is one possible value, not the value, once that block or chain ends;
@@ -78,6 +79,8 @@ KNOWN = frozenset({"PWD", "CLAUDE_PROJECT_DIR", "HOME", "IFS", "TMPDIR"})  # nam
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")  # O(1)
 VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")  # O(1)
 STAYS = (".superlite/*",)  # folders a write may name from an unknown directory: it sits at the root or not at all | O(1)
+REFUSED = "Refused command: {} (none of this Bash call ran; run its other commands again without it)"  # O(1)
+MAX_TREE = 2000  # entries a folder may hold for rm -r to pass as housekeeping | O(1)
 UNRESOLVED_HINT = ("The guard cannot resolve this target: name the path literally in the command, or write the file (a findings report, "
                    "a plan edit, a fixer brief, a wait file under .superlite/ or a plans folder) with the Write or Edit tool.")  # O(1)
 WRAP = {  # wrapper: (short options that take a value, long options that take a value) | O(1)
@@ -103,6 +106,7 @@ class Verdict:  # O(1)
     abs: str  # absolute path, same exceptions | O(1)
     kind: str  # "protected" | "human" | "code" | O(1)
     word: str = field(default="", compare=False)  # for an unknown target: the word the guard could not resolve | O(1)
+    cmd: str = field(default="", compare=False)  # the command (segment text) the verdict came from | O(1)
 
 
 class _Ctx:  # O(p)
@@ -959,12 +963,51 @@ def _link_hit(src, dests, inn, st, ctx):  # O(d * p) | protected verdict when a 
     return None  # O(1)
 
 
-def _stray(v, ctx):  # O(p) + git | an untracked, unowned regular file in active mode; any doubt is False
+def _tree_ok(top):  # O(MAX_TREE) | a folder of only plain single-link files and folders, no run or git folder; any doubt is False
+    try:  # O(1)
+        n, todo = 0, [top]  # O(1)
+        while todo:  # O(MAX_TREE)
+            with os.scandir(todo.pop()) as it:  # O(1)
+                for e in it:  # O(entries)
+                    n += 1  # O(1)
+                    if n > MAX_TREE or e.is_symlink() or e.name in (".git", ".superlite") or e.name.lower() in NAMES:  # O(1)
+                        return False  # O(1)
+                    if e.is_dir(follow_symlinks=False):  # O(1)
+                        todo.append(e.path)  # O(1)
+                    elif not e.is_file(follow_symlinks=False) or e.stat(follow_symlinks=False).st_nlink != 1:  # O(1)
+                        return False  # O(1)
+        return True  # O(1)
+    except OSError:  # O(1)
+        return False  # O(1)
+
+
+def _owns_within(rel, owns):  # O(owns * p) | does a task own the folder, a file below it, or a glob that may reach below it?
+    import next_tasks  # lazy | O(1)
+    if next_tasks.owns_match(rel, owns):  # the folder or one above it | O(owns)
+        return True  # O(1)
+    for o in owns:  # O(owns)
+        if "*" not in o:  # O(1)
+            if (o.rstrip("/") + "/").startswith(rel + "/"):  # the folder itself or an owned file below | O(p)
+                return True  # O(1)
+        else:  # O(1)
+            lit = o.split("*", 1)[0]  # O(p)
+            if (rel + "/").startswith(lit) or lit.startswith(rel + "/"):  # the glob may reach below | O(p)
+                return True  # O(1)
+    return False  # O(1)
+
+
+def _stray(v, ctx, folders=False):  # O(p) + git | an untracked, unowned regular file (folder with folders=True) in active mode; any doubt is False
     try:  # O(1)
         if ctx.mode != "active" or v.rel in ("?", ".") or not ctx.sd or "?" in v.abs:  # O(1)
             return False  # O(1)
         st = os.lstat(v.abs)  # O(p)
-        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:  # a link, folder or hard link | O(1)
+        isdir = folders and stat.S_ISDIR(st.st_mode)  # O(1)
+        if isdir:  # O(1)
+            if any(x in (".git", ".superlite") or x in NAMES for x in v.rel.lower().split("/")):  # the folder's own name | O(p)
+                return False  # O(1)
+            if not _tree_ok(v.abs):  # O(MAX_TREE)
+                return False  # O(1)
+        elif not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:  # a link, folder or hard link | O(1)
             return False  # O(1)
         import subprocess  # lazy | O(1)
         env = {k: x for k, x in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}  # O(env)
@@ -977,6 +1020,8 @@ def _stray(v, ctx):  # O(p) + git | an untracked, unowned regular file in active
             plan = json.load(f)["plan"]  # O(1)
         root = plan_tools.stable_root(plan)  # O(d)
         rel = os.path.relpath(os.path.realpath(v.abs), os.path.realpath(root)).replace(os.sep, "/")  # O(p)
+        if isdir:  # O(1)
+            return not any(_owns_within(rel, t.owns) for t in plan_tools.Plan.load(plan).tasks)  # O(tasks * owns)
         return not any(next_tasks.owns_match(rel, t.owns) for t in plan_tools.Plan.load(plan).tasks)  # O(tasks)
     except Exception:  # noqa: BLE001  any doubt blocks | O(1)
         return False  # O(1)
@@ -1046,7 +1091,7 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
         flag = _flag_of(t, fl)  # O(w * p)
         v = _check(t, inn, st, ctx, name, flag)  # O(d * p)
         one = len(inn) == 1 and inn[0] is not None and "$" not in t and "`" not in t  # one known folder, literal target | O(p)
-        if v is not None and one and base in ("rm", "unlink") and v.kind == "code" and not flag and _stray(v, ctx):  # O(1)
+        if v is not None and one and base in ("rm", "rmdir", "unlink") and v.kind == "code" and not flag and _stray(v, ctx, base != "unlink"):  # O(1)
             continue  # a file git does not track and no task owns: housekeeping | O(1)
         if v is not None:  # O(1)
             return v  # O(1)
@@ -1125,7 +1170,20 @@ def _assign(st, name, new):  # O(1) | set a shell variable; a reassigned one kee
     st.vars[name] = new  # O(1)
 
 
-def _run(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, then the command
+def _seg_text(seg):  # O(w + redirects) | the segment's words, then each write redirect as `op target`
+    parts = list(seg.words)  # O(w)
+    parts += [f"{r.op} {r.target}" for r in seg.redirects if r.op in WRITE_REDIRECTS]  # O(redirects)
+    return " ".join(parts)  # O(n)
+
+
+def _run(c, st, ctx, depth):  # O(n) | one segment; a verdict not yet named gets this segment's text (the innermost wins)
+    v = _run_seg(c, st, ctx, depth)  # O(n)
+    if v is not None and not v.cmd:  # O(1)
+        return replace(v, cmd=_seg_text(c.seg))  # O(n)
+    return v  # O(1)
+
+
+def _run_seg(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects, then the command
     seg = c.seg  # O(1)
     _tick(ctx)  # O(1)
     st.here = c.inn  # O(1)
@@ -1620,6 +1678,8 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
     _incident(sd, "rule-block", tool, target, rule=v.kind, cwd=cwd or project)  # O(len)
     for line in MESSAGES[v.kind]:  # O(1)
         _err(line)  # O(len)
+    if v.cmd:  # the one command of the chain that was refused | O(1)
+        _err(REFUSED.format(_flat(v.cmd, 300)))  # O(len)
     if v.kind != "protected":  # the protected message names no target | O(1)
         if v.word:  # the word the guard could not resolve | O(len)
             _err(UNRESOLVED_HINT)  # the supported way, right before the word so the last lines stay as before | O(len)
