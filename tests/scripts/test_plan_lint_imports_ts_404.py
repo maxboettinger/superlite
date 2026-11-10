@@ -130,3 +130,18 @@ def test_import_issues_has_all_stacks(tmp_path):
     plan_tools.Plan  # noqa
     out = plan_tools.import_issues(plan, tmp_path)
     assert out and "@shop/web" in out[-1]
+
+
+def test_ts_scan_prunes_node_modules(tmp_path, monkeypatch):
+    two(tmp_path)
+    write(tmp_path / "packages/core/src/order.ts", "export interface Order {}\n")
+    pkg(tmp_path, "packages/util", "@shop/util")
+    plan = plan_in(tmp_path, t1="packages/util/src/load.ts")
+    write(tmp_path / "packages/core/node_modules/dep/index.ts", "export interface Order {}\n")
+
+    def no_rglob(self, pattern):
+        raise AssertionError("rglob walks node_modules")
+
+    monkeypatch.setattr(Path, "rglob", no_rglob)
+    out = plan_tools.ts_import_issues(plan, tmp_path)
+    assert any("Order is declared in @shop/core" in w for w in out)
