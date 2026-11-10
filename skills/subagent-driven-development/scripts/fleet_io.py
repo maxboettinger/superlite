@@ -2,7 +2,7 @@
 """Fleet worker I/O: build the task message, send it to a Herdr pane, wait for the report.
 
     fleet_io.py send WID Tn [Tm ...] [--plan P]     (also as `sl fleet send`)
-    fleet_io.py send WID --brief FILE [--label L] [--plan P]
+    fleet_io.py send WID --brief FILE [--label L] [--full] [--plan P]
     fleet_io.py send WID --text TEXT [--plan P]    (task ids, --brief and --text are exclusive: two of them exit 2)
     fleet_io.py keys WID KEY [KEY ...]
     fleet_io.py wait [--timeout MS] [--any] [WID ...]
@@ -13,6 +13,8 @@ GREEN exit=0 <log>` plus its last log line), `BLOCKED-UI` plus the screen for a 
 rest. A stop record ends the wait in any Herdr state when it holds a status; one without a status on a done or idle
 pane is UNKNOWN plus the last pane lines. A stop record whose transcript reads empty, or without the status its cut `last` line holds, is re-read for READ_MS (10 s), then reported UNKNOWN (transcript unread); the cut line is never the report. Its exit code is always 0. A report is written as `<id>.md` (the text) and `<id>.json` (`fleet_report.parse`);
 a one-turn worker (fixer, reviewer, research, layer) is stopped once its status is final.
+A turn that ends without a status (stop record, or a done/idle screen) is asked once per send for its report (`W1 T3 ASKED`, `asked` in fleet.json); the next miss is UNKNOWN. Leads are never asked.
+A report with concerns adds ` concerns=N` to the wait line. `send WID --brief FILE --full` asks a final-reviewer worker for a full review (exit 2 for another role or without --brief).
 `send --brief` resends the brief once when Herdr reports agent_prompt_stalled; a second stall is the error.
 `send`, `send --brief` and `send --text` resend once after a stall, and after a slow Herdr reply ("timed out waiting for app response") unless the worker already shows `working`.
 A lead's stop records written by its own child sessions (a transcript outside the lead's worktree project folder) never count as the lead's stop.
@@ -49,6 +51,8 @@ STATUS_LINE = "Status: DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED"  # O
 FINAL = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "APPROVED", "CHANGES_REQUESTED")  # a one-turn worker with one of these is stopped | O(1)
 SETTLE_MS = 10000  # a stop record must appear within this long after the state change | O(1)
 READ_MS = 10000  # a transcript that lags its stop record is re-read this long before the report is UNKNOWN | O(1)
+ASK = ("Your last turn ended without your report. If your work is not done, finish it first: run any wait in the foreground and do not end your turn to wait. "  # O(1)
+       "Then end your reply with your report.")  # O(1)
 HERE = Path(__file__).resolve().parent  # O(1)
 
 
@@ -257,22 +261,37 @@ def _blocks_text(e):  # the text blocks of a message joined; None for a message 
     return "\n".join(b.get("text", "") for b in blocks if b.get("type") == "text")  # O(len)
 
 
-def _starts_turn(e):  # a user message from the task sender, not a tool result, hook feedback or other meta message | O(len)
+def _starts_turn(e):  # a message from the task sender: not a tool result, hook feedback, meta or task-notification message | O(len)
     if e.get("type") != "user" or e.get("isMeta"):  # O(1)
         return False  # O(1)
+    origin = e.get("origin")  # O(1)
+    if isinstance(origin, dict) and origin.get("kind") not in (None, "human"):  # O(1)
+        return False  # O(1)
     text = _blocks_text(e)  # O(len)
-    return bool(text and text.strip()) and not text.lstrip().startswith("Stop hook feedback")  # O(len)
+    if not (text and text.strip()):  # O(len)
+        return False  # O(1)
+    head = text.lstrip()  # O(len)
+    return not head.startswith(("Stop hook feedback", "<task-notification>"))  # O(1)
 
 
 def _has_status(text):  # O(len)
     return bool(mx.STATUS.search(text) or mx.LEAD.search(text.lstrip().split("\n", 1)[0]))  # O(len)
 
 
-def report_text(transcript):  # the last assistant text of the latest turn that holds a status line, else the turn's last text | O(T)
+def _rank(text):  # json-valid report 3, a status with a parsed field 2, a status 1, else 0 | O(len)
+    rep = fleet_report.parse(text)  # O(len)
+    if rep.get("valid"):  # O(1)
+        return 3  # O(1)
+    if not _has_status(text):  # O(len)
+        return 0  # O(1)
+    return 2 if any(rep.get(k) for k in ("files", "tests", "summary", "findings", "concerns")) else 1  # O(1)
+
+
+def report_text(transcript):  # the best text of the latest sender turn (newest of the best rank), else its last text | O(T)
     recs = _records(transcript)  # O(T)
     start = max((i for i, e in enumerate(recs) if _starts_turn(e)), default=0)  # O(T)
     texts = [t for e in recs[start:] if e.get("type") == "assistant" for t in [_blocks_text(e)] if t and t.strip()]  # O(T)
-    return next((t for t in reversed(texts) if _has_status(t)), texts[-1] if texts else "")  # O(T)
+    return max(reversed(texts), key=_rank) if texts else ""  # first maximum = the newest | O(T)
 
 
 def _stops(sd):  # the stop records of metrics.jsonl in file order | O(m)
@@ -421,7 +440,7 @@ def _busy(sd, wid, label, sent):  # worker busy on LABEL since SENT, in the pool
                 pass  # O(1)
 
 
-def send_brief(sd, wid, brief, label=""):  # O(w + len brief path + pool bytes)
+def send_brief(sd, wid, brief, label="", full=False):  # O(w + len brief path + pool bytes)
     """Tell worker WID to read the brief file and answer as its role's report contract says; returns the label
     (LABEL, else the brief's stem). FileNotFoundError for a missing brief, KeyError for an unknown worker."""
     sd = Path(sd)  # O(1)
@@ -429,7 +448,8 @@ def send_brief(sd, wid, brief, label=""):  # O(w + len brief path + pool bytes)
     if not path.is_file():  # O(1)
         raise FileNotFoundError(str(brief))  # O(1)
     w = fs.load(sd)["workers"][wid]  # KeyError for an unknown worker | O(w)
-    msg = fleet_report.brief_message(w.get("role") or "implementer", str(path))  # O(1)
+    role = w.get("role") or "implementer"  # O(1)
+    msg = fleet_report.brief_message(role, str(path), full) if full else fleet_report.brief_message(role, str(path))  # O(1)
     label = label or path.stem  # O(1)
     sent = now_ms()  # O(1)
     name = fs.name_of(sd, wid, w)  # O(w)
@@ -507,7 +527,8 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # TAIL: the last pa
     rep = fleet_report.parse(text, rid, allow_json=source == "transcript")  # a screen holds no trustworthy json block | O(len)
     _write(jp, json.dumps({**rep, "id": wid, "label": label, "role": w.get("role") or "implementer", "source": source, "report": str(mp)}, indent=2) + "\n")  # O(len)
     n = len(rep["findings"])  # O(1)
-    print(f"{wid} {label} {rep['status']} findings={n} {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
+    nc = len(rep.get("concerns") or [])  # O(1)
+    print(f"{wid} {label} {rep['status']} findings={n}" + (f" concerns={nc}" if nc else "") + f" {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
     _ready(sd, wid, label)  # O(w)
     pane_label(sd, wid, f"{wid} {label} reported, waiting for coordinator")  # before the worker may be stopped | O(w)
     if w.get("one_turn") and rep["status"] in FINAL:  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker | O(1)
@@ -531,6 +552,27 @@ def _finish_layer(sd, wid, w, r):  # a finished layer worker: its result as json
     _ready(sd, wid, label)  # O(w)
     _stop_worker(sd, wid)  # O(w)
     return {"id": wid, "task": label, "status": r["status"], "report": str(jp), "source": "layer", "findings": 0}  # O(1)
+
+
+def _ask(sd, wid, w, after=0):  # ask a worker whose turn ended without a report, once per send; None: not askable, False: Herdr failed | O(w + len)
+    role = w.get("role") or "implementer"  # O(1)
+    asked = int(w.get("asked") or 0)  # O(1)
+    if role in ("lead", "layer") or (asked and asked == int(w.get("sent") or 0)):  # O(1)
+        return None  # O(1)
+    sent = max(now_ms(), after + 1)  # newer than the stop record it answers, whatever the clocks say | O(1)
+    try:  # O(1)
+        _prompt(fs.name_of(sd, wid, w), ASK + " " + (fleet_report.REVIEW if role == "final-reviewer" else fleet_report.WORK))  # O(len)
+    except hc.HerdrError:  # O(1)
+        return False  # O(1)
+    label = w.get("task") or wid  # O(1)
+    with fs.locked(sd):  # O(1) plus wait
+        data = fs.load(sd)  # O(w)
+        if wid in data["workers"]:  # O(1)
+            data["workers"][wid].update({"state": "busy", "sent": sent, "asked": sent})  # O(1)
+            fs.save(sd, data)  # O(w)
+    pane_label(sd, wid, f"{wid} {label}")  # O(w)
+    print(f"{wid} {label} ASKED (turn ended without a report; asked once)")  # O(1)
+    return True  # O(1)
 
 
 def _blocked(sd, wid, w):  # O(s + w)
@@ -589,7 +631,12 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
                         continue  # O(1)
             text = seen[wid]["text"] if rec is not None else ""  # O(1)
             reported = rec is not None and fleet_report.parse(text, label)["status"] != "UNKNOWN"  # O(len)
-            if rec is not None and (reported or st in ("done", "idle")):  # a stop record ends the wait in any herdr state once it holds a status | O(1)
+            ended = rec is not None and not reported and (st in ("done", "idle") or (st not in ("working", "blocked") and now - seen[wid]["first"] >= SETTLE_MS))  # O(1)
+            if reported or ended:  # a stop record ends the wait in any herdr state once it holds a status | O(1)
+                if ended and _ask(sd, wid, w, rec["t"]):  # asked once: the worker is busy again | O(w + len)
+                    seen.pop(wid, None)  # O(1)
+                    changed.pop(wid, None)  # O(1)
+                    continue  # O(1)
                 results.append(_finish(sd, wid, w, text, "transcript", None if reported else _pane_tail(sd, wid, w)))  # O(len + s)
                 pending.remove(wid)  # O(w)
             elif st == "blocked":  # O(1)
@@ -602,7 +649,12 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
                         text = hc.read_screen(fs.name_of(sd, wid, w), 80, "recent")  # O(s)
                     except hc.HerdrError as e:  # O(1)
                         text = f"(no screen: {e})"  # O(1)
-                    results.append(_finish(sd, wid, w, text, "screen"))  # O(s)
+                    asked = _ask(sd, wid, w) if fleet_report.parse(text, label, allow_json=False)["status"] == "UNKNOWN" else None  # O(len)
+                    if asked:  # O(1)
+                        seen.pop(wid, None)  # O(1)
+                        changed.pop(wid, None)  # O(1)
+                        continue  # O(1)
+                    results.append(_finish(sd, wid, w, "", "screen", tail=text) if asked is False else _finish(sd, wid, w, text, "screen"))  # O(s)
                     pending.remove(wid)  # O(w)
             else:  # O(1)
                 changed.pop(wid, None)  # O(1)
@@ -627,6 +679,7 @@ def main(argv=None):  # O(wait)
     sp.add_argument("--text")  # O(1)
     sp.add_argument("--brief")  # O(1)
     sp.add_argument("--label", default="")  # O(1)
+    sp.add_argument("--full", action="store_true")  # O(1)
     sp.add_argument("--plan")  # O(1)
     sp.add_argument("--sl", default=str(HERE / "sl"))  # O(1)
     sp.add_argument("--root", default=str(HERE.parents[2]))  # O(1)
@@ -656,6 +709,9 @@ def main(argv=None):  # O(wait)
         if a.cmd == "send" and sum([bool(a.tasks), a.text is not None, a.brief is not None]) > 1:  # before any herdr call or file check | O(1)
             print("error: send takes task ids, --text or --brief, not two of them", file=sys.stderr)  # O(1)
             return 2  # O(1)
+        if a.cmd == "send" and a.full and a.brief is None:  # O(1)
+            print("error: --full needs --brief", file=sys.stderr)  # O(1)
+            return 2  # O(1)
         if a.cmd == "keys":  # O(1)
             hc.send_keys(fs.worker_name(sd, a.wid), a.keys)  # O(w + len keys)
             print(f"{a.wid} keys sent")  # O(1)
@@ -667,7 +723,11 @@ def main(argv=None):  # O(wait)
             if not Path(a.brief).is_file():  # before any prompt | O(1)
                 print(f"error: brief not found: {Path(a.brief).resolve()}", file=sys.stderr)  # O(1)
                 return 2  # O(1)
-            send_brief(sd, a.wid, a.brief, a.label)  # O(w + pool bytes)
+            role = (fs.load(sd)["workers"][a.wid].get("role") or "implementer") if a.full else ""  # KeyError for an unknown worker | O(w)
+            if a.full and role != "final-reviewer":  # before any prompt | O(1)
+                print(f"error: --full is for a final-reviewer worker ({a.wid} is {role})", file=sys.stderr)  # O(1)
+                return 2  # O(1)
+            send_brief(sd, a.wid, a.brief, a.label, a.full)  # O(w + pool bytes)
         elif not a.tasks:  # O(1)
             print("error: send needs task ids, --text or --brief", file=sys.stderr)  # O(1)
             return 2  # O(1)
