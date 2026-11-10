@@ -25,7 +25,7 @@ def test_spawn_lead_starts_in_the_worktree_without_prime(world, tmp_path, monkey
     lsd, name = str((wt / ".superlite").resolve()), fleet.fs.agent_name(world.sd, "W1")
     assert r == {"id": "W1", "name": name, "account": "claude3", "pane_id": "w6:p1", "agent": "lead", "model": "opus", "role": "lead", "lead_sd": lsd}
     sl = str(Path(fl.__file__).resolve().parent / "sl")
-    assert ("start_agent", name, fl.lead_argv(sl, "opus")) in world.fh.calls and not any(c[0] == "prompt" for c in world.fh.calls)
+    assert ("start_agent", name, fl.lead_argv(sl, "opus", 400000)) in world.fh.calls and not any(c[0] == "prompt" for c in world.fh.calls)
     env = next(c for c in world.fh.calls if c[0] == "create_workspace")[2]
     assert (env["SUPERLITE_FLEET_ROLE"], env["SUPERLITE_STATE_DIR"], env["SUPERLITE_FLEET_PARENT_DIR"]) == ("lead", lsd, str(world.sd.resolve()))
     w = json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]
