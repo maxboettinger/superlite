@@ -141,7 +141,7 @@ def test_claimed_line_once_per_call(tmp_path):
     write(repo, "src/c.py", "C = 1\n")
     r = ck(repo, "T1", "T2", "T3")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert r.stderr.count("left uncommitted (claimed by T4): notes/x.md") == 1
+    assert r.stderr.count("left uncommitted (claimed by T4; commit_task T4 commits it once T4 is done): notes/x.md") == 1
 
 
 def test_note_once_in_process(capsys):
