@@ -129,19 +129,70 @@ def _norm(p):  # O(len(path))
     return str(p).replace("\\", "/")  # O(len(path))
 
 
+TOOL_KINDS = {"probe": "probe_run", "contract": "pt_review"}  # --kind names for the tools that log without a kind | O(1)
+
+
+def _newest(entries):  # O(i)
+    """Location -> its newest entry (the one the packet and `finish` count), in first-seen order."""
+    newest = {}  # O(1)
+    for e in entries:  # O(i)
+        newest[(_norm(e["file"]), e["line"])] = e  # O(1)
+    return newest  # O(1)
+
+
+def _tool(e):  # O(1)
+    return e.get("agent") or e.get("tool")  # O(1)
+
+
+def _bulk_resolve(a, entries, pt_review):  # O(i) + one locked append
+    """Close every open location whose newest entry has kind K or was logged by tool K (#416)."""
+    want = TOOL_KINDS.get(a.kind, a.kind)  # O(1)
+    is_open = lambda e: str(e.get("resolution", "")).lower() not in pt_review.RESOLVED  # O(1)
+    newest = _newest(entries)  # O(i)
+    opened = [e for e in newest.values() if is_open(e)]  # O(l)
+    hit = [e for e in opened if e.get("kind") == a.kind or want in (e.get("kind"), _tool(e))
+           or (a.kind == "unknown" and not e.get("kind"))]  # `unknown` is how the no-match list names a kind-less entry | O(l)
+    if not hit:  # O(1)
+        kinds = Counter(e.get("kind") or "unknown" for e in opened)  # O(l)
+        tools = Counter(_tool(e) for e in opened if _tool(e))  # O(l)
+        lists = [f"open by kind: {', '.join(f'{k}={n}' for k, n in sorted(kinds.items()))}"]  # O(k log k)
+        if tools:  # O(1)
+            lists.append(f"by agent: {', '.join(f'{k}={n}' for k, n in sorted(tools.items()))}")  # O(t log t)
+        _die(f"no open incident of kind {a.kind}; " + ("; ".join(lists) if opened else "none is open"))  # O(1)
+    batch = []  # O(1)
+    for base in hit:  # O(l)
+        kind = base.get("kind") if base.get("kind") in KINDS else None  # O(1)
+        try:  # O(1)
+            batch.append(make_entry(base["file"], base["line"], f"{a.resolution}: {a.ruling}", a.agent, kind, a.resolution))  # O(c)
+        except ValueError as e:  # O(1)
+            _die(str(e))  # O(1)
+    append(a.log, batch)  # O(total c) + one fsync
+    for base in hit:  # O(l)
+        print(f"{a.resolution} {base['file']}:{base['line']}")  # O(1)
+    print(f"closed {len(hit)} of kind {a.kind} ({a.resolution})")  # O(1)
+    return 0  # O(1)
+
+
 def cmd_resolve(a):  # O(B) + one locked append
-    """Close the incident at --file/--line with a ruling: append an entry with that location's kind and a resolved
-    resolution, so the packet and `finish` (newest non-verified entry per location) stop counting it as open."""
+    """Close the incident at --file/--line (or every open one of --kind K) with a ruling: append an entry with that
+    location's kind and a resolved resolution, so the packet and `finish` (newest non-verified entry per location)
+    stop counting it as open."""
     import pt_review  # the resolutions the packet counts as closed; lazy, `add` stays light | O(module)
     if a.resolution not in pt_review.RESOLVED:  # O(1)
         _die(f"--resolution must be one of: {', '.join(sorted(pt_review.RESOLVED))}")  # O(1)
+    if not a.ruling:  # O(1)
+        _die("give the ruling: --ruling TEXT (or --reason TEXT)")  # O(1)
+    if a.kind and (a.file is not None or a.line is not None):  # O(1)
+        _die("give --file F --line N, or --kind K, not both")  # O(1)
+    if not a.kind and (a.file is None or a.line is None):  # O(1)
+        _die("give --file F --line N, or --kind K")  # O(1)
     entries = [e for e in _read(a.log) if e.get("kind") != "verified"]  # a `verified` entry is no incident | O(B)
+    if a.kind:  # O(1)
+        return _bulk_resolve(a, entries, pt_review)  # O(i)
     want = (_norm(a.file), a.line)  # O(1)
     at = [e for e in entries if (_norm(e["file"]), e["line"]) == want]  # O(i)
     if not at:  # O(1)
-        newest = {}  # location -> its newest entry, as the packet and `finish` count open | O(1)
-        for e in entries:  # O(i)
-            newest[(_norm(e["file"]), e["line"])] = e  # O(1)
+        newest = _newest(entries)  # location -> its newest entry, as the packet and `finish` count open | O(i)
         opened = sorted(f"{f}:{n}" for (f, n), e in newest.items()  # O(l log l)
                         if str(e.get("resolution", "")).lower() not in pt_review.RESOLVED)
         _die(f"no incident at {want[0]}:{a.line}" + (f"; open: {', '.join(opened[:20])}" if opened else "; none is open"))  # O(1)
@@ -221,10 +272,11 @@ def main(argv=None):  # O(1) parser setup + command cost
     s.add_argument("--confidence")  # O(1)
     s.add_argument("--log", default=log)  # O(1)
     s.set_defaults(fn=cmd_add)  # O(1)
-    s = sub.add_parser("resolve", help="close the incident at FILE:LINE with a ruling (#116)")  # O(1)
-    s.add_argument("--file", required=True)  # O(1)
-    s.add_argument("--line", type=int, required=True)  # O(1)
-    s.add_argument("--ruling", required=True, help="why it is closed; becomes the entry's context")  # O(1)
+    s = sub.add_parser("resolve", help="close the incident at FILE:LINE, or every open one of --kind K, with a ruling (#116, #416)")  # O(1)
+    s.add_argument("--file")  # O(1)
+    s.add_argument("--line", type=int)  # O(1)
+    s.add_argument("--kind", help="close every open incident of this kind or logged by this tool (probe = probe_run, contract = pt_review); not with --file/--line")  # O(1)
+    s.add_argument("--ruling", "--reason", dest="ruling", help="why it is closed; becomes the entry's context")  # O(1)
     s.add_argument("--resolution", default="resolved", help="fixed, resolved, closed, wontfix or accepted")  # O(1)
     s.add_argument("--agent")  # O(1)
     s.add_argument("--log", default=log)  # O(1)
