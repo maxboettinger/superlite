@@ -4,7 +4,7 @@
     report.py --plan PLAN.md [--dir .superlite] [--full | --json]
     report.py --list [--plans docs/plans]  |  --show NAME [--full]
 
-Actual: metrics.task_records / coordinator_record (agent transcripts), test-summary.json, incidents.jsonl.
+Actual: metrics.task_records / coordinator_record (agent transcripts), the ledger's last full test run (finish.test_result, a newer run named beside it; test-summary.json when the ledger holds none), incidents.jsonl.
 Projected: `.superlite/projection.json`, saved by `plan_tools lint --stable` (a fixed forecast); without it the
 projection is recomputed from the plan as it is now, and the report says so. Projected wall-clock is the
 critical path of the task graph under the predictor's estimates (plan_tools.schedule_report: parse_taskgraph +
@@ -125,8 +125,12 @@ def collect(plan_path, sl_dir) -> dict:  # O(M + B + n*(n + e))
         m = mix.setdefault(r["model"] or "unknown", {"tasks": 0, "cost_usd": 0.0})  # O(1)
         m["tasks"] += 1  # O(1)
         m["cost_usd"] += r["cost_usd"] + (r["rework_cost"] or 0)  # O(1)
-    tests = _read_json(sl / "test-summary.json")  # O(file)
     import finish  # O(1)
+    tests, newer, _ = finish.test_result(sl / "progress.md")  # O(R*w)
+    tests_from = "progress.md" if tests is not None else None  # O(1)
+    if tests is None:  # O(1)
+        tests = _read_json(sl / "test-summary.json")  # O(file)
+        tests_from = "test-summary.json" if tests is not None else None  # O(1)
     incidents = finish.open_incidents(sl / "incidents.jsonl", finish.load_run_summaries(sl))  # O(I*S*F) same filter as the packet
     ftp = [r["first_time_pass"] for r in rows if r["first_time_pass"] is not None]  # O(n)
     per = []  # O(n)
@@ -152,7 +156,7 @@ def collect(plan_path, sl_dir) -> dict:  # O(M + B + n*(n + e))
         "critical_path": {"actual": [r["task"] for r in rows if r.get("on_critical_path")],
                           "projected": (proj or {}).get("critical_path"), "projected_min": (proj or {}).get("critical_path_min")},
         "model_mix": mix, "coordinator_cost_by_model": (co or {}).get("cost_by_model"),
-        "quality": {"tests": tests, "first_time_pass": sum(1 for x in ftp if x), "first_time_n": len(ftp),
+        "quality": {"tests": tests, "tests_newer": newer, "tests_from": tests_from, "first_time_pass": sum(1 for x in ftp if x), "first_time_n": len(ftp),
                     "rework_dispatches": sum(r["rework_dispatches"] for r in rows), "open_incidents": len(incidents)},
         "tasks": per,
     }  # O(1)
@@ -204,8 +208,7 @@ def render(c) -> str:  # O(n)
                + (f" ({cp['projected_min']:.1f} min)" if cp["projected_min"] is not None else ""))  # O(1)
     out.append("model mix: " + (", ".join(f"{m} {v['tasks']} tasks ${v['cost_usd']:.2f}" for m, v in sorted(c["model_mix"].items())) or "n/a")
                + "".join(f", coordinator {m} ${v:.2f}" for m, v in (c["coordinator_cost_by_model"] or {}).items()))  # O(1)
-    t = q["tests"]  # O(1)
-    tline = f"tests {t.get('passed', '?')} passed, {t.get('failed', '?')} failed" if isinstance(t, dict) else "tests n/a (no test-summary.json)"  # O(1)
+    tline = _tests_text(q, "tests n/a (no test-summary.json)")  # O(1)
     out.append(f"quality: {tline}; first-time pass "
                + (f"{q['first_time_pass']}/{q['first_time_n']} ({100 * q['first_time_pass'] // q['first_time_n']}%)" if q["first_time_n"] else "n/a")
                + f"; rework dispatches {q['rework_dispatches']}; open incidents {q['open_incidents']}")  # O(1)
@@ -219,6 +222,19 @@ def render(c) -> str:  # O(n)
     return "\n".join(out) + "\n"  # O(n)
 
 
+def _tests_text(q, none):  # O(1) the tests phrase of render and summary; old saved reports lack tests_newer and tests_from
+    t = q["tests"]  # O(1)
+    if not isinstance(t, dict):  # O(1)
+        return none  # O(1)
+    s = f"tests {t.get('passed', '?')} passed, {t.get('failed', '?')} failed"  # O(1)
+    n = q.get("tests_newer")  # O(1)
+    if n:  # O(1)
+        return s + f" (last full run; newer {n.get('mode', '?')} run: {n.get('passed', '?')} passed, {n.get('failed', '?')} failed)"  # O(1)
+    if q.get("tests_from") == "progress.md" and t.get("mode") != "full":  # O(1)
+        return s + f" ({t.get('mode', '?')} run; no full run)"  # O(1)
+    return s  # O(1)
+
+
 def summary(c, path) -> str:  # O(n)
     """At most 10 lines: headline, tests and first-time pass, the biggest miss, the takeaway and the path of the full report."""
     h, q = c["headline"], c["quality"]  # O(1)
@@ -227,8 +243,7 @@ def summary(c, path) -> str:  # O(n)
                                ("agents", "agents", "d", "+d")):  # O(1)
         v = h[key]  # O(1)
         out.append(f"  {label:15}{_num(v['projected'], fmt):>7} -> {_num(v['actual'], fmt):>7}  {_delta(delta(v['projected'], v['actual']), '', d)}")  # O(1)
-    t = q["tests"]  # O(1)
-    out.append(f"  tests {t.get('passed', '?')} passed, {t.get('failed', '?')} failed" if isinstance(t, dict) else "  tests n/a")  # O(1)
+    out.append("  " + _tests_text(q, "tests n/a"))  # O(1)
     out[-1] += ("; first-time pass " + (f"{q['first_time_pass']}/{q['first_time_n']}" if q["first_time_n"] else "n/a")
                 + f"; rework {q['rework_dispatches']}; open incidents {q['open_incidents']}")  # O(1)
     miss = next((r for r in c["tasks"] if r["delta"]["abs"] is not None), None)  # O(n)
