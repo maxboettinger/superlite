@@ -2,14 +2,15 @@
 """Opt-in auto-commit and hidden checkpoints for superlite runs.
 
     autocommit.py on|off|status         any command also takes --plan P (plan, folder or .superlite): work in P's checkout
-    autocommit.py apply [--no-squash]   real commits on the current branch, one per task (--no-squash: one per checkpoint)
+    autocommit.py apply [--no-squash] [--trailer "Key: value"]...   real commits on the current branch, one per task
+                                        (--no-squash: one per checkpoint; each --trailer ends every commit message)
     autocommit.py clean      delete refs/superlite/* and the checkpoint state
 
 Default is OFF: commit_task then records a shadow checkpoint commit (never on HEAD, the
 branch or the user's index) under refs/superlite/<run>/<Tn> and the work stays uncommitted
 in the tree. `on` (or SUPERLITE_AUTOCOMMIT=1, which overrides the file) makes commit_task
 commit on the current branch as before. State: .superlite/autocommit.json and
-.superlite/checkpoints.json. Stdlib only; commits use the user's git identity, no trailers.
+.superlite/checkpoints.json. Stdlib only; commits use the user's git identity, trailers only from `apply --trailer`.
 """
 import json
 import os
@@ -25,6 +26,8 @@ TEMP_INDEX = ".superlite/checkpoint.index"
 REF_ROOT = "refs/superlite"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 TRUE, FALSE = ("1", "true", "yes", "on"), ("0", "false", "no", "off")
+TRAILER = re.compile(r"([A-Za-z0-9][A-Za-z0-9-]*):[ \t]*([^\r\n]+)")
+NO_TRAILER_VALUE = "apply: --trailer needs a value: --trailer \"Key: value\""
 
 
 def git(*args, env=None, check=True):
@@ -291,7 +294,33 @@ def build_chain(start, entries, moved):
     return out, parent
 
 
-def apply(squash=True):
+def apply_options(args):
+    """`apply` options: (squash, trailers as `Key: value` in order, error); error is "" when they are valid."""
+    squash, trailers, i = True, [], 0  # O(1)
+    while i < len(args):  # O(a)
+        a = args[i]
+        if a == "--no-squash":
+            squash = False
+        elif a == "--trailer" or a.startswith("--trailer="):
+            if a == "--trailer":
+                nxt = args[i + 1] if i + 1 < len(args) else None
+                value = None if nxt is None or nxt.startswith("--") else nxt  # another option is not a value
+                i += value is not None
+            else:
+                value = a[len("--trailer="):]
+            if value is None:
+                return squash, trailers, NO_TRAILER_VALUE
+            m = TRAILER.fullmatch(value.strip())
+            if not m:
+                return squash, trailers, f"apply: --trailer takes one line \"Key: value\" (key: letters, digits, -), got {value!r}"
+            trailers.append(f"{m.group(1)}: {m.group(2)}")
+        else:
+            return squash, trailers, f"apply: unknown option {a}"
+        i += 1
+    return squash, trailers, ""
+
+
+def apply(squash=True, trailers=()):
     st = load_state()
     if not st or not st.get("entries"):
         sys.exit("apply: no checkpoints recorded (nothing to commit)")
@@ -336,7 +365,7 @@ def apply(squash=True):
         if tree == ptree:  # O(1)
             skipped.append(e)  # O(1)
             continue  # O(1)
-        parent = git("commit-tree", tree, "-m", e["title"],
+        parent = git("commit-tree", tree, "-m", e["title"], *(["-m", "\n".join(trailers)] if trailers else []),
                      *(["-p", parent] if parent else [])).stdout.strip()  # O(1)
         ptree = tree  # O(1)
         done.append(e)  # O(1)
@@ -374,7 +403,13 @@ def listing():
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    usage = __doc__.split("\n")[0] + "\nusage: autocommit.py on|off|status|apply [--no-squash]|clean [--plan P]"
+    usage = (__doc__.split("\n")[0] + "\nusage: autocommit.py on|off|status|apply [--no-squash] "
+             "[--trailer \"Key: value\"]...|clean [--plan P]")
+    if any(a == "--trailer" and (i + 1 == len(argv) or argv[i + 1].startswith("--"))
+           for i, a in enumerate(argv)):  # before split_plan drops a `--plan P` that follows: P's neighbour is no value; O(a)
+        print(NO_TRAILER_VALUE, file=sys.stderr)
+        print(usage, file=sys.stderr)
+        return 2
     rest, plan = split_plan(argv)
     if plan == "":
         print(usage, file=sys.stderr)
@@ -391,8 +426,13 @@ def main(argv=None):
     elif cmd == "status":
         print(f"autocommit: {'on (commit each task on your branch)' if is_on() else 'off (hidden checkpoints, work stays uncommitted)'}")
         print(listing())
-    elif cmd == "apply" and set(rest[1:]) <= {"--no-squash"}:
-        return apply(squash="--no-squash" not in rest[1:])
+    elif cmd == "apply":
+        squash, trailers, error = apply_options(rest[1:])
+        if error:
+            print(error, file=sys.stderr)
+            print(usage, file=sys.stderr)
+            return 2
+        return apply(squash=squash, trailers=trailers)
     elif cmd == "clean":
         clean()
     else:
