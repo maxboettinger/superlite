@@ -53,6 +53,7 @@ A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is
 SIGTERM and SIGHUP on a run kill its test processes and leave a red summary (`run_tests stopped by SIGTERM; ...`, exit 2).
 With `--task Tn` every summary carries `"task"` and `--background` also writes `test-summary-<Tn>.latest`; `--wait <earlier run of Tn>` then waits on Tn's newest run and says so on stderr.
 `-m EXPR` selects a pytest marker (`-m EXPR` goes onto the pytest argv, or onto a test-cmd.json pytest command; a runner that is not pytest is a usage error, exit 2) and makes the run a fast (narrowed) run. A pytest exit 5 stops with `pytest collected nothing (exit 5): <cause>`: all tests deselected (by `-m`, or by a deselecting `-m` in the project's addopts), or the paths hold no tests.
+A `--full` run holds a machine-wide lock (`<superlite home>/locks/full-suite.lock`, flock; the OS frees it when the process ends) around its test command, so full suites on one machine run one at a time. A waiting run prints `run_tests: waiting for the full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS); full runs on one machine run one at a time`, then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for. A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
 Stdlib only.
 """
 # Complexity notation:
@@ -60,6 +61,7 @@ Stdlib only.
 #   sk = skipped tests, I = lines in the incident log (B = its bytes), d = depth of a dotted classname,
 #   p = pytest path args, O = bytes of pytest output, c = length of an incident context, w = width of one line
 import argparse  # O(1)
+import contextlib  # O(1)
 import configparser  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
@@ -74,6 +76,10 @@ import tempfile  # O(1)
 import time  # O(1)
 import traceback  # O(1)
 import xml.etree.ElementTree as ET  # O(1)
+try:  # O(1)
+    import fcntl  # O(1)
+except ImportError:  # Windows: no flock | O(1)
+    fcntl = None  # O(1)
 from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(path list)
@@ -81,6 +87,7 @@ import _pyrun as pyrun  # noqa: E402  # O(1) module load
 import testcmd  # noqa: E402  # O(1) module load
 import failure_sites  # noqa: E402  # O(1) module load
 import commit_task as ct  # noqa: E402  # O(1) module load
+import state  # noqa: E402  # O(1) module load
 import next_tasks as nt  # noqa: E402  # O(1) module load
 import trees  # noqa: E402  # O(1) module load
 
@@ -89,6 +96,9 @@ DEFAULT_SUMMARY = ".superlite/test-summary.json"  # O(1)
 POLL_SECONDS = 0.5  # O(1)
 DEFAULT_WAIT = 540.0  # O(1)
 DEFAULT_LIMIT = 3600.0  # O(1) wall-clock seconds for one test run; 0 = none
+LOCK_ENV = "SUPERLITE_FULL_SUITE_LOCK"  # O(1) exported to the test processes: the pid holding the lock
+LOCK_POLL = 0.5  # O(1)
+DEFAULT_LOCK_WAIT = 3600.0  # O(1) seconds a full run waits for the lock; 0 = no limit
 CURRENT_TASK = None  # --task of this run; write_summary records it | O(1)
 WRITTEN = set()  # resolved summary paths this process wrote; main clears it | O(1)
 XCODE_OUT = re.compile(r"^\W*✘ Test |: error: -\[|^Test case '.*' failed on |\*\* TEST (?:FAILED|SUCCEEDED) \*\*", re.M)  # xcodebuild test output | O(1)
@@ -99,6 +109,100 @@ class LimitHit(Exception):  # O(1) a test command ran past --limit and its proce
     def __init__(self, seconds, text, command=""):  # O(1)
         super().__init__(f"limit {seconds:g} s")  # O(1)
         self.seconds, self.text, self.command = seconds, text, command  # O(1)
+
+
+class LockBusy(Exception):  # O(1) the full-suite lock stayed held past --lock-wait
+    def __init__(self, seconds, holder):  # O(1)
+        super().__init__(f"lock wait {seconds:g} s")  # O(1)
+        self.seconds, self.holder = seconds, holder  # O(1)
+
+
+def full_lock_path():  # O(1) read at call time, so SUPERLITE_HOME moves it
+    return state.home() / "locks" / "full-suite.lock"  # O(1)
+
+
+def lock_holder(path):  # O(file) the holder record in the lock file, None when missing, empty, half-written or not a record
+    try:  # O(1)
+        info = json.loads(Path(path).read_text(encoding="utf-8"))  # O(file)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+    return info if isinstance(info, dict) and isinstance(info.get("pid"), int) and not isinstance(info.get("pid"), bool) else None  # O(1)
+
+
+def holder_text(info):  # O(1) `pid P in ROOT (task T) since HH:MM:SS`
+    if not info:  # O(1)
+        return "another run"  # O(1)
+    text = f"pid {info.get('pid')} in {info.get('root')}"  # O(1)
+    if info.get("task"):  # O(1)
+        text += f" (task {info['task']})"  # O(1)
+    started = info.get("started")  # O(1)
+    if isinstance(started, (int, float)) and not isinstance(started, bool):  # O(1)
+        text += " since " + time.strftime("%H:%M:%S", time.localtime(started))  # O(1)
+    return text  # O(1)
+
+
+@contextlib.contextmanager
+def full_suite_lock(a, label):  # O(wait / LOCK_POLL) polls; a full run holds the machine-wide lock around its test command
+    if label != "full" or fcntl is None:  # O(1)
+        yield  # O(1)
+        return  # O(1)
+    path = full_lock_path()  # O(1)
+    holder = lock_holder(path)  # O(file)
+    if holder and os.environ.get(LOCK_ENV) == str(holder["pid"]):  # an outer run holds it for us | O(1)
+        yield  # O(1)
+        return  # O(1)
+    try:  # O(1)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)  # O(1)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)  # O(1)
+    except OSError as err:  # O(1)
+        print(f"run_tests: full-suite lock not taken: {err}; running without it", file=sys.stderr)  # O(1)
+        yield  # O(1)
+        return  # O(1)
+    note = Path(a.summary).with_suffix(".lockwait")  # O(1)
+    try:  # the finally frees the lock and deletes the note | O(1)
+        t0 = time.monotonic()  # O(1)
+        waited = False  # O(1)
+        while True:  # O(wait / LOCK_POLL) iterations
+            try:  # O(1)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # O(1)
+                break  # O(1)
+            except BlockingIOError:  # O(1)
+                holder = lock_holder(path)  # O(file)
+                if not waited:  # O(1)
+                    waited = True  # O(1)
+                    print(f"run_tests: waiting for the full-suite lock (held by {holder_text(holder)}); full runs on one machine run one at a time", file=sys.stderr)  # O(1)
+                    if a.run_id:  # O(1)
+                        atomic_write(note, json.dumps(holder or {}))  # O(1)
+                remaining = None if a.lock_wait is None else a.lock_wait - (time.monotonic() - t0)  # O(1)
+                if remaining is not None and remaining <= 0:  # O(1)
+                    raise LockBusy(a.lock_wait, holder)  # O(1)
+                time.sleep(LOCK_POLL if remaining is None else min(LOCK_POLL, remaining))  # O(1)
+            except OSError as err:  # O(1)
+                print(f"run_tests: full-suite lock not taken: {err}; running without it", file=sys.stderr)  # O(1)
+                yield  # O(1)
+                return  # O(1)
+        with contextlib.suppress(OSError):  # O(1)
+            note.unlink()  # O(1)
+        if waited:  # O(1)
+            print(f"run_tests: full-suite lock taken after {time.monotonic() - t0:.0f} s", file=sys.stderr)  # O(1)
+        os.lseek(fd, 0, 0)  # O(1)
+        os.ftruncate(fd, 0)  # O(1)
+        os.write(fd, json.dumps({"pid": os.getpid(), "root": str(Path.cwd()), "task": a.task, "started": time.time()}).encode())  # O(1)
+        earlier = os.environ.get(LOCK_ENV)  # O(1)
+        os.environ[LOCK_ENV] = str(os.getpid())  # O(1)
+        try:  # O(1)
+            yield  # O(1)
+        finally:  # O(1)
+            if earlier is None:  # O(1)
+                os.environ.pop(LOCK_ENV, None)  # O(1)
+            else:  # O(1)
+                os.environ[LOCK_ENV] = earlier  # O(1)
+            with contextlib.suppress(OSError):  # O(1)
+                os.ftruncate(fd, 0)  # O(1)
+    finally:  # O(1)
+        with contextlib.suppress(OSError):  # O(1)
+            note.unlink()  # O(1)
+        os.close(fd)  # O(1)
 
 
 class Stopped(Exception):  # O(1) SIGTERM or SIGHUP reached run_tests; run_tree kills the test processes on the way out
@@ -352,6 +456,9 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
             except (OSError, ValueError):  # O(1)
                 pass  # O(1)
             alive = f" (pid {pid} still running)" if pid and pid > 0 and pid_alive(mine) else ""  # O(1)
+            note = mine.with_suffix(".lockwait")  # O(1)
+            if note.exists():  # the run still waits for the full-suite lock | O(1)
+                print(f"run_tests: {mine} is waiting for the full-suite lock (held by {holder_text(lock_holder(note))})", file=sys.stderr)  # O(file)
             print(f"tests: no result yet after {limit:g} s{alive}; run again: {wait_line(mine)[len('wait: '):]}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         time.sleep(POLL_SECONDS)  # O(1)
@@ -874,6 +981,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                     help="wait for PATH's run (the `summary:` line); bare: the latest background run")  # O(1)
     ap.add_argument("--timeout", type=float, default=None, help=f"--wait limit in seconds (default {DEFAULT_WAIT:.0f})")  # O(1)
     ap.add_argument("--limit", type=float, default=DEFAULT_LIMIT, help="wall-clock seconds before the test command tree is killed (default %(default)g; 0 = none)")  # O(1)
+    ap.add_argument("--lock-wait", type=float, default=DEFAULT_LOCK_WAIT, help="seconds a full run waits for the machine-wide full-suite lock (default 3600; 0 = no limit)")  # O(1)
     ap.add_argument("--task", default=None, help="task id: compiled stacks run in .superlite/trees/<task> (own files only); incidents carry it and a green run closes its red ones")  # O(1)
     ap.add_argument("--also", nargs="+", action="extend", default=[], metavar="F", help="declare files this --task commits besides its Owns, before the run (ledger ruling; needs --task)")  # O(1)
     ap.add_argument("--ruling", default=ALSO_RULING, help=argparse.SUPPRESS)  # O(1)
@@ -893,6 +1001,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     OUTPUT = ""  # O(1)
     CURRENT_TASK = a.task or None  # O(1)
     a.limit = a.limit if a.limit > 0 else None  # <= 0 means no limit | O(1)
+    a.lock_wait = a.lock_wait if a.lock_wait > 0 else None  # O(1)
     a.started = time.time()  # before the runner reads any code: the summary's `started` (#101) | O(1)
     cwd = Path.cwd().resolve()  # O(1)
     a.cwd = cwd  # for the missing-path message, before to_root moves us | O(1)
@@ -947,6 +1056,13 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         publish_summary(a)  # O(summary size)
         record_no_result(a, reason, e.command, -9, e.text.splitlines(), None)  # O(L + c)
         print(f"0 0 0 {secs:.1f}")  # O(1)
+        return 2  # O(1)
+    except LockBusy as e:  # O(1)
+        reason = f"full-suite lock: still held by {holder_text(e.holder)} after {e.seconds:g} s (run_tests --lock-wait S; 0 = no limit)"  # O(1)
+        print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+        write_summary(a.summary, "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
+        publish_summary(a)  # O(summary size)
+        print("0 0 0 0.0")  # O(1)
         return 2  # O(1)
     except BaseException as e:  # a crash still leaves a (red) summary and the zero line | O(1)
         if isinstance(e, SystemExit) and e.code in (0, None):  # O(1)
@@ -1295,7 +1411,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             tree_gone = node_install_line(tree, spec)  # a tree without node_modules fails like the root | O(m + f)
             if tree_gone:  # O(1)
                 return usage_error(a, label, tree_gone)  # O(summary size)
-        rc = run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
+        with full_suite_lock(a, label):  # O(wait / LOCK_POLL)
+            rc = run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
         if tree and rc == 1:  # a red tree run names the changed files the tree lacks (#517) | O(f)
             try:  # O(1)
                 out = outside_tree(".", overlay_now)  # O(f log f)
@@ -1314,9 +1431,10 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             return usage_error(a, label, str(e))  # the summary is written too | O(summary size)
         cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), *(["-m", a.marker] if a.marker else []), "-q", "-rP", "-p", "no:cacheprovider",  # O(p) -rP: a passing test's prints reach the output log (#501)
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
-        t0 = time.monotonic()  # O(1)
-        r = run_captured(cmd, limit=a.limit, env=child_env())  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
-        seconds = time.monotonic() - t0  # O(1)
+        with full_suite_lock(a, label):  # O(wait / LOCK_POLL)
+            t0 = time.monotonic()  # O(1)
+            r = run_captured(cmd, limit=a.limit, env=child_env())  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
+            seconds = time.monotonic() - t0  # O(1)
         save_output(a, shlex.join(cmd), r.returncode, r.stdout + r.stderr)  # O(o)
         has_xml = xml_path.exists() and xml_path.stat().st_size > 0  # O(1)
         parsed = collection_report(xml_path) if r.returncode == 2 and has_xml else None  # a collection error stops pytest with exit 2 (#196) | O(X + T*d)
