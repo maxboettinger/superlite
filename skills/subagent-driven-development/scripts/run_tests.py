@@ -15,6 +15,7 @@ A no-result stop keeps its command, exit and output in `.superlite/no-result-*.l
 An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change except files owned by unfinished sibling tasks (kept at base, named on the line), a `--full` tree the task's own files.
 
 An isolated tree links `.superlite/` to the project's, so a test command finds its scripts there. Before each run, every overlaid file whose bytes changed since the tree's last run gets a fresh mtime (`.superlite/trees/<task>.digests.json`), so a build tool sees the edit (#507).
+With --task Tn whose plan **Tests:** field holds cmd=<command>, the run executes that command instead of the project's runner (a fast run; --fast paths are not passed; with no readable count its exit code is one test).
 `--also F [F ...]` (needs `--task`; relative paths read from the caller's cwd) records `Ruling: Tn also commits F` in the ledger before the run, so the tree holds F and commit_task commits it; a red tree run names up to 5 changed files the tree lacks and suggests it.
 
 Prints `passed failed skipped seconds` (errors count as failed). Each failing
@@ -1061,7 +1062,9 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
             tail_set = {x.strip() for x in p["tail"]}  # O(40)
             kept = [x for x in (p["error"] if r.returncode else "", p["marker"]) if x and x not in tail_set]  # the error and marker may sit above the last 40 lines | O(40)
             atomic_write(Path(a.summary).with_name("test-output.log"), "\n".join([*kept, *p["tail"]]) + "\n")  # O(40)
-            if not r.returncode and not (p["passed"] or p["failed"] or p["skipped"] or p["names"]):  # the runner counted zero tests: a stop, not a pass (#240) | O(1)
+            if not r.returncode and spec.get("source") == "plan" and not p["counted"]:  # a green cmd with no readable count is one passed test | O(1)
+                counts["passed"] = 1  # O(1)
+            if not r.returncode and not (p["passed"] or counts["passed"] or p["failed"] or p["skipped"] or p["names"]):  # the runner counted zero tests: a stop, not a pass (#240) | O(1)
                 runner = f"; runner: {p['empty']}"[:120] if p["empty"] else ""  # the runner's own "no tests" line | O(1)
                 reason = f"no tests ran: exit {r.returncode} from `{spec['command']}` with no test count; its filter may select nothing"[:300 - len(runner)] + runner  # O(1)
                 print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
@@ -1184,6 +1187,30 @@ def stable_plan():  # O(S) the plan path `plan_tools lint --stable` recorded, el
         return None  # O(1)
 
 
+def task_cmd_spec(a):  # O(L + m + f) the spec of the `cmd=` in --task's plan **Tests:** field, else None
+    if not getattr(a, "task", None):  # O(1)
+        return None  # O(1)
+    plan = a.plan or next((p for p in (stable_plan(), nt.DEFAULT_PLAN) if p and Path(p).is_file()), None)  # O(1)
+    if not plan or not Path(plan).is_file():  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        info = nt.parse_plan(plan)  # O(L)
+    except Exception:  # an unreadable plan is the old path's usage error, not ours  # O(1)
+        return None  # O(1)
+    if a.task not in info:  # O(1)
+        return None  # O(1)
+    cmd = testcmd.task_command(nt._field(info[a.task]["body"], "Tests"))  # O(len body)
+    if not cmd:  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        base = testcmd.resolve(".", ())  # O(m + f)
+    except Exception:  # O(1)
+        base = None  # O(1)
+    base = base or {}  # O(1)
+    return {"language": "task", "python": False, "command": cmd, "junit": "", "env": base.get("env") or {}, "setup": base.get("setup") or "",  # O(1)
+            "source": "plan", "origin": f"{plan}: {a.task} **Tests:** cmd=", "isolate": bool(base.get("isolate"))}  # O(1)
+
+
 def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     paths = [p for chunk in (a.fast or []) for p in nt.csv(chunk)]  # O(p)
     label = "fast" if paths or a.marker else "full"  # O(1)
@@ -1191,6 +1218,13 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         return usage_error(a, label, "--also needs --task Tn")  # O(summary size)
     if a.also:  # the claim is recorded before any runner or tree, so the tree below holds the file | O(c + k)
         also_claims(a)  # O(c + k)
+    tspec = task_cmd_spec(a)  # the task's own **Tests:** cmd= | O(L + m + f)
+    if tspec:  # a fast run of the named command; --fast paths are not handed to it | O(1)
+        label = "fast"  # O(1)
+        print(f"run_tests: {a.task} runs its **Tests:** cmd: {tspec['command']}", file=sys.stderr)  # O(1)
+        if paths:  # O(1)
+            print(f"run_tests: --fast paths are not passed to {a.task}'s **Tests:** cmd=", file=sys.stderr)  # O(1)
+        paths = []  # O(1)
     if paths:  # O(1)
         try:  # O(1)
             paths = expand_fast_paths(paths)  # O(p)
@@ -1201,8 +1235,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             publish_summary(a)  # O(summary size)
             print("0 0 0 0.0")  # O(1)
             return 1  # O(1)
-    a.unit_snap = unit_snapshot(a, label)  # before the runner touches anything | O(n * size)
-    spec = fast_spec(paths)  # .superlite/test-cmd.json, else marker files | O(m + f)
+    a.unit_snap = None if tspec else unit_snapshot(a, label)  # before the runner touches anything | O(n * size)
+    spec = tspec or fast_spec(paths)  # .superlite/test-cmd.json, else marker files | O(m + f)
     if spec is None:  # no test command: exit 2 with a clear summary | O(1)
         hint = getattr(testcmd, "missing_reason", None)  # T3's text when present | O(1)
         reason = hint(Path(".")) if hint else ("no test command found: add .superlite/test-cmd.json "  # O(1)
