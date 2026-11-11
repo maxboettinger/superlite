@@ -136,14 +136,8 @@ for rel in files:
                 sys.path.append(base)
             importlib.import_module(".".join(dotted))
         else:
-            if dotted and base not in sys.path:
-                sys.path.append(base)
-            name = "_slcheck_" + "_".join(p.replace("-", "_") for p in parts)
-            sys.path.append(os.path.dirname(path))
-            spec = importlib.util.spec_from_file_location(name, path)
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules[name] = mod
-            spec.loader.exec_module(mod)
+            failures.append({"file": rel, "skip": True})
+            continue
     except BaseException as e:
         line = 0
         for fr in traceback.extract_tb(e.__traceback__):
@@ -216,8 +210,37 @@ def syntax_errors(files):  # O(total size of m_py files)
     return errors  # O(1)
 
 
-def import_errors(files, roots=None, root="."):  # O(m_py * import cost) + 1 process spawn (batched)
-    """Import every file once under the project's own interpreter (root/.venv, VIRTUAL_ENV, else ours)."""
+def _req_name(req):  # O(len req)
+    m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req) if isinstance(req, str) else None  # O(len)
+    return re.sub(r"[-.]+", "_", m.group(1)).lower() if m else None  # O(len)
+
+
+def _pyproject_deps(root):  # O(pyproject size); (main, optional) normalised names, empty when unreadable
+    try:  # O(1)
+        import tomllib  # O(1)
+        data = tomllib.loads((Path(root) / "pyproject.toml").read_text(encoding="utf-8"))  # O(size)
+    except (ImportError, OSError, ValueError):  # no tomllib (3.10), no file or broken file | O(1)
+        return set(), set()  # O(1)
+    proj = data.get("project") if isinstance(data.get("project"), dict) else {}  # O(1)
+    main = {_req_name(r) for r in proj.get("dependencies") or []}  # O(deps)
+    extra = []  # O(1)
+    for v in (proj.get("optional-dependencies") or {}).values():  # O(groups)
+        extra += list(v)  # O(group)
+    for v in (data.get("dependency-groups") or {}).values():  # O(groups)
+        extra += [r for r in v if isinstance(r, str)]  # O(group)
+    uv = data.get("tool", {}).get("uv", {}) if isinstance(data.get("tool"), dict) else {}  # O(1)
+    extra += list(uv.get("dev-dependencies") or []) if isinstance(uv, dict) else []  # O(deps)
+    return main - {None}, {_req_name(r) for r in extra} - {None}  # O(deps)
+
+
+def optional_deps(root):  # O(pyproject size)
+    """Normalised names of optional and dev dependencies declared in root/pyproject.toml."""
+    return _pyproject_deps(root)[1]  # O(size)
+
+
+def import_errors(files, roots=None, root=".", notes=None):  # O(m_py * import cost) + 1 process spawn (batched)
+    """Import every file once under the project's own interpreter (root/.venv, VIRTUAL_ENV, else ours).
+    Files no import can name are skipped; a missing optional dependency is a warning. Both go to notes."""
     if not files:  # O(1)
         return []  # O(1)
     py = _pyrun.project_python(root)  # O(1) file lookups, never run
@@ -231,7 +254,21 @@ def import_errors(files, roots=None, root="."):  # O(m_py * import cost) + 1 pro
         out = json.loads(r.stdout.strip().splitlines()[-1])  # O(output)
     except (IndexError, json.JSONDecodeError):  # O(1)
         return [(files[0], 0, f"import check crashed under {os.path.abspath(py)}: {r.stderr.strip()[-150:]}")]  # O(1) absolute, so the log names the exact file
-    return [(f["file"], f["line"], f["error"]) for f in out]  # O(failures)
+    main, optional = _pyproject_deps(root) if any(not f.get("skip") for f in out) else (set(), set())  # O(size)
+    errors = []  # O(1)
+    for f in out:  # O(failures)
+        if f.get("skip"):  # O(1)
+            if notes is not None:  # O(1)
+                notes.append(("skip", f["file"], 0, "no module name"))  # O(1)
+            continue  # O(1)
+        m = re.match(r"ModuleNotFoundError: No module named '([^'.]+)", f["error"])  # O(len)
+        name = re.sub(r"[-.]+", "_", m.group(1)).lower() if m else None  # O(len)
+        if name and name in optional and name not in main:  # O(1)
+            if notes is not None:  # O(1)
+                notes.append(("warn", f["file"], f["line"], f["error"]))  # O(1)
+            continue  # O(1)
+        errors.append((f["file"], f["line"], f["error"]))  # O(1)
+    return errors  # O(failures)
 
 
 def is_module(path):  # O(len path)
@@ -685,7 +722,13 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     py = [f for f in present if f.endswith(".py")]  # O(m)
     problems = syntax_errors(py)  # O(size of py files)
     if not problems:  # O(1)
-        problems = import_errors([f for f in py if is_module(f)], a.roots)  # O(m_py * import cost) + process spawn
+        gate = []  # skip and warn notes from the import check | O(1)
+        problems = import_errors([f for f in py if is_module(f)], a.roots, notes=gate)  # O(m_py * import cost) + process spawn
+        for kind, f, line, msg in gate:  # O(notes) iterations
+            if kind == "skip":  # O(1)
+                print(f"import check skipped ({msg}): {f}", file=sys.stderr)  # O(1)
+            else:  # O(1)
+                print(f"import warning {f}:{line} {msg} (optional dependency not installed; not blocking)", file=sys.stderr)  # O(1)
     if problems:  # O(1)
         shown = [f"{'syntax' if msg.startswith('SyntaxError') else 'import'} {f}:{line} {msg}" for f, line, msg in problems]  # O(problems)
         for ln in shown:  # O(problems) iterations
