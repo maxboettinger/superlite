@@ -409,6 +409,10 @@ class Plan:  # O(1)
     def header_wave0_off(self) -> bool:  # O(C)
         return bool(re.search(r"^\*\*Wave0:\*\*\s*none\b", re.split(r"^#{2,}\s", self.text, maxsplit=1, flags=re.M)[0], re.M | re.I))  # O(C)
 
+    def header_edges_hard(self) -> bool:  # O(C) the header line `**Edges:** hard (<why>)` keeps every Consumes edge
+        head = re.split(r"^#{2,}\s", self.text, maxsplit=1, flags=re.M)[0]  # O(C)
+        return bool(re.search(r"^\*\*Edges:\*\*[ \t]*hard\b", head, re.M | re.I))  # O(C)
+
     def header_max_chars(self) -> int | None:  # O(C)
         m = re.search(r"^\*\*Max chars:\*\*\s*([\d_,]+)", self.text, re.M)  # O(C)
         return int(re.sub(r"[_,]", "", m.group(1))) if m else None  # O(1)
@@ -489,8 +493,14 @@ HARD_LABEL = re.compile(r"^\|\s*hard\s*\|$", re.I)  # O(1)
 
 
 def hard_edges(plan: Plan) -> set[tuple[str, str]]:  # O(L*s) total
-    """Edges prune must keep: `A -->|hard| B` in the taskgraph, or a `%% hard: A->B, C->D` line in it."""
+    """Edges prune must keep: `A -->|hard| B` in the taskgraph, or a `%% hard: A->B, C->D` line in it; with the header line
+    `**Edges:** hard (<why>)` every edge of the taskgraph."""
     out: set[tuple[str, str]] = set()  # O(1)
+    if plan.header_edges_hard():  # O(C)
+        try:  # O(1)
+            out.update((d, tid) for tid, ds in parse_taskgraph(plan).items() for d in ds)  # O(L*s + e)
+        except PlanError:  # O(1)
+            pass  # O(1)
     for block, j in find_taskgraph_blocks(plan):  # O(blocks) iterations
         for raw in block.content[j + 1:]:  # O(G) iterations
             ln = raw.strip()  # O(s)
@@ -1189,6 +1199,33 @@ def required_params(args: str, method: bool = False) -> int:  # O(s)
     return n  # O(1)
 
 
+LANG_EXT = {".py": "Python", ".pyi": "Python", ".ts": "TypeScript", ".tsx": "TypeScript", ".mts": "TypeScript", ".cts": "TypeScript",  # O(1)
+            ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript", ".swift": "Swift", ".go": "Go",  # O(1)
+            ".rs": "Rust", ".kt": "Kotlin", ".kts": "Kotlin", ".java": "Java", ".cs": "C#", ".rb": "Ruby"}  # O(1)
+STACK_WORDS = {"Python": ("python",), "TypeScript": ("typescript",), "JavaScript": ("javascript", "node", "node.js"), "Swift": ("swift",),  # O(1)
+               "Go": ("go", "golang"), "Rust": ("rust",), "Kotlin": ("kotlin",), "Java": ("java",), "C#": ("c#", "csharp", ".net"), "Ruby": ("ruby",)}  # O(1)
+
+
+def owned_languages(task: Task) -> set[str]:  # O(k*s*A)
+    """Display names of the languages of the task's written Owns files (extension, any case; a trailing ` (note)` is dropped)."""
+    out = set()  # O(1)
+    for entry in task.written_owns:  # O(o) iterations
+        name = re.sub(r"\s+\([^)]*\)\s*$", "", entry).strip().lower()  # O(s)
+        lang = LANG_EXT.get(os.path.splitext(name)[1])  # O(s)
+        if lang:  # O(1)
+            out.add(lang)  # O(1)
+    return out  # O(1)
+
+
+def stack_languages(plan: Plan) -> set[str]:  # O(C)
+    """Languages named on the header's `Tech stack:` line (whole words, any case); empty without such a line."""
+    head = re.split(r"^#{2,}\s", plan.text, maxsplit=1, flags=re.M)[0]  # O(C)
+    m = re.search(r"^\**Tech stack:\**\s*(.*)$", head, re.M | re.I)  # O(C)
+    if not m:  # O(1)
+        return set()  # O(1)
+    return {lang for lang, words in STACK_WORDS.items() if any(re.search(r"(?<![\w.#])" + re.escape(w) + r"(?![\w#])", m.group(1), re.I) for w in words)}  # O(w*s)
+
+
 def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
     """PROBE: a `call=` Probe entry must name a Produces of this plan that takes exactly one required parameter (probes pass
     one text argument). The entry's task is a fix task; an entry outside every task block (plan header, a section) is plan-scoped."""
@@ -1203,9 +1240,26 @@ def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
         for part in re.split(r"\s*·\s*", fm.group(2)):  # O(parts)
             key, eq, val = strip_ticks(part).partition("=")  # O(s)
             target = strip_ticks(val)  # O(s)
-            if not eq or key.strip().lower() != "call" or not target:  # O(1)
+            kind = key.strip().lower()  # O(s)
+            if not eq or kind not in ("call", "serve") or not target:  # O(1)
                 continue  # O(1)
-            cands = [s for _, s in sigs if s["name"] == target or target.endswith("." + s["name"]) or s["name"].endswith("." + target)]  # O(n*q)
+            cands = [(tid, s) for tid, s in sigs if s["name"] == target or target.endswith("." + s["name"]) or s["name"].endswith("." + target)] if kind == "call" else []  # O(n*q)
+            who = cands[0][0] if cands else holder if kind == "serve" else None  # O(1)
+            langs = set().union(*(owned_languages(plan.by_id[tid]) for tid in {c[0] for c in cands})) if cands else owned_languages(plan.by_id[holder]) if kind == "serve" and holder else set()  # O(n*k*s*A)
+            if not langs:  # O(1)
+                who = None  # O(1)
+                langs = set().union(*(owned_languages(t) for t in plan.tasks)) or stack_languages(plan)  # O(n*k*s*A)
+            if langs and "Python" not in langs:  # O(1)
+                names = ", ".join(sorted(langs))  # O(l log l)
+                msg = (f"PROBE: {kind}={target} imports Python, but {who} owns no Python file ({names}); " if who  # O(1)
+                       else f"PROBE: {kind}={target} imports Python, but the plan's stack is {names}; ") + "use run= with a built command or **Probe entry:** none (<why>)"  # O(1)
+                if (holder, msg) not in seen:  # O(1)
+                    seen.add((holder, msg))  # O(1)
+                    issues.append(Issue(msg, [holder] if holder else (), scope="task" if holder else "plan"))  # O(1)
+                continue  # O(1)
+            if kind != "call":  # O(1)
+                continue  # O(1)
+            cands = [c for _, c in cands]  # O(q)
             counts = [required_params(c["args"], bool(c["cls"]) and c["member"] != "__init__") for c in cands]  # O(n*q*s)
             if cands and 1 in counts:  # O(q)
                 continue  # O(1)
@@ -1781,6 +1835,53 @@ def spec_gaps(spec_text: str, plan: "Plan") -> list[str]:  # O(S*(d+covers) + C)
     return gaps  # O(1)
 
 
+PLATFORM_IF_RE = re.compile(r"^\s*#(?:if|elseif)\b")  # O(1)
+PLATFORM_COND_RE = re.compile(r"\b(os|canImport|targetEnvironment)\(([^()]*)\)")  # O(1)
+PLATFORM_BUILD_RE = re.compile(r"-destination\b|\s-sdk\s|--swift-sdk\b|--triple\b")  # O(1)
+
+
+def _platform_conds(lines) -> list[str]:  # O(L*s) os/canImport/targetEnvironment conditions on #if/#elseif lines, first-seen order
+    out: list[str] = []  # O(1)
+    for ln in lines:  # O(L)
+        if PLATFORM_IF_RE.match(ln):  # O(s)
+            for kind, arg in PLATFORM_COND_RE.findall(ln):  # O(s)
+                c = f"{kind}({arg.replace(' ', '')})"  # O(s)
+                if c not in out:  # O(c)
+                    out.append(c)  # O(1)
+    return out  # O(1)
+
+
+def platform_notes(plan: Plan, root: Path | None) -> list[str]:  # O(n*(text + files*size)) #516: code behind #if os(...) needs the other platform's build
+    out: list[str] = []  # O(1)
+    for t in plan.tasks:  # O(n)
+        if t.status == "draft":  # O(k*s)
+            continue  # O(1)
+        conds = _platform_conds(t.text.splitlines())  # O(text)
+        srcs: list[str] = []  # O(1)
+        if root is not None and not t.repo:  # O(k*s)
+            for ent in t.written_owns:  # O(o)
+                if not ent.lower().endswith(".swift"):  # O(s)
+                    continue  # O(1)
+                try:  # O(1)
+                    body = (root / ent).read_text(encoding="utf-8", errors="replace")  # O(size)
+                except (OSError, ValueError):  # missing file, folder, bad path
+                    continue  # O(1)
+                found = _platform_conds(body.splitlines())  # O(size)
+                if found:  # O(1)
+                    srcs.append(ent)  # O(1)
+                    conds.extend(c for c in found if c not in conds)  # O(c^2)
+        if not conds:  # O(1)
+            continue  # O(1)
+        if t.field_text("tests").strip().lower() == "slow" and PLATFORM_BUILD_RE.search(t.text):  # O(text)
+            continue  # O(1)
+        if _platform_conds(t.text.splitlines()):  # O(text)
+            srcs.append("task text")  # O(1)
+        shown = ", ".join(conds[:3]) + (f" +{len(conds) - 3} more" if len(conds) > 3 else "")  # O(c)
+        out.append(f"WARNING: PLATFORM: {t.id} has code behind #if {shown} ({', '.join(srcs)}); a build for the host platform skips it: "  # O(s)
+                   "put that platform's build in the task's steps (e.g. xcodebuild build -destination 'generic/platform=iOS') and set **Tests:** slow")  # O(1)
+    return out  # O(1)
+
+
 def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e*n + C*P + n*p + merge/simulate) total
     issues: list[str] = []  # O(1)
     warnings: list[str] = []  # O(1)
@@ -1888,6 +1989,10 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
     try:  # a SwiftPM import gap is a warning, never an issue; a parser miss must not block a task (#388) | O(1)
         if plan.path:  # O(1)
             warnings.extend(import_issues(plan, stable_root(str(plan.path))))  # O(T*d + files*s)
+    except (OSError, ValueError):  # O(1)
+        pass  # O(1)
+    try:  # #516 Swift code behind #if os(...) needs a second platform build | O(1)
+        warnings.extend(platform_notes(plan, stable_root(str(plan.path)) if plan.path else None))  # O(n*(text + files*size))
     except (OSError, ValueError):  # O(1)
         pass  # O(1)
     import shape  # lazy: shape imports this module | O(1)
