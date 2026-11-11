@@ -2260,6 +2260,11 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         warnings.extend(platform_notes(plan, stable_root(str(plan.path)) if plan.path else None))  # O(n*(text + files*size))
     except (OSError, ValueError):  # O(1)
         pass  # O(1)
+    try:  # #493 another open run owns the same files | O(1)
+        if plan.path:  # O(1)
+            warnings.extend(cross_run_warnings(plan))  # O(r*n*k)
+    except Exception:  # O(1) warn only
+        pass  # O(1)
     try:  # #475 a task whose tests the project's runner cannot run names its command | O(1)
         issues.extend(tests_issues(plan, stable_root(str(plan.path)) if plan.path else None))  # O(n*(o + p))
     except (OSError, ValueError):  # O(1)
@@ -2434,6 +2439,21 @@ def wave0_off(plan_path) -> bool:  # O(L) the plan header says `**Wave0:** none`
         return Plan.load(str(plan_path)).header_wave0_off()  # O(L)
     except (OSError, ValueError):  # O(1)
         return False  # O(1)
+
+
+def cross_run_warnings(plan: Plan) -> list[str]:  # O(r*n*k) #493: tasks whose Owns share a file with another open superlite run of the repository
+    import worktree  # O(1)
+    root = stable_root(str(plan.path))  # O(d)
+    out: list[str] = []  # O(1)
+    for run in worktree.open_runs(root, here=root):  # O(w*plan)
+        hits: dict[str, list[str]] = {}  # shared entry -> task ids in plan order | O(1)
+        for t in plan.tasks:  # O(n)
+            for f in worktree.overlaps(t.owns, run["files"]):  # O(k*j)
+                hits.setdefault(f, []).append(t.id)  # O(1)
+        if hits:  # O(1)
+            shared = [f"{f} ({', '.join(ids)})" for f, ids in sorted(hits.items())]  # O(h log h)
+            out.append("WARNING: " + worktree.overlap_line(run, shared))  # O(limit)
+    return out  # O(1)
 
 
 def stable_root(plan_path: str) -> Path:  # O(d) directory that holds .superlite/: the plan's git toplevel (state.plan_dir)
