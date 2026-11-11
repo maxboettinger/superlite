@@ -1603,7 +1603,7 @@ MESSAGES = {  # O(1)
              "fixer-sonnet-high; unknown cause -> fixer-opus.",
              "- Wave 0 skeleton/stub/config files belong to an implementer-haiku task.",
              "- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
-             "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file git "
+             "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file or folder git "
              "does not track and no task Owns.",
              "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
              ".superlite by hand."],

@@ -7,7 +7,7 @@ import guard_judge as gj  # noqa: E402
 
 BLOCK_LINE = ("- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
               "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a "
-              "file git does not track and no task Owns.")
+              "file or folder git does not track and no task Owns.")
 
 
 def git(P, *a):
