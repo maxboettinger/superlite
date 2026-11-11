@@ -2,7 +2,7 @@
 """Run pytest, parse the junit XML, print one summary line.
 
     run_tests.py [--fast PATHS... | --full] [--log PATH] [--ledger PATH]
-                 [--summary PATH] [--background]
+                 [--summary PATH] [--background] [-m EXPR]
     run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] --command CMD   (a full result run outside run_tests; report only, closes no incidents)
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
@@ -50,6 +50,7 @@ A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is
 `--limit S` (default 3600; 0 = none) kills a test command's whole process tree after S seconds: exit 2, a red summary `wall-clock limit: test run killed after S s` and a `no-result` incident.
 SIGTERM and SIGHUP on a run kill its test processes and leave a red summary (`run_tests stopped by SIGTERM; ...`, exit 2).
 With `--task Tn` every summary carries `"task"` and `--background` also writes `test-summary-<Tn>.latest`; `--wait <earlier run of Tn>` then waits on Tn's newest run and says so on stderr.
+`-m EXPR` selects a pytest marker (`-m EXPR` goes onto the pytest argv, or onto a test-cmd.json pytest command; a runner that is not pytest is a usage error, exit 2) and makes the run a fast (narrowed) run. A pytest exit 5 stops with `pytest collected nothing (exit 5): <cause>`: all tests deselected (by `-m`, or by a deselecting `-m` in the project's addopts), or the paths hold no tests.
 Stdlib only.
 """
 # Complexity notation:
@@ -57,6 +58,7 @@ Stdlib only.
 #   sk = skipped tests, I = lines in the incident log (B = its bytes), d = depth of a dotted classname,
 #   p = pytest path args, O = bytes of pytest output, c = length of an incident context, w = width of one line
 import argparse  # O(1)
+import configparser  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
 import json  # O(1)
@@ -223,7 +225,7 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
              *[x for x in argv if x != "--background"],  # O(len argv)
              "--summary", str(mine), "--publish", str(Path(a.summary).resolve()), "--run-id", run_id]  # O(1) last flag wins
     ptr = {"id": run_id, "summary": str(mine), "started": time.time(),  # O(1)
-           "mode": "fast" if "--fast" in argv else "full"}  # O(1)
+           "mode": "fast" if a.fast or a.marker else "full"}  # O(1)
     atomic_write(pointer_path(a.summary), json.dumps(ptr) + "\n")  # O(1)
     if a.task:  # a wait on an earlier run of this task finds its newest run (#507) | O(1)
         atomic_write(task_pointer_path(a.summary, a.task), json.dumps({**ptr, "task": a.task}) + "\n")  # O(1)
@@ -558,14 +560,14 @@ def no_result_log(summary, command, cwd, rc, lines):  # O(L) + file write, keeps
         return ""  # O(1)
 
 
-def no_result_target(command, rc, log):  # O(1) the feedback target of a no-result stop
-    return f"exit {rc} from `{command[:200]}`; log {log or 'not written'}"  # O(1)
+def no_result_target(command, rc, log, cause=None):  # O(1) the feedback target of a no-result stop
+    return (f"nothing collected: {cause}; " if cause else "") + f"exit {rc} from `{command[:200]}`; log {log or 'not written'}"  # O(1)
 
 
-def record_no_result(a, reason, command, rc, lines, tree=None):  # O(L + c) log the stop's trace, print its path, log the incident
+def record_no_result(a, reason, command, rc, lines, tree=None, cause=None):  # O(L + c) log the stop's trace, print its path, log the incident
     log = no_result_log(a.summary, command, str(tree) if tree else str(Path.cwd()), rc, lines)  # O(L)
     print(f"run_tests: no-result log {log}", file=sys.stderr)  # O(1)
-    extra = {"target": no_result_target(command, rc, log), "command": command[:300], "exit": rc, "log": log}  # O(1)
+    extra = {"target": no_result_target(command, rc, log, cause), "command": command[:300], "exit": rc, "log": log}  # O(1)
     if tree:  # O(1)
         extra["cwd"] = str(tree)  # O(1)
     add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task, extra)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
@@ -859,6 +861,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--ledger", default=ct.DEFAULT_LEDGER)  # O(1)
     ap.add_argument("--summary", default=DEFAULT_SUMMARY,  # O(1)
                     help="test summary JSON for pt_review packet (default %(default)s)")  # O(1)
+    ap.add_argument("-m", "--marker", default=None, metavar="EXPR", help="pytest marker expression (a fast run; a test-cmd.json pytest command gets it appended)")  # O(1)
     ap.add_argument("--background", action="store_true",  # O(1)
                     help="start a detached run, print `summary: <path>`, exit 0")  # O(1)
     ap.add_argument("--wait", nargs="?", const="", default=None, dest="wait_path", metavar="PATH",  # O(1)
@@ -934,7 +937,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         reason = f"wall-clock limit: test run killed after {secs:g} s (run_tests --limit S; 0 = none)"  # O(1)
         print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
         save_output(a, e.command, -9, e.text)  # O(len text)
-        write_summary(a.summary, "fast" if a.fast else "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], secs, error=reason)  # O(1)
+        write_summary(a.summary, "fast" if a.fast or a.marker else "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], secs, error=reason)  # O(1)
         publish_summary(a)  # O(summary size)
         record_no_result(a, reason, e.command, -9, e.text.splitlines(), None)  # O(L + c)
         print(f"0 0 0 {secs:.1f}")  # O(1)
@@ -943,7 +946,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         if isinstance(e, SystemExit) and e.code in (0, None):  # O(1)
             raise  # O(1)
         if Path(a.summary).resolve() not in WRITTEN:  # a result already written stays | O(1)
-            write_summary(a.summary, "fast" if a.fast else "full", {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
+            write_summary(a.summary, "fast" if a.fast or a.marker else "full", {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
                                                                     "skipped_tests": []}, [], 0.0,  # O(1)
                           error=f"run_tests stopped by {e}; its test processes were killed" if isinstance(e, Stopped) else f"run_tests crashed: {e!r}"[:200])  # O(1)
             publish_summary(a)  # O(summary size)
@@ -1084,6 +1087,76 @@ def fast_spec(paths: list[str], quiet: bool = False):  # testcmd.resolve plus it
     return spec  # O(1)
 
 
+def with_marker(command, marker):  # O(len command) the pytest command plus `-m MARKER` (shell-quoted), None when the command is not pytest
+    try:  # O(1)
+        lex = shlex.shlex(command, posix=True, punctuation_chars=True)  # O(1)
+        lex.whitespace_split = True  # O(1)
+        words = list(lex)  # O(len)
+    except ValueError:  # O(1)
+        return None  # O(1)
+    names = [Path(w.replace("\\", "/")).name for w in words]  # O(len)
+    hits = [i for i, n in enumerate(names) if n in ("pytest", "py.test")]  # `python -m pytest` has the word pytest too | O(len)
+    if not hits:  # O(1)
+        return None  # O(1)
+    if any(w and all(c in "();<>|&" for c in w) for w in words[hits[0] + 1:]):  # a shell operator or redirect after pytest: the marker would reach another program | O(len)
+        return None  # O(1)
+    return f"{command} -m {shlex.quote(marker)}"  # O(1)
+
+
+def addopts_text(root, name):  # O(file) the addopts of one pytest config file as argv words: (file owns the pytest config, words)
+    path = Path(root) / name  # O(1)
+    if not path.is_file():  # O(1)
+        return False, []  # O(1)
+    try:  # O(1)
+        text = path.read_text(encoding="utf-8")  # O(file)
+        if name == "pyproject.toml":  # O(1)
+            import tomllib  # O(1)
+            tbl = tomllib.loads(text).get("tool", {}).get("pytest", {}).get("ini_options")  # O(file)
+            if not isinstance(tbl, dict):  # O(1)
+                return False, []  # O(1)
+            val = tbl.get("addopts", "")  # O(1)
+        else:  # O(1)
+            cp = configparser.ConfigParser(interpolation=None, strict=False)  # O(1)
+            cp.read_string(text)  # O(file)
+            section = "tool:pytest" if name == "setup.cfg" else "pytest"  # O(1)
+            if not cp.has_section(section):  # an existing pytest.ini wins even without a section | O(1)
+                return name == "pytest.ini", []  # O(1)
+            val = cp.get(section, "addopts", fallback="")  # O(1)
+        return True, [str(x) for x in val] if isinstance(val, list) else shlex.split(str(val))  # O(len)
+    except (OSError, ValueError, ImportError, AttributeError, TypeError, configparser.Error):  # an unreadable config still owns the settings | O(1)
+        return True, []  # O(1)
+
+
+def addopts_marker(root):  # O(file) (marker expression, config file name) of the `-m` in the project's pytest addopts, else None
+    for name in ("pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"):  # pytest's own precedence | O(1)
+        found, words = addopts_text(root, name)  # O(file)
+        if not found:  # O(1)
+            continue  # O(1)
+        expr = None  # O(1)
+        for i, w in enumerate(words):  # the last -m wins | O(len)
+            if w == "-m" and i + 1 < len(words):  # O(1)
+                expr = words[i + 1]  # O(1)
+            elif w.startswith("-m") and len(w) > 2 and not w.startswith("--"):  # O(1)
+                expr = w[2:]  # O(1)
+        return (expr, name) if expr else None  # O(1)
+    return None  # O(1)
+
+
+def nothing_collected(output, paths, marker, root):  # O(len output + file) why a pytest run (exit 5) collected nothing
+    m = re.search(r"(\d+) deselected", output)  # O(len output)
+    if m:  # O(1)
+        n = m.group(1)  # O(1)
+        if marker:  # O(1)
+            return f"all {n} collected tests deselected by -m '{marker}'"  # O(1)
+        found = addopts_marker(root)  # O(file)
+        if found:  # O(1)
+            return f"all {n} collected tests deselected by addopts -m '{found[0]}' in {found[1]}; pass run_tests -m EXPR to select them"  # O(1)
+        return f"all {n} collected tests deselected by a -m or -k filter"  # O(1)
+    if paths:  # O(p)
+        return "no tests found in " + ", ".join(paths)  # O(p)
+    return "no tests found (check testpaths and python_files in the pytest config)"  # O(1)
+
+
 def expand_fast_paths(paths):  # O(p) source paths -> related tests; test paths kept
     """--fast accepts source or test paths; a source path maps via testcmd.resolve_related."""
     out = []  # O(1)
@@ -1108,7 +1181,7 @@ def stable_plan():  # O(S) the plan path `plan_tools lint --stable` recorded, el
 
 def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     paths = [p for chunk in (a.fast or []) for p in nt.csv(chunk)]  # O(p)
-    label = "fast" if paths else "full"  # O(1)
+    label = "fast" if paths or a.marker else "full"  # O(1)
     if a.also and not a.task:  # O(1)
         return usage_error(a, label, "--also needs --task Tn")  # O(summary size)
     if a.also:  # the claim is recorded before any runner or tree, so the tree below holds the file | O(c + k)
@@ -1142,6 +1215,11 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     node_gone = node_install_line(Path.cwd(), spec)  # O(m + f)
     if node_gone:  # no install yet: a usage error, not a test failure (#269) | O(1)
         return usage_error(a, label, node_gone)  # O(summary size)
+    if a.marker and not spec["python"]:  # a test-cmd.json command takes the marker only when it is pytest | O(len)
+        marked = with_marker(spec["command"], a.marker)  # O(len)
+        if marked is None:  # O(1)
+            return usage_error(a, label, f"-m EXPR selects pytest markers; the {spec['language']} test command `{spec['command']}` is not pytest")  # O(summary size)
+        spec = {**spec, "command": marked}  # O(1)
     if spec["python"] and paths:  # a missing path is a usage error, not a no-result stop (#235) | O(p)
         gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd())  # O(p)
         if gone:  # O(1)
@@ -1195,7 +1273,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             base = pyrun.pytest_cmd()  # O(1) + at most one probe spawn
         except pyrun.PytestUnavailable as e:  # O(1)
             return usage_error(a, label, str(e))  # the summary is written too | O(summary size)
-        cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), "-q", "-rP", "-p", "no:cacheprovider",  # O(p) -rP: a passing test's prints reach the output log (#501)
+        cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), *(["-m", a.marker] if a.marker else []), "-q", "-rP", "-p", "no:cacheprovider",  # O(p) -rP: a passing test's prints reach the output log (#501)
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
         t0 = time.monotonic()  # O(1)
         r = run_captured(cmd, limit=a.limit, env=child_env())  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
@@ -1205,13 +1283,14 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         parsed = collection_report(xml_path) if r.returncode == 2 and has_xml else None  # a collection error stops pytest with exit 2 (#196) | O(X + T*d)
         if parsed is None and (r.returncode not in (0, 1) or not has_xml):  # O(1)
             tail = (r.stdout + r.stderr).strip().splitlines()[-5:]  # O(O)
-            reason = f"pytest produced no results (exit {r.returncode}): " + (" | ".join(tail) or "no output")  # O(1)
+            cause = nothing_collected(strip_ansi(r.stdout + r.stderr), paths, a.marker, Path(".")) if r.returncode == 5 else None  # O(O + file)
+            reason = f"pytest collected nothing (exit 5): {cause}" if cause else f"pytest produced no results (exit {r.returncode}): " + (" | ".join(tail) or "no output")  # O(1)
             print(reason, file=sys.stderr)  # O(1)
             write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
                                              "skipped_tests": []}, [], seconds,  # O(1)
-                          error=reason if r.returncode != 5 else None)  # O(1)
+                          error=reason)  # O(1)
             publish_summary(a)  # O(summary size)
-            record_no_result(a, reason, shlex.join(cmd), r.returncode, (r.stdout + r.stderr).splitlines())  # O(O + c)
+            record_no_result(a, reason, shlex.join(cmd), r.returncode, (r.stdout + r.stderr).splitlines(), cause=cause)  # O(O + c)
             print(f"0 0 0 {seconds:.1f}")  # O(1)
             return 1 if r.returncode == 5 else 2  # O(1)
         counts, failures, files = parsed or parse_junit(xml_path)  # O(X + T*d)
