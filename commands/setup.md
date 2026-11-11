@@ -4,7 +4,7 @@ argument-hint: ""
 ---
 
 Check and report, changing nothing without a yes:
-- the project language and test command (`sl testcmd`, `test-cmd.json` or detection) and that it runs;
+- the project language and test command (`sl testcmd`: report its `command` and `origin`, the file it came from: the project's `.superlite/test-cmd.json`, the main checkout's, the user-level `~/.config/superlite/test-cmd.json` entry for the project's language, or `detection`) and that it runs;
 - Python 3.10+ for the `sl` tools;
 - the model tiers in `config/models.json` and `config/routing.json`;
 - whether superpowers is also enabled (two process skills compete: suggest disabling one for this project);

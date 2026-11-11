@@ -5,7 +5,9 @@
 
 Order: (a) `.superlite/test-cmd.json` {"language","test","test_file","junit","setup","related"} (JSON; `test_file` is a template
 with {files}; `{junit}` in a command is replaced by the path run_tests wants the JUnit XML at; a literal `junit` path is read
-after the run; `related` is a template with `{src}` for source->test mapping); (b) detection from the project's own marker files: package.json scripts.test (npm test; the JUnit flag when
+after the run; `related` is a template with `{src}` for source->test mapping); (a2) the main checkout's file when root is a linked worktree; (a3) the user-level default `~/.config/superlite/test-cmd.json`
+(override: SUPERLITE_USER_TEST_CMD), a JSON object keyed by language whose entry has the same fields as (a), read for the detected language
+when the project has no file of its own; (b) detection from the project's own marker files: package.json scripts.test (npm test; the JUnit flag when
 vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo.toml, Package.swift, *.sln / *.csproj, then Python
 (pyproject.toml, pytest.ini, setup.cfg, tox.ini, conftest.py, or test_*.py files); (c) otherwise None.
 `{only_testing}` expands to one shell-quoted -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing); the target comes from Xcode target membership and Package.swift test targets, else the folder name; a path in no test target runs the unfiltered `test` command.
@@ -46,7 +48,7 @@ def read_config(root: Path):  # O(file)
     return None  # O(1)
 
 
-def main_checkout_config(root: Path):  # config of the main checkout when root is a linked worktree | O(file)
+def _main_checkout_root(root: Path):  # the main checkout's folder when root is a linked worktree, else None | O(1)
     try:  # O(1)
         out = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-common-dir"], capture_output=True, text=True, timeout=10)  # O(1)
         if out.returncode != 0 or not out.stdout.strip():  # O(1)
@@ -56,7 +58,62 @@ def main_checkout_config(root: Path):  # config of the main checkout when root i
         return None  # O(1)
     if common == (Path(root) / ".git").resolve():  # the main checkout itself | O(1)
         return None  # O(1)
-    return read_config(common.parent)  # O(file)
+    return common.parent  # O(1)
+
+
+def main_checkout_config(root: Path):  # config of the main checkout when root is a linked worktree | O(file)
+    main = _main_checkout_root(root)  # O(1)
+    return read_config(main) if main else None  # O(file)
+
+
+def user_config_path() -> Path:  # read at call time, never cached | O(1)
+    env = os.environ.get("SUPERLITE_USER_TEST_CMD")  # O(1)
+    return Path(env) if env else Path.home() / ".config" / "superlite" / "test-cmd.json"  # O(1)
+
+
+def shown(path: Path) -> str:  # the path with the home folder as ~ | O(1)
+    s, home = str(path), str(Path.home())  # O(1)
+    return "~" + s[len(home):] if s == home or s.startswith(home + os.sep) else s  # O(1)
+
+
+def read_user_config(language: str):  # the user-level entry for a language, or None | O(file)
+    p = user_config_path()  # O(1)
+    try:  # O(1)
+        d = json.loads(p.read_text(encoding="utf-8"))  # O(file)
+    except FileNotFoundError:  # O(1)
+        return None  # O(1)
+    except (OSError, ValueError) as e:  # O(1)
+        print(f"user test-cmd.json ignored ({shown(p)}): {e}", file=sys.stderr)  # O(1)
+        return None  # O(1)
+    if not isinstance(d, dict):  # O(1)
+        print(f"user test-cmd.json ignored ({shown(p)}): needs a JSON object keyed by language", file=sys.stderr)  # O(1)
+        return None  # O(1)
+    entry = d.get(language)  # O(1)
+    if entry is None:  # O(1)
+        return None  # O(1)
+    if not (isinstance(entry, dict) and isinstance(entry.get("test"), str) and entry["test"]):  # O(1)
+        print(f'user test-cmd.json ignored for {language} ({shown(p)}): needs a JSON object with a "test" command', file=sys.stderr)  # O(1)
+        return None  # O(1)
+    return {**entry, "language": language}  # O(1)
+
+
+def config_source(root: Path):  # -> (config | None, source, origin): project file, main checkout's, user entry, detection | O(m + f)
+    root = Path(root)  # O(1)
+    cfg = read_config(root)  # O(file)
+    if cfg is not None:  # O(1)
+        return cfg, "test-cmd.json", CONFIG  # O(1)
+    main = _main_checkout_root(root)  # O(1)
+    cfg = read_config(main) if main else None  # O(file)
+    if cfg is not None:  # O(1)
+        return cfg, "test-cmd.json", str(main / CONFIG)  # O(1)
+    det = detect(root)  # O(m + f)
+    lang = det.get("language") if det is not None else None  # O(1)
+    if lang is None and root.is_dir() and any(q.name.endswith((".xcodeproj", ".xcworkspace")) for q in root.iterdir()):  # Xcode: no detected command, still swift | O(entries)
+        lang = "swift"  # O(1)
+    cfg = read_user_config(lang) if lang else None  # O(file)
+    if cfg is not None:  # O(1)
+        return cfg, "user", shown(user_config_path())  # O(1)
+    return (det, "markers", "detection") if det is not None else (None, "markers", "none")  # O(1)
 
 
 def names_filter(paths) -> str:  # basenames without suffix joined by | | O(p)
@@ -535,7 +592,7 @@ def missing_reason(root) -> str:  # why no test command resolved, with a hint fo
     if any(n.endswith((".xcodeproj", ".xcworkspace")) for n in names):  # O(entries)
         dest = "-destination 'platform=iOS Simulator,name=iPhone 16'"  # O(1)
         return (f'no test command found: add .superlite/test-cmd.json, e.g. {{"language": "swift", "test": "xcodebuild test -scheme <Scheme> {dest}", '
-                f'"test_file": "xcodebuild test -scheme <Scheme> {dest} {{only_testing}}"}}')  # O(1)
+                f'"test_file": "xcodebuild test -scheme <Scheme> {dest} {{only_testing}}"}}; or a "swift" entry in {shown(user_config_path())} for every project without its own')  # O(1)
     return 'no test command found: add .superlite/test-cmd.json with {"test": ..., "test_file": ...} or a marker file'  # O(1)
 
 
@@ -679,16 +736,13 @@ def is_test_path(path: str) -> bool:  # O(1)
 def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
     """-> {"language", "python": bool, "command": str|None, "junit": str, "env": {}, "setup": str, "source"} or None."""
     root = Path(root)  # O(1)
-    cfg = read_config(root) or main_checkout_config(root)  # O(file)
-    src = "test-cmd.json"  # O(1)
-    if cfg is None:  # O(1)
-        cfg, src = detect(root), "markers"  # O(m + f)
+    cfg, src, origin = config_source(root)  # O(m + f)
     if cfg is None:  # O(1)
         return None  # O(1)
     lang = cfg.get("language") or "unknown"  # O(1)
     iso = cfg["isolate"] if isinstance(cfg.get("isolate"), bool) else lang in ISOLATE_LANGS  # explicit config wins | O(1)
     if cfg.get("test") is None and cfg.get("language") == "python":  # O(1)
-        return {"language": "python", "python": True, "command": None, "junit": "", "env": {}, "setup": "", "source": src, "isolate": iso}  # O(1)
+        return {"language": "python", "python": True, "command": None, "junit": "", "env": {}, "setup": "", "source": src, "origin": origin, "isolate": iso}  # O(1)
     files = " ".join(f'"{p}"' if " " in p else p for p in paths)  # O(p)
     template = cfg.get("test_file") or cfg["test"]  # O(1)
     command = template.replace("{files}", files) if paths else cfg["test"]  # O(1)
@@ -703,7 +757,7 @@ def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
         else:  # O(1)
             command = command.replace("{only_testing}", ids)  # O(p)
     return {"language": lang, "isolate": iso, "python": False, "command": command, "junit": cfg.get("junit") or "",  # O(1)
-            "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src}
+            "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src, "origin": origin}
 
 
 NAME_PATTERNS = [r"^--- FAIL: (\S+)", r"^test (\S+) \.\.\. FAILED", r"^\s*(?:FAIL|✗|×|✕)\s+(.+?)\s*$", r"^\s*Failed\s+(\S+)",  # O(1)

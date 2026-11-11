@@ -6,6 +6,7 @@
     run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] --command CMD   (a full result run outside run_tests; report only, closes no incidents)
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
+The test command comes from, in order: the project's `.superlite/test-cmd.json`, the main checkout's, the user-level entry for the detected language (`~/.config/superlite/test-cmd.json`), then detection.
 Every exit path leaves a summary: a usage error, an unknown task, a missing pytest, an unprepared tree or a crash (`run_tests crashed: ...`, exit 2) writes a red zero summary; `--wait` names a background run whose process died (its pid sits in `<summary>.pid`) and the log of one that timed out.
 A red Swift (xcodebuild) run reports each failure at its file and line (`failure_sites`, #499); a counted `--fast` run limited to Swift files covers them, so a later green run closes those files' located failures and an uncounted run closes none.
 When a run prints no test count and exits 0, the stop names the runner's own "no tests" line (`; runner: <line>`).
@@ -773,15 +774,19 @@ def has_swift(root):  # does the git tree (tracked or untracked, not ignored) ho
 
 
 def placeholder_line(root, spec):  # the refusal text for a test-cmd.json {only_testing} placeholder in a project without Swift files, else None | O(m + f)
-    if not spec or spec.get("python") or spec.get("source") != "test-cmd.json":  # O(1)
+    if not spec or spec.get("python") or spec.get("source") not in ("test-cmd.json", "user"):  # O(1)
         return None  # O(1)
     root = Path(root)  # O(1)
-    cfg = testcmd.read_config(root) or testcmd.main_checkout_config(root)  # O(file)
+    cfg = testcmd.config_source(root)[0]  # O(m + f)
     if not isinstance(cfg, dict) or not any(isinstance(cfg.get(k), str) and "{only_testing}" in cfg[k] for k in ("test", "test_file")):  # O(1)
         return None  # O(1)
     if has_swift(root) is not False:  # O(files)
         return None  # O(1)
-    where = ".superlite/test-cmd.json" if (root / ".superlite" / "test-cmd.json").is_file() else "the main checkout's .superlite/test-cmd.json"  # O(1)
+    user = spec.get("source") == "user"  # O(1)
+    if user:  # O(1)
+        where = f'the "{spec.get("language")}" entry of {spec.get("origin") or testcmd.shown(testcmd.user_config_path())}'  # O(1)
+    else:  # O(1)
+        where = ".superlite/test-cmd.json" if (root / ".superlite" / "test-cmd.json").is_file() else "the main checkout's .superlite/test-cmd.json"  # O(1)
     det = testcmd.detect(root)  # O(m + f)
     head = "test-cmd.json uses {only_testing}, the Xcode (Swift) placeholder, but this"  # O(1)
     if not det:  # O(1)
@@ -789,7 +794,7 @@ def placeholder_line(root, spec):  # the refusal text for a test-cmd.json {only_
     lang = det["language"]  # O(1)
     if lang == "python":  # O(1)
         return (f"{head} python project has no Swift files: in {where} write the python form {{files}} "  # O(1)
-                '(e.g. "test_file": "python -m pytest {files}"), or delete that file so run_tests runs pytest itself')
+                '(e.g. "test_file": "python -m pytest {files}"), or delete that ' + ("entry" if user else "file") + ' so run_tests runs pytest itself')
     return f'{head} {lang} project has no Swift files: in {where} write the {lang} form {{files}} (e.g. "test_file": "{det["test_file"]}")'  # O(1)
 
 
@@ -1075,7 +1080,7 @@ xcode_only_testing = testcmd.xcode_only_testing  # O(1)
 
 
 def fast_spec(paths: list[str], quiet: bool = False):  # testcmd.resolve plus its notes under a `run_tests:` prefix | O(m + f)
-    cfg = testcmd.read_config(Path(".")) or testcmd.main_checkout_config(Path("."))  # O(file)
+    cfg = testcmd.config_source(Path("."))[0]  # O(m + f)
     tpl = [cfg.get(k) for k in ("test_file", "test")] if cfg else []  # O(1)
     if not paths or not any(isinstance(t, str) and "{only_testing}" in t for t in tpl):  # O(1)
         return testcmd.resolve(".", paths)  # O(m + f)
