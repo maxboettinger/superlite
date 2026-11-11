@@ -139,3 +139,17 @@ def test_python_plan_call_checks_unchanged(tmp_path):
 def test_owns_note_and_upper_case_extension_count(tmp_path):
     p = plan(tmp_path, [task("T1", "`src/App.TS (entry)`")])
     assert ptm.owned_languages(ptm.Plan.load(str(p)).tasks[0]) == {"TypeScript"}
+
+
+def test_edges_value_on_next_line_is_ignored(tmp_path):
+    p = two(tmp_path, "**Edges:**\nhard things follow\n")
+    assert ptm.Plan.load(str(p)).header_edges_hard() is False
+
+
+def test_stack_words_java_not_javascript_and_go_as_word(tmp_path):
+    def langs(stack):
+        return ptm.stack_languages(ptm.Plan.load(str(plan(tmp_path, [task("T1", "src/x/")], stack=stack))))
+    assert langs("Java 17") == {"Java"}
+    assert langs("JavaScript") == {"JavaScript"}
+    assert langs("Django, Mongo") == set()
+    assert langs("Go 1.22") == {"Go"}

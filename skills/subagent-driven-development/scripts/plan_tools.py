@@ -411,7 +411,7 @@ class Plan:  # O(1)
 
     def header_edges_hard(self) -> bool:  # O(C) the header line `**Edges:** hard (<why>)` keeps every Consumes edge
         head = re.split(r"^#{2,}\s", self.text, maxsplit=1, flags=re.M)[0]  # O(C)
-        return bool(re.search(r"^\*\*Edges:\*\*\s*hard\b", head, re.M | re.I))  # O(C)
+        return bool(re.search(r"^\*\*Edges:\*\*[ \t]*hard\b", head, re.M | re.I))  # O(C)
 
     def header_max_chars(self) -> int | None:  # O(C)
         m = re.search(r"^\*\*Max chars:\*\*\s*([\d_,]+)", self.text, re.M)  # O(C)
@@ -1200,10 +1200,10 @@ def required_params(args: str, method: bool = False) -> int:  # O(s)
 
 
 LANG_EXT = {".py": "Python", ".pyi": "Python", ".ts": "TypeScript", ".tsx": "TypeScript", ".mts": "TypeScript", ".cts": "TypeScript",  # O(1)
-            ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript", ".swift": "Swift", ".go": "Go",
-            ".rs": "Rust", ".kt": "Kotlin", ".kts": "Kotlin", ".java": "Java", ".cs": "C#", ".rb": "Ruby"}
+            ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript", ".swift": "Swift", ".go": "Go",  # O(1)
+            ".rs": "Rust", ".kt": "Kotlin", ".kts": "Kotlin", ".java": "Java", ".cs": "C#", ".rb": "Ruby"}  # O(1)
 STACK_WORDS = {"Python": ("python",), "TypeScript": ("typescript",), "JavaScript": ("javascript", "node", "node.js"), "Swift": ("swift",),  # O(1)
-               "Go": ("go", "golang"), "Rust": ("rust",), "Kotlin": ("kotlin",), "Java": ("java",), "C#": ("c#", "csharp", ".net"), "Ruby": ("ruby",)}
+               "Go": ("go", "golang"), "Rust": ("rust",), "Kotlin": ("kotlin",), "Java": ("java",), "C#": ("c#", "csharp", ".net"), "Ruby": ("ruby",)}  # O(1)
 
 
 def owned_languages(task: Task) -> set[str]:  # O(k*s*A)
@@ -1252,7 +1252,7 @@ def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
             if langs and "Python" not in langs:  # O(1)
                 names = ", ".join(sorted(langs))  # O(l log l)
                 msg = (f"PROBE: {kind}={target} imports Python, but {who} owns no Python file ({names}); " if who  # O(1)
-                       else f"PROBE: {kind}={target} imports Python, but the plan's stack is {names}; ") + "use run= with a built command or **Probe entry:** none (<why>)"
+                       else f"PROBE: {kind}={target} imports Python, but the plan's stack is {names}; ") + "use run= with a built command or **Probe entry:** none (<why>)"  # O(1)
                 if (holder, msg) not in seen:  # O(1)
                     seen.add((holder, msg))  # O(1)
                     issues.append(Issue(msg, [holder] if holder else (), scope="task" if holder else "plan"))  # O(1)
