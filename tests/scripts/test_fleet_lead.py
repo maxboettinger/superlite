@@ -22,7 +22,7 @@ def test_spawn_lead_starts_in_the_worktree_without_prime(world, tmp_path, monkey
     wt = tmp_path / "wt"; wt.mkdir()
     fleet.main(["on", "--accounts", "claude1,claude3"])
     r = fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u"})
-    lsd, name = str((wt / ".superlite").resolve()), fleet.fs.agent_name(world.sd, "W1")
+    lsd, name = str((wt / ".superlite").resolve()), fleet.fs.agent_name(world.sd, "W1", root=wt, ident="lead")
     assert r == {"id": "W1", "name": name, "account": "claude3", "pane_id": "w6:p1", "agent": "lead", "model": "opus", "role": "lead", "lead_sd": lsd}
     sl = str(Path(fl.__file__).resolve().parent / "sl")
     assert ("start_agent", name, fl.lead_argv(sl, "opus", 400000)) in world.fh.calls and not any(c[0] == "prompt" for c in world.fh.calls)
@@ -38,7 +38,7 @@ def test_trust_dialog_and_stopping_a_lead_stops_its_fleet_first(world, tmp_path,
     monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
     fleet.main(["on"]); world.fh.start_error = "agent_not_ready"; world.fh.screen = "Quick safety check\n   Yes, I trust this folder\n"
     wt = tmp_path / "wt"; fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u"})
-    name = fleet.fs.agent_name(world.sd, "W1")
+    name = fleet.fs.agent_name(world.sd, "W1", root=wt, ident="lead")
     assert ("send_keys", name, ["Down", "Enter"]) in world.fh.calls
     lsd = wt / ".superlite"
     fleet.fs.save(lsd, {**fleet.fs.default(), "on": True, "workspace_id": "w9", "workers": {"W1": {"name": "sl-wt-ab12-w1", "pane_id": "w9:p1", "state": "busy"}}})

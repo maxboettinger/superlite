@@ -84,7 +84,7 @@ def _spawn_lead(main_sd, worktree, model, base, after):  # O(a * e + w) plus her
     if after is not None:  # O(1)
         print(f"{after.wid} account {after.account} {after.why}; retrying on account {account}", file=sys.stderr)  # O(1)
     wid = fs.next_id(main_sd)  # O(w)
-    name = fs.agent_name(main_sd, wid)  # O(1)
+    name = fs.agent_name(main_sd, wid, root=worktree, ident="lead", taken=fleet._live_names())  # O(a)
     worktree.mkdir(parents=True, exist_ok=True)  # O(1)
     lsd = worktree / ".superlite"  # O(1)
     lsd.mkdir(parents=True, exist_ok=True)  # O(1)

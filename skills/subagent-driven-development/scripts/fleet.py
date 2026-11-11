@@ -261,6 +261,13 @@ def lean_argv(argv):  # O(n) a copy of argv with the lean flags before the deny 
     return a[:i] + flags + a[i:j] + names + a[j:]  # O(n)
 
 
+def _live_names():  # names of the live herdr agents on this machine; no agent list: none | O(a)
+    try:  # O(1)
+        return {x.get("name") for x in hc.agents() if x.get("name")}  # O(a)
+    except hc.HerdrError:  # O(1)
+        return set()  # O(1)
+
+
 def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer"):  # O(a * e + w) plus herdr calls
     """One worker; a start that stays slow is retried once on another account.
     Every worker starts lean (#377): no MCP servers, Chrome, skills or slash commands; Artifact, ListAgents, ReadNotifications and ReportFindings denied (LEAN_FLAGS, LEAN_DENY)."""
@@ -287,7 +294,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus
     if after is not None:  # O(1)
         print(f"{after.wid} account {after.account} {after.why}; retrying on account {account}", file=sys.stderr)  # O(1)
     wid = fs.next_id(sd)  # O(w)
-    name = fs.agent_name(sd, wid)  # herdr rejects `W1`; every herdr agent call below uses this name | O(1)
+    name = fs.agent_name(sd, wid, taken=_live_names())  # herdr rejects `W1`; every herdr agent call below uses this name | O(a)
     wenv = {**worker_env(sd, wid, agent, cdir, base), **fleet_roles.env(role)}  # O(1)
     cwd = str(project)  # O(1)
     record = {"name": name, "account": account, "agent": agent, "tier": tier or model, "state": "starting", "task": None, "role": role, "one_turn": launch["one_turn"]}  # O(1)
@@ -658,6 +665,9 @@ def main(argv=None):  # O(w) plus command cost
     s.add_argument("ids", nargs="*")  # O(1)
     s.add_argument("--all", action="store_true")  # O(1)
     s.add_argument("--plan")  # O(1)
+    s = sub.add_parser("name", help="print the full agent name sl:{repo}-{worktree}-{id}")  # O(1)
+    s.add_argument("ident", nargs="?", default="")  # O(1)
+    s.add_argument("--plan")  # O(1)
     s = sub.add_parser("report", help="print a worker's last report")  # O(1)
     s.add_argument("ids", nargs="+")  # O(1)
     s.add_argument("--plan")  # O(1)
@@ -666,10 +676,13 @@ def main(argv=None):  # O(w) plus command cost
         sub.add_parser(n, help=h)  # O(1)
     a = p.parse_args(argv)  # O(n)
     sd = _sd(a)  # O(d)
+    if a.cmd == "name":  # O(1) before any herdr call; fleet mode may be off
+        print(fs.full_name(sd, a.ident))  # O(1)
+        return 0  # O(1)
     if a.cmd == "on":  # O(1)
         raw = a.accounts or os.environ.get("SUPERLITE_FLEET_ACCOUNTS", "")  # O(1) flag wins over env
         accts = [x.strip() for x in raw.split(",") if x.strip()]  # O(a)
-        fs.set_on(sd, f"sl:{sd.parent.name}", accts)  # O(w)
+        fs.set_on(sd, fs.full_name(sd), accts)  # O(w)
         if any(not ac.is_path(x) and x != "current" for x in accts) and not ac.read_listing().get("accounts"):  # O(a) plus subprocess time
             print("fleet: warning: claude-profile list unavailable; account names cannot be resolved, pass config dir paths instead", file=sys.stderr)  # O(1)
         print(f"fleet: on accounts={','.join(accts) or 'auto'}", file=sys.stderr)  # O(a) stdout stays clean for worker lines
