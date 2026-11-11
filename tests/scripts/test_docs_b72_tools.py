@@ -8,6 +8,7 @@ SCRIPTS = ROOT / "skills" / "subagent-driven-development" / "scripts"
 RT_OLD = "with `--background` (prints `summary: <path>` and a `wait:` line)"
 RT_NEXT = "with `--background` (prints `summary: <path>`, then the cue `next: tests still running; run the wait line below now, in the foreground (never as a background command), and do not end your turn until it reports.` and, last, the `wait:` line)"
 RT_SWIFT = "a Swift `--fast` run whose test-cmd.json template holds `{only_testing}` maps each test file to one shell-quoted `-only-testing:<Target>/<Suite>` id per suite it declares (`-only-testing:<Target>` when it declares none, with the stderr note `run_tests: <path> declares no test suite; using -only-testing:<Target>`), the target read from target membership (the Sources-phase files and Xcode 16 synchronized folders of each `project.pbxproj`, the `Package.swift` test targets with their `path:`), else from the folder names; a path outside every test target runs the unfiltered `test` command with the stderr note `run_tests: <path> is not in a test target; running the unfiltered test command` (testcmd.py holds this one mapping for `testcmd.resolve` and `run_tests`, #431); "
+CT_CLAIM = "(nothing is printed when its claimer is in the call or the file equals the newest checkpoint; else `left uncommitted (claimed by T2, changed after its checkpoint; run commit_task T2): F` when the claimer is committed and not running, or `left uncommitted (claimed by T2; commit_task T2 commits it once T2 is done): F`); "
 CT_NOTES = "a file another task owns prints `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` when its owners are outside the call and not running, at least one of them is committed and the file differs from the newest checkpoint; a file this task owns that a running sibling (busy in pool.json, outside this call) also owns and that differs from the newest checkpoint is held out with one `left uncommitted (shared with running T2; commit_task T1 again once it is done): F` note per task, a task left with nothing fails `Tn FAILED: nothing to commit; held for running T2: F`, and `--also` files and the Wave 0 task are never held; every stderr note prints once per call, not once per task; "
 AC_SKIP = "; `apply` writes no commit whose tree equals the commit it sits on (squash and `--no-squash`): each such entry prints `apply: skipped <title> (no change left)`, `applied N commit(s)` counts only the real commits, and with N = 0 HEAD and the index stay untouched while the checkpoints are still removed"
 BL_HEAD = "| `backlog` | Backlog mode CLI: `status [--all]`, `plan [--tier sonnet]"
@@ -35,7 +36,7 @@ def test_run_tests_row_names_the_cue_and_the_swift_mapping():
 
 
 def test_commit_task_row_names_the_notes():
-    assert "(`left uncommitted (claimed by Tn): F`); " + CT_NOTES + "`--also` counts" in row("commit_task")
+    assert CT_CLAIM + CT_NOTES + "`--also` counts" in row("commit_task")
 
 
 def test_autocommit_row_names_the_skip_line():
