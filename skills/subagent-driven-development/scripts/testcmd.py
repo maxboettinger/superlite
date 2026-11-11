@@ -11,7 +11,7 @@ when the project has no file of its own; (b) detection from the project's own ma
 vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo.toml, Package.swift, *.sln / *.csproj, then Python
 (pyproject.toml, pytest.ini, setup.cfg, tox.ini, conftest.py, or test_*.py files); (c) otherwise None.
 `{only_testing}` expands to one shell-quoted -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing); the target comes from Xcode target membership and Package.swift test targets, else the folder name; a path in no test target runs the unfiltered `test` command.
-Library: resolve, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
+Library: resolve, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
 """
 # Complexity notation:
 #   m = marker files checked, f = files walked for the Python test-file scan (bounded), o = output lines
@@ -731,6 +731,44 @@ def is_test_path(path: str) -> bool:  # O(1)
         return True  # O(1)
     dirs = p.lower().split("/")[:-1]  # O(len)
     return any(d in ("tests", "test", "__tests__", "spec") for d in dirs)  # O(depth)
+
+
+DOC_EXT = (".md", ".markdown", ".mdx", ".rst", ".txt", ".adoc")  # O(1)
+DATA_DIRS = ("fixtures", "fixture", "testdata")  # O(1)
+JS_EXT = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"}  # O(1)
+TEST_CODE_EXT = {".sh", ".bash", ".zsh", ".bats", ".py", ".go", ".rs", ".swift", ".cs", ".rb", ".pl", ".php", ".lua", ".java", ".kt"} | JS_EXT  # O(1)
+RUNNER_EXT = {"python": {".py"}, "javascript": JS_EXT, "typescript": JS_EXT, "go": {".go"}, "rust": {".rs"}, "swift": {".swift"}, "csharp": {".cs"}}  # O(1)
+CMD_RE = re.compile(r"(?:^|\s)cmd=(.*)", re.S)  # O(1)
+
+
+def task_command(tests_field: str) -> str | None:  # O(len)
+    """The command a task's Tests field names with `cmd=`, or None."""
+    m = CMD_RE.search(tests_field or "")  # O(len)
+    if not m:  # O(1)
+        return None  # O(1)
+    c = m.group(1).strip()  # O(len)
+    if len(c) >= 2 and c[0] == "`" and c[-1] == "`":  # O(1)
+        c = c[1:-1].strip()  # O(len)
+    return c or None  # O(1)
+
+
+def verify_paths(owns: list[str]) -> list[str]:  # O(o*depth)
+    """The owned files a task's tests live in: tests/ folder entries, else test-named files, else all code."""
+    dirs = lambda o: o.replace("\\", "/").lower().split("/")[:-1]  # O(depth)
+    data = lambda o: any(d in DATA_DIRS for d in dirs(o))  # fixture data is no test file | O(depth)
+    code = [o for o in owns if not data(o) and not o.lower().endswith(DOC_EXT)]  # O(o*depth)
+    in_tests = [o for o in code if any(d in ("tests", "test") for d in dirs(o))]  # O(o*depth)
+    return in_tests or [o for o in code if is_test_path(o)] or code  # O(o)
+
+
+def unrunnable(spec: dict | None, paths: list[str]) -> list[str]:  # O(p)
+    """The test-code paths the resolved command's runner cannot run, in order."""
+    if not spec:  # O(1)
+        return []  # O(1)
+    ok = RUNNER_EXT.get("python" if spec.get("python") else spec.get("language"))  # O(1)
+    if ok is None:  # O(1)
+        return []  # O(1)
+    return [p for p in paths if posixpath.splitext(p.replace("\\", "/").split("/")[-1])[1].lower() in TEST_CODE_EXT - ok]  # O(p)
 
 
 def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
