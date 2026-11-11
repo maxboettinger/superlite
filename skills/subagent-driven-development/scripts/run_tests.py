@@ -13,6 +13,7 @@ When a run prints no test count and exits 0, the stop names the runner's own "no
 Every run keeps its full output (pytest with `-rP`, so a passing test's prints show) in `<summary stem>.output.log` beside the summary (newest 20 kept); the summary's `output` names it, a foreground run prints `run_tests: output <path>` and `--wait` prints `output: <path>` right before its summary line (#501).
 A no-result stop keeps its command, exit and output in `.superlite/no-result-*.log` (newest 20) and its incident carries them as `target`, `command`, `exit`, `log`.
 An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change except files owned by unfinished sibling tasks (kept at base, named on the line), a `--full` tree the task's own files.
+A fleet worker's `--fast` run without `--task` (package reviewer, fixer; not a lead) on an isolated stack runs in its own tree `.superlite/trees/worker-<Wn>`: every working-tree change except files of unfinished tasks and changed files another busy fixer's or reviewer's brief names (#479); `--full` runs stay in the run root.
 
 An isolated tree links `.superlite/` to the project's, so a test command finds its scripts there. Before each run, every overlaid file whose bytes changed since the tree's last run gets a fresh mtime (`.superlite/trees/<task>.digests.json`), so a build tool sees the edit (#507).
 With --task Tn whose plan **Tests:** field holds cmd=<command>, the run executes that command instead of the project's runner (a fast run; --fast paths are not passed; with no readable count its exit code is one test).
@@ -141,6 +142,21 @@ def holder_text(info):  # O(1) `pid P in ROOT (task T) since HH:MM:SS`
     return text  # O(1)
 
 
+def is_ancestor(pid):  # O(64) ps calls; True when pid is a parent, grandparent... of this process
+    cur = os.getppid()  # O(1)
+    for _ in range(64):  # O(64)
+        if cur <= 1:  # O(1)
+            return False  # O(1)
+        if cur == pid:  # O(1)
+            return True  # O(1)
+        try:  # O(1)
+            out = subprocess.run(["ps", "-o", "ppid=", "-p", str(cur)], capture_output=True, text=True, timeout=10).stdout  # O(1)
+            cur = int(out.strip())  # O(1)
+        except (OSError, ValueError, subprocess.SubprocessError):  # O(1)
+            return False  # O(1)
+    return False  # O(1)
+
+
 @contextlib.contextmanager
 def full_suite_lock(a, label):  # O(wait / LOCK_POLL) polls; a full run holds the machine-wide lock around its test command
     if label != "full" or fcntl is None:  # O(1)
@@ -148,7 +164,7 @@ def full_suite_lock(a, label):  # O(wait / LOCK_POLL) polls; a full run holds th
         return  # O(1)
     path = full_lock_path()  # O(1)
     holder = lock_holder(path)  # O(file)
-    if holder and os.environ.get(LOCK_ENV) == str(holder["pid"]):  # an outer run holds it for us | O(1)
+    if holder and (os.environ.get(LOCK_ENV) == str(holder["pid"]) or is_ancestor(holder["pid"])):  # an outer run holds it for us, also when the env lost LOCK_ENV | O(64)
         yield  # O(1)
         return  # O(1)
     try:  # O(1)
@@ -1381,32 +1397,36 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             return usage_error(a, label, gone)  # O(summary size)
     if not spec["python"]:  # O(1)
         tree = None  # O(1)
-        if a.task and spec.get("isolate", False):  # compiled stack: test own files only, in an isolated tree | O(1)
+        key = a.task or (worker_tree_name() if paths and spec.get("isolate", False) else None)  # a fleet worker's --fast run without --task gets worker-<Wn> (#479) | O(env)
+        if key and spec.get("isolate", False):  # compiled stack: test own files only, in an isolated tree | O(1)
             sp = stable_plan()  # O(S)
             plan = a.plan or next((p for p in (sp, nt.DEFAULT_PLAN) if p and Path(p).is_file()), None)  # --plan, else the first existing of stable.json's plan and the default | O(1)
-            if not plan or not Path(plan).is_file():  # O(1)
+            if not a.task:  # a worker has no task of its own: no plan just means no unfinished tasks to hold back | O(1)
+                info = nt.parse_plan(plan) if plan and Path(plan).is_file() else {}  # O(L)
+            elif not plan or not Path(plan).is_file():  # O(1)
                 tried = a.plan or ", ".join(x for x in (sp and f"{sp} (.superlite/stable.json)", nt.DEFAULT_PLAN) if x)  # O(1)
                 reason = f"--task {a.task} needs its plan: pass --plan PLAN (tried {tried}, not found)"  # O(1)
                 return usage_error(a, label, reason)  # O(summary size)
-            info = nt.parse_plan(plan)  # O(L)
-            if a.task not in info:  # O(1)
-                return usage_error(a, label, f"unknown task {a.task} in {plan}")  # O(summary size)
+            else:  # O(1)
+                info = nt.parse_plan(plan)  # O(L)
+                if a.task not in info:  # O(1)
+                    return usage_error(a, label, f"unknown task {a.task} in {plan}")  # O(summary size)
             ct.add_also_owns(info, a.ledger)  # --also and --claim rulings own their files too (#239) | O(c + o)
             held = {}  # O(1)
             try:  # O(1)
                 if paths:  # a --fast run tests every working-tree change except the files of unfinished siblings | O(1)
-                    overlay, kept = fast_overlay(".", a.task, info, a.ledger)  # O(c + f * T * o)
+                    overlay, kept = fast_overlay(".", a.task, info, a.ledger) if a.task else worker_overlay(".", key, info, a.ledger)  # O(c + f * T * o)
                     held = kept  # {path: sorted owner ids}
-                tree = trees.prepare(".", a.task, overlay if paths else info[a.task]["owns"])  # a --full run tests the task's own files | O(f * o) + git checkout
+                tree = trees.prepare(".", key, overlay if paths else info[a.task]["owns"])  # a --full run tests the task's own files | O(f * o) + git checkout
             except (RuntimeError, OSError) as err:  # O(1)
-                return usage_error(a, label, f"isolated tree for {a.task} not prepared: {err}")  # O(summary size)
+                return usage_error(a, label, f"isolated tree for {key} not prepared: {err}")  # O(summary size)
             _link_dir(Path.cwd() / ".superlite", Path(tree) / ".superlite")  # the tree reaches the root's .superlite/ (#511) | O(d)
             try:  # O(1)
-                overlay_now = json.loads(trees.overlay_file(".", a.task).read_text(encoding="utf-8"))  # O(f)
+                overlay_now = json.loads(trees.overlay_file(".", key).read_text(encoding="utf-8"))  # O(f)
             except (OSError, ValueError):  # O(1)
                 overlay_now = []  # O(1)
-            refresh_mtimes(tree, a.task, overlay_now)  # O(P * size)
-            announce_tree(tree, a.task, bool(paths), held)  # O(f)
+            refresh_mtimes(tree, key, overlay_now)  # O(P * size)
+            announce_tree(tree, key, bool(paths), held)  # O(f)
             link_node_modules(Path.cwd(), tree, spec)  # O(d)
             tree_gone = node_install_line(tree, spec)  # a tree without node_modules fails like the root | O(m + f)
             if tree_gone:  # O(1)
@@ -1420,7 +1440,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                 out = []  # O(1)
             if out:  # O(1)
                 more = f" (+{len(out) - 5} more)" if len(out) > 5 else ""  # O(1)
-                print(f"run_tests: {len(out)} changed file(s) not in {a.task}'s tree: {', '.join(out[:5])}{more}; if {a.task} needs one, rerun with --also F", file=sys.stderr)  # O(1)
+                tail = f"if {a.task} needs one, rerun with --also F" if a.task else "kept at base while their task or worker is busy"  # O(1)
+                print(f"run_tests: {len(out)} changed file(s) not in {key}'s tree: {', '.join(out[:5])}{more}; {tail}", file=sys.stderr)  # O(1)
         return rc  # O(1)
 
     with tempfile.TemporaryDirectory() as tmp:  # O(1) mkdtemp
@@ -1473,6 +1494,42 @@ def fast_overlay(root, task, info, ledger):  # O(f * T * o) + two spawns: (paths
     return overlay, held  # O(1)
 
 
+def worker_tree_name(env=None):  # O(1) `worker-<Wn>` for a fleet worker that tests (not a lead), else None
+    env = os.environ if env is None else env  # O(1)
+    wid, agent = env.get("SUPERLITE_FLEET_WORKER") or "", (env.get("SUPERLITE_FLEET_AGENT") or "").split(":")[-1]  # O(1)
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", wid) or env.get("SUPERLITE_FLEET_ROLE") == "lead" or agent in ("", "lead"):  # O(1)
+        return None  # O(1)
+    return f"worker-{wid}"  # O(1)
+
+
+def busy_held(sd, me, paths):  # O(w + p * w) the paths another busy fixer's or reviewer's brief names, {path: [worker ids]}; a path me's own brief names is not held
+    briefs = ct.busy_briefs(sd, None)  # O(w + brief size)
+    mine = briefs.pop(me, None)  # O(1)
+    out = {}  # O(1)
+    for p in paths:  # O(p) iterations
+        if mine and ct.brief_names(mine[1], p):  # O(brief size)
+            continue  # O(1)
+        owners = sorted(wid for wid, (_label, text) in briefs.items() if ct.brief_names(text, p))  # O(w * brief size)
+        if owners:  # O(1)
+            out[p] = owners  # O(1)
+    return out  # O(1)
+
+
+def worker_overlay(root, key, info, ledger):  # O(f * T * o) + two spawns: (paths to overlay, {path: owners}) for a worker's tree; owners are unfinished task ids and `busy Wn`
+    copy, delete = trees.own_changes(root, trees.base_commit(root), ["**/*"])  # O(f)
+    done = ct.committed_tasks(ledger)  # O(c)
+    paths = sorted(set(copy) | set(delete))  # O(f log f)
+    busy = busy_held(Path(root) / ".superlite", key.removeprefix("worker-"), paths)  # O(w + p * w)
+    overlay, held = [], {}  # O(1)
+    for p in paths:  # O(f)
+        owners = sorted(t for t in info if t not in done and nt.owns_match(p, info[t]["owns"])) + [f"busy {w}" for w in busy.get(p, [])]  # O(T * o)
+        if owners:  # O(1)
+            held[p] = owners  # O(1)
+        else:  # O(1)
+            overlay.append(p)  # O(1)
+    return overlay, held  # O(1)
+
+
 def announce_tree(tree, task, fast, held=None):  # O(f) name the isolated tree and how many files it overlays on stderr
     try:  # O(1)
         n = len(json.loads(trees.overlay_file(".", task).read_text(encoding="utf-8")))  # O(f)
@@ -1485,8 +1542,10 @@ def announce_tree(tree, task, fast, held=None):  # O(f) name the isolated tree a
     what = "all working-tree changes (--fast)" if fast else f"{task}'s own changes"  # O(1)
     kept = ""  # O(1)
     if held:  # O(1)
-        ids = sorted({t for owners in held.values() for t in owners})  # O(f)
-        kept = f"; kept at base: {len(held)} file{'' if len(held) == 1 else 's'} of unfinished {' '.join(ids)}"  # O(1)
+        every = {t for owners in held.values() for t in owners}  # O(f)
+        ids, busy = sorted(t for t in every if not t.startswith("busy ")), sorted(t[5:] for t in every if t.startswith("busy "))  # O(f log f)
+        what_held = ", ".join(x for x in (f"of unfinished {' '.join(ids)}" if ids else "", f"of busy {' '.join(busy)}" if busy else "") if x)  # O(1)
+        kept = f"; kept at base: {len(held)} file{'' if len(held) == 1 else 's'} {what_held}"  # O(1)
     print(f"run_tests: tree {rel} = base + {what}: {n} file{'' if n == 1 else 's'}{kept}", file=sys.stderr)  # O(1)
 
 
