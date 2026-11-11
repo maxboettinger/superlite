@@ -1,0 +1,86 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-11T08:03:03",
+ "headline": {
+  "wall_min": {
+   "projected": 1.562,
+   "actual": 25.6
+  },
+  "cost_usd_agents": {
+   "projected": 0.109274,
+   "actual": 0.356231
+  },
+  "task_min": {
+   "projected": 1.562,
+   "actual": 0.88
+  },
+  "agents": {
+   "projected": 1,
+   "actual": 4
+  }
+ },
+ "cost_split": {
+  "agents_usd": 0.190206,
+  "rework_usd": 0.166025,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 0.356231
+ },
+ "concurrency": {
+  "peak": 1,
+  "projected_peak": 1
+ },
+ "critical_path": {
+  "actual": [
+   "T1"
+  ],
+  "projected": [
+   "T1"
+  ],
+  "projected_min": 1.562
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 1,
+   "cost_usd": 0.35623099999999996
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "passed": 3,
+   "failed": 0,
+   "skipped": 0,
+   "seconds": 173.3,
+   "mode": "fast",
+   "failures": [],
+   "skipped_tests": [],
+   "files": {
+    "tests/e2e/test_tui.py": [
+     3,
+     0
+    ]
+   },
+   "output": "/Users/max/github/superlite/.claude/worktrees/superlite-b97-stale-compact-stamps/.superlite/test-summary.output.log",
+   "started": 1794383242.709656
+  },
+  "first_time_pass": 0,
+  "first_time_n": 0,
+  "rework_dispatches": 1,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 1.562,
+   "actual_min": 0.88,
+   "delta": {
+    "abs": -0.682,
+    "pct": -43.7
+   },
+   "cost_usd": 0.356231,
+   "first_time_pass": null
+  }
+ ]
+}
