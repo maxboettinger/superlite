@@ -9,5 +9,6 @@ from _fixtures import HOST_VARS  # importing it drops the host vars and makes th
 def _isolated_superlite_home(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "_sl_home"))
     monkeypatch.setenv("SUPERLITE_AUTOCOMMIT", "1")  # most tests assert real commits; test_autocommit.py turns it off
+    monkeypatch.setenv("SUPERLITE_USER_TEST_CMD", str(tmp_path / "_user_test_cmd.json"))  # the user's real ~/.config file stays out
     for var in HOST_VARS:
         monkeypatch.delenv(var, raising=False)
