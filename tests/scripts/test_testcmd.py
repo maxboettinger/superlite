@@ -108,7 +108,7 @@ def test_junit_from_a_node_runner_keeps_the_summary_shape(tmp_path):
     assert cp.returncode == 1, cp.both
     assert cp.out.strip().split()[:3] == ["2", "1", "0"]
     s = summary(tmp_path)
-    assert set(s) == {"passed", "failed", "skipped", "seconds", "mode", "failures", "skipped_tests", "files", "started"}
+    assert set(s) == {"passed", "failed", "skipped", "seconds", "mode", "failures", "skipped_tests", "files", "started", "output"}
     assert (s["passed"], s["failed"], s["mode"]) == (2, 1, "full")
     assert s["failures"] == ["tests/feed.test.ts::feed > builds rss: expected 1 to be 2"]
     inc = (tmp_path / ".superlite" / "incidents.jsonl").read_text(encoding="utf-8")
@@ -128,25 +128,26 @@ def test_exit_code_fallback_for_a_runner_without_junit(tmp_path):
 
 
 def test_exit_code_zero_without_junit_is_green(tmp_path):
-    config(tmp_path, language="rust", test=f'{sys.executable} -c "print(1)"', test_file="", junit="", setup="")
+    config(tmp_path, language="rust", test=f'{sys.executable} -c "print(\'1 passed\')"', test_file="", junit="", setup="")
     cp = rt(tmp_path)
     assert cp.returncode == 0 and summary(tmp_path)["failed"] == 0 and summary(tmp_path)["passed"] >= 1
 
 
 def test_non_python_project_never_asks_for_pytest(tmp_path):
     (tmp_path / "go.mod").write_text("module m\n", encoding="utf-8")
-    config(tmp_path, language="go", test=f'{sys.executable} -c "print(1)"', test_file="", junit="", setup="")
+    config(tmp_path, language="go", test=f'{sys.executable} -c "print(\'1 passed\')"', test_file="", junit="", setup="")
     code = ("import sys; sys.path.insert(0, %r); import _pyrun\n"
             "def boom(*a, **k): raise AssertionError('pytest was asked for')\n"
             "_pyrun.pytest_cmd = boom\n"
             "import run_tests; sys.exit(run_tests.main(['--full']))\n") % str(SCRIPTS)
     cp = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True)
     assert cp.returncode == 0, cp.stdout + cp.stderr
-    assert "pytest" not in cp.stdout + cp.stderr
+    shown = [ln for ln in (cp.stdout + cp.stderr).splitlines() if "output" not in ln]  # the kept-output path carries the tmp dir's test name
+    assert "pytest" not in "\n".join(shown)
 
 
 def test_background_and_wait_work_for_a_non_python_runner(tmp_path):
-    config(tmp_path, language="go", test=f'{sys.executable} -c "print(1)"', test_file="", junit="", setup="")
+    config(tmp_path, language="go", test=f'{sys.executable} -c "print(\'1 passed\')"', test_file="", junit="", setup="")
     cp = rt(tmp_path, "--background")
     assert cp.returncode == 0 and cp.out.startswith("summary:")
     w = rt(tmp_path, "--wait", "--timeout", "60")
@@ -155,7 +156,7 @@ def test_background_and_wait_work_for_a_non_python_runner(tmp_path):
 
 
 def test_setup_runs_once(tmp_path):
-    config(tmp_path, language="go", test=f'{sys.executable} -c "print(1)"', test_file="",
+    config(tmp_path, language="go", test=f'{sys.executable} -c "print(\'1 passed\')"', test_file="",
            junit="", setup=f'{sys.executable} -c "open(\'setup.ran\', \'a\').write(\'x\')"')
     rt(tmp_path)
     rt(tmp_path)
@@ -225,7 +226,7 @@ def test_main_checkout_without_config_is_none(tmp_path):
 
 
 def test_green_run_lists_no_names(tmp_path):
-    (tmp_path / "runner.py").write_text('print("1) frontend")\nprint("** TEST SUCCEEDED **")\n', encoding="utf-8")
+    (tmp_path / "runner.py").write_text('print("1) frontend")\nprint("1 passed")\nprint("** TEST SUCCEEDED **")\n', encoding="utf-8")
     config(tmp_path, language="bash", test=f"{sys.executable} runner.py")
     cp = rt(tmp_path, "--full")
     assert cp.returncode == 0, cp.both

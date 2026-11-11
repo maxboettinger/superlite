@@ -103,7 +103,7 @@ def test_key_value_counts():
 
 def test_unknown_format_falls_back_to_exit_code():
     r = testcmd.parse_output("done", 0)
-    assert (r["passed"], r["failed"]) == (1, 0)
+    assert (r["passed"], r["failed"], r["counted"]) == (0, 0, False)
     r = testcmd.parse_output("done", 1)
     assert r["failed"] == 1
 
@@ -113,6 +113,6 @@ def test_error_and_marker_extracted():
     assert r["failed"] == 1
     assert r["error"] == "Foo.swift:3:5: error: cannot find 'Date' in scope"
     assert r["marker"] == "** TEST FAILED **"
-    r = testcmd.parse_output("1) frontend\n** TEST SUCCEEDED **", 0)
+    r = testcmd.parse_output("1) frontend\n1 passed\n** TEST SUCCEEDED **", 0)
     assert (r["passed"], r["failed"], r["names"], r["error"]) == (1, 0, [], "")
     assert r["marker"] == "** TEST SUCCEEDED **"

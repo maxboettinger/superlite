@@ -7,6 +7,9 @@
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
 Every exit path leaves a summary: a usage error, an unknown task, a missing pytest, an unprepared tree or a crash (`run_tests crashed: ...`, exit 2) writes a red zero summary; `--wait` names a background run whose process died (its pid sits in `<summary>.pid`) and the log of one that timed out.
+A red Swift (xcodebuild) run reports each failure at its file and line (`failure_sites`, #499); a counted `--fast` run limited to Swift files covers them, so a later green run closes those files' located failures and an uncounted run closes none.
+When a run prints no test count and exits 0, the stop names the runner's own "no tests" line (`; runner: <line>`).
+Every run keeps its full output (pytest with `-rP`, so a passing test's prints show) in `<summary stem>.output.log` beside the summary (newest 20 kept); the summary's `output` names it, a foreground run prints `run_tests: output <path>` and `--wait` prints `output: <path>` right before its summary line (#501).
 A no-result stop keeps its command, exit and output in `.superlite/no-result-*.log` (newest 20) and its incident carries them as `target`, `command`, `exit`, `log`.
 An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change except files owned by unfinished sibling tasks (kept at base, named on the line), a `--full` tree the task's own files.
 
@@ -72,6 +75,7 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(path list)
 import _pyrun as pyrun  # noqa: E402  # O(1) module load
 import testcmd  # noqa: E402  # O(1) module load
+import failure_sites  # noqa: E402  # O(1) module load
 import commit_task as ct  # noqa: E402  # O(1) module load
 import next_tasks as nt  # noqa: E402  # O(1) module load
 import trees  # noqa: E402  # O(1) module load
@@ -83,6 +87,8 @@ DEFAULT_WAIT = 540.0  # O(1)
 DEFAULT_LIMIT = 3600.0  # O(1) wall-clock seconds for one test run; 0 = none
 CURRENT_TASK = None  # --task of this run; write_summary records it | O(1)
 WRITTEN = set()  # resolved summary paths this process wrote; main clears it | O(1)
+XCODE_OUT = re.compile(r"^\W*✘ Test |: error: -\[|^Test case '.*' failed on |\*\* TEST (?:FAILED|SUCCEEDED) \*\*", re.M)  # xcodebuild test output | O(1)
+OUTPUT = ""  # the full-output log of this run; write_summary records it, main clears it | O(1)
 
 
 class LimitHit(Exception):  # O(1) a test command ran past --limit and its process tree was killed
@@ -163,6 +169,32 @@ def run_stem(mine):  # O(len name) the stem before the run id in a run summary's
 def run_summary_path(summary, run_id):  # O(1)
     p = Path(summary)  # O(1)
     return p.with_name(f"{p.stem}-{run_id}{p.suffix}")  # O(1)
+
+
+def output_log_path(summary):  # O(1) `<stem>.output.log` beside the summary
+    p = Path(summary)  # O(1)
+    return p.with_name(p.stem + ".output.log")  # O(1)
+
+
+def keep_output(summary, command, rc, text):  # O(n log n) n = logs kept, + file write; keeps the newest 20 logs
+    """Write the run's full output (command, exit, blank line, text) to output_log_path(summary); return its path, "" on OSError."""
+    try:  # O(1)
+        path = output_log_path(Path(summary).resolve())  # O(1)
+        atomic_write(path, f"command: {command}\nexit: {rc}\n\n{text}")  # O(len text)
+        olds = sorted(path.parent.glob("*.output.log"), key=lambda q: (q.stat().st_mtime, q.name))  # O(n log n)
+        for old in olds[:-20]:  # O(n)
+            if old != path:  # O(1)
+                old.unlink(missing_ok=True)  # O(1)
+        return str(path)  # O(1)
+    except OSError:  # O(1)
+        return ""  # O(1)
+
+
+def save_output(a, command, rc, text):  # O(len text) keep the run's output, remember it for the summary, name it on stderr
+    global OUTPUT  # O(1)
+    OUTPUT = keep_output(a.summary, command, rc, text)  # O(len text)
+    if OUTPUT:  # O(1)
+        print(f"run_tests: output {OUTPUT}", file=sys.stderr)  # O(1)
 
 
 def atomic_write(path, text):  # O(len text) + file write
@@ -321,6 +353,8 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
         time.sleep(POLL_SECONDS)  # O(1)
     print(json.dumps(data, ensure_ascii=False, indent=1))  # O(summary size)
     sys.stdout.flush()  # O(1)
+    if data.get("output"):  # O(1)
+        print(f"output: {data['output']}", file=sys.stderr)  # O(1)
     print(summary_line(data), file=sys.stderr)  # O(1)
     green = not data.get("failed") and bool(data.get("passed") or data.get("skipped"))  # O(1)
     return 0 if green else 1  # O(1)
@@ -468,6 +502,8 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
         data["error"] = error[:400]  # the placeholder refusal is longer than 200 chars | O(1)
     if CURRENT_TASK:  # a wait on an earlier run of the task finds its newest run (#507) | O(1)
         data["task"] = CURRENT_TASK  # O(1)
+    if OUTPUT:  # the full output of this run (#501) | O(1)
+        data["output"] = OUTPUT  # O(1)
     if started is not None:  # the packet closes only incidents logged before this run started (#101) | O(1)
         data["started"] = started  # O(1)
     p = Path(path)  # O(1)
@@ -535,12 +571,12 @@ def record_no_result(a, reason, command, rc, lines, tree=None):  # O(L + c) log 
     add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task, extra)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
 
 
-def resolve_passed(log, task, failures, files, green=False, full=False, started=None):  # O(B + I + k) read the log once, one append (#180, #380)
+def resolve_passed(log, task, failures, files, green=False, full=False, started=None, covered=None):  # O(B + I + k) read the log once, one append (#180, #380)
     """Close open test-failure incidents logged before this run: a --task run closes its tests that pass now (`fixed: passed on a later run`);
     a green --task run also closes that task's `-` failures (`fixed: a green <task> run`) and re-logs other tasks' open ones there, so a sibling's red stays open; a green --full run without --task closes every
     run_tests failure (`fixed: the full suite passed`). The entry is what `sl incident resolve` writes (kind of the open entry, resolution `fixed`)."""
     p = Path(log)  # O(1)
-    if not p.exists() or not (task and files or green and (task or full)):  # O(1)
+    if not p.exists() or not (task and (files or covered) or green and (task or full)):  # O(1)
         return  # O(1)
     resolved = nt.sibling("pt_review").RESOLVED  # the resolutions the packet counts as closed; lazy | O(module)
     newest = {}  # location -> its newest non-verified entry, as the packet and `finish` count open | O(1)
@@ -559,6 +595,7 @@ def resolve_passed(log, task, failures, files, green=False, full=False, started=
                     stretch.setdefault((e["file"], e["line"]), []).append(e)  # O(1)
     norm = lambda x: str(x).replace("\\", "/")  # noqa: E731 | O(len)
     ran = {norm(f) for f, (ok, _bad) in files.items() if ok}  # a file with no passing test (a collection error) closes nothing (#196) | O(F)
+    cov = {norm(c) for c in covered} if covered and covered is not True else set()  # O(p) a counted run's covered files count as ran (#499)
     failing = {(norm(f), ctx.split(": ", 1)[0]) for f, _line, ctx in failures}  # (file, test name) still red | O(k)
 
     def before(e):  # O(1) logged before this run started
@@ -568,7 +605,7 @@ def resolve_passed(log, task, failures, files, green=False, full=False, started=
     def context(f, e):  # O(len) the closing context for the entry, or None to keep it open
         if e.get("kind") != "test-failure" or str(e.get("resolution", "")).lower() in resolved or not before(e):  # no rule closes an entry logged at or after this run's start | O(1)
             return None  # O(1)
-        if task and e.get("task") == task and norm(f) in ran and (norm(f), str(e.get("context", "")).split(": ", 1)[0]) not in failing:  # O(len)
+        if task and e.get("task") == task and (norm(f) in ran or norm(f) in cov or covered is True and f != "-") and (norm(f), str(e.get("context", "")).split(": ", 1)[0]) not in failing:  # O(len)
             return "fixed: passed on a later run"  # O(1)
         if not task and green and full and e.get("agent") == "run_tests":  # O(1)
             return "fixed: the full suite passed"  # O(1)
@@ -843,7 +880,8 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
     a = ap.parse_args(argv)  # O(1)
     WRITTEN.clear()  # O(1)
-    global CURRENT_TASK  # O(1)
+    global CURRENT_TASK, OUTPUT  # O(1)
+    OUTPUT = ""  # O(1)
     CURRENT_TASK = a.task or None  # O(1)
     a.limit = a.limit if a.limit > 0 else None  # <= 0 means no limit | O(1)
     a.started = time.time()  # before the runner reads any code: the summary's `started` (#101) | O(1)
@@ -895,6 +933,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         secs = e.seconds  # O(1)
         reason = f"wall-clock limit: test run killed after {secs:g} s (run_tests --limit S; 0 = none)"  # O(1)
         print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+        save_output(a, e.command, -9, e.text)  # O(len text)
         write_summary(a.summary, "fast" if a.fast else "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], secs, error=reason)  # O(1)
         publish_summary(a)  # O(summary size)
         record_no_result(a, reason, e.command, -9, e.text.splitlines(), None)  # O(L + c)
@@ -982,6 +1021,7 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
         r = run_captured(sub(spec["command"]), limit=a.limit, shell=True, env=env, cwd=cwd)  # O(o) + the run
         seconds = time.monotonic() - t0  # O(1)
         text = (r.stdout or "") + (r.stderr or "")  # O(o)
+        save_output(a, sub(spec["command"]), r.returncode, text)  # O(o)
         if alt and not literal.exists():  # O(1)
             literal = alt  # O(1)
         reports = junit_reports(xml_path, literal)  # the main report plus sidecars | O(n log n)
@@ -995,23 +1035,34 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
             counts = {"passed": p["passed"], "failed": p["failed"], "skipped": p["skipped"], "skipped_tests": []}  # O(1)
             last = next((ln for ln in reversed(p["tail"]) if ln.strip()), "no output")  # O(1)
             failures = [("-", 0, f"{n}: failed") for n in p["names"]]  # O(k)
+            files = {}  # O(1)
+            if XCODE_OUT.search(text) or spec.get("language") == "swift":  # xcodebuild output: failures with file and line (#499) | O(o)
+                sites = failure_sites.failures(strip_ansi(text), str(Path(cwd) if cwd else root), paths, p["names"])  # O(o + f*n)
+                if sites:  # O(1)
+                    failures = sites  # O(1)
+                    for f, _line, _ctx in sites:  # a located file counts its failed tests | O(k)
+                        if f != "-":  # O(1)
+                            files.setdefault(f, [0, 0])[1] += 1  # O(1)
+            covered = None  # O(1)
+            if p["counted"]:  # a counted run (it compiled; an XCTest failure line is no build error) covers its files: a full run all, a fast run the Swift files it was limited to (#499) | O(p)
+                covered = True if label == "full" else [f.replace("\\", "/") for f in paths if f.replace("\\", "/").endswith(".swift")] if label == "fast" else None  # O(p)
             if r.returncode and not failures:  # a red exit with no names: name the command | O(1)
                 failures = [("-", 0, f"exit code {r.returncode} from `{spec['command']}`: {last}"[:200])]  # O(1)
             if r.returncode and p["error"]:  # a compile error leads the failures | O(1)
                 failures.insert(0, ("-", 0, f"build error: {p['error']}"[:160]))  # O(1)
-            files = {}  # O(1)
             tail_set = {x.strip() for x in p["tail"]}  # O(40)
             kept = [x for x in (p["error"] if r.returncode else "", p["marker"]) if x and x not in tail_set]  # the error and marker may sit above the last 40 lines | O(40)
             atomic_write(Path(a.summary).with_name("test-output.log"), "\n".join([*kept, *p["tail"]]) + "\n")  # O(40)
             if not r.returncode and not (p["passed"] or p["failed"] or p["skipped"] or p["names"]):  # the runner counted zero tests: a stop, not a pass (#240) | O(1)
-                reason = f"no tests ran: exit {r.returncode} from `{spec['command']}` with no test count; its filter may select nothing"[:300]  # O(1)
+                runner = f"; runner: {p['empty']}"[:120] if p["empty"] else ""  # the runner's own "no tests" line | O(1)
+                reason = f"no tests ran: exit {r.returncode} from `{spec['command']}` with no test count; its filter may select nothing"[:300 - len(runner)] + runner  # O(1)
                 print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
                 write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
                 publish_summary(a)  # O(summary size)
                 record_no_result(a, reason, sub(spec["command"]), r.returncode, [*kept, *p["tail"]], cwd)  # O(40 + c)
                 print(f"0 0 0 {seconds:.1f}")  # O(1)
                 return 1  # O(1)
-    return finish_run(a, label, counts, failures, files, seconds, r.returncode)  # O(k + F)
+    return finish_run(a, label, counts, failures, files, seconds, r.returncode, covered=covered if report is None else None)  # O(k + F)
 
 
 # the Swift -only-testing mapping lives in testcmd.py: one by-target-membership mapping for every caller (#431)
@@ -1144,11 +1195,12 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             base = pyrun.pytest_cmd()  # O(1) + at most one probe spawn
         except pyrun.PytestUnavailable as e:  # O(1)
             return usage_error(a, label, str(e))  # the summary is written too | O(summary size)
-        cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), "-q", "-p", "no:cacheprovider",  # O(p)
+        cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), "-q", "-rP", "-p", "no:cacheprovider",  # O(p) -rP: a passing test's prints reach the output log (#501)
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
         t0 = time.monotonic()  # O(1)
         r = run_captured(cmd, limit=a.limit, env=child_env())  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
         seconds = time.monotonic() - t0  # O(1)
+        save_output(a, shlex.join(cmd), r.returncode, r.stdout + r.stderr)  # O(o)
         has_xml = xml_path.exists() and xml_path.stat().st_size > 0  # O(1)
         parsed = collection_report(xml_path) if r.returncode == 2 and has_xml else None  # a collection error stops pytest with exit 2 (#196) | O(X + T*d)
         if parsed is None and (r.returncode not in (0, 1) or not has_xml):  # O(1)
@@ -1202,7 +1254,7 @@ def announce_tree(tree, task, fast, held=None):  # O(f) name the isolated tree a
     print(f"run_tests: tree {rel} = base + {what}: {n} file{'' if n == 1 else 's'}{kept}", file=sys.stderr)  # O(1)
 
 
-def finish_run(a, label, counts, failures, files, seconds, returncode):  # O(k + F + B) one incident append
+def finish_run(a, label, counts, failures, files, seconds, returncode, covered=None):  # O(k + F + B) one incident append
     write_summary(a.summary, label, counts, failures, seconds, files=files, started=getattr(a, "started", None))  # O(k + sk + F)
     publish_summary(a)  # O(summary size)
     items = [(f, line, ctx, "test-failure", "open") for f, line, ctx in failures]  # O(k)
@@ -1213,7 +1265,7 @@ def finish_run(a, label, counts, failures, files, seconds, returncode):  # O(k +
             if ok and not bad and (f, ctx) not in seen:  # O(1) set lookup
                 items.append((f, 0, ctx, "verified", None))  # O(1)
     add_incidents(a.log, items, a.task)  # O(k + F) one append
-    resolve_passed(a.log, a.task, failures, files, green=not (counts["failed"] or not (counts["passed"] or counts["skipped"])), full=label == "full", started=getattr(a, "started", None))  # O(B + I + k) a green run closes stale failures (#180, #380)
+    resolve_passed(a.log, a.task, failures, files, green=not (counts["failed"] or not (counts["passed"] or counts["skipped"])), full=label == "full", started=getattr(a, "started", None), covered=covered)  # O(B + I + k) a green run closes stale failures (#180, #380)
 
     summary = (f"{counts['passed']} {counts['failed']} {counts['skipped']} "  # O(1)
                f"{seconds:.1f}")  # O(1)
