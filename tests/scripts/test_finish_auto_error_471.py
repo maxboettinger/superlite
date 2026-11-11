@@ -37,3 +37,16 @@ def test_long_reason_cut(tmp_path):
 
 def test_empty_reason_keeps_file(tmp_path):
     assert stops(tmp_path, "a.py", 2, "T1: ")[0][2] == "a.py:2"
+
+
+def test_non_t_task_prefix_stripped(tmp_path):
+    got = stops(tmp_path, "f.py", 3, "S2: ModuleNotFoundError: No module named x; nothing committed")
+    assert got[0][2] == "f.py:3 ModuleNotFoundError: No module named x"
+
+
+def test_unprefixed_error_keeps_its_name(tmp_path):
+    assert stops(tmp_path, "f.py", 1, "TypeError: bad")[0][2] == "f.py:1 TypeError: bad"
+
+
+def test_blocked_by_commit_task_is_scope_block(tmp_path):
+    assert stops(tmp_path, "f.py", 0, "S1: x.py blocked by commit_task; nothing committed")[0][2] == "f.py"

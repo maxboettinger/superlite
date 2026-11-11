@@ -147,9 +147,9 @@ UNRESOLVED = ("", "none", "open", "unresolved")  # as commit_task reads a block'
 
 
 def _error_target(file, line, context):  # O(w) a commit_task block's target: file[:line] plus the error, cut at 150 chars
-    reason = re.sub(r"^T\w+:\s*", "", " ".join(str(context or "").split()))  # drop the task prefix | O(w)
+    reason = re.sub(r"^[A-Z]{1,3}\d+[A-Za-z]?:\s*", "", " ".join(str(context or "").split()))  # drop the task prefix | O(w)
     reason = reason.removesuffix("; nothing committed").strip()  # O(w)
-    if reason.startswith("change outside Owns"):  # a scope block names no error | O(1)
+    if reason.startswith("change outside Owns") or "blocked by commit_task" in reason:  # a scope block names no error | O(1)
         reason = ""  # O(1)
     try:  # O(1)
         n = int(line or 0)  # O(1)
