@@ -1,5 +1,5 @@
 # tests/scripts/test_fleet_capacity.py
-import hashlib, json
+import json
 import pytest
 from test_accounts import acc
 from test_fleet import REAL, _three_accounts, fleet, world  # noqa: F401  (world is a fixture)
@@ -101,14 +101,14 @@ def test_current_with_headroom_registers_its_claude_profile_name(world):
     r = fleet.spawn(world.sd, world.plan, "sonnet", world.proj, env={"HOME": "/u", "CLAUDE_CONFIG_DIR": "/u/.claude-account1"})
     assert r["account"] == "current" and fleet.fs.live_by_account(_rows(_name(world, r["id"])), set()) == {"claude1": 1}
 
-def test_agent_name_carries_a_hash_of_the_run_root(world):
+def test_agent_name_is_the_readable_run_name(world):
     fleet.main(["on"]); r = fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
-    assert _name(world, r["id"]) == f"sl-proj-{hashlib.sha1(str(world.proj.resolve()).encode()).hexdigest()[:4]}-w1"
+    assert _name(world, r["id"]) == "sl-proj-main-w1"
 
 def test_fleet_docs_name_capacity_and_hard_stop():
     skill = (ROOT / "skills" / "subagent-driven-development" / "fleet.md").read_text(encoding="utf-8")
     docs = (ROOT / "docs" / "fleet.md").read_text(encoding="utf-8")
     for text in (skill, docs):
-        assert "report BLOCKED" in text and "never fall back to in-process" in text and "sl-<run folder>-<hash>-w" in text
+        assert "report BLOCKED" in text and "never fall back to in-process" in text and "sl-<repo>-<worktree>-w" in text
     assert "one taskgraph plan in one checkout" in skill and "in addition" in skill
     assert "4 panes" in docs and "20 rows" in docs and "fleet/agents" in docs and "different names" not in docs

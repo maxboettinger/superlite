@@ -24,7 +24,7 @@ def test_agent_names_stay_unique_and_valid(tmp_path):
         sd = tmp_path / parent / "proj" / ".superlite"
         sd.mkdir(parents=True)
         for wid in ("W1", "W12"):
-            n = fs.agent_name(sd, wid)
+            n = fs.agent_name(sd, wid, taken=names)
             assert re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", n) and n.endswith("-" + wid.lower())
             names.add(n)
     assert len(names) == 4

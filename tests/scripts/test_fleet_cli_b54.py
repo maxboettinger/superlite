@@ -1,11 +1,12 @@
 """fleet.py CLI: --help lists every subcommand (#387), fleet report (#376), an unusable --plan exits 2 (#372)."""
+import re
 import json, os, sys
 import pytest
 from test_plan_tools import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 import fleet  # noqa: E402
 
-SUBS = ("on", "off", "status", "spawn", "stop", "report", "send", "keys", "wait", "run")
+SUBS = ("on", "off", "status", "spawn", "stop", "name", "report", "send", "keys", "wait", "run")
 HINT = "; pass the plan file or the run's .superlite folder, or leave --plan out to use the current directory's run"
 
 
@@ -14,8 +15,8 @@ def test_help_lists_every_subcommand(capsys):
         fleet.main(["--help"])
     out = capsys.readouterr().out
     assert e.value.code == 0
-    choices = next(x.strip() for x in out.splitlines() if x.strip().startswith("{"))
-    assert set(choices.strip("{}").split(",")) == set(SUBS)
+    choices = re.search(r"\{([a-z,]+)\}", out).group(1)
+    assert set(choices.split(",")) == set(SUBS)
     for s in SUBS:
         assert any(x.split()[:1] == [s] and len(x.split()) > 1 for x in out.splitlines()), s
 
