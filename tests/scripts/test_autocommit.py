@@ -334,3 +334,64 @@ def test_apply_replays_unborn_base_and_odd_paths(tmp_path):
         assert autocommit.moved_overlap("", head, set(files)) == ["my dir/a b.py"]
     finally:
         os.chdir(cwd)
+
+
+SESSION = "Claude-Session: https://claude.ai/code/session_01"
+
+
+def body(repo, rev):
+    return git(repo, "log", "-1", "--format=%B", rev).split("\n")
+
+
+def test_apply_trailer_goes_on_every_commit_in_order(tmp_path):
+    repo = make_repo(tmp_path)
+    base = git(repo, "rev-parse", "HEAD")
+    two_tasks(repo)
+    r = run("autocommit", "apply", "--trailer", SESSION, "--trailer=Reviewed-by:Ann <a@x.org>", cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert git(repo, "log", "--format=%s", f"{base}..HEAD").split("\n") == ["T2: lexer", "T1: parser"]
+    for rev, title in (("HEAD", "T2: lexer"), ("HEAD~1", "T1: parser")):
+        assert body(repo, rev) == [title, "", SESSION, "Reviewed-by: Ann <a@x.org>"]
+        assert git(repo, "log", "-1", "--format=%(trailers:key=Claude-Session,valueonly)", rev) == \
+            "https://claude.ai/code/session_01"
+    assert git(repo, "for-each-ref", "refs/superlite") == ""
+
+
+def test_apply_trailer_with_no_squash_and_plan_anywhere(tmp_path):
+    repo = make_repo(tmp_path)
+    base = git(repo, "rev-parse", "HEAD")
+    two_tasks(repo)
+    r = run("autocommit", "apply", "--trailer", SESSION, "--plan", "plan.md", "--no-squash",
+            "--trailer", "  X-Run:   b96  ", "--trailer", SESSION, cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert git(repo, "rev-list", "--count", f"{base}..HEAD") == "2"
+    for rev, title in (("HEAD", "T2: lexer"), ("HEAD~1", "T1: parser")):
+        assert body(repo, rev) == [title, "", SESSION, "X-Run: b96", SESSION]
+
+
+def test_apply_without_trailer_keeps_a_bare_title(tmp_path):
+    repo = make_repo(tmp_path)
+    two_tasks(repo)
+    assert run("autocommit", "apply", cwd=repo).returncode == 0
+    assert body(repo, "HEAD") == ["T2: lexer"]
+
+
+def test_apply_refuses_a_bad_trailer_before_any_change(tmp_path):
+    repo = make_repo(tmp_path)
+    two_tasks(repo)
+    head = git(repo, "rev-parse", "HEAD")
+    refs = git(repo, "for-each-ref", "refs/superlite")
+    bad = [["--trailer"], ["--trailer", "--no-squash"], ["--trailer="], ["--trailer", "no colon here"],
+           ["--trailer", "Bad Key: v"], ["--trailer", "-Key: v"], ["--trailer", "Key:   "],
+           ["--trailer", "Key: a\nb"], ["--trailer", "Key: a\rb"], ["--trailer", "--plan", "plan.md", SESSION],
+           ["--trailer", "--plan=plan.md", SESSION], [SESSION, "--trailer", SESSION]]
+    for args in bad:
+        r = run("autocommit", "apply", *args, cwd=repo)
+        assert r.returncode == 2, (args, r.stdout, r.stderr)
+        assert "usage:" in r.stderr, (args, r.stderr)
+        assert "applied" not in r.stdout, args
+        assert git(repo, "rev-parse", "HEAD") == head, args
+        assert git(repo, "for-each-ref", "refs/superlite") == refs, args
+        assert (repo / ".superlite" / "checkpoints.json").exists(), args
+    for args in bad[:-1]:
+        assert "--trailer" in run("autocommit", "apply", *args, cwd=repo).stderr.split("usage:")[0], args
