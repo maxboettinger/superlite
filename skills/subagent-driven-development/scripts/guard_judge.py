@@ -1027,12 +1027,12 @@ def _stray(v, ctx, folders=False):  # O(p) + git | an untracked, unowned regular
         return False  # O(1)
 
 
-def _prog_pairs(w, flag, progs):  # O(docs * w) | (target, "?") of each heredoc or here-string read as the interpreter's program
+def _prog_pairs(w, flag, progs, text=None):  # O(docs * w) | (target, "?") of each heredoc or here-string read as the interpreter's program
     out = []  # O(1)
     for doc in progs:  # O(docs)
         k = w.index("-", 1) if "-" in w[1:] else len(w)  # O(w)
         w2 = _argv_sub(w[:k] + [flag, doc] + w[k + 1:])  # O(w + doc)
-        out.extend((t, "?") for t in guard_tools.targets(w2))  # O(doc)
+        out.extend((t, "?") for t in guard_tools.targets(w2, text=text))  # O(doc)
     return out  # O(docs)
 
 
@@ -1059,8 +1059,8 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
     if base in guard_tools.COMMANDS or base.lower() in guard_tools.COMMANDS or m:  # O(1)
         progs = c.docs if (m and not has_code) else []  # a heredoc or here-string is the program | O(docs)
         if script is not None:  # a script this command wrote by heredoc: its code, with the words after it as argv | O(code)
-            pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub([base, "-c", script[0]] + script[1])))  # O(code)
-            pairs.extend(_prog_pairs(w, flag, progs))  # the docs on its stdin are judged too | O(docs)
+            pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub([base, "-c", script[0]] + script[1]), text=ctx.text))  # O(code)
+            pairs.extend(_prog_pairs(w, flag, progs, ctx.text))  # the docs on its stdin are judged too | O(docs)
         elif base == "git":  # git: from each directory, with the command's variables and the project as top | O(d * w)
             env = dict(st.vars)  # O(v)
             for x in c.seg.words:  # NAME=value words before git | O(w)
@@ -1078,11 +1078,11 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
                 ts.append("?")  # the patch lands below a folder git does not name as its cwd | O(1)
             pairs.extend((t, "?") for t in ts)  # O(t)
         elif progs:  # O(docs)
-            pairs.extend(_prog_pairs(w, flag, progs))  # O(docs)
+            pairs.extend(_prog_pairs(w, flag, progs, ctx.text))  # O(docs)
         elif m and not has_code and c.piped and (len(w) == 1 or "-" in w[1:]):  # a program piped in | O(w)
             pairs.append(("?", None))  # O(1)
         else:  # O(1)
-            pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub(w) if m and flag == "-c" else w))  # O(w)
+            pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub(w) if m and flag == "-c" else w, text=ctx.text))  # O(w)
     inn = c.inn  # O(1)
     if m and "chdir" in " ".join(w[1:]) + "".join(c.docs) + (script[0] if script else ""):  # the code moves: unknown | O(n)
         inn = (None,)  # O(1)

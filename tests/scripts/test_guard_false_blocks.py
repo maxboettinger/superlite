@@ -322,3 +322,41 @@ def test_arithmetic_is_no_write_target(proj, cmd):
 ])
 def test_arithmetic_keeps_real_writes_blocked(proj, cmd):
     assert bash(proj, cmd).returncode == 2, cmd
+
+
+# --- #458: a heredoc script writing below tempfile's temp root ---------------------------------------------------
+import json  # noqa: E402
+import os  # noqa: E402
+import subprocess  # noqa: E402
+
+from test_block_coordinator_edits import BASH, HOOK  # noqa: E402
+
+TMP_PROG = "import tempfile, os\nd = tempfile.mkdtemp()\nopen(os.path.join(d, 'a.txt'), 'w').write('x')\n"
+
+
+def hook_tmpdir(proj, cmd, tmpdir):
+    raw = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(proj), "TMPDIR": str(tmpdir)}
+    return subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env)
+
+
+def test_heredoc_script_writing_below_the_temp_root_passes(proj, tmp_path_factory):
+    troot, s = tmp_path_factory.mktemp("troot"), tmp_path_factory.mktemp("scratch")
+    cmd = f"S={s}; cat > $S/x.py <<'EOF'\n{TMP_PROG}EOF\npython3 $S/x.py"
+    assert hook_tmpdir(proj, cmd, troot).returncode == 0
+    gettemp = cmd.replace("d = tempfile.mkdtemp()", "d = tempfile.gettempdir()")
+    assert hook_tmpdir(proj, gettemp, troot).returncode == 0
+    inline = "python3 -c \"" + TMP_PROG.replace("\n", "; ") + "\""
+    assert hook_tmpdir(proj, inline, troot).returncode == 0
+
+
+@pytest.mark.parametrize("change", [
+    ("d = tempfile.mkdtemp()", "d = tempfile.mkdtemp(dir='src')"),
+    ("import tempfile, os", "import tempfile, os\ntempfile.tempdir = 'src'"),
+    ("S=", "export TMPDIR=PROJ/src; S="),
+])
+def test_temp_root_with_a_named_folder_stays_unknown(proj, tmp_path_factory, change):
+    troot, s = tmp_path_factory.mktemp("troot"), tmp_path_factory.mktemp("scratch")
+    cmd = f"S={s}; cat > $S/x.py <<'EOF'\n{TMP_PROG}EOF\npython3 $S/x.py"
+    cmd = cmd.replace(change[0], change[1], 1).replace("PROJ", str(proj))
+    assert hook_tmpdir(proj, cmd, troot).returncode == 2, cmd

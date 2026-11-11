@@ -534,3 +534,55 @@ def test_issue_478_programs_pass_while_idle(tmp_path):
                "open(os.path.join(os.environ['D'], name), 'w')\nEOF")
     v = guard_judge.judge(unknown, P, P, "idle", sd)
     assert v is not None and v.kind == "protected"
+
+
+# --- #458: tempfile's temp root ----------------------------------------------------------------------------------
+import tempfile  # noqa: E402
+
+
+@pytest.fixture
+def troot(monkeypatch, tmp_path):
+    r = tmp_path / "troot"
+    r.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(r))
+    return str(r)
+
+
+def _py(code):
+    return targets(["python3", "-c", code], text=code)
+
+
+def test_temp_root_reads_the_command_text(troot):
+    assert guard_tools.temp_root("python3 x.py") == troot
+    assert guard_tools.temp_root("cp a $TMPDIR/b; ls ${TMPDIR} $TMP") == troot
+    for text in ("TMPDIR=/p python3 x.py", "export TEMP=/p", "unset TMP", "tempfile.tempdir = '/p'",
+                 "os.environ['TMPDIR'] = '/p'", "echo ${TMPDIR:-/p}", None):
+        assert guard_tools.temp_root(text) is None, text
+
+
+def test_mkdtemp_and_gettempdir_name_the_temp_root(troot):
+    assert _py("import tempfile, os\nd = tempfile.mkdtemp()\nopen(os.path.join(d, 'a.txt'), 'w').write('x')\n") == [
+        troot + "/?/a.txt"]
+    assert _py("import tempfile\nfrom pathlib import Path\n"
+               "(Path(tempfile.mkdtemp(prefix='sl-', suffix='.d')) / 'a.txt').write_text('x')\n") == [troot + "/?/a.txt"]
+    assert _py("import tempfile, os\nopen(os.path.join(tempfile.gettempdir(), 'sl-a.json'), 'w')\n") == [
+        troot + "/sl-a.json"]
+    assert _py("import tempfile\nopen(tempfile.gettempdir() + '/a', 'w')\n") == [troot + "/a"]
+
+
+@pytest.mark.parametrize("code", [
+    "import tempfile, os\nd = tempfile.mkdtemp(dir='src')\nopen(os.path.join(d, 'a'), 'w')\n",
+    "import tempfile, os\nd = tempfile.mkdtemp('', '', 'src')\nopen(os.path.join(d, 'a'), 'w')\n",
+    "import tempfile, os\nd = tempfile.mkdtemp(prefix='../x')\nopen(os.path.join(d, 'a'), 'w')\n",
+    "import tempfile, os\nd = tempfile.mkdtemp(prefix=p)\nopen(os.path.join(d, 'a'), 'w')\n",
+    "import tempfile, os\ntempfile.tempdir = 'src'\nopen(os.path.join(tempfile.gettempdir(), 'a'), 'w')\n",
+    "import tempfile, os\nos.environ['TMPDIR'] = 'src'\nd = tempfile.mkdtemp()\nopen(os.path.join(d, 'a'), 'w')\n",
+    "from tempfile import mkdtemp\nimport os\nopen(os.path.join(mkdtemp(), 'a'), 'w')\n",
+    "import tempfile\nopen(tempfile.gettempdir('x') + '/a', 'w')\n",
+])
+def test_temp_folders_the_guard_cannot_place_stay_unknown(troot, code):
+    assert _py(code) == ["?"]
+
+
+def test_without_the_command_text_the_temp_root_is_unknown(troot):
+    assert targets(["python3", "-c", "import tempfile\nopen(tempfile.gettempdir() + '/a', 'w')\n"]) == ["?"]

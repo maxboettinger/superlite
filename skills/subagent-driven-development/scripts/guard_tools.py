@@ -11,6 +11,7 @@ import io
 import os
 import re
 import shlex
+import tempfile
 import tokenize
 
 import guard_files
@@ -484,6 +485,9 @@ _NAMES: list[dict[str, list[str]]] = [{}]  # O(1) | the names of the code in han
 _ASSIGN = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*([-+*/%|&^@]|//|\*\*|<<|>>)?=(?![=>])\s*")  # O(1)
 _FOR = re.compile(r"(?<![\w.])for\s+([A-Za-z_][\w\s,()]*?)\s+in\s+")  # O(1)
 _UNK = "\x00"  # an unknown piece inside a composed path
+_TEMP: list[str | None] = [None]  # O(1) | the temp root of the code in hand (None: unknown)
+_TEMP_ENV = re.compile(r"\$(?:TMPDIR|TEMP|TMP)\b|\$\{(?:TMPDIR|TEMP|TMP)\}")  # O(1)
+_TEMP_NAMED = re.compile(r"\b(?:TMPDIR|TEMP|TMP|tempdir)\b")  # O(1)
 _PATH_CTORS = frozenset({"Path", "PurePath", "PosixPath", "WindowsPath", "PurePosixPath", "PureWindowsPath"})
 _JOINS = frozenset({"os.path.join", "posixpath.join", "ntpath.join", "path.join", "join"})
 _IDENT = re.compile(r"[A-Za-z_]\w*")
@@ -676,9 +680,12 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
         self.i = j  # O(1)
         if s[j:j + 1] != "(":  # O(1)
             return self._cap(self.names[name]) if name in self.names else [_UNK]  # O(64)
+        a0 = self.i  # O(1)
         args = self.args()  # O(len(s))
         if args is None:  # O(1)
             return None  # O(1)
+        if name in ("tempfile.gettempdir", "tempfile.mkdtemp"):  # O(1)
+            return self._temp(name, s[a0 + 1:self.i - 1])  # O(len(s))
         last = name.rsplit(".", 1)[-1]  # O(1)
         if last in _PATH_CTORS or name in _JOINS:  # O(1)
             acc = args[0] if args else ["."]  # O(1)
@@ -688,6 +695,27 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
         if name in ("str", "os.fspath", "fspath") and len(args) == 1:  # O(1)
             return args[0]  # O(1)
         return [_UNK]  # O(1)
+
+    @staticmethod
+    def _temp(name: str, raw: str) -> list[str]:  # O(len(raw)) | tempfile's root, or a fresh folder below it
+        root = _TEMP[0]  # O(1)
+        if root is None:  # O(1)
+            return [_UNK]  # O(1)
+        if name == "tempfile.gettempdir":  # O(1)
+            return [root] if not raw.strip() else [_UNK]  # O(1)
+        try:  # O(len(raw))
+            call = ast.parse("f(" + raw + ")", mode="eval").body  # O(len(raw))
+        except Exception:  # noqa: BLE001  any doubt is unknown | O(1)
+            return [_UNK]  # O(1)
+        if not isinstance(call, ast.Call) or len(call.args) > 2:  # O(1)
+            return [_UNK]  # O(1)
+        vals = list(call.args) + [k.value for k in call.keywords if k.arg in ("prefix", "suffix")]  # O(1)
+        if len(vals) != len(call.args) + len(call.keywords):  # O(1)
+            return [_UNK]  # O(1)
+        for v in vals:  # O(1)
+            if not (isinstance(v, ast.Constant) and isinstance(v.value, str)) or any(x in v.value for x in ("/", "\\", "..")):  # O(len(v))
+                return [_UNK]  # O(1)
+        return [root + "/?"]  # O(1)
 
     def string(self, sm: re.Match) -> list[str] | None:  # O(len(s)) | a string or f-string literal
         s = self.s  # O(1)
@@ -1380,8 +1408,18 @@ def _params(code: str, known: dict[str, list[str]]) -> list[tuple[int, str, list
     return out  # O(len(out))
 
 
-def _code(code: str, lang: str) -> list[str]:  # O(len(code) * |patterns|)
-    prev = _NAMES[0]  # O(1)
+def temp_root(text: str | None) -> str | None:  # O(len(text)) | tempfile's temp root, unless the command text names or sets it
+    if text is None or _TEMP_NAMED.search(_TEMP_ENV.sub("", text)):  # O(len(text))
+        return None  # O(1)
+    root = tempfile.gettempdir().replace("\\", "/")  # O(1)
+    if len(root) > 1:  # O(1)
+        root = root.rstrip("/")  # O(1)
+    return root if root.startswith("/") and "\x00" not in root else None  # O(1)
+
+
+def _code(code: str, lang: str, root: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
+    prev, prev_t = _NAMES[0], _TEMP[0]  # O(1)
+    _TEMP[0] = root  # O(1)
     scan = code  # O(1)
     if lang == "py":  # strings and comments are data unless the code can run text  # O(1)
         masked = _mask(code)  # O(len(code))
@@ -1395,7 +1433,7 @@ def _code(code: str, lang: str) -> list[str]:  # O(len(code) * |patterns|)
                 _NAMES[0] = _assigned(code, lang, scan, params)  # O(len(code))
         return _code1(code, lang, scan)  # O(len(code) * |patterns|)
     finally:  # O(1)
-        _NAMES[0] = prev  # O(1)
+        _NAMES[0], _TEMP[0] = prev, prev_t  # O(1)
 
 
 def _code1(code: str, lang: str, scan: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
@@ -1553,5 +1591,5 @@ def _targets(words: list[str], cwd: str | None = None, env=None, top: str | None
         return _ps(cmd, args)  # O(len(args))
     found = _eval_code(cmd, args)  # O(len(args))
     if found:  # O(1)
-        return _code(found[1], found[0])  # O(len(code))
+        return _code(found[1], found[0], temp_root(text))  # O(len(code))
     return []  # O(1)
