@@ -1,0 +1,117 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-11T16:15:12",
+ "headline": {
+  "wall_min": {
+   "projected": 3.952,
+   "actual": 2.557
+  },
+  "cost_usd_agents": {
+   "projected": 0.435348,
+   "actual": 0.655316
+  },
+  "task_min": {
+   "projected": 7.154,
+   "actual": 3.515
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 6
+  }
+ },
+ "cost_split": {
+  "agents_usd": 0.655316,
+  "rework_usd": 0,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 0.655316
+ },
+ "concurrency": {
+  "peak": 2,
+  "projected_peak": 2
+ },
+ "critical_path": {
+  "actual": [
+   "T1",
+   "T3"
+  ],
+  "projected": [
+   "T1",
+   "T3"
+  ],
+  "projected_min": 3.952
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 4,
+   "cost_usd": 0.655316
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 6475,
+   "failed": 0,
+   "skipped": 8,
+   "seconds": 849.6,
+   "recorded": false
+  },
+  "tests_newer": null,
+  "tests_from": "progress.md",
+  "first_time_pass": 0,
+  "first_time_n": 0,
+  "rework_dispatches": 0,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 1.593,
+   "actual_min": 0.565,
+   "delta": {
+    "abs": -1.028,
+    "pct": -64.5
+   },
+   "cost_usd": 0.095532,
+   "first_time_pass": null
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 2.331,
+   "actual_min": 1.313,
+   "delta": {
+    "abs": -1.0177,
+    "pct": -43.7
+   },
+   "cost_usd": 0.249075,
+   "first_time_pass": null
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 1.609,
+   "actual_min": 0.685,
+   "delta": {
+    "abs": -0.924,
+    "pct": -57.4
+   },
+   "cost_usd": 0.118405,
+   "first_time_pass": null
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 1.621,
+   "actual_min": 0.952,
+   "delta": {
+    "abs": -0.6693,
+    "pct": -41.3
+   },
+   "cost_usd": 0.192304,
+   "first_time_pass": null
+  }
+ ]
+}
