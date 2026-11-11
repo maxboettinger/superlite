@@ -1864,6 +1864,104 @@ def _ts_owned(t: Task, root: Path) -> list[Path]:  # O(o*s) | the non-test TypeS
     return [root / o.replace("\\", "/") for o in t.owns if _ts_file(o)]  # O(o*s)
 
 
+def jsonc_loads(text: str) -> object:  # O(s) | json with // and /* */ comments and trailing commas; ValueError on bad JSON
+    out: list[str] = []  # O(1)
+    i, n = 0, len(text)  # O(1)
+    while i < n:  # O(s) iterations
+        c = text[i]  # O(1)
+        if c == '"':  # O(1)
+            j = i + 1  # O(1)
+            while j < n and text[j] != '"':  # O(s) iterations
+                j += 2 if text[j] == "\\" else 1  # O(1)
+            out.append(text[i:j + 1])  # O(s)
+            i = j + 1  # O(1)
+        elif text.startswith("//", i):  # O(1)
+            j = text.find("\n", i)  # O(s)
+            i = n if j < 0 else j  # O(1)
+        elif text.startswith("/*", i):  # O(1)
+            j = text.find("*/", i + 2)  # O(s)
+            i = n if j < 0 else j + 2  # O(1)
+        else:  # O(1)
+            if c in "}]":  # O(1)
+                k = len(out)  # O(1)
+                while k and out[k - 1].isspace():  # O(w) iterations
+                    k -= 1  # O(1)
+                if k and out[k - 1] == ",":  # O(1)
+                    del out[k - 1]  # O(s)
+            out.append(c)  # O(1)
+            i += 1  # O(1)
+    return json.loads("".join(out))  # O(s)
+
+
+def _ts_config(path: Path, depth: int = 0, seen: tuple[Path, ...] = ()) -> dict:  # O(L*s) | {"data": own json, "base": baseUrl dir or None, "paths": (dict, anchor dir) or None} through relative extends
+    if depth > 5 or path in seen:  # O(1)
+        return {}  # O(1)
+    try:  # O(1)
+        data = jsonc_loads(path.read_text(encoding="utf-8-sig", errors="replace"))  # O(s)
+    except (OSError, ValueError):  # O(1)
+        return {}  # O(1)
+    if not isinstance(data, dict):  # O(1)
+        return {}  # O(1)
+    res: dict = {"data": data, "base": None, "paths": None}  # O(1)
+    ext = data.get("extends")  # O(1)
+    for v in (ext if isinstance(ext, list) else [ext]):  # O(e) iterations
+        if not isinstance(v, str) or not v.startswith(("./", "../", "/")):  # O(1)
+            continue  # O(1)
+        b = Path(os.path.normpath(path.parent / v))  # O(s)
+        if not v.endswith(".json") and not b.is_file():  # O(1)
+            b = b.with_name(b.name + ".json")  # O(1)
+        sub = _ts_config(b, depth + 1, seen + (path,))  # O(L*s)
+        for key in ("base", "paths"):  # O(1) iterations
+            if sub.get(key) is not None:  # O(1)
+                res[key] = sub[key]  # O(1)
+    opts = data.get("compilerOptions")  # O(1)
+    if isinstance(opts, dict):  # O(1)
+        if isinstance(opts.get("baseUrl"), str):  # O(1)
+            res["base"] = Path(os.path.normpath(path.parent / opts["baseUrl"]))  # O(s)
+        if isinstance(opts.get("paths"), dict):  # O(1)
+            res["paths"] = (opts["paths"], path.parent)  # O(1)
+    return res  # O(1)
+
+
+def tsconfig_allows(root: Path, pkgs: dict[str, dict]) -> dict[str, dict]:  # O(P*(L*s + paths*P*d)) | package -> {"names": packages its tsconfig references and path aliases reach, "config": nearest tsconfig.json}; only packages with a link
+    def at(p: Path, me: str) -> str | None:  # O(P*d)
+        hit = _target_of(Path(os.path.normpath(p)) / "_", pkgs)  # O(P*d)
+        return hit if hit and hit != me else None  # O(1)
+    found: dict[str, dict] = {}  # O(1)
+    for name, info in pkgs.items():  # O(P) iterations
+        names: set[str] = set()  # O(1)
+        own = _ts_config(info["dir"] / "tsconfig.json")  # O(L*s)
+        refs = own.get("data", {}).get("references") if own else None  # O(1)
+        for ref in (refs if isinstance(refs, list) else []):  # O(r) iterations
+            rp = ref.get("path") if isinstance(ref, dict) else None  # O(1)
+            if isinstance(rp, str):  # O(1)
+                tgt = info["dir"] / rp  # O(1)
+                hit = at(tgt.parent if rp.endswith(".json") else tgt, name)  # O(P*d)
+                if hit:  # O(1)
+                    names.add(hit)  # O(1)
+        cur, cfg_path = info["dir"], None  # O(1)
+        while cfg_path is None:  # O(d) iterations
+            if (cur / "tsconfig.json").is_file():  # O(1)
+                cfg_path = cur / "tsconfig.json"  # O(1)
+            elif cur == root or cur == cur.parent:  # O(1)
+                break  # O(1)
+            else:  # O(1)
+                cur = cur.parent  # O(1)
+        if cfg_path is not None:  # O(1)
+            cfg = own if cfg_path.parent == info["dir"] else _ts_config(cfg_path)  # O(L*s)
+            if cfg.get("paths"):  # O(1)
+                table, anchor = cfg["paths"]  # O(1)
+                base = cfg["base"] or anchor  # O(1)
+                for targets in table.values():  # O(paths) iterations
+                    for tg in (targets if isinstance(targets, list) else []):  # O(t) iterations
+                        hit = at(base / tg.split("*", 1)[0], name) if isinstance(tg, str) else None  # O(P*d)
+                        if hit:  # O(1)
+                            names.add(hit)  # O(1)
+            if names:  # O(1)
+                found[name] = {"names": sorted(names), "config": cfg_path.relative_to(root).as_posix()}  # O(n)
+    return found  # O(P)
+
+
 def ts_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*types*pkgs) | a seam name declared in a workspace package the consumer's package does not depend on (#404)
     pkgs = ts_packages(root)  # O(F + M*s)
     if not pkgs:  # O(1)
@@ -1871,6 +1969,7 @@ def ts_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*
     pairs = _seam_pairs(plan)  # O(n*q*cands)
     if not any(_ts_owned(t, root) for t, _s, _p, _q in pairs):  # O(pairs*o*s)
         return []  # O(pairs)
+    links = tsconfig_allows(root, pkgs)  # O(P*(L*s + paths*P*d))
     owned = {t.id: sorted({n for n in (_target_of(f, pkgs) for f in _ts_owned(t, root)) if n}) for t in plan.tasks}  # O(n*o*P*d)
     by_type: dict[str, set[str]] = {}  # O(1)
     for t in plan.tasks:  # O(n) iterations
@@ -1900,12 +1999,13 @@ def ts_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*
             for importer in owned.get(t.id, []):  # O(o) iterations
                 deps = pkgs[importer]["deps"]  # O(1)
                 key = (t.id, importer, tuple(sorted(mods)))  # O(m)
-                if not mods or key in seen or any(m == importer or m in deps for m in mods):  # O(m)
+                if not mods or key in seen or any(m == importer or m in deps or m in links.get(importer, {}).get("names", ()) for m in mods):  # O(m)
                     continue  # O(m)
                 seen.add(key)  # O(1)
                 order = ", ".join(getattr(deps, "order", sorted(deps))) or "none"  # O(deps)
                 warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {what} is declared in {', '.join(sorted(mods))}, "  # O(s)
-                             f"which package {importer} may not import ({pkgs[importer]['manifest']}) dependencies: {order}")  # O(deps)
+                             f"which package {importer} may not import ({pkgs[importer]['manifest']}) dependencies: {order}"  # O(deps)
+                             + (f"; tsconfig ({links[importer]['config']}) allows: {', '.join(links[importer]['names'])}" if importer in links else ""))  # O(deps)
     return warns  # O(w)
 
 

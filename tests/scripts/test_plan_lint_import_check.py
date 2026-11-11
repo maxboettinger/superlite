@@ -180,3 +180,105 @@ def test_layers_text_unchanged_with_tomllib(tmp_path):
     write(tmp_path / "pyproject.toml", PYPROJECT)
     out = plan_tools.import_issues(plan_in(tmp_path, "shop/a/x.py", "shop/b/y.py"), tmp_path)
     assert out == [WARN + '"Layers" in pyproject.toml)']
+
+
+TS_ITEM = "loadOrder(id: string) -> Order"
+
+
+def pkg(root: Path, rel: str, name: str, **extra) -> None:
+    data = {"name": name}
+    data.update(extra)
+    write(root / rel / "package.json", json.dumps(data))
+
+
+def ts_two(root: Path) -> None:
+    pkg(root, "packages/core", "@shop/core")
+    pkg(root, "packages/web", "@shop/web", dependencies={"react": "18"})
+
+
+def ts_plan(root: Path):
+    return plan_in(root, "packages/core/src/order.ts", "packages/web/src/page.tsx", TS_ITEM)
+
+
+def allows(root: Path):
+    return plan_tools.tsconfig_allows(root, plan_tools.ts_packages(root))
+
+
+def test_jsonc_loads_values():
+    f = plan_tools.jsonc_loads
+    assert f('{"a": 1, // note\n "b": [2, 3,],\n /* block\n */ "c": {"d": "x",},}') == {"a": 1, "b": [2, 3], "c": {"d": "x"}}
+    assert f('{"u": "http://x/*y*/", "v": "a // b", "w": "q\\"//"}') == {"u": "http://x/*y*/", "v": "a // b", "w": 'q"//'}
+    assert f('[1, /* c */ ]') == [1]
+    with pytest.raises(ValueError):
+        f('{"a": }')
+
+
+def test_tsconfig_references_allow(tmp_path):
+    ts_two(tmp_path)
+    write(tmp_path / "packages/web/tsconfig.json", '{\n  // project refs\n  "references": [{"path": "../core"},],\n}')
+    assert allows(tmp_path) == {"@shop/web": {"names": ["@shop/core"], "config": "packages/web/tsconfig.json"}}
+    assert plan_tools.ts_import_issues(ts_plan(tmp_path), tmp_path) == []
+
+
+def test_tsconfig_reference_to_file(tmp_path):
+    ts_two(tmp_path)
+    write(tmp_path / "packages/web/tsconfig.json", '{"references": [{"path": "../core/tsconfig.build.json"}]}')
+    assert allows(tmp_path)["@shop/web"]["names"] == ["@shop/core"]
+
+
+def test_tsconfig_paths_through_extends(tmp_path):
+    ts_two(tmp_path)
+    write(tmp_path / "tsconfig.base.json", '{"compilerOptions": {"baseUrl": ".", "paths": '
+          '{"@shop/core/*": ["packages/core/src/*"], "@x": ["vendor/x"]}}}')
+    write(tmp_path / "packages/web/tsconfig.json", '{"extends": "../../tsconfig.base.json", "compilerOptions": {"strict": true}}')
+    assert allows(tmp_path) == {"@shop/web": {"names": ["@shop/core"], "config": "packages/web/tsconfig.json"}}
+    assert plan_tools.ts_import_issues(ts_plan(tmp_path), tmp_path) == []
+
+
+def test_tsconfig_paths_without_baseurl_and_nearest_config(tmp_path):
+    ts_two(tmp_path)
+    write(tmp_path / "tsconfig.json", '{"compilerOptions": {"paths": {"@core": ["./packages/core/src/index.ts"]}}}')
+    assert allows(tmp_path) == {"@shop/web": {"names": ["@shop/core"], "config": "tsconfig.json"}}
+
+
+def test_tsconfig_override_and_ancestor_references(tmp_path):
+    ts_two(tmp_path)
+    pkg(tmp_path, "packages/util", "@shop/util")
+    write(tmp_path / "tsconfig.json", '{"files": [], "references": [{"path": "packages/core"}, {"path": "packages/web"}]}')
+    assert allows(tmp_path) == {}
+    write(tmp_path / "base.json", '{"compilerOptions": {"paths": {"@core": ["packages/core/src"]}}}')
+    write(tmp_path / "packages/web/tsconfig.json", '{"extends": ["../../base"], "compilerOptions": '
+          '{"baseUrl": "..", "paths": {"@util": ["util/src"]}}}')
+    assert allows(tmp_path) == {"@shop/web": {"names": ["@shop/util"], "config": "packages/web/tsconfig.json"}}
+
+
+def test_tsconfig_bad_inputs_quiet(tmp_path):
+    ts_two(tmp_path)
+    write(tmp_path / "packages/web/tsconfig.json", '{"extends": ["@tsconfig/node20/tsconfig.json", "./a.json"]}')
+    write(tmp_path / "packages/web/a.json", '{"extends": "./tsconfig.json"}')
+    write(tmp_path / "packages/core/tsconfig.json", "{not json")
+    assert allows(tmp_path) == {}
+
+
+def test_tsconfig_names_in_warning(tmp_path):
+    ts_two(tmp_path)
+    pkg(tmp_path, "packages/util", "@shop/util")
+    write(tmp_path / "packages/web/tsconfig.json", '{"references": [{"path": "../util"}]}')
+    assert plan_tools.ts_import_issues(ts_plan(tmp_path), tmp_path) == [
+        "WARNING: IMPORT: T2 consumes loadOrder(id: string) -> Order from T1, but loadOrder is declared in @shop/core, "
+        "which package @shop/web may not import (packages/web/package.json) dependencies: react; "
+        "tsconfig (packages/web/tsconfig.json) allows: @shop/util"]
+
+
+def test_tsconfig_absent_text_unchanged(tmp_path):
+    ts_two(tmp_path)
+    assert plan_tools.ts_import_issues(ts_plan(tmp_path), tmp_path) == [
+        "WARNING: IMPORT: T2 consumes loadOrder(id: string) -> Order from T1, but loadOrder is declared in @shop/core, "
+        "which package @shop/web may not import (packages/web/package.json) dependencies: react"]
+
+
+def test_tsconfig_bom_is_read(tmp_path):
+    ts_two(tmp_path)
+    (tmp_path / "packages/web").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "packages/web/tsconfig.json").write_bytes(b'\xef\xbb\xbf{"references": [{"path": "../core"}]}')
+    assert allows(tmp_path)["@shop/web"]["names"] == ["@shop/core"]
