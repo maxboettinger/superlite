@@ -23,7 +23,7 @@ def stop(w, wid, tr, t):
 
 def test_send_labels_pane(cw):
     io.send(cw.sd, cw.plan, "W1", ["T3"], "/sl/sl", "/sl")
-    assert ("call", ["pane", "rename", "w6:p1", "W1 T3"]) in cw.fh.calls
+    assert ("call", ["pane", "rename", "w6:p1", io.pane_title(cw.sd, "W1", "T3")]) in cw.fh.calls
 
 
 def test_finish_labels_reported(cw, tmp_path):
@@ -31,14 +31,14 @@ def test_finish_labels_reported(cw, tmp_path):
     tr = tmp_path / "w1.jsonl"; transcript(tr, "Status: DONE")
     stop(cw, "W1", tr, sent + 10); cw.fh.states = [{"sl-proj-w1": "done"}]
     io.wait(cw.sd, ["W1"], 5000)
-    assert ["pane", "rename", "w6:p1", "W1 T3 reported, waiting for coordinator"] in renames(cw)
+    assert ["pane", "rename", "w6:p1", io.pane_title(cw.sd, "W1", "T3", "reported, waiting for coordinator")] in renames(cw)
 
 
 def test_blocked_ui_labels(cw):
     io.send(cw.sd, cw.plan, "W2", ["T4"], "/sl/sl", "/sl")
     cw.fh.states = [{"sl-proj-w2": "blocked"}]
     io.wait(cw.sd, ["W2"], 5000)
-    assert ["pane", "rename", "w6:p2", "W2 T4 BLOCKED-UI"] in renames(cw)
+    assert ["pane", "rename", "w6:p2", io.pane_title(cw.sd, "W2", "T4", "BLOCKED-UI")] in renames(cw)
 
 
 def test_label_failure_never_breaks_send(world, capsys):
