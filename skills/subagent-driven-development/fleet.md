@@ -6,7 +6,7 @@ Fleet covers one taskgraph plan in one checkout: several tickets go into one pla
 
 ## Implementers
 
-`"$SL" fleet spawn --for-dispatch --plan $PLAN` is the one call per dispatch round, Wave 0 included (it sends `.superlite/briefs/wave0.md` as T0), instead of `dispatch` plus a spawn and a send per line. It runs `dispatch`, starts a worker for each `fresh tier=T agent=TYPE` line, sends each line's tasks (an `agent=Wn` line goes to that idle worker) and prints one `Wn Tn[,Tm] sent` line per worker; `evict=` lines go to stderr. It sends every ready task (no cap) and stops each evicted idle worker (`stopped Wn` on stdout). It refuses with `BLOCKED: no ...prime.md; run build_prime --plan PLAN first` when the prime is missing. `BLOCKED: Tn[,Tm] not sent (<reason>)` (the call then exits 3) means no worker got those tasks: treat them as BLOCKED; the other lines still went out. `poll` never appears in fleet mode.
+`"$SL" fleet spawn --for-dispatch --plan $PLAN` is the one call per dispatch round, Wave 0 included (it sends `.superlite/briefs/wave0.md` as T0), instead of `dispatch` plus a spawn and a send per line. It runs `dispatch`, starts a worker for each `fresh tier=T agent=TYPE` line, sends each line's tasks (an `agent=Wn` line goes to that idle worker) and prints one `Wn Tn[,Tm] sent` line per worker; `evict=` lines go to stderr. Workers an earlier dispatch dropped from the pool are stopped too (`stopped Wn`). A prime that stalls waits up to 30 s for a late start, then is sent once more; a start that stays slow is retried once on another account (a stderr line says so). It sends every ready task (no cap) and stops each evicted idle worker (`stopped Wn` on stdout). It refuses with `BLOCKED: no ...prime.md; run build_prime --plan PLAN first` when the prime is missing. `BLOCKED: Tn[,Tm] not sent (<reason>)` (the call then exits 3) means no worker got those tasks: treat them as BLOCKED; the other lines still went out. `poll` never appears in fleet mode.
 
 By hand, one line: `fresh tier=T agent=TYPE`: `"$SL" fleet spawn --tier T --plan $PLAN` prints `Wn account=A pane=P agent=TYPE`; then `"$SL" fleet send Wn Tn [Tm ...] --plan $PLAN`. `agent=Wn`: `"$SL" fleet send Wn Tn --plan $PLAN`.
 
@@ -14,8 +14,8 @@ By hand, one line: `fresh tier=T agent=TYPE`: `"$SL" fleet spawn --tier T --plan
 
 Every other role takes a brief file under `.superlite/briefs/` (never pasted into the send): `"$SL" fleet spawn --role R [--tier T] --plan $PLAN` prints `Wn account=A pane=P agent=TYPE`, then `"$SL" fleet send Wn --brief <abs file> [--label L] --plan $PLAN`. A one-turn worker answers once and `fleet wait` stops it.
 
-- Package reviewer: `--role package-reviewer`; the brief holds what the review brief in `SKILL.md` holds.
-- Final reviewer: `--role final-reviewer`, a fresh worker per round: `fleet send Wn --brief <abs>/.superlite/review-packet.md --label FR<round>`.
+- Package reviewer: `fleet spawn --for-review Tn [Tm ...] --plan $PLAN` (or `--package X`) writes the brief, starts the worker and sends it; `fleet spawn --for-dispatch` ends with `review: Tn (<why>)` lines for committed tasks that need a review. By hand: `--role package-reviewer`; the brief holds what the review brief in `SKILL.md` holds. A failed send is retried once (stall or slow Herdr reply).
+- Final reviewer: `--role final-reviewer`, a fresh worker per round: `fleet send Wn --brief <abs>/.superlite/review-packet.md --label FR<round>`; add `--full` to ask for a full review.
 - Fixers: `"$SL" findings route --plan $PLAN <json paths>` prints `fixer tier=T brief=P files=F task=Tn` per finding group. Per line: `fleet spawn --role fixer --tier T`, then `fleet send Wn --brief P`. Escalation: the same brief to a worker one `--tier` up.
 - Research: `--role research` (read-only `superlite:researcher`).
 - Test layers, in a repo with `scripts/test_layers.py`: `"$SL" fleet run --layer headless|tui|evals --plan $PLAN` runs the layer in a shell pane; no brief.
@@ -24,12 +24,13 @@ Every other role takes a brief file under `.superlite/briefs/` (never pasted int
 
 Run `"$SL" fleet wait --any --timeout 540000 --plan $PLAN` as a background command (the harness wakes you when a worker finishes) instead of waiting for SendMessage replies. Act on its lines, not on report text. Run it again while workers are busy. `BUSY Wn Wm` lists the workers still running. A lead that must not end its turn may run it in the foreground. One-turn workers are stopped by `fleet wait`.
 
-- `Wn <label> <STATUS> findings=<n> <sd>/fleet/reports/<id>.json`: `<id>` is the label's first comma part; ` (screen)` marks the screen fallback.
+- `Wn <label> <STATUS> findings=<n> [concerns=N] <sd>/fleet/reports/<id>.json`: ` concerns=N` counts a report's concerns; `<id>` is the label's first comma part; ` (screen)` marks the screen fallback.
   - Task labels (`DONE`, `DONE_WITH_CONCERNS`): `commit_task` as usual.
   - `findings=` above 0 or `CHANGES_REQUESTED`: `findings route` with the JSON paths, then the fixer lines above.
   - `BLOCKED`: treat the task as BLOCKED.
   - `UNKNOWN` (no parsable report): `"$SL" fleet report Wn --plan $PLAN` prints the saved `.superlite/fleet/reports/<id>.md` (read-only; a busy worker or one with no collected report exits 1); read it once, then decide.
   - `NEEDS_CONTEXT`: answer with `"$SL" fleet send Wn --text "..."`, then wait again.
+- `Wn <label> ASKED`: the turn ended without a report; the worker was asked once. Wait again; a second miss reports UNKNOWN.
 - `Wn layer-L GREEN|RED exit=<n> <log path>` plus `  <last line>`: a layer result; read the log on RED.
 - `Wn Tn BLOCKED-UI <screen path>`: read the screen file; answer with `"$SL" fleet keys Wn KEY...` or `fleet send Wn --text "..."`, or treat the task as BLOCKED.
 - `TIMEOUT Wn Wm`: run `fleet wait` again.

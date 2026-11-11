@@ -5,7 +5,7 @@ description: Use when executing a superlite plan that has a %% taskgraph. Runs a
 
 # Subagent-Driven Development
 
-You are the coordinator: you decide, dispatch and rule; scripts do what has a definite answer; agents design, write, review and fix.
+You are the coordinator: you decide, dispatch and rule; scripts do what has a definite answer; agents write, review and fix.
 
 Shorthand: `SUPERLITE` = plugin root, two levels above this skill's "Base directory for this skill: ..." path (`cygpath -u` it first if present). `SL="$SUPERLITE/skills/subagent-driven-development/scripts/sl"`; run it as `"$SL" ...`. `PLAN` = the plan file; pass `--plan $PLAN` everywhere. Exit 3 (no Python): `incident add`.
 
@@ -52,7 +52,7 @@ Keep `.superlite/pool.json` (agents: id, tasks, files, context_k, idle_min, busy
 3. Task message (batch: one message, in order): heading, `SUPERLITE=<abs plugin root>`, `PLAN=<abs plan path>`, `ROOT=<abs run root>`, "your task text: `<abs sl> task Tn --plan PLAN`", Owns and files not to touch, Review Focus categories for its files, rulings and interface names (a fake returns the producer's `e.g.` examples), the literal absolute `sl` path (no `$SL`), verify command (`<abs sl> run_tests --fast PATHS --task Tn --background`, then run the printed `wait:` line in the foreground (never as a background command) and end the turn only after it reports), and for haiku the full task block instead of `task` (mini prime cuts lines), and "reply in at most 200 words: status DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED, files, test result, `Red run:` line, open questions".
 4. Record all DONE tasks in one call (hidden checkpoints; `sl autocommit on`: real): `"$SL" commit_task T3 T5 --plan $PLAN --dispatch` commits each task's files, prints `Tn <sha>`, `Tn FAILED` or `Tn: no change since its last checkpoint <sha>` (one task: the SHA), then `next:`/dispatch lines. FAILED (unowned files, syntax/import problems): send it back. DONE_WITH_CONCERNS: fix correctness ones first. NEEDS_CONTEXT: answer. BLOCKED: log it; a fixer a tier up takes it. A haiku miss (NEEDS_CONTEXT, BLOCKED, red): `"$SL" routing miss --task Tn --plan $PLAN`; never retried on Haiku. Act on `next:` lines. Human step: `"$SL" hold Tn --reason R`, `--release Tn`. A task that must touch another task's file: `commit_task Tn --also F --ruling "..."`; it then owns it for the run (several tasks: the first).
 5. After a commit, `commit_task` has started `probe_run --commit` and, for each seam with both sides committed, `pt_review contract --seam` in the background. A pass logs `verified`; a mismatch is an incident (`fixing.md`).
-6. Probe failures: `incident hotspots --files <task files>` first; open failures go to fixers (`fixing.md`). `commit_task` accepts generated `tests/regression/` files from any task.
+6. Probe failures: `incident hotspots --files <task files>` first; open failures go to fixers (`fixing.md`); ruled false positive: `probe_run --dismiss ID`. `commit_task` accepts generated `tests/regression/` files from any task.
 
 ## Reviews (D16)
 
@@ -64,7 +64,7 @@ flowchart LR
   R1 & R2 --> X[fixes + regression tests] --> K[commit_task again]
 ```
 
-- Matching tasks get `superlite:package-reviewer` on commit, in the next dispatch message. Others: one review per committed package (last package: each task as it commits).
+- Matching tasks get `superlite:package-reviewer` on commit. Others: one per package (last package: per task). Fleet: `fleet spawn --for-review Tn` or `--package X`; `--for-dispatch` prints `review: Tn`.
 - Brief: absolute `sl` path, commit or range, spec slice, `PLAN`, files in scope, `incident hotspots` output, adapter path. It reviews, fixes with regression tests, logs; never commits.
 
 ## Coordinator batching
@@ -86,9 +86,9 @@ flowchart TB
 ```
 
 1. Gate: all tasks and reviews committed, all seams `verified`.
-2. Build the packet: `"$SL" plan_tools packet --plan $PLAN --base <start-sha>` (inline: `--inline --spec <spec.md>`; later rounds `--previous <rounds.md>`) uses the test summary, probe results and incidents, and writes `.superlite/review-packet.md`. Same message: start `run_tests --full --background`; don't wait.
+2. Build the packet: `"$SL" plan_tools packet --plan $PLAN --base <start-sha>` (inline: `--inline --spec <spec.md>`; later rounds `--previous <rounds.md>`) uses the test summary, probe results and incidents, and writes `.superlite/review-packet.md`. Same message: `run_tests --full --background`, no wait.
 3. Start `superlite:final-reviewer` then, fresh, brief = the absolute `sl` path and "read .superlite/review-packet.md", nothing more. The tree stays frozen. It answers once: `Verdict: APPROVED` or `CHANGES_REQUESTED` plus `file:line - problem - fix - tier N` lines. No `Checked:` block (fast path too) is no review: start a fresh one. Full review asked: `fleet send Wn --brief <packet> --full` (Agent: `Full review` in the brief).
-4. Red suite lines are findings. Send all to fixers (`fixing.md`: tier by understanding, split by file); then `commit_task Tn` per owning task (`--claim F --ruling TEXT` for files outside Owns) and one more `run_tests --background`. Leftovers become a `Ruling:`.
+4. Red suite lines are findings. Send all to fixers (`fixing.md`); then `commit_task Tn` per owning task (`--claim F --ruling TEXT` for files outside Owns) and one more `run_tests --background`. Leftovers: `Ruling:`.
 5. Before the final commit, `"$SL" run_tests --wait`; green means freeze.
 
 ## Measure and budget
