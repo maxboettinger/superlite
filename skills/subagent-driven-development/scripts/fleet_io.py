@@ -54,6 +54,8 @@ READ_MS = 10000  # a transcript that lags its stop record is re-read this long b
 ASK = ("Your last turn ended without your report. If your work is not done, finish it first: run any wait in the foreground and do not end your turn to wait. "  # O(1)
        "Then end your reply with your report.")  # O(1)
 HERE = Path(__file__).resolve().parent  # O(1)
+TOOL_DIRS = ("skills/subagent-driven-development/scripts/", "skills/subagent-driven-development/probes/")  # where sl finds its tools | O(1)
+WORKTREE_REST = "Every other command (task, incident, run_tests, commit_task) stays on the sl above: it holds the run's state."  # O(1)
 
 
 def now_ms():  # O(1)
@@ -182,6 +184,21 @@ def _hotspots(sd, files):  # the stdout of `incident hotspots` for FILES, or why
     return buf.getvalue().strip() or "(none)"  # O(out)
 
 
+def worktree_sl(root, superlite_root, files):  # (Root's sl, [tool names]) when Root is another superlite checkout and FILES change its tools, else None (#513) | O(f)
+    root = Path(root).resolve()  # O(d)
+    sl = root / "skills" / "subagent-driven-development" / "scripts" / "sl"  # O(1)
+    if root == Path(superlite_root).resolve() or not sl.is_file():  # O(d)
+        return None  # O(1)
+    names = []  # O(1)
+    for f in files:  # O(f) iterations
+        p = str(f).replace("\\", "/")  # O(len)
+        while p.startswith("./"):  # O(len)
+            p = p[2:]  # O(len)
+        if p.startswith(TOOL_DIRS) and Path(p).stem not in names:  # O(f)
+            names.append(Path(p).stem)  # O(1)
+    return (str(sl), names) if names else None  # O(1)
+
+
 def review_brief(sd, plan, tasks, sl_path, superlite_root, package=None):  # the package-reviewer's brief | O(L + e + k*s + B)
     sd = Path(sd)  # O(1)
     plan_p = Path(plan).resolve()  # O(1)
@@ -195,7 +212,12 @@ def review_brief(sd, plan, tasks, sl_path, superlite_root, package=None):  # the
     else:  # O(1)
         why = "Why: " + "; ".join(f"{t}: {'; '.join(review_reasons(plan_p, t)) or 'asked for'}" for t in tasks)  # O(k*(L + e))
     lines = [f"# Review: {ids}" + (f" (package {package})" if package else ""), "", f"SUPERLITE={superlite_root}", f"PLAN={plan_p}", f"Root: {root}",  # O(1)
-             f"sl (type it literally in every command): {sl_path}", why, "", "Commits:"]  # O(1)
+             f"sl (type it literally in every command): {sl_path}"]  # O(1)
+    wt = worktree_sl(root, superlite_root, files)  # O(o)
+    if wt:  # O(1)
+        lines += [f"Worktree sl (live checks of the tools these tasks add or change: {', '.join(wt[1])}; type it literally): {wt[0]}",  # O(o)
+                  WORKTREE_REST]  # O(1)
+    lines += [why, "", "Commits:"]  # O(1)
     for t in tasks:  # O(k) iterations
         lines += [f"- {c}" for c in commits.get(t, [])]  # O(c)
     if not any(commits.get(t) for t in tasks):  # O(k)

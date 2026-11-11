@@ -13,7 +13,7 @@ import run_tests  # noqa: E402
 
 
 def run(*args, cwd):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_") or k == "SUPERLITE_HOME"}
     env["PYTHONIOENCODING"] = "utf-8"
     cp = subprocess.run([sys.executable, str(RUN_TESTS), *map(str, args)], capture_output=True, cwd=cwd, env=env, timeout=120)
     cp.out, cp.err = cp.stdout.decode("utf-8"), cp.stderr.decode("utf-8")

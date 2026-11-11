@@ -59,7 +59,7 @@ def test_xcode_return_has_keys():
 def test_run_tests_no_count_stops(tmp_path):
     (tmp_path / ".superlite").mkdir()
     (tmp_path / ".superlite" / "test-cmd.json").write_text(json.dumps({"language": "bash", "test": "echo done"}), encoding="utf-8")
-    env = {k: v for k, v in __import__("os").environ.items() if not k.startswith("SUPERLITE_")}
+    env = {k: v for k, v in __import__("os").environ.items() if not k.startswith("SUPERLITE_") or k == "SUPERLITE_HOME"}
     cp = subprocess.run([sys.executable, str(SCRIPTS / "run_tests.py"), "--full"], cwd=tmp_path, capture_output=True, text=True, env=env)
     assert cp.returncode == 1, cp.stdout + cp.stderr
     s = json.loads((tmp_path / ".superlite" / "test-summary.json").read_text(encoding="utf-8"))
