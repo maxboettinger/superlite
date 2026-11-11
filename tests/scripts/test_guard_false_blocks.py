@@ -360,3 +360,27 @@ def test_temp_root_with_a_named_folder_stays_unknown(proj, tmp_path_factory, cha
     cmd = f"S={s}; cat > $S/x.py <<'EOF'\n{TMP_PROG}EOF\npython3 $S/x.py"
     cmd = cmd.replace(change[0], change[1], 1).replace("PROJ", str(proj))
     assert hook_tmpdir(proj, cmd, troot).returncode == 2, cmd
+
+
+# F-T1-1: a failing `$((` or command-position `((` is tried as arithmetic once per start index, so nesting stays linear.
+@pytest.mark.parametrize("cmd", [
+    "echo " + "$(( (" * 40 + ")" * 40,
+    "echo " + "$(( (" * 40 + "rm src/a.py" + ")" * 40,
+    "((" * 40 + "echo a" + ")" * 40,
+    "(( " + "$(( (" * 40 + ")" * 40,
+    "(( " * 40 + "rm src/a.py" + ") " * 40,
+])
+def test_nested_failing_arithmetic_lexes_in_linear_time(cmd):
+    code = "import sys, guard_lex; guard_lex.split(sys.argv[1])"
+    env = {**os.environ, "PYTHONPATH": str(_Path(guard_lex.__file__).parent)}
+    subprocess.run([sys.executable, "-c", code, cmd], env=env, timeout=1.0, check=True)  # TimeoutExpired = exponential
+
+
+def test_nested_failing_arithmetic_keeps_the_hook_verdict(proj):
+    def verdict(cmd):
+        raw = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
+        env = {**os.environ, "CLAUDE_PROJECT_DIR": str(proj)}
+        return subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env, timeout=10).returncode
+
+    assert verdict("echo " + "$(( (" * 40 + ")" * 40) == 2  # nested past the judge's depth: an unknown target, blocked as before
+    assert verdict("echo " + "$(( (" * 40 + "echo 1 > src/a.py" + ")" * 40) == 2
