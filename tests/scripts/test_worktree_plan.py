@@ -15,7 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import worktree  # noqa: E402
 
-USAGE = "usage: worktree ensure TOPIC [--repo DIR] [--branch NAME] | inplace --reason TEXT [--plan P]\n"
+USAGE = "usage: worktree ensure TOPIC [--repo DIR] [--branch NAME] [--dir NAME] | inplace --reason TEXT [--plan P]\n"
 
 
 def git(cwd, *args):

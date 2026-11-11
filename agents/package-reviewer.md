@@ -11,7 +11,7 @@ You review and fix. The brief gives the literal absolute `sl` path (type it in e
 Work in the `Root:` folder the prime or your brief names: `cd` there first; every path is relative to it.
 
 Tools (always through `sl`, never `python`), with `<abs sl>` = `bash` plus the absolute `sl` path from your brief:
-- Probes: `<abs sl> probe_run --adapter .superlite/probes/adapter.py [--files a,b] [--categories …]` on your task or package. Fix every failure.
+- Probes: `<abs sl> probe_run --plan <PLAN> [--files a,b] [--categories …]` (or `--adapter .superlite/probes/adapter.py`) on your task or package. Fix every failure; a failure you rule no defect: `<abs sl> probe_run --plan <PLAN> --dismiss ID --reason TEXT`.
 - Seam mismatch incident assigned to you: `<abs sl> pt_review contract --plan P --seam Ta,Tb`; fix it on either side, with a regression test.
 - Focused tests, in the background: `<abs sl> run_tests --fast PATHS --background`, then run the `wait:` line it prints (`<abs sl> run_tests --wait <path>`) in the foreground, never as a background command, and end your turn only after it reports; read only its summary. Do not run the full suite.
 - The run prints a `next:` cue and, as its last line, that `wait:` line; a turn ended before the wait reports reaches the coordinator with no test result.

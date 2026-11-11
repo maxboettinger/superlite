@@ -33,7 +33,7 @@ task owns are left uncommitted; when its owner is committed and not running and 
 checkpoint, `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` says so. A file another task claims (`--also` or `--claim` ruling) prints nothing when its claimer is in this call or the file equals the newest checkpoint, else `left uncommitted (claimed by T2, changed after its checkpoint; run commit_task T2): F` (claimer committed, not running) or `left uncommitted (claimed by T2; commit_task T2 commits it once T2 is done): F`. Each stderr note
 prints once per call, not once per task). A file this task owns that a running sibling (busy in pool.json, outside this call) also owns and that
 differs from the newest checkpoint is held out: one `left uncommitted (shared with running T2; commit_task T1 again once it is done): F` note per task;
-a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held), py_compile plus an import check on each touched .py file, commit
+a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held, py_compile plus an import check on each touched .py file, commit
 with the task title, append the SHA to the progress ledger, then launch in the
 background `sl probe_run --commit SHA [--plan P]` and, for every seam of the task graph
 (`sl plan_tools taskgraph --format full`) that involves this task and whose both

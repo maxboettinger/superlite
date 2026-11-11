@@ -13,7 +13,7 @@ def test_mvp_has_no_standalone_orchestrator_question():
     assert len(steps) == 7
     first = steps[0]
     assert first.startswith("1. First, before you write the plan or ask anything, load `superlite:brainstorming`")
-    for s in ("one question batch carries the orchestrator choice", "`sl orchestrator set human|ai`",
+    for s in ("reads the orchestrator choice (`sl orchestrator status`)",
               "AskUserQuestion is withheld", "go on to step 2 in the same turn", "replace brainstorming's design and approval steps"):
         assert s in first, s
     assert MVP.count("superlite:brainstorming") == 1

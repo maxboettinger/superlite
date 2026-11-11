@@ -7,7 +7,7 @@ Superlite feature mode. Request: $ARGUMENTS
 
 If the request is empty, ask for it in one line. Then:
 
-- First, before you read code or ask anything, load `superlite:brainstorming`, even when the change looks trivial: it sizes the request. Its one question batch carries the orchestrator choice (human or AI) unless the user already said; run `sl orchestrator set human|ai`.
+- First, before you read code or ask anything, load `superlite:brainstorming`, even when the change looks trivial: it sizes the request. Its one question batch reads the orchestrator choice (`sl orchestrator status`) and asks only when none is set.
 - Read before designing: find the files and tests the change touches, and follow the project's own conventions and toolchain. Offer Graphify only if `sl graphify_gate` allows, and never install it without the user's yes.
 - Then build with `superlite:subagent-driven-development`.
 - Scope rules for this mode: change only what the request needs. Name the existing interfaces the new code must keep (FROZEN in the plan) and add seam checks between new and existing code. Existing tests must still pass.

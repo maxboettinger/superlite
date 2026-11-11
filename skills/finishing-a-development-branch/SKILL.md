@@ -45,6 +45,10 @@ No further menus or typed confirmations. Act on the answer.
 - **Push and PR:** `git push -u origin <branch>`, then `gh pr create` with a title and a body holding the summary and test evidence. Report the PR URL. Keep the branch.
 - **Keep:** report the branch name and any worktree path. Nothing else.
 
+## Conflict after finish
+
+When the PR or the merge conflicts with the base branch after the run finished: run `<skill-dir>/../subagent-driven-development/scripts/sl orchestrator end --plan <absolute plan path>` first (the coordinator guard blocks every edit until then). Then `git fetch origin` and `git merge origin/<base>` into the run's branch, never a rebase (no force-push). Resolve the conflicts, run `<skill-dir>/../subagent-driven-development/scripts/sl run_tests --full`, push.
+
 ## 6. Worktree cleanup
 
 For a superlite build, first end the run in every case, while the worktree still exists: `<skill-dir>/../subagent-driven-development/scripts/sl orchestrator end --plan <absolute plan path>` (archives the run markers and logs; the coordinator guard stops). When `end` refuses because another session owns the run (this session took over a run whose first session ran out of usage or crashed; `finish` names it too), run `<skill-dir>/../subagent-driven-development/scripts/sl orchestrator takeover --plan <absolute plan path>` first, then `end` again.
