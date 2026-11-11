@@ -258,7 +258,7 @@ def test_build_task_verifies_with_a_full_run(tmp_path):
     plan = make_plan(tmp_path, [{"id": "T2", "owns": "Sources/App/AppShell.swift", "tests": "build"}, {"id": "T4", "owns": "src/d.py, tests/test_d.py"}])
     m = io.task_message(plan, ["T2"], "/sl/sl", "/sl")
     assert "`/sl/sl run_tests --full --task T2 --background`" in m and "--fast" not in m and "in the foreground" in m
-    assert "run_tests --fast tests/test_d.py --task T2 --background" in io.task_message(plan, ["T2", "T4"], "/sl/sl", "/sl")
+    assert "run_tests --fast tests/test_d.py --task T4 --background" in io.task_message(plan, ["T2", "T4"], "/sl/sl", "/sl")
 
 def test_docs_only_task_gets_no_run_tests_line(tmp_path):
     plan = make_plan(tmp_path, [{"id": "T2", "owns": "docs/fleet.md, README.md"}, {"id": "T3", "owns": "tests/scripts/fixtures/fleet/herdr, docs/x.rst"}])
