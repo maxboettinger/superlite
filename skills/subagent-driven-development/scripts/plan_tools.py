@@ -19,6 +19,7 @@ A repeated `##`/`###` heading inside a task that is followed by a task field is 
 from __future__ import annotations  # O(1)
 
 import argparse  # O(1)
+import ast  # O(1)
 import configparser  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
@@ -1485,7 +1486,7 @@ def swift_import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s
     return warns  # O(w)
 
 
-IL_LISTS = ("layers", "containers", "ignore_imports", "modules", "source_modules", "forbidden_modules", "protected_modules", "allowed_importers")  # O(1) | contract keys that hold lists
+IL_LISTS = ("layers", "containers", "ignore_imports", "modules", "source_modules", "forbidden_modules", "protected_modules", "allowed_importers", "ancestors", "skip_descendants")  # O(1) | contract keys that hold lists
 
 
 def _il_list(v) -> list[str]:  # O(s) | an INI value's lines or a TOML list as clean strings
@@ -1502,6 +1503,11 @@ def _il_contract(raw: dict, name: str) -> dict:  # O(k*s) | one contract in the 
     for k in IL_LISTS:  # O(1) iterations
         if k not in out and k in raw:  # O(1)
             out[k] = _il_list(raw[k])  # O(s)
+    if "depth" in raw:  # O(1)
+        try:  # O(1)
+            out["depth"] = int(str(raw["depth"]).strip())  # O(1)
+        except (ValueError, TypeError):  # O(1)
+            out["depth"] = 10  # O(1) | import-linter's default
     return out  # O(1)
 
 
@@ -1512,8 +1518,14 @@ def importlinter_config(root: Path) -> dict | None:  # O(files*s) | the first im
             if not p.is_file():  # O(1)
                 continue  # O(1)
             if fname == "pyproject.toml":  # O(1)
-                import tomllib  # O(1) | absent before 3.11: the file is skipped
-                top = tomllib.loads(p.read_text(encoding="utf-8")).get("tool", {}).get("importlinter")  # O(s)
+                text = p.read_text(encoding="utf-8")  # O(s)
+                try:  # O(1)
+                    import tomllib  # O(1) | absent before 3.11: the file is skipped
+                except ImportError:  # O(1)
+                    if re.search(r"^\s*\[\[?\s*tool\.importlinter\b", text, re.M):  # O(s)
+                        return {"file": fname, "roots": [], "contracts": [], "skipped": f"Python {sys.version_info[0]}.{sys.version_info[1]} has no tomllib"}  # O(1)
+                    continue  # O(1)
+                top = tomllib.loads(text).get("tool", {}).get("importlinter")  # O(s)
                 if not isinstance(top, dict):  # O(1)
                     continue  # O(1)
                 roots = _il_list(top.get("root_packages") or top.get("root_package"))  # O(s)
@@ -1543,6 +1555,9 @@ def py_module(path: str, roots: list[str]) -> str | None:  # O(s) | dotted modul
                 mod = mod[:-1]  # O(parts)
             return ".".join(mod)  # O(parts)
     return None  # O(1)
+
+
+IL_KNOWN_TYPES = ('forbidden', 'layers', 'independence', 'protected', 'acyclic_siblings')  # O(1) | contract types plan lint checks
 
 
 def _il_regex(expr: str) -> str:  # O(s) | wildcard module expression as a regex
@@ -1578,13 +1593,114 @@ def _il_layer_at(entries: list[str], containers: list[str], module: str, ap: boo
     return None  # O(1)
 
 
-def contract_blocks(contract: dict, importer: str, imported: str) -> bool:  # O(L*C*s) | True when the contract forbids importer importing imported
+def py_import_graph(root: Path, roots: list[str]) -> dict[str, set[str]]:  # O(files*s) | module -> modules under the roots it imports anywhere, from root/<pkg> and root/src/<pkg>
+    trees: dict[str, tuple[ast.AST, bool]] = {}  # O(1)
+    seen: set[Path] = set()  # O(1)
+    for base in (root, root / "src"):  # O(1) iterations
+        for pkg in roots:  # O(roots) iterations
+            d = base / pkg  # O(1)
+            if not d.is_dir():  # O(1)
+                continue  # O(1)
+            for f in sorted(d.rglob("*.py")):  # O(files) iterations
+                if f in seen:  # O(1)
+                    continue  # O(1)
+                seen.add(f)  # O(1)
+                m = py_module(f.relative_to(root).as_posix(), roots)  # O(s)
+                if not m:  # O(1)
+                    continue  # O(1)
+                try:  # O(1)
+                    trees[m] = (ast.parse(f.read_text(encoding="utf-8", errors="replace")), f.name == "__init__.py")  # O(size)
+                except (SyntaxError, ValueError):  # O(1)
+                    continue  # O(1) | a file that does not parse is no key
+    graph: dict[str, set[str]] = {m: set() for m in trees}  # O(M)
+    for m, (tree, is_pkg) in trees.items():  # O(M) iterations
+        pkg_parts = m.split(".") if is_pkg else m.split(".")[:-1]  # O(s)
+        for node in ast.walk(tree):  # O(nodes) iterations
+            found: list[str] = []  # O(1)
+            if isinstance(node, ast.Import):  # O(1)
+                found = [a.name for a in node.names]  # O(names)
+            elif isinstance(node, ast.ImportFrom):  # O(1)
+                if node.level:  # O(1)
+                    keep = len(pkg_parts) - (node.level - 1)  # O(1)
+                    if keep < 1:  # O(1)
+                        continue  # O(1)
+                    base_mod = ".".join(pkg_parts[:keep] + ([node.module] if node.module else []))  # O(s)
+                else:  # O(1)
+                    base_mod = node.module or ""  # O(1)
+                if base_mod:  # O(1)
+                    found = [f"{base_mod}.{a.name}" if f"{base_mod}.{a.name}" in trees else base_mod for a in node.names]  # O(names)
+            for name in found:  # O(names) iterations
+                if name.split(".")[0] in roots and name != m:  # O(s)
+                    graph[m].add(name)  # O(1)
+    return graph  # O(M)
+
+
+def _il_ignored(contract: dict, src: str, dst: str) -> bool:  # O(k*s) | True when ignore_imports names the import src -> dst
+    for ln in contract.get("ignore_imports") or []:  # O(k) iterations
+        a, _, b = ln.partition("->")  # O(s)
+        if module_within(a.strip(), src, False) and module_within(b.strip(), dst, False):  # O(s)
+            return True  # O(1)
+    return False  # O(1)
+
+
+def sibling_cycle(contract: dict, importer: str, imported: str, graph: dict[str, set[str]]) -> list[str] | None:  # O(M*e) | [s1, s2, ..., s1] when importer -> imported closes a cycle among the siblings of their common package
+    a, b = importer.split("."), imported.split(".")  # O(s)
+    n = 0  # O(1)
+    while n < min(len(a), len(b)) and a[n] == b[n]:  # O(s)
+        n += 1  # O(1)
+    if n < 1 or n >= len(a) or n >= len(b):  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        depth = int(contract.get("depth", 10))  # O(1)
+    except (ValueError, TypeError):  # O(1)
+        depth = 10  # O(1)
+    skips = [re.compile(_il_regex(x)) for x in contract.get("skip_descendants") or []]  # O(k*s)
+    ok = False  # O(1)
+    for anc in contract.get("ancestors") or []:  # O(k) iterations
+        rx = re.compile(_il_regex(anc))  # O(s)
+        for k in range(1, n + 1):  # O(n) iterations
+            if n - k <= depth and rx.fullmatch(".".join(a[:k])) and not any(sk.fullmatch(".".join(a[:j])) for sk in skips for j in range(k, n + 1)):  # O(n*k*s)
+                ok = True  # O(1)
+    if not ok:  # O(1)
+        return None  # O(1)
+    p = ".".join(a[:n])  # O(s)
+    s1, s2 = ".".join(a[:n + 1]), ".".join(b[:n + 1])  # O(s)
+    adj: dict[str, set[str]] = {}  # O(1)
+    for src, targets in graph.items():  # O(M) iterations
+        if not src.startswith(p + "."):  # O(s)
+            continue  # O(1)
+        c = ".".join(src.split(".")[:n + 1])  # O(s)
+        for dst in targets:  # O(e) iterations
+            if dst.startswith(p + ".") and not _il_ignored(contract, src, dst):  # O(k*s)
+                d = ".".join(dst.split(".")[:n + 1])  # O(s)
+                if d != c:  # O(1)
+                    adj.setdefault(c, set()).add(d)  # O(1)
+    prev: dict[str, str | None] = {s2: None}  # O(1)
+    queue = [s2]  # O(1)
+    for cur in queue:  # O(siblings) iterations
+        if cur == s1:  # O(1)
+            break  # O(1)
+        for nxt in sorted(adj.get(cur, ())):  # O(e log e)
+            if nxt not in prev:  # O(1)
+                prev[nxt] = cur  # O(1)
+                queue.append(nxt)  # O(1)
+    if s1 not in prev:  # O(1)
+        return None  # O(1)
+    path = [s1]  # O(1)
+    while prev[path[-1]] is not None:  # O(siblings) iterations
+        path.append(prev[path[-1]])  # O(1)
+    return [s1] + path[::-1]  # O(siblings)
+
+
+def contract_blocks(contract: dict, importer: str, imported: str, graph: dict[str, set[str]] | None = None) -> bool:  # O(L*C*s) | True when the contract forbids importer importing imported
     ap = contract.get("as_packages", True)  # O(1)
     for ln in contract.get("ignore_imports") or []:  # O(k) iterations
         a, _, b = ln.partition("->")  # O(s)
         if module_within(a.strip(), importer, False) and module_within(b.strip(), imported, False):  # O(s)
             return False  # O(1)
     kind = str(contract.get("type") or "").strip()  # O(1)
+    if kind == "acyclic_siblings":  # O(1)
+        return graph is not None and bool(sibling_cycle(contract, importer, imported, graph))  # O(M*e)
     if kind == "layers":  # O(1)
         entries, cons = contract.get("layers") or [], contract.get("containers") or []  # O(1)
         a = _il_layer_at(entries, cons, importer, ap)  # O(L*C*s)
@@ -1613,7 +1729,7 @@ def contract_blocks(contract: dict, importer: str, imported: str) -> bool:  # O(
     return False  # O(1)
 
 
-def _py_owned(t: Task, roots: list[str]) -> list[str]:  # O(o*s) | modules of the non-test .py files a task owns
+def _py_src_paths(t: Task) -> list[str]:  # O(o*s) | the non-test .py paths a task owns
     out = []  # O(1)
     for o in t.owns:  # O(o) iterations
         q = o.replace("\\", "/")  # O(s)
@@ -1621,6 +1737,13 @@ def _py_owned(t: Task, roots: list[str]) -> list[str]:  # O(o*s) | modules of th
         base = parts[-1]  # O(1)
         if not base.endswith(".py") or base == "conftest.py" or base.startswith("test_") or base.endswith("_test.py") or {"tests", "test"} & set(parts[:-1]):  # O(s)
             continue  # O(1)
+        out.append(q)  # O(1)
+    return out  # O(o)
+
+
+def _py_owned(t: Task, roots: list[str]) -> list[str]:  # O(o*s) | modules of the non-test .py files a task owns
+    out = []  # O(1)
+    for q in _py_src_paths(t):  # O(o) iterations
         m = py_module(q, roots)  # O(s)
         if m and m not in out:  # O(o)
             out.append(m)  # O(1)
@@ -1650,7 +1773,13 @@ def _py_classes(root: Path, roots: list[str]) -> dict[str, list[str]]:  # O(file
 
 def py_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*types*mods*contracts) | a seam name declared where an import-linter contract bars the consumer's module (#404)
     cfg = importlinter_config(root)  # O(files*s)
-    if not cfg or not cfg["contracts"]:  # O(1)
+    if not cfg:  # O(1)
+        return []  # O(1)
+    if cfg.get("skipped"):  # O(1)
+        if any(_py_src_paths(pr[0]) for pr in _seam_pairs(plan)):  # O(n*q*cands)
+            return [f"NOTE: IMPORT: {cfg['file']} [tool.importlinter] not read ({cfg['skipped']}); the import-linter seam check is skipped (Python 3.11+ reads it)"]  # O(1)
+        return []  # O(1)
+    if not cfg["contracts"]:  # O(1)
         return []  # O(1)
     roots = cfg["roots"]  # O(1)
     owned = {t.id: _py_owned(t, roots) for t in plan.tasks}  # O(n*o*s)
@@ -1663,6 +1792,12 @@ def py_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*
                 by_type.setdefault(tname, []).extend(owned[t.id])  # O(o)
     pairs = _seam_pairs(plan)  # O(n*q*cands)
     classes = _py_classes(root, roots) if pairs else {}  # O(files*s) once per run
+    notes: list[str] = []  # O(1)
+    if any(owned.get(t.id) for t, _, _, _ in pairs):  # O(pairs)
+        for c in cfg["contracts"]:  # O(contracts) iterations
+            if c["type"] and c["type"] not in IL_KNOWN_TYPES:  # O(1)
+                notes.append(f"NOTE: IMPORT: import-linter contract \"{c['name']}\" in {cfg['file']} has type {c['type']}, which plan lint does not check")  # O(s)
+    graph = py_import_graph(root, roots) if pairs and any(c["type"] == "acyclic_siblings" for c in cfg["contracts"]) else None  # O(files*s) once per run
     warns: list[str] = []  # O(1)
     seen: set[tuple[str, str, tuple[str, ...]]] = set()  # O(1)
     for t, sig, pid, psig in pairs:  # O(pairs) iterations
@@ -1675,14 +1810,15 @@ def py_import_issues(plan: Plan, root: Path) -> list[str]:  # O(files*s + pairs*
         for what, mods in groups:  # O(types) iterations
             for importer in owned.get(t.id, []):  # O(o) iterations
                 key = (t.id, importer, tuple(sorted(mods)))  # O(m)
-                if not mods or key in seen or not all(any(contract_blocks(c, importer, m) for c in cfg["contracts"]) for m in mods):  # O(m*contracts*s)
+                if not mods or key in seen or not all(any(contract_blocks(c, importer, m, graph) for c in cfg["contracts"]) for m in mods):  # O(m*contracts*s)
                     continue  # O(1)
                 seen.add(key)  # O(1)
                 first = sorted(mods)[0]  # O(m)
-                c = next(c for c in cfg["contracts"] if contract_blocks(c, importer, first))  # O(contracts*s)
+                c = next(c for c in cfg["contracts"] if contract_blocks(c, importer, first, graph))  # O(contracts*s)
+                cyc = sibling_cycle(c, importer, first, graph) if c["type"] == "acyclic_siblings" else None  # O(M*e)
                 warns.append(f"WARNING: IMPORT: {t.id} consumes {sig['item']} from {pid}, but {what} is declared in {', '.join(sorted(mods))}, "  # O(s)
-                             f"which {importer} may not import (import-linter contract \"{c['name']}\" in {cfg['file']})")  # O(s)
-    return warns  # O(w)
+                             f"which {importer} may not import (import-linter contract \"{c['name']}\" in {cfg['file']}{'; cycle ' + ' -> '.join(cyc) if cyc else ''})")  # O(s)
+    return notes + warns  # O(w)
 
 
 TS_SKIP = {"node_modules", ".git", ".superlite", "dist", "build", "out", "coverage", ".next", ".turbo"}  # O(1)
