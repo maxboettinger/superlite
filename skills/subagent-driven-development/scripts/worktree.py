@@ -13,11 +13,14 @@ Exit 2 when a plain folder sits at the target path. A new worktree gets a stderr
 top-level entries of the main checkout it lacks (`.env`, `.venv/`; names only, nothing is copied).
 `inplace` sets `inplace` to the reason in the marker `<state folder>/inline-flow.json` that hooks/mark-inline-flow wrote
 (hooks/inline-worktree-guard then lets edits in the main checkout pass) and appends `Ruling: in place - TEXT` to the
-state folder's progress.md; no marker: nothing changes, exit 0 (#148). Stdlib only.
+state folder's progress.md; no marker: nothing changes, exit 0 (#148).
+Other open runs of the repository (#493): `ensure` prints stderr lines only. With a plan in the run folder, one `WARNING: OVERLAP:` line per other run whose files the plan's Owns share; without one, one line per other run naming its files. Warn only.
+Stdlib only; another run's plan is read through plan_tools.
 """
 # Complexity notation: n = length of the topic, w = registered worktrees, e = lines of info/exclude, i = ignored entries,
-# r = length of the reason, f = size of the marker file
+# r = length of the reason, f = size of the marker file, b = backlog batches, k = files a run owns
 import argparse  # O(1)
+import fnmatch  # O(1)
 import json  # O(1)
 import re  # O(1)
 import subprocess  # O(1)
@@ -27,6 +30,7 @@ from pathlib import Path  # O(1)
 PARENT = ".claude/worktrees"  # O(1)
 INTERNAL = {".git", ".superlite", ".claude", "__pycache__", ".DS_Store"}  # (.DS_Store: OS noise a global gitignore lists) never listed as missing (#141) | O(1)
 SHOWN = 10  # names in the "missing here" line | O(1)
+TAIL = "; the run that merges second merges the default branch first"  # ends every OVERLAP line | O(1)
 MARKER = "inline-flow.json"  # in the state folder: written by hooks/mark-inline-flow, read by hooks/inline-worktree-guard | O(1)
 
 
@@ -162,6 +166,116 @@ def ensure(topic, start, branch=None, folder=None):  # O(w) + spawns
     return target, "created"  # O(1)
 
 
+def run_plan(root):  # O(f) file read
+    """-> the plan file named by `root/.superlite/stable.json` (key `plan`) when it exists, else None."""
+    try:  # O(1)
+        data = json.loads((Path(root) / ".superlite" / "stable.json").read_text(encoding="utf-8"))  # O(f)
+        plan = Path(data["plan"])  # O(1)
+        return plan if plan.is_file() else None  # O(1)
+    except (OSError, ValueError, KeyError, TypeError):  # O(1) absent, unreadable or not an object
+        return None  # O(1)
+
+
+def _plan_owns(plan):  # O(plan) parse
+    """-> every Owns entry of the plan's tasks ([] when the plan is unreadable)."""
+    try:  # O(1)
+        import plan_tools  # noqa: E402  # O(1) lazy: only an open run's plan needs it
+        return [o for t in plan_tools.Plan.load(str(plan)).tasks for o in t.owns]  # O(plan)
+    except Exception:  # O(1) warn only: a broken plan gives no files
+        return []  # O(1)
+
+
+def _batches(main):  # O(f + b)
+    """-> the batches of `main/.superlite/backlog.json` ([] when absent or broken)."""
+    try:  # O(1)
+        data = json.loads((Path(main) / ".superlite" / "backlog.json").read_text(encoding="utf-8"))  # O(f)
+        batches = data["batches"]  # O(1)
+        return [b for b in batches if isinstance(b, dict)] if isinstance(batches, list) else []  # O(b)
+    except (OSError, ValueError, KeyError, TypeError):  # O(1)
+        return []  # O(1)
+
+
+def open_runs(top, here=None):  # O(w*plan + b) + spawn
+    """-> the other open runs of the repository of `top`: [{label, path, files}] sorted by path; [] on any failure."""
+    try:  # O(1)
+        me = Path(here if here is not None else top).resolve()  # O(1)
+        rc, out, _ = git(top, "worktree", "list", "--porcelain")  # O(w) + spawn
+        if rc:  # O(1)
+            return []  # O(1)
+        blocks = [b.splitlines() for b in out.split("\n\n") if b.strip()]  # O(w)
+        runs = {}  # resolved path -> run | O(1)
+        main = None  # O(1)
+        for i, lines in enumerate(blocks):  # O(w)
+            path = Path(lines[0][9:]).resolve() if lines[0].startswith("worktree ") else None  # O(1)
+            if i == 0:  # O(1)
+                main = path  # O(1)
+            if path is None or "bare" in lines or path == me or not path.is_dir():  # O(1)
+                continue  # O(1)
+            plan = run_plan(path)  # O(f)
+            if plan is None:  # O(1)
+                continue  # O(1)
+            branch = next((ln[18:] for ln in lines if ln.startswith("branch refs/heads/")), path.name)  # O(1)
+            runs[path] = {"label": branch, "path": path.as_posix(), "files": set(_plan_owns(plan))}  # O(plan)
+        for b in _batches(main) if main is not None else []:  # O(b)
+            wt, state = b.get("worktree"), b.get("state")  # O(1)
+            if not wt or state in ("planned", "shipped") or not Path(str(wt)).is_dir():  # O(1)
+                continue  # O(1)
+            path = Path(str(wt)).resolve()  # O(1)
+            if path == me:  # O(1)
+                continue  # O(1)
+            run = runs.setdefault(path, {"label": "", "path": path.as_posix(), "files": set()})  # O(1)
+            run["label"] = f"{b.get('id', '?')} ({state})"  # O(1)
+            run["files"].update(str(f) for f in b.get("files") or [] if isinstance(f, str))  # O(k)
+        return [{"label": r["label"], "path": r["path"], "files": sorted(r["files"])} for _, r in sorted(runs.items(), key=lambda kv: kv[1]["path"]) if r["files"]]  # O(w*k log k)
+    except Exception:  # O(1) warn only
+        return []  # O(1)
+
+
+def _norm(entry):  # O(len entry)
+    e = entry.replace("\\", "/")  # O(len)
+    while e.startswith("./"):  # O(1)
+        e = e[2:]  # O(len)
+    return e  # O(1)
+
+
+def _same(a, b):  # O(len a + len b)
+    if a == b:  # O(1)
+        return True  # O(1)
+    if (a.endswith("/") and b.startswith(a)) or (b.endswith("/") and a.startswith(b)):  # O(len)
+        return True  # O(1) one is a folder holding the other
+    return fnmatch.fnmatchcase(a, b) or fnmatch.fnmatchcase(b, a)  # O(len a * len b)
+
+
+def overlaps(mine, theirs):  # O(k*j)
+    """-> the entries of `mine` (as written, sorted, unique) that equal, sit under, or glob-match an entry of `theirs`."""
+    other = [_norm(t) for t in theirs]  # O(j)
+    return sorted({m for m in mine if any(_same(_norm(m), t) for t in other)})  # O(k*j)
+
+
+def shown_list(items, limit=5):  # O(limit)
+    more = f" (+{len(items) - limit} more)" if len(items) > limit else ""  # O(1)
+    return ", ".join(items[:limit]) + more  # O(limit)
+
+
+def overlap_line(run, shared):  # O(limit)
+    return f"OVERLAP: {shown_list(shared)} also owned by open run {run['label']} at {run['path']}" + TAIL  # O(limit)
+
+
+def ensure_lines(path, state):  # O(w*plan) + spawn
+    """-> the stderr lines about other open runs for the run folder `path`; [] for no-repo or on any failure."""
+    if state == "no-repo":  # O(1)
+        return []  # O(1)
+    try:  # O(1)
+        runs = open_runs(path, here=path)  # O(w*plan)
+        plan = run_plan(path)  # O(f)
+        if plan is None:  # O(1)
+            return [f"worktree: open run {r['label']} at {r['path']} owns {len(r['files'])} file{'' if len(r['files']) == 1 else 's'}: {shown_list(r['files'])}; keep your plan's Owns off them (plan lint warns on a shared file)" for r in runs]  # O(w*k)
+        mine = _plan_owns(plan)  # O(plan)
+        return [f"worktree: WARNING: {overlap_line(r, sh)}" for r in runs for sh in [overlaps(mine, r["files"])] if sh]  # O(w*k*j)
+    except Exception:  # O(1) warn only
+        return []  # O(1)
+
+
 def inplace(reason, sd):  # O(f + r)
     """Record the in-place opt-out in the inline-flow marker of state folder `sd` and the ledger -> False when no marker."""
     f = Path(sd) / MARKER  # O(1)
@@ -225,6 +339,8 @@ def main(argv=None):  # O(w) + spawns
         line = missing_line(missing_ignored(path.parents[len(PARENT.split("/"))], path))  # the main root above <PARENT>/<name> | O(i) + spawn
         if line:  # O(1)
             print(line, file=sys.stderr)  # O(1)
+    for line in ensure_lines(path, state):  # O(w*plan)
+        print(line, file=sys.stderr)  # O(1)
     print(path.as_posix())  # O(1)
     return 0  # O(1)
 
