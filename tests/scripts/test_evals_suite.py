@@ -164,9 +164,62 @@ def test_one_batch_counts_only_decisions():
     assert ": " not in criteria and " #" not in criteria
 
 
+NO_QUESTIONS = ROOT / "evals" / "ai-bounded-quiet" / "graders" / "no-questions.md"
+
+
+def no_questions_split():
+    text = NO_QUESTIONS.read_text()
+    assert text.startswith("---\n")
+    _, head, body = text.split("---\n", 2)
+    fm = {}
+    for line in head.splitlines():
+        key, _, value = line.partition(":")
+        fm[key.strip()] = value.strip()
+    return head, fm, body
+
+
+def test_type_and_one_line_criteria():
+    head, fm, _ = no_questions_split()
+    assert fm["type"] == "llm"
+    assert set(fm) == {"type", "criteria"}
+    assert len(head.splitlines()) == 2
+
+
+def test_criteria_fail_only_on_design_scope_or_preference_questions():
+    criteria = no_questions_split()[1]["criteria"]
+    for need in ("Fail only when", "design, scope or preference", "waits for the user's answer",
+                 "zero questions included"):
+        assert need in criteria, need
+
+
+def test_criteria_never_counts_a_denied_test_command_report():
+    criteria = no_questions_split()[1]["criteria"]
+    for need in ("Ruling lines", "a tool, command or permission was denied", "run a command or test by hand",
+                 "Bash was denied, please run pytest yourself", "enable or allow a denied tool",
+                 "checks not run", "optional follow-up"):
+        assert need in criteria, need
+
+
+def test_criteria_is_a_safe_yaml_plain_scalar():
+    criteria = no_questions_split()[1]["criteria"]
+    assert ": " not in criteria and " #" not in criteria
+    assert criteria[0] not in "\"'&*!|>%@`{[#-?:,"
+    assert not criteria.endswith(":")
+
+
+def test_body_names_the_denied_command_report():
+    body = no_questions_split()[2]
+    assert "rulings, not questions" in body
+    assert "run it by hand" in body and "not a question" in body
+
+
 def test_reads_coverage_matches_the_skill_file():
     fm = frontmatter(EVALS / "brainstorm-coverage" / "graders" / "reads-coverage.md")
     assert fm["type"] == "tool_used" and fm["tool"] == "Read" and fm["arm"] == "with-only"
     pattern = re.compile(fm["input_match"])
     assert pattern.search('"file_path": "/p/skills/brainstorming/coverage.md"')
     assert not pattern.search('"file_path": "/x/docs/coverage.md"')
+
+
+def test_no_questions_tests_live_in_the_suite():
+    assert not (ROOT / "tests" / "scripts" / "test_evals_no_questions_414.py").exists()
