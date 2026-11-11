@@ -256,3 +256,131 @@ def test_hooks_doc_names_accepted_limits():
     line = [x for x in doc.splitlines() if x.startswith("- `block-coordinator-edits`")][0]
     for s in ("docs.md", "worktree", "quadratic", "nested quotes"):
         assert s in line, s
+
+
+# --- #478: arithmetic is no command, redirect or heredoc; only its substitutions run ---------------------------------
+import sys  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "scripts"))
+import guard_lex  # noqa: E402
+
+
+def test_dollar_arith_keeps_its_text_and_only_its_substitutions():
+    (s,) = guard_lex.split("echo $(( $(date +%s) - start ))")
+    assert s.words == ["echo", "$(( $(date +%s) - start ))"] and s.dyn == [False, True]
+    assert s.bodies == ["date +%s"] and s.redirects == []
+    (s,) = guard_lex.split('echo "t $(( $(date) - s ))s"')
+    assert s.words == ["echo", "t $(( $(date) - s ))s"] and s.bodies == ["date"]
+    (s,) = guard_lex.split("echo $((a>b)) $((c<<2)) ${x:-$((d>e))}")
+    assert s.bodies == [] and s.redirects == [] and s.heredocs == []
+
+
+def test_arith_command_and_for_header():
+    (s,) = guard_lex.split("(( n > 3 ))")
+    assert (s.words, s.redirects, s.subshell, s.arith) == ([], [], None, " n > 3 ")
+    segs = guard_lex.split("for (( i=0; i>5; i++ )); do :; done")
+    assert segs[0].words == ["for"] and segs[0].arith == " i=0; i>5; i++ " and segs[0].subshell is None
+    segs = guard_lex.split("if (( $(date +%s) > 3 )); then :; fi")
+    assert segs[0].words == ["if"] and segs[0].bodies == ["date +%s"] and segs[0].redirects == []
+
+
+def test_unbalanced_double_paren_stays_a_substitution_or_group():
+    (s,) = guard_lex.split("x=$((echo hi > a) )")
+    assert s.bodies == ["(echo hi > a) "]
+    (s,) = guard_lex.split("((echo a) )")
+    assert s.subshell == "(echo a)" and s.arith is None
+
+
+def test_unquoted_heredoc_arith_runs_only_its_substitution():
+    (s,) = guard_lex.split("cat > /tmp/b99.txt <<EOF\nelapsed $(( $(date +%s) - start ))\nEOF")
+    assert s.bodies == ["date +%s"]
+
+
+@pytest.mark.parametrize("cmd", [
+    "start=$(date +%s); sleep 0; echo \"took $(( $(date +%s) - start ))s\"",
+    "start=$(date +%s); x=$(( $(date +%s) - start )); echo $x",
+    "start=$(date +%s); CI=true Scripts/ci.sh ios-test > /tmp/b99-ci.log 2>&1; code=$?; "
+    "echo \"exit=$code seconds=$(( $(date +%s) - start ))\"",
+    "echo $((a>b)) $((c<<2))",
+    "(( n > 3 )) && echo ok",
+    "for (( i=0; i>5; i++ )); do :; done",
+    "while (( n > 0 )); do n=$((n-1)); done",
+    "start=1; cat > /tmp/b99.txt <<EOF\nelapsed $(( $(date +%s) - start ))\nEOF",
+])
+def test_arithmetic_is_no_write_target(proj, cmd):
+    assert bash(proj, cmd).returncode == 0, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "echo $(( $(echo 1 | tee src/a.py) + 1 ))",
+    "(( $(echo 1 > src/a.py) ))",
+    "echo $(( 1 + 2 )) > src/a.py",
+    "x=$((echo hi > src/a.py) )",
+    "((echo hi > src/a.py) )",
+    "v=.superlite/a; while (( v++ < 3 )); do :; done; echo > $v",
+])
+def test_arithmetic_keeps_real_writes_blocked(proj, cmd):
+    assert bash(proj, cmd).returncode == 2, cmd
+
+
+# --- #458: a heredoc script writing below tempfile's temp root ---------------------------------------------------
+import json  # noqa: E402
+import os  # noqa: E402
+import subprocess  # noqa: E402
+
+from test_block_coordinator_edits import BASH, HOOK  # noqa: E402
+
+TMP_PROG = "import tempfile, os\nd = tempfile.mkdtemp()\nopen(os.path.join(d, 'a.txt'), 'w').write('x')\n"
+
+
+def hook_tmpdir(proj, cmd, tmpdir):
+    raw = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(proj), "TMPDIR": str(tmpdir)}
+    return subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env)
+
+
+def test_heredoc_script_writing_below_the_temp_root_passes(proj, tmp_path_factory):
+    troot, s = tmp_path_factory.mktemp("troot"), tmp_path_factory.mktemp("scratch")
+    cmd = f"S={s}; cat > $S/x.py <<'EOF'\n{TMP_PROG}EOF\npython3 $S/x.py"
+    assert hook_tmpdir(proj, cmd, troot).returncode == 0
+    gettemp = cmd.replace("d = tempfile.mkdtemp()", "d = tempfile.gettempdir()")
+    assert hook_tmpdir(proj, gettemp, troot).returncode == 0
+    inline = "python3 -c \"" + TMP_PROG.replace("\n", "; ") + "\""
+    assert hook_tmpdir(proj, inline, troot).returncode == 0
+
+
+@pytest.mark.parametrize("change", [
+    ("d = tempfile.mkdtemp()", "d = tempfile.mkdtemp(dir='src')"),
+    ("import tempfile, os", "import tempfile, os\ntempfile.tempdir = 'src'"),
+    ("S=", "export TMPDIR=PROJ/src; S="),
+])
+def test_temp_root_with_a_named_folder_stays_unknown(proj, tmp_path_factory, change):
+    troot, s = tmp_path_factory.mktemp("troot"), tmp_path_factory.mktemp("scratch")
+    cmd = f"S={s}; cat > $S/x.py <<'EOF'\n{TMP_PROG}EOF\npython3 $S/x.py"
+    cmd = cmd.replace(change[0], change[1], 1).replace("PROJ", str(proj))
+    assert hook_tmpdir(proj, cmd, troot).returncode == 2, cmd
+
+
+# F-T1-1: a failing `$((` or command-position `((` is tried as arithmetic once per start index, so nesting stays linear.
+@pytest.mark.parametrize("cmd", [
+    "echo " + "$(( (" * 40 + ")" * 40,
+    "echo " + "$(( (" * 40 + "rm src/a.py" + ")" * 40,
+    "((" * 40 + "echo a" + ")" * 40,
+    "(( " + "$(( (" * 40 + ")" * 40,
+    "(( " * 40 + "rm src/a.py" + ") " * 40,
+])
+def test_nested_failing_arithmetic_lexes_in_linear_time(cmd):
+    code = "import sys, guard_lex; guard_lex.split(sys.argv[1])"
+    env = {**os.environ, "PYTHONPATH": str(_Path(guard_lex.__file__).parent)}
+    subprocess.run([sys.executable, "-c", code, cmd], env=env, timeout=1.0, check=True)  # TimeoutExpired = exponential
+
+
+def test_nested_failing_arithmetic_keeps_the_hook_verdict(proj):
+    def verdict(cmd):
+        raw = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
+        env = {**os.environ, "CLAUDE_PROJECT_DIR": str(proj)}
+        return subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env, timeout=10).returncode
+
+    assert verdict("echo " + "$(( (" * 40 + ")" * 40) == 2  # nested past the judge's depth: an unknown target, blocked as before
+    assert verdict("echo " + "$(( (" * 40 + "echo 1 > src/a.py" + ")" * 40) == 2

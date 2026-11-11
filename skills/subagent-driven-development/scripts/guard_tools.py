@@ -6,9 +6,13 @@ literal, a directory with a trailing "/" for an extraction into it. COMMANDS hol
 module reads (a path and ".exe" are stripped from the command word first).
 """
 
+import ast
+import io
 import os
 import re
 import shlex
+import tempfile
+import tokenize
 
 import guard_files
 import guard_lex
@@ -481,6 +485,9 @@ _NAMES: list[dict[str, list[str]]] = [{}]  # O(1) | the names of the code in han
 _ASSIGN = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*([-+*/%|&^@]|//|\*\*|<<|>>)?=(?![=>])\s*")  # O(1)
 _FOR = re.compile(r"(?<![\w.])for\s+([A-Za-z_][\w\s,()]*?)\s+in\s+")  # O(1)
 _UNK = "\x00"  # an unknown piece inside a composed path
+_TEMP: list[str | None] = [None]  # O(1) | the temp root of the code in hand (None: unknown)
+_TEMP_ENV = re.compile(r"\$(?:TMPDIR|TEMP|TMP)\b|\$\{(?:TMPDIR|TEMP|TMP)\}")  # O(1)
+_TEMP_NAMED = re.compile(r"\b(?:TMPDIR|TEMP|TMP|tempdir)\b")  # O(1)
 _PATH_CTORS = frozenset({"Path", "PurePath", "PosixPath", "WindowsPath", "PurePosixPath", "PureWindowsPath"})
 _JOINS = frozenset({"os.path.join", "posixpath.join", "ntpath.join", "path.join", "join"})
 _IDENT = re.compile(r"[A-Za-z_]\w*")
@@ -673,9 +680,12 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
         self.i = j  # O(1)
         if s[j:j + 1] != "(":  # O(1)
             return self._cap(self.names[name]) if name in self.names else [_UNK]  # O(64)
+        a0 = self.i  # O(1)
         args = self.args()  # O(len(s))
         if args is None:  # O(1)
             return None  # O(1)
+        if name in ("tempfile.gettempdir", "tempfile.mkdtemp"):  # O(1)
+            return self._temp(name, s[a0 + 1:self.i - 1])  # O(len(s))
         last = name.rsplit(".", 1)[-1]  # O(1)
         if last in _PATH_CTORS or name in _JOINS:  # O(1)
             acc = args[0] if args else ["."]  # O(1)
@@ -685,6 +695,27 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
         if name in ("str", "os.fspath", "fspath") and len(args) == 1:  # O(1)
             return args[0]  # O(1)
         return [_UNK]  # O(1)
+
+    @staticmethod
+    def _temp(name: str, raw: str) -> list[str]:  # O(len(raw)) | tempfile's root, or a fresh folder below it
+        root = _TEMP[0]  # O(1)
+        if root is None:  # O(1)
+            return [_UNK]  # O(1)
+        if name == "tempfile.gettempdir":  # O(1)
+            return [root] if not raw.strip() else [_UNK]  # O(1)
+        try:  # O(len(raw))
+            call = ast.parse("f(" + raw + ")", mode="eval").body  # O(len(raw))
+        except Exception:  # noqa: BLE001  any doubt is unknown | O(1)
+            return [_UNK]  # O(1)
+        if not isinstance(call, ast.Call) or len(call.args) > 2:  # O(1)
+            return [_UNK]  # O(1)
+        vals = list(call.args) + [k.value for k in call.keywords if k.arg in ("prefix", "suffix")]  # O(1)
+        if len(vals) != len(call.args) + len(call.keywords):  # O(1)
+            return [_UNK]  # O(1)
+        for v in vals:  # O(1)
+            if not (isinstance(v, ast.Constant) and isinstance(v.value, str)) or any(x in v.value for x in ("/", "\\", "..")):  # O(len(v))
+                return [_UNK]  # O(1)
+        return [root + "/?"]  # O(1)
 
     def string(self, sm: re.Match) -> list[str] | None:  # O(len(s)) | a string or f-string literal
         s = self.s  # O(1)
@@ -760,14 +791,24 @@ def _split_top(text: str) -> list[str]:  # O(len(text)) | the top-level comma-se
     return out  # O(len(out))
 
 
-def _assigned(code: str, lang: str) -> dict[str, list[str]]:  # O(len(code)) | name -> its literals; any other assignment drops it
+def _assigned(code: str, lang: str, scan: str | None = None,
+              params: list[tuple[int, str, list[str] | None]] | None = None) -> dict[str, list[str]]:  # O(len(code)) | name -> its literals; any other assignment drops it
+    scan = code if scan is None else scan  # the text the events are found in (strings and comments masked)  # O(1)
     lits: dict[str, list[str]] = {}  # O(1)
     bad: set[str] = set()  # O(1)
-    events = [(m.start(), m) for m in _ASSIGN.finditer(code)]  # O(len(code))
-    events += [(m.start(), m) for m in _FOR.finditer(code)] if lang == "py" else []  # O(len(code))
+    events: list = [(m.start(), _ASSIGN.match(code, m.start())) for m in _ASSIGN.finditer(scan)]  # found in scan, read in code  # O(len(code))
+    events += [(m.start(), _FOR.match(code, m.start())) for m in _FOR.finditer(scan)] if lang == "py" else []  # O(len(code))
+    events = [e for e in events if e[1] is not None]  # O(len(events))
+    events += [(off, (name, vals)) for off, name, vals in params or []]  # a helper's parameter, at its def line  # O(len(params))
     events.sort(key=lambda e: e[0])  # O(events * log events)
     for _, m in events:  # O(events)
         known = {k: v for k, v in lits.items() if k not in bad}  # O(len(lits))
+        if isinstance(m, tuple):  # a helper parameter: the literals of its calls, or unknown  # O(1)
+            if m[1] is None:  # O(1)
+                bad.add(m[0])  # O(1)
+            else:  # O(1)
+                lits.setdefault(m[0], []).extend(v for v in m[1] if v not in lits.get(m[0], []))  # O(len(m[1]))
+            continue  # O(1)
         if m.re is _FOR:  # for NAME in (literal, ...): the name takes every value  # O(1)
             names = _IDENT.findall(m.group(1))  # O(1)
             vals = None  # O(1)
@@ -1235,9 +1276,10 @@ def _str_name(code: str, pos: int) -> bool:  # O(len(code)) | is the receiver en
     return True  # O(1)
 
 
-def _py_methods(code: str) -> list[str]:  # O(len(code))
+def _py_methods(code: str, scan: str | None = None) -> list[str]:  # O(len(code))
+    scan = code if scan is None else scan  # O(1)
     out: list[str] = []  # O(1)
-    for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|unlink|open|rename|replace)\s*\(", code):  # O(len(code))
+    for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|unlink|open|rename|replace)\s*\(", scan):  # O(len(code))
         name = m.group(1)  # O(1)
         if re.search(r"\b(?:os|shutil)\s*$", code[max(0, m.start() - 12):m.start()]):  # a module function, matched by name  # O(1)
             continue  # O(1)
@@ -1293,25 +1335,142 @@ def _expand(args: list[Arg]) -> list[list[Arg]]:  # O(64 * len(args)) | a name a
     return combos  # O(1)
 
 
-def _code(code: str, lang: str) -> list[str]:  # O(len(code) * |patterns|)
-    prev = _NAMES[0]  # O(1)
-    _NAMES[0] = _assigned(code, lang)  # O(len(code))
+_RUNS_TEXT = (
+    re.compile(r"(?<![\w.])(?:exec|eval|compile|execfile|__import__|getattr|system|popen)\s*\("),
+    re.compile(r"\b(?:builtins|__builtins__|runpy|importlib|subprocess|pty|pickle|marshal|ctypes)\b"),
+    re.compile(r"\bos\s*\.\s*(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*)\b"),
+    re.compile(r"\b(?:import\s+code|from\s+code\s+import)\b"),
+    re.compile(r"\bfrom\s+os\s+import\b(?:[^\n(]*|\s*\([^)]*)\b(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*)\b"),
+    re.compile(r"\.\s*(?:exec|eval|system|popen|execl\w*|execv\w*|spawn\w*|posix_spawn\w*)\s*\("),
+    re.compile(r"\b(?:timeit|cProfile|profile|pdb|doctest|operator|globals|vars|locals|create_subprocess_\w+)\b"),
+    re.compile(r"\bsys\s*\.\s*modules\b|\b(?:__dict__|__globals__|__subclasses__)\b"),
+    re.compile(r"\bsys\s*\.\s*path\b|\b(?:chdir|imp|zipimport|pkgutil|site)\b"),
+)  # code that can run text keeps its strings visible
+
+
+def _mask(code: str) -> str | None:  # O(len(code)) | code with plain string literals and comments blanked (same offsets), None if unreadable
+    starts = [0]  # O(1)
+    for line in code.split("\n"):  # O(len(code))
+        starts.append(starts[-1] + len(line) + 1)  # O(1)
+    chars = list(code)  # O(len(code))
     try:  # O(1)
-        return _code1(code, lang)  # O(len(code) * |patterns|)
+        for tok in tokenize.generate_tokens(io.StringIO(code).readline):  # O(len(code))
+            if tok.type == tokenize.COMMENT or (tok.type == tokenize.STRING and not re.match(r"[A-Za-z]*[fF]", tok.string)):  # O(1)
+                a, b = starts[tok.start[0] - 1] + tok.start[1], starts[tok.end[0] - 1] + tok.end[1]  # O(1)
+                for k in range(a, b):  # O(len(token))
+                    if chars[k] != "\n":  # O(1)
+                        chars[k] = " "  # O(1)
+    except Exception:  # O(1)
+        return None  # O(1)
+    return "".join(chars)  # O(len(code))
+
+
+def _params(code: str, known: dict[str, list[str]]) -> list[tuple[int, str, list[str] | None]]:  # O(len(code) + |tree|)
+    """(offset of the def line, parameter, the literals of its calls or None) for each parameter of a plain module-level helper."""
+    try:  # O(1)
+        tree = ast.parse(code)  # O(len(code))
+    except Exception:  # O(1)
+        return []  # O(1)
+    lines = code.split("\n")  # O(len(code))
+    starts = [0]  # O(1)
+    for line in lines:  # O(len(code))
+        starts.append(starts[-1] + len(line) + 1)  # O(1)
+    defs: dict[str, int] = {}  # O(1)
+    uses: dict[str, int] = {}  # O(1)
+    calls_of: dict[str, list[ast.Call]] = {}  # O(1)
+    for n in ast.walk(tree):  # one pass over the tree  # O(|tree|)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):  # O(1)
+            defs[n.name] = defs.get(n.name, 0) + 1  # O(1)
+        elif isinstance(n, ast.Name):  # O(1)
+            uses[n.id] = uses.get(n.id, 0) + 1  # O(1)
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):  # O(1)
+            calls_of.setdefault(n.func.id, []).append(n)  # O(1)
+
+    def seg(node: ast.expr) -> str | None:  # O(len(node text)) | the node's source, cut by its line and column offsets
+        if node.end_lineno is None or node.end_col_offset is None or "\r" in code or "\f" in code:  # O(len(code))
+            return ast.get_source_segment(code, node)  # O(len(code))
+        def at(row: int, col: int) -> int:  # O(len(line)) | columns are UTF-8 bytes
+            return starts[row - 1] + len(lines[row - 1].encode()[:col].decode(errors="replace"))  # O(len(line))
+        return code[at(node.lineno, node.col_offset):at(node.end_lineno, node.end_col_offset)]  # O(len(node text))
+
+    out: list[tuple[int, str, list[str] | None]] = []  # O(1)
+    for fn in tree.body:  # O(|tree|)
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):  # O(1)
+            continue  # O(1)
+        a = fn.args  # O(1)
+        if fn.decorator_list:  # a decorator may call the function with other arguments  # O(1)
+            continue  # O(1)
+        if a.vararg or a.kwarg or a.posonlyargs or a.kwonlyargs or defs.get(fn.name, 0) != 1:  # O(1)
+            continue  # O(1)
+        names = [x.arg for x in a.args]  # O(1)
+        defaults = dict(zip(names[len(names) - len(a.defaults):], a.defaults))  # O(1)
+        calls = calls_of.get(fn.name, [])  # O(1)
+        plain = bool(calls) and uses.get(fn.name, 0) == len(calls)  # only direct calls use the name  # O(1)
+        plain = plain and not any(isinstance(x, ast.Starred) for c in calls for x in c.args)  # O(calls)
+        plain = plain and all(k.arg in names for c in calls for k in c.keywords)  # no ** and no unknown keyword  # O(calls)
+        values: dict[str, list[str] | None] = {n: [] for n in names}  # O(1)
+        for c in calls if plain else []:  # O(calls)
+            kw = {k.arg: k.value for k in c.keywords}  # O(1)
+            for i, n in enumerate(names):  # O(len(names))
+                node = c.args[i] if i < len(c.args) else kw.get(n, defaults.get(n))  # O(1)
+                vals = None  # O(1)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):  # O(1)
+                    vals = [node.value]  # O(1)
+                elif node is not None:  # O(1)
+                    text = seg(node)  # O(len(node text))
+                    r = _compose_raw(text, known) if text is not None else None  # O(len(text))
+                    vals = r if r is not None and all(_UNK not in v for v in r) else None  # O(len(r))
+                cur = values[n]  # O(1)
+                if vals is None or cur is None:  # O(1)
+                    values[n] = None  # O(1)
+                else:  # O(1)
+                    values[n] = _uniq(cur + vals)  # O(len(vals))
+        for n in names:  # O(len(names))
+            v = values[n] if plain else None  # O(1)
+            out.append((starts[fn.lineno - 1], n, None if v is None or len(v) > 64 else v))  # O(1)
+    return out  # O(len(out))
+
+
+def temp_root(text: str | None) -> str | None:  # O(len(text)) | tempfile's temp root, unless the command text names or sets it
+    if text is None or _TEMP_NAMED.search(_TEMP_ENV.sub("", text)):  # O(len(text))
+        return None  # O(1)
+    root = tempfile.gettempdir().replace("\\", "/")  # O(1)
+    if len(root) > 1:  # O(1)
+        root = root.rstrip("/")  # O(1)
+    return root if root.startswith("/") and "\x00" not in root else None  # O(1)
+
+
+def _code(code: str, lang: str, root: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
+    prev, prev_t = _NAMES[0], _TEMP[0]  # O(1)
+    _TEMP[0] = root  # O(1)
+    scan = code  # O(1)
+    data = False  # strings are data, so no code can reach a helper by its name as text  # O(1)
+    if lang == "py":  # strings and comments are data unless the code can run text  # O(1)
+        masked = _mask(code)  # O(len(code))
+        if masked is not None and not any(r.search(masked) for r in _RUNS_TEXT):  # O(len(code))
+            scan, data = masked, True  # O(1)
+    _NAMES[0] = _assigned(code, lang, scan)  # O(len(code))
+    try:  # O(1)
+        if lang == "py" and data:  # O(1)
+            params = _params(code, _NAMES[0])  # O(len(code))
+            if params:  # O(1)
+                _NAMES[0] = _assigned(code, lang, scan, params)  # O(len(code))
+        return _code1(code, lang, scan)  # O(len(code) * |patterns|)
     finally:  # O(1)
-        _NAMES[0] = prev  # O(1)
+        _NAMES[0], _TEMP[0] = prev, prev_t  # O(1)
 
 
-def _code1(code: str, lang: str) -> list[str]:  # O(len(code) * |patterns|)
+def _code1(code: str, lang: str, scan: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
+    scan = code if scan is None else scan  # O(1)
     out: list[str] = []  # O(1)
     for pat, action in _CALLS[lang]:  # O(|patterns|)
-        for m in re.finditer(pat, code):  # O(len(code))
+        for m in re.finditer(pat, scan):  # O(len(code))
             at = m.end() - 1 if code[m.end() - 1] == "(" else m.end()  # the opening ( is part of the argument list  # O(1)
             args, end = _parse_args(code, at, lang, lang in ("rb", "pl"))  # O(len(code))
             for c in _expand(args):  # O(64)
                 out.extend(action(c, code[at:end]))  # type: ignore[operator]  # O(len(args))
     if lang == "py":  # O(1)
-        out.extend(_py_methods(code))  # O(len(code))
+        out.extend(_py_methods(code, scan))  # O(len(code))
     if lang in ("rb", "php", "pl"):  # backticks and qx/%x run shell text  # O(len(code))
         for m in re.finditer(r"`((?:[^`\\]|\\.)*)`|(?:\bqx|%x)\s*([({\[/'\"])", code):  # O(len(code))
             if m.group(1) is not None:  # O(1)
@@ -1456,5 +1615,5 @@ def _targets(words: list[str], cwd: str | None = None, env=None, top: str | None
         return _ps(cmd, args)  # O(len(args))
     found = _eval_code(cmd, args)  # O(len(args))
     if found:  # O(1)
-        return _code(found[1], found[0])  # O(len(code))
+        return _code(found[1], found[0], temp_root(text))  # O(len(code))
     return []  # O(1)

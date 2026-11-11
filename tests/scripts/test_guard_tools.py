@@ -437,3 +437,189 @@ def test_str_replace_on_a_name_bound_to_strings_is_no_move():
     assert py("p = 'a' / Path('q')\np.replace('b')") == ["b"]
     assert py("s = 'a'\ns = Path(s)\ns.replace('b')") == ["b"]
     assert py("for p in ('a',): p.replace('b')") == ["b"]
+
+
+# --- #478: Python string literals and comments are data; helper parameters take their call literals ---------------
+
+DATA_PROG = "\n".join([
+    "from pathlib import Path",
+    "p = Path('docs/a.md')",
+    "s = p.read_text()",
+    's += """',
+    "def test_x(tmp_path):",
+    "    (tmp_path / '.superlite' / 'orchestrator.json').write_text('{}')",
+    "    open(name, 'w').write('x')",
+    "    p = something()",
+    "a run (main or a lead) and subprocess.run(x)",
+    '"""',
+    "p.write_text(s)",
+    "",
+])
+HELPER = "\n".join([
+    "from pathlib import Path",
+    "def sub(path, old, new, count=1):",
+    "    p = Path(path); s = p.read_text(encoding='utf-8')",
+    "    assert s.count(old) == count",
+    "    p.write_text(s.replace(old, new), encoding='utf-8')",
+    "sub('docs/hooks.md', 'a', 'b')",
+    "sub(path='README.md', old='c', new='d', count=2)",
+    "",
+])
+
+
+def test_write_calls_in_strings_and_comments_are_data():
+    assert targets(["python3", "-c", DATA_PROG]) == ["docs/a.md"]
+    assert targets(["python3", "-c", "# open('src/a.py', 'w')\nprint(1)  # shutil.rmtree('src')\n"]) == []
+
+
+def test_fstring_fields_and_unreadable_code_stay_visible():
+    assert targets(["python3", "-c", "x = f\"{open('src/a.py', 'w').write('x')}\"\n"]) == ["src/a.py"]
+    assert targets(["python3", "-c", "s = '''open('src/a.py', 'w')\n"]) == ["src/a.py"]   # tokenize fails
+
+
+@pytest.mark.parametrize("runner", [
+    "exec(s)", "eval(s)", "compile(s, 'x', 'exec')", "__import__('os')", "getattr(os, 'remove')",
+    "import builtins", "import runpy", "import importlib", "os.system('true')", "import pickle",
+    "from os import system as sh\nsh('true')", "from os import popen as po", "from os import execv",
+    "from os import (\n    spawnl,\n)", "import timeit\ntimeit.timeit(s)", "import cProfile\ncProfile.run(s)",
+    "import profile\nprofile.run(s)", "import pdb\npdb.run(s)", "import doctest",
+    "import asyncio\nasyncio.create_subprocess_shell(s)", "import asyncio\nasyncio.create_subprocess_exec(s)",
+    "import sys\nsys.modules['builtins'].exec(s)", "x.eval(s)", "globals()['f'](s)", "vars()", "locals()",
+    "import sys\nsys.modules", "k.__dict__", "f.__globals__", "object.__subclasses__()", "import operator",
+    "import os as o\no.system('true')",
+    "import sys\nsys.path.insert(0, '/tmp/x')", "os.chdir('/tmp/x')", "import imp", "import zipimport",
+    "import pkgutil", "import site\nsite.addsitedir('/tmp/x')",
+])
+def test_code_that_can_run_text_keeps_strings_visible(runner):
+    code = "import os\ns = \"open('src/a.py', 'w').write('x')\"\n" + runner + "\n"
+    assert "src/a.py" in targets(["python3", "-c", code])
+
+
+@pytest.mark.parametrize("other", ["r = re.compile('x')", "v = ast.literal_eval('1')", "print(code)"])
+def test_lookalike_names_are_no_runners(other):
+    code = "import re, ast\ns = \"open('src/a.py', 'w').write('x')\"\n" + other + "\n"
+    assert targets(["python3", "-c", code]) == []
+
+
+def test_helper_parameter_takes_the_literals_of_its_calls():
+    assert sorted(targets(["python3", "-c", HELPER])) == ["README.md", "docs/hooks.md"]
+    gate = HELPER + "sub('.superlite/orchestrator.json', 'x', 'y')\n"
+    assert ".superlite/orchestrator.json" in targets(["python3", "-c", gate])
+
+
+@pytest.mark.parametrize("extra", [
+    "import sys\nsub(sys.argv[1], 'e', 'f')\n",
+    "f = sub\n",
+    "sub(*['docs/x.md', 'a', 'b'])\n",
+])
+def test_helper_parameter_with_an_unreadable_use_stays_unknown(extra):
+    assert "?" in targets(["python3", "-c", HELPER + extra])
+
+
+@pytest.mark.parametrize("code", [
+    "from pathlib import Path\ndef main():\n    def w(path):\n        Path(path).write_text('x')\n    w('docs/a.md')\nmain()\n",
+    "from pathlib import Path\ndef w(path, *rest):\n    Path(path).write_text('x')\nw('docs/a.md')\n",
+    "from pathlib import Path\nclass K:\n    def w(self, path):\n        Path(path).write_text('x')\nK().w('docs/a.md')\n",
+    "from pathlib import Path\ndef w(path):\n    Path(path).write_text('x')\nw('docs/a.md')\ndef broken(:\n",
+    "from pathlib import Path\n@deco\ndef w(path):\n    Path(path).write_text('x')\nw('docs/a.md')\n",
+])
+def test_only_plain_module_level_helpers_are_bound(code):
+    assert targets(["python3", "-c", code]) == ["?"]
+
+
+def test_issue_478_programs_pass_while_idle(tmp_path):
+    import guard_judge
+    P = str(tmp_path.resolve())
+    (tmp_path / ".superlite").mkdir()
+    sd = (P + "/.superlite",)
+    gate = "(tmp_path / '.superlite' / 'orchestrator.json').write_text('{}')"
+    cmd = ("cat > tests/test_x.py <<'EOF'\ndef test_a(tmp_path):\n    " + gate + "\nEOF\n"
+           "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('tests/test_y.py')\ns = p.read_text()\n"
+           "s += '''\ndef test_b(tmp_path):\n    " + gate + "\n'''\np.write_text(s)\nEOF")
+    assert guard_judge.judge(cmd, P, P, "idle", sd) is None
+    doc = "'the gate file .superlite/orchestrator.json, a run (main or a lead)'"
+    cmd2 = "python3 - <<'EOF'\n" + HELPER + "sub('docs/hooks.md', 'x', " + doc + ")\nEOF"
+    assert guard_judge.judge(cmd2, P, P, "idle", sd) is None
+    unknown = ("python3 - <<'EOF'\nimport os\nname = 'orchestrator.json'\n"
+               "open(os.path.join(os.environ['D'], name), 'w')\nEOF")
+    v = guard_judge.judge(unknown, P, P, "idle", sd)
+    assert v is not None and v.kind == "protected"
+
+
+# --- #458: tempfile's temp root ----------------------------------------------------------------------------------
+import tempfile  # noqa: E402
+
+
+@pytest.fixture
+def troot(monkeypatch, tmp_path):
+    r = tmp_path / "troot"
+    r.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(r))
+    return str(r)
+
+
+def _py(code):
+    return targets(["python3", "-c", code], text=code)
+
+
+def test_temp_root_reads_the_command_text(troot):
+    assert guard_tools.temp_root("python3 x.py") == troot
+    assert guard_tools.temp_root("cp a $TMPDIR/b; ls ${TMPDIR} $TMP") == troot
+    for text in ("TMPDIR=/p python3 x.py", "export TEMP=/p", "unset TMP", "tempfile.tempdir = '/p'",
+                 "os.environ['TMPDIR'] = '/p'", "echo ${TMPDIR:-/p}", None):
+        assert guard_tools.temp_root(text) is None, text
+
+
+def test_mkdtemp_and_gettempdir_name_the_temp_root(troot):
+    assert _py("import tempfile, os\nd = tempfile.mkdtemp()\nopen(os.path.join(d, 'a.txt'), 'w').write('x')\n") == [
+        troot + "/?/a.txt"]
+    assert _py("import tempfile\nfrom pathlib import Path\n"
+               "(Path(tempfile.mkdtemp(prefix='sl-', suffix='.d')) / 'a.txt').write_text('x')\n") == [troot + "/?/a.txt"]
+    assert _py("import tempfile, os\nopen(os.path.join(tempfile.gettempdir(), 'sl-a.json'), 'w')\n") == [
+        troot + "/sl-a.json"]
+    assert _py("import tempfile\nopen(tempfile.gettempdir() + '/a', 'w')\n") == [troot + "/a"]
+
+
+@pytest.mark.parametrize("code", [
+    "import tempfile, os\nd = tempfile.mkdtemp(dir='src')\nopen(os.path.join(d, 'a'), 'w')\n",
+    "import tempfile, os\nd = tempfile.mkdtemp('', '', 'src')\nopen(os.path.join(d, 'a'), 'w')\n",
+    "import tempfile, os\nd = tempfile.mkdtemp(prefix='../x')\nopen(os.path.join(d, 'a'), 'w')\n",
+    "import tempfile, os\nd = tempfile.mkdtemp(prefix=p)\nopen(os.path.join(d, 'a'), 'w')\n",
+    "import tempfile, os\ntempfile.tempdir = 'src'\nopen(os.path.join(tempfile.gettempdir(), 'a'), 'w')\n",
+    "import tempfile, os\nos.environ['TMPDIR'] = 'src'\nd = tempfile.mkdtemp()\nopen(os.path.join(d, 'a'), 'w')\n",
+    "from tempfile import mkdtemp\nimport os\nopen(os.path.join(mkdtemp(), 'a'), 'w')\n",
+    "import tempfile\nopen(tempfile.gettempdir('x') + '/a', 'w')\n",
+])
+def test_temp_folders_the_guard_cannot_place_stay_unknown(troot, code):
+    assert _py(code) == ["?"]
+
+
+def test_without_the_command_text_the_temp_root_is_unknown(troot):
+    assert targets(["python3", "-c", "import tempfile\nopen(tempfile.gettempdir() + '/a', 'w')\n"]) == ["?"]
+
+
+BIG_HELPER = "from pathlib import Path\ndef sub(path, old, new):\n    Path(path).write_text(old + new)\n"
+
+
+@pytest.mark.parametrize("extra", [
+    "exec(\"sub('src/a.py', 'a', 'b')\")\n",
+    "globals()['sub']('src/a.py', 'a', 'b')\n",
+    "import sys\ngetattr(sys.modules[__name__], 'sub')('src/a.py', 'a', 'b')\n",
+    "vars()['sub']('src/a.py', 'a', 'b')\n",
+    "locals()['sub']('src/a.py', 'a', 'b')\n",
+    "import sys\nsys.modules['__main__'].sub('src/a.py', 'a', 'b')\n",
+    "sub.__dict__\nexec('x')\n",
+])
+def test_helper_parameter_stays_unknown_when_the_code_can_reach_the_helper_indirectly(extra):
+    assert "?" in targets(["python3", "-c", BIG_HELPER + "sub('docs/a.md', 'a', 'b')\n" + extra])
+
+
+def test_a_large_program_with_many_helpers_and_calls_stays_fast():
+    import time
+    defs = "".join(f"def h{i}(path, a):\n    Path(path).write_text(a)\n" for i in range(200))
+    calls = "".join(f"h{i % 200}('docs/f{i % 20}.md', x{i} + 'y')\n" for i in range(2000))
+    code = "from pathlib import Path\n" + defs + calls
+    t = time.monotonic()
+    out = targets(["python3", "-c", code])
+    assert time.monotonic() - t < 2.0
+    assert "docs/f0.md" in out and "docs/f19.md" in out

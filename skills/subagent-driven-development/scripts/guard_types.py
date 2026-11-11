@@ -22,3 +22,4 @@ class Segment:  # O(1)
     # per word: "" literal, "g" an unquoted glob (*, ?, [...]), "b" an unquoted brace group ({a,b}, {x}) in a word with
     # no quoted part, "u" a brace group in a word with a quoted part (its expansion is not read) | O(1)
     globs: list[str] = field(default_factory=list, compare=False)
+    arith: str | None = field(default=None, compare=False)  # the text inside a `(( ))` command or `for (( ))` header | O(1)

@@ -44,7 +44,7 @@ def _lead(words: list[str]) -> list[str]:  # O(prefix + 3)
 
 
 def _empty(seg: Segment) -> bool:  # O(1)
-    return not (seg.words or seg.redirects or seg.subshell is not None)  # O(1)
+    return not (seg.words or seg.redirects or seg.subshell is not None or seg.arith is not None)  # O(1)
 
 
 def _new() -> Segment:  # O(1)
@@ -60,6 +60,7 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
         self.glob = False  # the last word read has an unquoted `*`, `?` or `[...]` | O(1)
         self.flag = ""  # the last word read: its Segment.globs flag | O(1)
         self.close_at = 0  # index of the `)` that ended the last nested parse (n when none) | O(1)
+        self.arith_memo: dict[tuple[int, int], tuple[tuple[str, int] | None, list[str]]] = {}  # (start, depth) -> _arith result | O(1)
 
     # ---- words -------------------------------------------------------------------------------------------------
     def _backtick(self, i: int, bodies: list[str]) -> tuple[str, int]:  # O(n)
@@ -85,6 +86,65 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
         end = self.close_at  # O(1)
         bodies.append(self.s[i:end])  # O(n)
         return self.s[i - 2:end + 1], min(end + 1, self.n), end >= self.n  # O(n)
+
+    def _subst(self, i: int, bodies: list[str]) -> tuple[str, int, bool]:  # O(n) per level
+        """`s[i]` is `$` and `s[i+1]` is `(`: an arithmetic `$(( ))` (text kept, only its substitutions run) or `$( )`."""
+        got = self._arith(i + 3, bodies) if self.s.startswith("$((", i) else None  # O(n)
+        if got is not None:  # O(1)
+            return self.s[i:got[1]], got[1], False  # O(n)
+        return self._paren(i + 2, bodies)  # O(n)
+
+    def _arith(self, i: int, bodies: list[str]) -> tuple[str, int] | None:  # O(n) per level
+        """`i` is after `((`: (inner text, index after the closing `))`), or None when the parens do not close as `))`.
+        Substitution bodies inside reach `bodies` only on success."""
+        if self.depth >= MAX_DEPTH:  # O(1)
+            return None  # O(1)
+        key = (i, self.depth)  # each start index is tried as arithmetic once per depth, so a failed `$((` or `((` retried as a substitution or group costs no second scan | O(1)
+        if key not in self.arith_memo:  # O(1)
+            self.depth += 1  # O(1)
+            scratch: list[str] = []  # O(1)
+            try:  # O(n)
+                self.arith_memo[key] = (self._arith_scan(i, scratch), scratch)  # O(n)
+            finally:  # O(1)
+                self.depth -= 1  # O(1)
+        got, scratch = self.arith_memo[key]  # O(1)
+        if got is not None:  # O(1)
+            bodies.extend(scratch)  # O(bodies)
+        return got  # O(1)
+
+    def _arith_scan(self, i: int, bodies: list[str]) -> tuple[str, int] | None:  # O(n)
+        s, n, j, depth = self.s, self.n, i, 0  # O(1)
+        while j < n:  # O(n)
+            c = s[j]  # O(1)
+            if c == "\\":  # O(1)
+                j += 2  # O(1)
+            elif c == "'":  # O(1)
+                k = s.find("'", j + 1)  # O(n)
+                j = n if k < 0 else k + 1  # O(1)
+            elif c == '"':  # O(1)
+                j, _, _ = self._dquote(j + 1, [], bodies)  # O(n)
+            elif c == "`":  # O(1)
+                _, j = self._backtick(j + 1, bodies)  # O(n)
+            elif c == "$" and s[j + 1:j + 2] == "{":  # O(1)
+                _, j, _ = self._brace(j + 2, bodies)  # O(n)
+            elif c == "$" and s[j + 1:j + 2] == "(":  # O(1)
+                _, j, _ = self._subst(j, bodies)  # O(n)
+            elif c == "(":  # O(1)
+                depth += 1  # O(1)
+                j += 1  # O(1)
+                if depth >= MAX_DEPTH:  # too deep to read as arithmetic: the caller lexes a group or substitution | O(1)
+                    return None  # O(1)
+            elif c == ")":  # O(1)
+                if depth > 0:  # O(1)
+                    depth -= 1  # O(1)
+                    j += 1  # O(1)
+                elif s[j + 1:j + 2] == ")":  # O(1)
+                    return s[i:j], j + 2  # O(n)
+                else:  # O(1)
+                    return None  # O(1)
+            else:  # O(1)
+                j += 1  # O(1)
+        return None  # O(1)
 
     def _brace(self, i: int, bodies: list[str], in_dq: bool = False) -> tuple[str, int, bool]:  # O(n)
         """`i` is after `${`: (original text through the matching `}`, index after it, unterminated). In double
@@ -112,7 +172,7 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
             elif c == "`":  # O(1)
                 _, j = self._backtick(j + 1, bodies)  # O(n)
             elif c == "$" and s[j + 1:j + 2] == "(":  # O(1)
-                _, j, _ = self._paren(j + 2, bodies)  # O(n)
+                _, j, _ = self._subst(j, bodies)  # O(n)
             elif c == "{":  # O(1)
                 depth += 1  # O(1)
                 j += 1  # O(1)
@@ -130,7 +190,7 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
         s = self.s  # O(1)
         nx = s[i + 1:i + 2]  # O(1)
         if nx == "(":  # O(1)
-            text, j, bad = self._paren(i + 2, bodies)  # O(n)
+            text, j, bad = self._subst(i, bodies)  # O(n)
             parts.append(text)  # O(1)
             return j, True, bad  # O(1)
         if nx == "{":  # O(1)
@@ -312,7 +372,7 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
             if c == "\\":  # O(1)
                 i += 2  # O(1)
             elif c == "$" and body[i + 1:i + 2] == "(":  # O(1)
-                _, i, _ = lx._paren(i + 2, out)  # O(len(body))
+                _, i, _ = lx._subst(i, out)  # O(len(body))
             elif c == "`":  # O(1)
                 _, i = lx._backtick(i + 1, out)  # O(len(body))
             else:  # O(1)
@@ -413,6 +473,12 @@ class _Lex:  # O(n) over one text, each character read once per nesting level it
                     break  # O(1)
                 if not _empty(cur):  # a stray `)` ends a case pattern | O(1)
                     finish(";")  # O(1)
+            elif c == "(" and s[i + 1:i + 2] == "(" and not closed and (
+                    cur.words == ["for"] or all(w in _CONTROL for w in cur.words)) \
+                    and (got := self._arith(i + 2, cur.bodies)) is not None:  # `(( ))` command or `for (( ))` header | O(n)
+                cur.arith = got[0]  # O(1)
+                self.i = got[1]  # O(1)
+                closed = True  # O(1)
             elif c == "(":  # a group, or the `()` of a function definition | O(1)
                 if not _empty(cur):  # O(1)
                     finish(";")  # O(1)
