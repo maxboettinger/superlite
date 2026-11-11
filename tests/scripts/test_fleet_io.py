@@ -177,7 +177,7 @@ def test_real_herdr_binary_argv(world, tmp_path, monkeypatch):
     monkeypatch.setattr(io, "hc", herdr_client)
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl")
     logged = [json.loads(l) for l in log.read_text().splitlines()]; argv = logged[0]; assert argv[:3] == ["agent", "prompt", "sl-proj-w1"] and "--until" in argv and "working" in argv
-    assert ["pane", "rename", "w6:p1", "W1 T3"] in logged  # the real verb reaches the binary
+    assert ["pane", "rename", "w6:p1", io.pane_title(world.sd, "W1", "T3")] in logged  # the real verb reaches the binary
     assert io.pane_label(world.sd, "W1", "W1 T3") is True
 
 def test_pane_label_without_timeout_passes_no_keyword(world, monkeypatch):
@@ -281,15 +281,15 @@ def test_send_text_appends_the_report_contract(world):
 
 # --- #226: the worker's stop hook relabels its pane, whether or not a `fleet wait` runs
 from test_fleet_hooks import run_hook  # noqa: E402
-REPORTED = ["pane", "rename", "w6:p1", "W1 T3 reported, waiting for coordinator"]
+def reported(world): return ["pane", "rename", "w6:p1", io.pane_title(world.sd, "W1", "T3", "reported, waiting for coordinator")]
 
 def test_stopped_labels_the_pane_reported(world):
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]
-    assert io.stopped(world.sd, "W1", sent + 10) is True and world.fh.calls[-1] == ("call", REPORTED)
+    assert io.stopped(world.sd, "W1", sent + 10) is True and world.fh.calls[-1] == ("call", reported(world))
 
 def test_stopped_after_wait_uses_the_last_task(world):
     data = json.loads((world.sd / "fleet.json").read_text()); data["workers"]["W1"].update({"state": "ready", "task": None, "last_task": "T3", "sent": 1500}); (world.sd / "fleet.json").write_text(json.dumps(data))
-    assert io.stopped(world.sd, "W1", 2000) is True and world.fh.calls[-1] == ("call", REPORTED)
+    assert io.stopped(world.sd, "W1", 2000) is True and world.fh.calls[-1] == ("call", reported(world))
 
 def test_stopped_skips_a_worker_sent_new_work_and_an_unknown_one(world):
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]; n = len(world.fh.calls)
@@ -308,7 +308,7 @@ def test_stop_hook_writes_the_record_then_renames_the_pane(world, tmp_path):
     stdin = json.dumps({"session_id": "s1", "transcript_path": "/t/w1.jsonl", "last_assistant_message": "Status: DONE"})
     r = run_hook("capture-worker-stop", stdin, hook_env(world.sd, log), world.proj)
     assert r.returncode == 0 and json.loads((world.sd / "metrics.jsonl").read_text().splitlines()[-1])["agent_id"] == "W1"
-    assert REPORTED in [json.loads(line) for line in log.read_text().splitlines()]
+    assert reported(world) in [json.loads(line) for line in log.read_text().splitlines()]
 
 def test_stop_hook_without_a_fleet_calls_no_herdr(tmp_path):
     sd = tmp_path / "proj" / ".superlite"; sd.mkdir(parents=True); (sd / "stable.json").write_text("{}"); log = tmp_path / "herdr.log"

@@ -85,16 +85,58 @@ def next_id(sd):  # O(w)
         return "W%d" % n  # O(1)
 
 
-def agent_name(sd, wid):  # O(len of the run folder name)
-    """Herdr agent name of a worker: `sl-<run folder>-<hash>-<worker id>`, within herdr's `[a-z][a-z0-9_-]{0,31}`.
+def run_names(root):  # O(depth + len of the .git file)
+    """(repo, worktree) of the checkout holding `root`: read from the first `.git` above it; no `.git` -> (folder, "main")."""
+    root = Path(root).resolve()  # O(depth)
+    top = next((p for p in (root, *root.parents) if (p / ".git").exists()), None)  # O(depth)
+    if top is None or (top / ".git").is_dir():  # O(1)
+        return ((top or root).name, "main")  # O(1)
+    try:  # O(1)
+        text = (top / ".git").read_text(encoding="utf-8")  # O(len)
+    except (OSError, UnicodeError):  # O(1)
+        return (top.name, "main")  # O(1)
+    m = re.match(r"gitdir:\s*(.+?)\s*$", text.strip())  # O(len)
+    if not m:  # O(1)
+        return (top.name, "main")  # O(1)
+    gd = (top / m.group(1)).resolve()  # O(len); an absolute path wins over the join
+    if gd.parent.name != "worktrees":  # O(1)
+        return (top.name, "main")  # O(1)
+    common = gd.parent.parent  # O(1)
+    repo = common.parent.name if common.name == ".git" else common.name  # O(1)
+    repo = repo[:-4] if repo.endswith(".git") and len(repo) > 4 else repo  # O(1)
+    wt = top.name  # O(1)
+    return (repo, wt[len(repo) + 1:] if wt.startswith(repo + "-") and len(wt) > len(repo) + 1 else wt)  # O(1)
 
-    Herdr keeps names unique among the live agents of a server. `<hash>` is the first 4 hex digits of the sha1 of the
-    run root's absolute path: it keeps equal folder names and long shared prefixes (worktrees `...-phase-2`, `...-phase-3`) apart.
-    The folder name is cut so that `-<hash>-<worker id>` always fits."""
-    h = hashlib.sha1(str(Path(sd).resolve().parent).encode()).hexdigest()[:4]  # O(len path)
-    tail = "-%s-%s" % (h, wid.lower())  # O(1)
-    run = re.sub(r"[^a-z0-9_-]+", "-", Path(sd).resolve().parent.name.lower()).strip("-_")  # O(len)
-    return ("sl-" + run)[:32 - len(tail)].rstrip("-_") + tail  # O(1)
+
+def full_name(sd, ident="", root=None):  # O(depth)
+    """`sl:{repo}-{worktree}-{ident}` of the run at `root` (default: the folder holding `sd`)."""
+    repo, wt = run_names(root or Path(sd).resolve().parent)  # O(depth)
+    return "sl:%s-%s%s" % (repo, wt, "-" + ident if ident else "")  # O(1)
+
+
+def slug(text, keep=""):  # O(len)
+    """Herdr name of a full name: lowercase, odd characters to one dash, within `[a-z][a-z0-9_-]{0,31}`; `keep` (the id) is cut last."""
+    s = re.sub(r"-+", "-", re.sub(r"[^a-z0-9_-]+", "-", text.lower())).strip("-_")  # O(len)
+    if not s or not s[0].isalpha() or not s.isascii():  # O(1)
+        s = ("sl-" + s).rstrip("-")  # O(1)
+    if len(s) <= 32:  # O(1)
+        return s  # O(1)
+    k = re.sub(r"-+", "-", re.sub(r"[^a-z0-9_-]+", "-", keep.lower())).strip("-_")  # O(len)
+    if k and len(k) > 28:  # O(1)
+        return "sl-" + k[-28:]  # O(1)
+    if k and s.endswith("-" + k):  # O(1)
+        return s[:-(len(k) + 1)][:31 - len(k)].rstrip("-_") + "-" + k  # O(1)
+    return s[:32].rstrip("-_")  # O(1)
+
+
+def agent_name(sd, wid, root=None, ident=None, taken=frozenset()):  # O(depth)
+    """Herdr agent name: slug of the full name; when that name is taken, the run hash (sha1 of the root path, 4 hex) joins the id."""
+    i = ident or wid  # O(1)
+    n = slug(full_name(sd, i, root), i)  # O(depth)
+    if n not in taken:  # O(1)
+        return n  # O(1)
+    h = hashlib.sha1(str(Path(root or Path(sd).parent).resolve()).encode()).hexdigest()[:4]  # O(len path)
+    return slug(full_name(sd, "%s-%s" % (h, i), root), "%s-%s" % (h, i))  # O(depth)
 
 
 def name_of(sd, wid, w):  # O(1)

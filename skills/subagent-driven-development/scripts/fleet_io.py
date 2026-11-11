@@ -369,6 +369,12 @@ def baseline_k(sd, wid):  # context after READY, cached in fleet.json; None is n
     return k  # O(1)
 
 
+def pane_title(sd, wid, label, status=""):  # `<full name of label> <worker> [status]`; a lead is named by its worktree, an unknown worker by the run | O(w)
+    w = fs.load(Path(sd))["workers"].get(wid) or {}  # O(w)
+    root = Path(w["worktree"]) if w.get("worktree") else None  # O(1)
+    return " ".join(x for x in (fs.full_name(sd, label, root), wid, status) if x)  # O(depth)
+
+
 def pane_label(sd, wid, text, timeout_ms=None):  # rename the worker's Herdr pane; a Herdr failure or an unknown worker never matters, a wrong verb or a missing hc.call does | O(w)
     try:  # O(1)
         pane = fs.load(Path(sd))["workers"][wid]["pane_id"]  # O(w)
@@ -384,7 +390,7 @@ def stopped(sd, wid, t_ms):  # the stop hook: label the pane reported unless the
     if w is None or int(w.get("sent") or 0) > t_ms:  # O(1)
         return False  # O(1)
     label = w.get("task") or w.get("last_task") or wid  # O(1)
-    return pane_label(sd, wid, f"{wid} {label} reported, waiting for coordinator", 3000)  # O(w)
+    return pane_label(sd, wid, pane_title(sd, wid, label, "reported, waiting for coordinator"), 3000)  # O(w)
 
 
 def _prompt(name, msg):  # prompt NAME; one resend after a stall or a slow reply that did not land | O(len msg)
@@ -418,7 +424,7 @@ def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
     _prompt(fs.name_of(sd, wid, data["workers"][wid]), msg)  # O(len msg)
     label = ",".join(tasks)  # O(k)
     _busy(sd, wid, label, sent)  # O(w + pool bytes)
-    pane_label(sd, wid, f"{wid} {label}")  # O(w)
+    pane_label(sd, wid, pane_title(sd, wid, label))  # O(w)
     print(f"{wid} {label} sent")  # O(1)
     return label  # O(1)
 
@@ -455,7 +461,7 @@ def send_brief(sd, wid, brief, label="", full=False):  # O(w + len brief path + 
     name = fs.name_of(sd, wid, w)  # O(w)
     _prompt(name, msg)  # O(len msg)
     _busy(sd, wid, label, sent)  # O(w + pool bytes)
-    pane_label(sd, wid, f"{wid} {label}")  # O(w)
+    pane_label(sd, wid, pane_title(sd, wid, label))  # O(w)
     print(f"{wid} {label} sent")  # O(1)
     return label  # O(1)
 
@@ -484,7 +490,7 @@ def send_text(sd, wid, text):  # O(w + len text)
             w.update({"state": "busy", "task": task, "sent": sent})  # O(1)
             fs.save(sd, data)  # O(w)
     if task:  # O(1)
-        pane_label(sd, wid, f"{wid} {task}")  # O(w)
+        pane_label(sd, wid, pane_title(sd, wid, task))  # O(w)
     print(f"{wid} text sent")  # O(1)
 
 
@@ -530,7 +536,7 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # TAIL: the last pa
     nc = len(rep.get("concerns") or [])  # O(1)
     print(f"{wid} {label} {rep['status']} findings={n}" + (f" concerns={nc}" if nc else "") + f" {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
     _ready(sd, wid, label)  # O(w)
-    pane_label(sd, wid, f"{wid} {label} reported, waiting for coordinator")  # before the worker may be stopped | O(w)
+    pane_label(sd, wid, pane_title(sd, wid, label, "reported, waiting for coordinator"))  # before the worker may be stopped | O(w)
     if w.get("one_turn") and rep["status"] in FINAL:  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker | O(1)
         _stop_worker(sd, wid)  # O(w)
     return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n}  # O(1)
@@ -570,7 +576,7 @@ def _ask(sd, wid, w, after=0):  # ask a worker whose turn ended without a report
         if wid in data["workers"]:  # O(1)
             data["workers"][wid].update({"state": "busy", "sent": sent, "asked": sent})  # O(1)
             fs.save(sd, data)  # O(w)
-    pane_label(sd, wid, f"{wid} {label}")  # O(w)
+    pane_label(sd, wid, pane_title(sd, wid, label))  # O(w)
     print(f"{wid} {label} ASKED (turn ended without a report; asked once)")  # O(1)
     return True  # O(1)
 
@@ -581,7 +587,7 @@ def _blocked(sd, wid, w):  # O(s + w)
     _write(sp, screen)  # O(s)
     fs.set_state(sd, wid, "blocked", w.get("task"))  # O(w)
     task = w.get("task") or wid  # O(1)
-    pane_label(sd, wid, f"{wid} {task} BLOCKED-UI")  # O(w)
+    pane_label(sd, wid, pane_title(sd, wid, task, "BLOCKED-UI"))  # O(w)
     print(f"{wid} {task} BLOCKED-UI {sp}")  # O(1)
     for line in [x for x in screen.splitlines() if x.strip()][-5:]:  # O(s)
         print(f"  {line}")  # O(1)

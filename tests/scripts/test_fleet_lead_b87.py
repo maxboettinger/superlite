@@ -73,7 +73,7 @@ def test_trust_dialog_after_start_accepted(world, tmp_path, monkeypatch):
     wt = _lead(world, tmp_path, monkeypatch)
     world.fh.screen = "Quick safety check\n > No, exit\n   Yes, I trust this folder\n"
     fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u"})
-    name = fleet.fs.agent_name(world.sd, "W1")
+    name = fleet.fs.agent_name(world.sd, "W1", root=wt, ident="lead")
     assert ("send_keys", name, ["Down", "Enter"]) in world.fh.calls
     assert json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]["state"] == "ready"
 
