@@ -16,7 +16,7 @@ NESTED = "Tests/KitTests/Nested.swift"
 
 
 def rt(cwd, *args):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_") or k == "SUPERLITE_HOME"}
     return subprocess.run([sys.executable, str(RUN_TESTS), *args], cwd=cwd, capture_output=True, text=True, timeout=120, env=env)
 
 

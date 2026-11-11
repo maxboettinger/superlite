@@ -79,7 +79,7 @@ def test_default_limit():
 @pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
 def test_sigterm_kills_test_processes(tmp_path):
     project(tmp_path, HANG)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_") or k == "SUPERLITE_HOME"}
     p = subprocess.Popen([sys.executable, str(RUN_TESTS), "--full"], cwd=tmp_path, env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
