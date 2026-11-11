@@ -12,6 +12,8 @@ superlite-side stops of the run (guard blocks and rewrites, guard errors, test r
 blocks) print as one line, `superlite stops this run: N kind (tool), ...`, and each is also logged as an `auto`
 feedback entry (`feedback.add_auto`; a failure to write feedback never fails finish, #140).
 A task held by `sl hold` (and not committed) is listed with its reason.
+The output ends with the takeover hint (only when another live session owns the run) and then the last line,
+`next: sl orchestrator end [--plan PLAN]` (#497): the guard blocks every edit until it runs, a merge-conflict fix too.
 Deterministic: the same files give the same text. Stdlib only.
 """
 # Complexity notation:
@@ -29,6 +31,7 @@ from pathlib import Path  # O(1)
 DEFAULT_LEDGER = ".superlite/progress.md"  # O(1)
 DEFAULT_LOG = ".superlite/incidents.jsonl"  # O(1)
 DEFAULT_LINT_LOG = ".superlite/lint-log.jsonl"  # O(1)
+END_TAIL = " (archives the run markers; the coordinator guard blocks every edit, a merge-conflict fix too, until it runs)"  # O(1)
 UNBLOCKED = re.compile(r"^\s*[-*+]?\s*unblocked:\s*dispatched\s+((?:[A-Z]{1,3}\d+[A-Za-z]?\s*)+?)\s*at\s+(\d\d:\d\d:\d\d)")  # O(1)
 
 RULING = re.compile(r"^\s*(?:[-*+]\s+)?(?:\*\*)?Ruling:(?:\*\*)?\s*(.*?)\s*$")  # O(1)
@@ -428,15 +431,6 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
     import orchestrator  # O(1)
     out.append(orchestrator.summary_line(Path(ledger).resolve().parent))  # mode, and the approval time in human mode | O(file)
-    out.append("after finishing: `sl orchestrator end` archives the run markers (the coordinator guard stops)")  # O(1)
-    try:  # a hint only: finish never fails over it | O(d)
-        import state  # O(1)
-        sd = Path(ledger).resolve().parent  # O(d)
-        other = state.live_owner(sd)  # O(d)
-        if other:  # O(1)
-            out.append(f"this run belongs to session {other}: run `sl orchestrator takeover --plan {sd}` before `sl orchestrator end`")  # O(1)
-    except Exception:  # O(1)
-        pass  # O(1)
     stops = stops_line(read_stops(log))  # O(I*w)
     if stops:  # O(1)
         out.append(stops)  # O(1)
@@ -459,6 +453,15 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     if incidents:  # the close form for one an obsolete or fixed one (#116) | O(1)
         out.append("- close one: sl incident resolve --file F --line N --ruling \"TEXT\" (file and line as listed)")  # O(1)
         out.append(bulk_close_line(incidents))  # O(I)
+    try:  # a hint only: finish never fails over it | O(d)
+        import state  # O(1)
+        sd = Path(ledger).resolve().parent  # O(d)
+        other = state.live_owner(sd)  # O(d)
+        if other:  # O(1)
+            out.append(f"this run belongs to session {other}: run `sl orchestrator takeover --plan {sd}` before `sl orchestrator end`")  # O(1)
+    except Exception:  # O(1)
+        pass  # O(1)
+    out.append(f"next: sl orchestrator end{' --plan ' + plan if plan else ''}" + END_TAIL)  # the last line (#497) | O(1)
     return "\n".join(out) + "\n"  # O(R + C + G + I) join
 
 
