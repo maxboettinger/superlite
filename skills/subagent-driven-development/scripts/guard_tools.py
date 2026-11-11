@@ -1340,6 +1340,10 @@ _RUNS_TEXT = (
     re.compile(r"\b(?:builtins|__builtins__|runpy|importlib|subprocess|pty|pickle|marshal|ctypes)\b"),
     re.compile(r"\bos\s*\.\s*(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*)\b"),
     re.compile(r"\b(?:import\s+code|from\s+code\s+import)\b"),
+    re.compile(r"\bfrom\s+os\s+import\b(?:[^\n(]*|\s*\([^)]*)\b(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*)\b"),
+    re.compile(r"\.\s*(?:exec|eval|system|popen|execl\w*|execv\w*|spawn\w*|posix_spawn\w*)\s*\("),
+    re.compile(r"\b(?:timeit|cProfile|profile|pdb|doctest|operator|globals|vars|locals|create_subprocess_\w+)\b"),
+    re.compile(r"\bsys\s*\.\s*modules\b|\b(?:__dict__|__globals__|__subclasses__)\b"),
 )  # code that can run text keeps its strings visible
 
 
@@ -1360,31 +1364,47 @@ def _mask(code: str) -> str | None:  # O(len(code)) | code with plain string lit
     return "".join(chars)  # O(len(code))
 
 
-def _params(code: str, known: dict[str, list[str]]) -> list[tuple[int, str, list[str] | None]]:  # O(len(code) * |tree|)
+def _params(code: str, known: dict[str, list[str]]) -> list[tuple[int, str, list[str] | None]]:  # O(len(code) + |tree|)
     """(offset of the def line, parameter, the literals of its calls or None) for each parameter of a plain module-level helper."""
     try:  # O(1)
         tree = ast.parse(code)  # O(len(code))
     except Exception:  # O(1)
         return []  # O(1)
+    lines = code.split("\n")  # O(len(code))
     starts = [0]  # O(1)
-    for line in code.split("\n"):  # O(len(code))
+    for line in lines:  # O(len(code))
         starts.append(starts[-1] + len(line) + 1)  # O(1)
-    nodes = list(ast.walk(tree))  # O(|tree|)
-    defs = [n for n in nodes if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]  # O(|tree|)
+    defs: dict[str, int] = {}  # O(1)
+    uses: dict[str, int] = {}  # O(1)
+    calls_of: dict[str, list[ast.Call]] = {}  # O(1)
+    for n in ast.walk(tree):  # one pass over the tree  # O(|tree|)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):  # O(1)
+            defs[n.name] = defs.get(n.name, 0) + 1  # O(1)
+        elif isinstance(n, ast.Name):  # O(1)
+            uses[n.id] = uses.get(n.id, 0) + 1  # O(1)
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):  # O(1)
+            calls_of.setdefault(n.func.id, []).append(n)  # O(1)
+
+    def seg(node: ast.expr) -> str | None:  # O(len(node text)) | the node's source, cut by its line and column offsets
+        if node.end_lineno is None or node.end_col_offset is None or "\r" in code or "\f" in code:  # O(len(code))
+            return ast.get_source_segment(code, node)  # O(len(code))
+        def at(row: int, col: int) -> int:  # O(len(line)) | columns are UTF-8 bytes
+            return starts[row - 1] + len(lines[row - 1].encode()[:col].decode(errors="replace"))  # O(len(line))
+        return code[at(node.lineno, node.col_offset):at(node.end_lineno, node.end_col_offset)]  # O(len(node text))
+
     out: list[tuple[int, str, list[str] | None]] = []  # O(1)
     for fn in tree.body:  # O(|tree|)
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):  # O(1)
             continue  # O(1)
         a = fn.args  # O(1)
-        if a.vararg or a.kwarg or a.posonlyargs or a.kwonlyargs or sum(d.name == fn.name for d in defs) != 1:  # O(|tree|)
+        if a.vararg or a.kwarg or a.posonlyargs or a.kwonlyargs or defs.get(fn.name, 0) != 1:  # O(1)
             continue  # O(1)
         names = [x.arg for x in a.args]  # O(1)
         defaults = dict(zip(names[len(names) - len(a.defaults):], a.defaults))  # O(1)
-        calls = [n for n in nodes if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == fn.name]  # O(|tree|)
-        uses = sum(isinstance(n, ast.Name) and n.id == fn.name for n in nodes)  # O(|tree|)
-        plain = bool(calls) and uses == len(calls)  # only direct calls use the name  # O(1)
-        plain = plain and not any(isinstance(x, ast.Starred) for c in calls for x in c.args)  # O(|tree|)
-        plain = plain and all(k.arg in names for c in calls for k in c.keywords)  # no ** and no unknown keyword  # O(|tree|)
+        calls = calls_of.get(fn.name, [])  # O(1)
+        plain = bool(calls) and uses.get(fn.name, 0) == len(calls)  # only direct calls use the name  # O(1)
+        plain = plain and not any(isinstance(x, ast.Starred) for c in calls for x in c.args)  # O(calls)
+        plain = plain and all(k.arg in names for c in calls for k in c.keywords)  # no ** and no unknown keyword  # O(calls)
         values: dict[str, list[str] | None] = {n: [] for n in names}  # O(1)
         for c in calls if plain else []:  # O(calls)
             kw = {k.arg: k.value for k in c.keywords}  # O(1)
@@ -1394,8 +1414,8 @@ def _params(code: str, known: dict[str, list[str]]) -> list[tuple[int, str, list
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):  # O(1)
                     vals = [node.value]  # O(1)
                 elif node is not None:  # O(1)
-                    seg = ast.get_source_segment(code, node)  # O(len(code))
-                    r = _compose_raw(seg, known) if seg is not None else None  # O(len(seg))
+                    text = seg(node)  # O(len(node text))
+                    r = _compose_raw(text, known) if text is not None else None  # O(len(text))
                     vals = r if r is not None and all(_UNK not in v for v in r) else None  # O(len(r))
                 cur = values[n]  # O(1)
                 if vals is None or cur is None:  # O(1)
@@ -1421,13 +1441,14 @@ def _code(code: str, lang: str, root: str | None = None) -> list[str]:  # O(len(
     prev, prev_t = _NAMES[0], _TEMP[0]  # O(1)
     _TEMP[0] = root  # O(1)
     scan = code  # O(1)
+    data = False  # strings are data, so no code can reach a helper by its name as text  # O(1)
     if lang == "py":  # strings and comments are data unless the code can run text  # O(1)
         masked = _mask(code)  # O(len(code))
         if masked is not None and not any(r.search(masked) for r in _RUNS_TEXT):  # O(len(code))
-            scan = masked  # O(1)
+            scan, data = masked, True  # O(1)
     _NAMES[0] = _assigned(code, lang, scan)  # O(len(code))
     try:  # O(1)
-        if lang == "py":  # O(1)
+        if lang == "py" and data:  # O(1)
             params = _params(code, _NAMES[0])  # O(len(code))
             if params:  # O(1)
                 _NAMES[0] = _assigned(code, lang, scan, params)  # O(len(code))

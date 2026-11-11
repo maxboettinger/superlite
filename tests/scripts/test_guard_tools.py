@@ -480,6 +480,13 @@ def test_fstring_fields_and_unreadable_code_stay_visible():
 @pytest.mark.parametrize("runner", [
     "exec(s)", "eval(s)", "compile(s, 'x', 'exec')", "__import__('os')", "getattr(os, 'remove')",
     "import builtins", "import runpy", "import importlib", "os.system('true')", "import pickle",
+    "from os import system as sh\nsh('true')", "from os import popen as po", "from os import execv",
+    "from os import (\n    spawnl,\n)", "import timeit\ntimeit.timeit(s)", "import cProfile\ncProfile.run(s)",
+    "import profile\nprofile.run(s)", "import pdb\npdb.run(s)", "import doctest",
+    "import asyncio\nasyncio.create_subprocess_shell(s)", "import asyncio\nasyncio.create_subprocess_exec(s)",
+    "import sys\nsys.modules['builtins'].exec(s)", "x.eval(s)", "globals()['f'](s)", "vars()", "locals()",
+    "import sys\nsys.modules", "k.__dict__", "f.__globals__", "object.__subclasses__()", "import operator",
+    "import os as o\no.system('true')",
 ])
 def test_code_that_can_run_text_keeps_strings_visible(runner):
     code = "import os\ns = \"open('src/a.py', 'w').write('x')\"\n" + runner + "\n"
@@ -586,3 +593,30 @@ def test_temp_folders_the_guard_cannot_place_stay_unknown(troot, code):
 
 def test_without_the_command_text_the_temp_root_is_unknown(troot):
     assert targets(["python3", "-c", "import tempfile\nopen(tempfile.gettempdir() + '/a', 'w')\n"]) == ["?"]
+
+
+BIG_HELPER = "from pathlib import Path\ndef sub(path, old, new):\n    Path(path).write_text(old + new)\n"
+
+
+@pytest.mark.parametrize("extra", [
+    "exec(\"sub('src/a.py', 'a', 'b')\")\n",
+    "globals()['sub']('src/a.py', 'a', 'b')\n",
+    "import sys\ngetattr(sys.modules[__name__], 'sub')('src/a.py', 'a', 'b')\n",
+    "vars()['sub']('src/a.py', 'a', 'b')\n",
+    "locals()['sub']('src/a.py', 'a', 'b')\n",
+    "import sys\nsys.modules['__main__'].sub('src/a.py', 'a', 'b')\n",
+    "sub.__dict__\nexec('x')\n",
+])
+def test_helper_parameter_stays_unknown_when_the_code_can_reach_the_helper_indirectly(extra):
+    assert "?" in targets(["python3", "-c", BIG_HELPER + "sub('docs/a.md', 'a', 'b')\n" + extra])
+
+
+def test_a_large_program_with_many_helpers_and_calls_stays_fast():
+    import time
+    defs = "".join(f"def h{i}(path, a):\n    Path(path).write_text(a)\n" for i in range(200))
+    calls = "".join(f"h{i % 200}('docs/f{i % 20}.md', x{i} + 'y')\n" for i in range(2000))
+    code = "from pathlib import Path\n" + defs + calls
+    t = time.monotonic()
+    out = targets(["python3", "-c", code])
+    assert time.monotonic() - t < 2.0
+    assert "docs/f0.md" in out and "docs/f19.md" in out
