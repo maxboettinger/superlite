@@ -8,6 +8,8 @@
     fleet_io.py wait [--timeout MS] [--any] [WID ...]
     fleet_io.py stopped WID --sd DIR [--t MS]       (the worker stop hook: relabel the pane)
 
+A batch's task message has one Verify Tn line per member, each with its own --task, and a Batch line: one run per task (#556).
+
 `wait` prints one line per finished worker (`W1 T3 DONE findings=0 <report json>`; a layer worker: `W3 layer-headless
 GREEN exit=0 <log>` plus its last log line), `BLOCKED-UI` plus the screen for a blocked one, and `TIMEOUT W2 ...` for the
 rest. A stop record ends the wait in any Herdr state when it holds a status; one without a status on a done or idle
@@ -76,9 +78,6 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
     ids = ", ".join(tasks)  # O(k)
     owns = [o for t in mine for o in t.owns]  # O(k*o)
     others = list(dict.fromkeys(o for t in pl.tasks if t.id not in tasks for o in t.owns if o not in owns))  # O(n*o*k) own files are never off limits, repeats dropped
-    tests = testcmd.verify_paths(owns)  # O(o)
-    code = bool(tests)  # O(1)
-    build = all(t.features.get("tests") == "build" for t in mine)  # O(k*s)
     out = [f"# Task{'s' if len(tasks) > 1 else ''} {ids}", "", f"SUPERLITE={superlite_root}", f"PLAN={plan}", f"sl (type it literally in every command): {sl_path}"]  # O(1)
     if tier == "haiku":  # O(1)
         out += ["", "Your task text:", ""] + [taskmod.render(pl, t) for t in tasks]  # O(k*n*q*s)
@@ -101,14 +100,13 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
         return f"`{sl_path} run_tests --fast {' '.join(tests)} --task {tid} --background`" + tail  # O(o)
     if ext:  # O(1)
         out += [f"Verify: `{sl_path} plan_tools external {tasks[0]} --plan {plan} --test` (its **Repo test:** command in the task's tree), not run_tests."]  # O(1)
-    elif any(cmds.values()):  # O(k)
+    else:  # O(1)
         for t in mine:  # O(k)
             tt = testcmd.verify_paths(t.owns)  # O(o)
             ln = line(None, t.id, tt, t.features.get("tests") == "build", bool(tt))  # O(o)
             out += [("Verify: " if len(mine) == 1 else f"Verify {t.id}: ") + (ln or "no test command (no code file in Owns); check that each owned file exists and says what the task asks.")]  # O(o)
-    else:  # O(1)
-        ln = line(None, tasks[0], tests, build, code)  # O(o)
-        out += ["Verify: " + (ln or "no test command (no code file in Owns); check that each owned file exists and says what the task asks.")]  # O(o)
+        if len(mine) > 1:  # O(1)
+            out += ["Batch: run each task's Verify command on its own (the red run too), never one run_tests for several tasks; a `--task Tn` run may use Tn's own tree, which holds Tn's files but not another member's unfinished ones, so each task's change must work without the other's."]  # O(1)
     out += ["", f"Reply in at most 200 words, starting with `{STATUS_LINE}` (pick one), then files changed, the test command and its result line, and open questions."]  # O(1)
     return "\n".join(out) + "\n"  # O(out)
 
