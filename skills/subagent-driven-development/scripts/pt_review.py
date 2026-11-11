@@ -26,6 +26,7 @@ Plan conventions read here (per task section `### Tn ...`):
   Data contract lines (any line, anchored at the start, bullets allowed):
       POST /api/cells {"ref":"A1"} -> 200 {cells: dict, note?: str}
   Review Focus section lines:  - <package>: deep, numeric, encoding, state
+  A Produces name resolves to the owning task's module first (`registry.register` -> the owned `.../sub/registry.py`).
   Task graph: a `%% taskgraph` block of `Tn --> Tm` edges (Tn produces for Tm).
 """  # O(1)
 # Complexity notation:
@@ -96,6 +97,8 @@ DECL_PREFIX_RE = re.compile(r"(?:(?:public|private|internal|fileprivate|open|fin
 FILE_SUFFIXES = {e.lstrip(".") for e in DECL_PATTERNS} | {"py", "md", "json", "yml", "yaml", "toml", "txt"}  # a name ending in one is a file name | O(1)
 STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')  # O(1)
 DOCS_NOTES: list[str] = []  # tasks with Produces but no code files in the last check_interfaces call | O(1)
+AMBIGUOUS_NOTES: list[str] = []  # Produces names matching several owned modules in the last check_interfaces call | O(1)
+AMBIGUOUS_ITEMS: list[Planned] = []  # the items behind AMBIGUOUS_NOTES, skipped by the comparison | O(1)
 DECLARED_NOTES: list[str] = []  # tasks checked by declaration in the last check_interfaces call | O(1)
 CONSUMER_EXT = {".html", ".htm", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".vue", ".py"}  # O(1)
 
@@ -706,6 +709,21 @@ def _exact_case(f: Path, n: int) -> bool:  # O(n * dir size) listdirs
 def locate(root: Path, plan: Plan, p: Planned) -> tuple[str, list[str], Path | None]:  # O(d^2 + o*B) per item (re-parses owned files)
     """Return (module, attribute chain, defining file) for a planned item."""  # O(d)
     parts = p.parts  # O(d)
+    own_py = [root / o for o in plan.tasks[p.task].owns() if o.endswith(".py") and not TEST_PATH_RE.search(o)]  # O(o*m)
+    mods = [(f, module_name(root, f)) for f in own_py]  # O(o*d)
+    for k in range(len(parts), 0, -1):  # O(d) iterations; the owning task's own modules come first
+        name = ".".join(parts[:k])  # O(d)
+        hit = [f for f, m in mods if m == name] or [f for f, m in mods if m.endswith("." + name)]  # O(o)
+        if len(hit) == 1:  # O(1)
+            return module_name(root, hit[0]), parts[k:], hit[0]  # O(d)
+        if hit:  # O(1)
+            named = [f for f in hit if k < len(parts) and parts[k] in _top_level_names(f)]  # O(o*B)
+            if len(named) == 1:  # O(1)
+                return module_name(root, named[0]), parts[k:], named[0]  # O(d)
+            if p not in AMBIGUOUS_ITEMS:  # O(I)
+                AMBIGUOUS_ITEMS.append(p)  # O(1)
+                AMBIGUOUS_NOTES.append(f"{p.task} Produces {p.qual}: {name} matches {', '.join(rel_to(root, f) for f in hit)}; write the full module path")  # O(o*d)
+            return "", parts, None  # O(1)
     for pkg in project_packages(root, plan, p.task):  # O(P) iterations; project-package prefix before the name as written
         if parts[0] == pkg:  # O(1)
             continue  # O(1)
@@ -842,6 +860,8 @@ def check_declarations(plan: Plan, root: Path, p: Planned) -> list[Mismatch]:  #
 
 def check_interfaces(plan: Plan, root: Path, task_ids: list[str] | None) -> tuple[list[Mismatch], int]:  # O(P*(d^2 + o*B + p^2)) + 1 subprocess total
     DECLARED_NOTES.clear()  # O(1)
+    AMBIGUOUS_NOTES.clear()  # O(1)
+    AMBIGUOUS_ITEMS.clear()  # O(1)
     DOCS_NOTES.clear()  # O(1)
     DOCS_NOTES.extend(tid for tid, t in plan.tasks.items() if (task_ids is None or tid in task_ids)  # O(n*o)
                       and t.owns() and t.produces() and not code_owns(plan, tid))  # O(o*m)
@@ -854,14 +874,14 @@ def check_interfaces(plan: Plan, root: Path, task_ids: list[str] | None) -> tupl
         locs = [locate(root, plan, p) for p in rest]  # O(1)
         reals = read_real(root, [(m, c) for m, c, _f in locs])  # O(1)
         for p, (mod, chain, f), real in zip(rest, locs, reals):  # O(P) iterations
-            for m in compare_sig(p, real):  # O(msgs) iterations
+            for m in ([] if p in AMBIGUOUS_ITEMS else compare_sig(p, real)):  # O(msgs) iterations
                 out.append(Mismatch(1, rel_to(root, real.get("file") or f) if (real.get("file") or f) else rel_to(root, plan.path), 1, f"{p.task} Produces: {m}", p.task))  # O(1)
         return out, len(items)  # O(1)
     locs = [locate(root, plan, p) for p in items]  # O(1)
     reals = read_real(root, [(m, c) for m, c, _f in locs])  # O(1)
     out: list[Mismatch] = []  # O(1)
     for p, (mod, chain, f), real in zip(items, locs, reals):  # O(P) iterations
-        msgs = compare_sig(p, real)  # O(1)
+        msgs = [] if p in AMBIGUOUS_ITEMS else compare_sig(p, real)  # O(I)
         if msgs:  # O(1)
             file = rel_to(root, real.get("file") or f) if (real.get("file") or f) else \
                 rel_to(root, plan.path)  # O(1)
@@ -1295,6 +1315,7 @@ def cmd_contract(a: argparse.Namespace) -> int:  # O(parts above + Mm file opens
         if n == 0:  # O(1)
             notes.append(f"part1: {producer.id} has no parseable Produces signatures")  # O(1)
         notes.extend(f"part1: {t} has no code files; Produces not checked" for t in DOCS_NOTES)  # O(n)
+        notes.extend(f"part1: {t}" for t in AMBIGUOUS_NOTES)  # O(I)
         if DECLARED_NOTES:  # O(1)
             notes.append(f"part1: {n} Produces name(s) of {', '.join(DECLARED_NOTES)} checked by declaration, parameters unchecked")  # O(1)
         m2, n2 = check_data_contract(plan, root, producer, consumer)  # O(1)
@@ -1308,6 +1329,7 @@ def cmd_contract(a: argparse.Namespace) -> int:  # O(parts above + Mm file opens
         mismatches, n = check_interfaces(plan, root, None)  # O(1)
         notes.append(f"part1: {n} Produces signature(s) checked")  # O(1)
         notes.extend(f"part1: {t} has no code files; Produces not checked" for t in DOCS_NOTES)  # O(n)
+        notes.extend(f"part1: {t}" for t in AMBIGUOUS_NOTES)  # O(I)
         if DECLARED_NOTES:  # O(1)
             notes.append(f"part1: Produces of {', '.join(DECLARED_NOTES)} checked by declaration, parameters unchecked")  # O(1)
     for n_ in notes:  # O(parts) iterations
