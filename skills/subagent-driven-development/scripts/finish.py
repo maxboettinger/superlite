@@ -146,6 +146,19 @@ STOP_KINDS = ("rule-block", "rule-rewrite", "guard-error", "no-result")  # incid
 UNRESOLVED = ("", "none", "open", "unresolved")  # as commit_task reads a block's state | O(1)
 
 
+def _error_target(file, line, context):  # O(w) a commit_task block's target: file[:line] plus the error, cut at 150 chars
+    reason = re.sub(r"^T\w+:\s*", "", " ".join(str(context or "").split()))  # drop the task prefix | O(w)
+    reason = reason.removesuffix("; nothing committed").strip()  # O(w)
+    if reason.startswith("change outside Owns"):  # a scope block names no error | O(1)
+        reason = ""  # O(1)
+    try:  # O(1)
+        n = int(line or 0)  # O(1)
+    except (TypeError, ValueError):  # O(1)
+        n = 0  # O(1)
+    head = f"{file}:{n}" if n > 0 else file  # O(1)
+    return f"{head} {reason[:150]}" if reason else head  # O(1)
+
+
 def read_stops(path):  # O(I*w) the stops of a run: (kind, tool, target) per incident, in log order
     """Superlite-side stops from the incident log: the kinds in STOP_KINDS, and an open `exception` of commit_task (a
     commit scope block or a refused commit). `tool` is the entry's `tool` (the hook or command that stopped), else its
@@ -170,6 +183,8 @@ def read_stops(path):  # O(I*w) the stops of a run: (kind, tool, target) per inc
             continue  # O(1)
         file = str(e.get("file") or "")  # O(1)
         target = str(e.get("target") or ("" if file in ("", "-") else file))  # O(1)
+        if kind == "exception" and e.get("agent") == "commit_task" and file not in ("", "-") and not e.get("target"):  # O(1)
+            target = _error_target(file, e.get("line"), e.get("context"))  # O(w)
         extra = [f"{k} {' '.join(str(e[k]).split())}" for k in ("rule", "cwd") if e.get(k)]  # O(w)
         if extra:  # O(1)
             target += " (" + ", ".join(extra) + ")"  # O(w)
