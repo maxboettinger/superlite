@@ -6,9 +6,12 @@ literal, a directory with a trailing "/" for an extraction into it. COMMANDS hol
 module reads (a path and ".exe" are stripped from the command word first).
 """
 
+import ast
+import io
 import os
 import re
 import shlex
+import tokenize
 
 import guard_files
 import guard_lex
@@ -760,14 +763,24 @@ def _split_top(text: str) -> list[str]:  # O(len(text)) | the top-level comma-se
     return out  # O(len(out))
 
 
-def _assigned(code: str, lang: str) -> dict[str, list[str]]:  # O(len(code)) | name -> its literals; any other assignment drops it
+def _assigned(code: str, lang: str, scan: str | None = None,
+              params: list[tuple[int, str, list[str] | None]] | None = None) -> dict[str, list[str]]:  # O(len(code)) | name -> its literals; any other assignment drops it
+    scan = code if scan is None else scan  # the text the events are found in (strings and comments masked)  # O(1)
     lits: dict[str, list[str]] = {}  # O(1)
     bad: set[str] = set()  # O(1)
-    events = [(m.start(), m) for m in _ASSIGN.finditer(code)]  # O(len(code))
-    events += [(m.start(), m) for m in _FOR.finditer(code)] if lang == "py" else []  # O(len(code))
+    events: list = [(m.start(), _ASSIGN.match(code, m.start())) for m in _ASSIGN.finditer(scan)]  # found in scan, read in code  # O(len(code))
+    events += [(m.start(), _FOR.match(code, m.start())) for m in _FOR.finditer(scan)] if lang == "py" else []  # O(len(code))
+    events = [e for e in events if e[1] is not None]  # O(len(events))
+    events += [(off, (name, vals)) for off, name, vals in params or []]  # a helper's parameter, at its def line  # O(len(params))
     events.sort(key=lambda e: e[0])  # O(events * log events)
     for _, m in events:  # O(events)
         known = {k: v for k, v in lits.items() if k not in bad}  # O(len(lits))
+        if isinstance(m, tuple):  # a helper parameter: the literals of its calls, or unknown  # O(1)
+            if m[1] is None:  # O(1)
+                bad.add(m[0])  # O(1)
+            else:  # O(1)
+                lits.setdefault(m[0], []).extend(v for v in m[1] if v not in lits.get(m[0], []))  # O(len(m[1]))
+            continue  # O(1)
         if m.re is _FOR:  # for NAME in (literal, ...): the name takes every value  # O(1)
             names = _IDENT.findall(m.group(1))  # O(1)
             vals = None  # O(1)
@@ -1235,9 +1248,10 @@ def _str_name(code: str, pos: int) -> bool:  # O(len(code)) | is the receiver en
     return True  # O(1)
 
 
-def _py_methods(code: str) -> list[str]:  # O(len(code))
+def _py_methods(code: str, scan: str | None = None) -> list[str]:  # O(len(code))
+    scan = code if scan is None else scan  # O(1)
     out: list[str] = []  # O(1)
-    for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|unlink|open|rename|replace)\s*\(", code):  # O(len(code))
+    for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|unlink|open|rename|replace)\s*\(", scan):  # O(len(code))
         name = m.group(1)  # O(1)
         if re.search(r"\b(?:os|shutil)\s*$", code[max(0, m.start() - 12):m.start()]):  # a module function, matched by name  # O(1)
             continue  # O(1)
@@ -1293,25 +1307,108 @@ def _expand(args: list[Arg]) -> list[list[Arg]]:  # O(64 * len(args)) | a name a
     return combos  # O(1)
 
 
+_RUNS_TEXT = (
+    re.compile(r"(?<![\w.])(?:exec|eval|compile|execfile|__import__|getattr|system|popen)\s*\("),
+    re.compile(r"\b(?:builtins|__builtins__|runpy|importlib|subprocess|pty|pickle|marshal|ctypes)\b"),
+    re.compile(r"\bos\s*\.\s*(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*)\b"),
+    re.compile(r"\b(?:import\s+code|from\s+code\s+import)\b"),
+)  # code that can run text keeps its strings visible
+
+
+def _mask(code: str) -> str | None:  # O(len(code)) | code with plain string literals and comments blanked (same offsets), None if unreadable
+    starts = [0]  # O(1)
+    for line in code.split("\n"):  # O(len(code))
+        starts.append(starts[-1] + len(line) + 1)  # O(1)
+    chars = list(code)  # O(len(code))
+    try:  # O(1)
+        for tok in tokenize.generate_tokens(io.StringIO(code).readline):  # O(len(code))
+            if tok.type == tokenize.COMMENT or (tok.type == tokenize.STRING and not re.match(r"[A-Za-z]*[fF]", tok.string)):  # O(1)
+                a, b = starts[tok.start[0] - 1] + tok.start[1], starts[tok.end[0] - 1] + tok.end[1]  # O(1)
+                for k in range(a, b):  # O(len(token))
+                    if chars[k] != "\n":  # O(1)
+                        chars[k] = " "  # O(1)
+    except Exception:  # O(1)
+        return None  # O(1)
+    return "".join(chars)  # O(len(code))
+
+
+def _params(code: str, known: dict[str, list[str]]) -> list[tuple[int, str, list[str] | None]]:  # O(len(code) * |tree|)
+    """(offset of the def line, parameter, the literals of its calls or None) for each parameter of a plain module-level helper."""
+    try:  # O(1)
+        tree = ast.parse(code)  # O(len(code))
+    except Exception:  # O(1)
+        return []  # O(1)
+    starts = [0]  # O(1)
+    for line in code.split("\n"):  # O(len(code))
+        starts.append(starts[-1] + len(line) + 1)  # O(1)
+    nodes = list(ast.walk(tree))  # O(|tree|)
+    defs = [n for n in nodes if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]  # O(|tree|)
+    out: list[tuple[int, str, list[str] | None]] = []  # O(1)
+    for fn in tree.body:  # O(|tree|)
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):  # O(1)
+            continue  # O(1)
+        a = fn.args  # O(1)
+        if a.vararg or a.kwarg or a.posonlyargs or a.kwonlyargs or sum(d.name == fn.name for d in defs) != 1:  # O(|tree|)
+            continue  # O(1)
+        names = [x.arg for x in a.args]  # O(1)
+        defaults = dict(zip(names[len(names) - len(a.defaults):], a.defaults))  # O(1)
+        calls = [n for n in nodes if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == fn.name]  # O(|tree|)
+        uses = sum(isinstance(n, ast.Name) and n.id == fn.name for n in nodes)  # O(|tree|)
+        plain = bool(calls) and uses == len(calls)  # only direct calls use the name  # O(1)
+        plain = plain and not any(isinstance(x, ast.Starred) for c in calls for x in c.args)  # O(|tree|)
+        plain = plain and all(k.arg in names for c in calls for k in c.keywords)  # no ** and no unknown keyword  # O(|tree|)
+        values: dict[str, list[str] | None] = {n: [] for n in names}  # O(1)
+        for c in calls if plain else []:  # O(calls)
+            kw = {k.arg: k.value for k in c.keywords}  # O(1)
+            for i, n in enumerate(names):  # O(len(names))
+                node = c.args[i] if i < len(c.args) else kw.get(n, defaults.get(n))  # O(1)
+                vals = None  # O(1)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):  # O(1)
+                    vals = [node.value]  # O(1)
+                elif node is not None:  # O(1)
+                    seg = ast.get_source_segment(code, node)  # O(len(code))
+                    r = _compose_raw(seg, known) if seg is not None else None  # O(len(seg))
+                    vals = r if r is not None and all(_UNK not in v for v in r) else None  # O(len(r))
+                cur = values[n]  # O(1)
+                if vals is None or cur is None:  # O(1)
+                    values[n] = None  # O(1)
+                else:  # O(1)
+                    values[n] = _uniq(cur + vals)  # O(len(vals))
+        for n in names:  # O(len(names))
+            v = values[n] if plain else None  # O(1)
+            out.append((starts[fn.lineno - 1], n, None if v is None or len(v) > 64 else v))  # O(1)
+    return out  # O(len(out))
+
+
 def _code(code: str, lang: str) -> list[str]:  # O(len(code) * |patterns|)
     prev = _NAMES[0]  # O(1)
-    _NAMES[0] = _assigned(code, lang)  # O(len(code))
+    scan = code  # O(1)
+    if lang == "py":  # strings and comments are data unless the code can run text  # O(1)
+        masked = _mask(code)  # O(len(code))
+        if masked is not None and not any(r.search(masked) for r in _RUNS_TEXT):  # O(len(code))
+            scan = masked  # O(1)
+    _NAMES[0] = _assigned(code, lang, scan)  # O(len(code))
     try:  # O(1)
-        return _code1(code, lang)  # O(len(code) * |patterns|)
+        if lang == "py":  # O(1)
+            params = _params(code, _NAMES[0])  # O(len(code))
+            if params:  # O(1)
+                _NAMES[0] = _assigned(code, lang, scan, params)  # O(len(code))
+        return _code1(code, lang, scan)  # O(len(code) * |patterns|)
     finally:  # O(1)
         _NAMES[0] = prev  # O(1)
 
 
-def _code1(code: str, lang: str) -> list[str]:  # O(len(code) * |patterns|)
+def _code1(code: str, lang: str, scan: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
+    scan = code if scan is None else scan  # O(1)
     out: list[str] = []  # O(1)
     for pat, action in _CALLS[lang]:  # O(|patterns|)
-        for m in re.finditer(pat, code):  # O(len(code))
+        for m in re.finditer(pat, scan):  # O(len(code))
             at = m.end() - 1 if code[m.end() - 1] == "(" else m.end()  # the opening ( is part of the argument list  # O(1)
             args, end = _parse_args(code, at, lang, lang in ("rb", "pl"))  # O(len(code))
             for c in _expand(args):  # O(64)
                 out.extend(action(c, code[at:end]))  # type: ignore[operator]  # O(len(args))
     if lang == "py":  # O(1)
-        out.extend(_py_methods(code))  # O(len(code))
+        out.extend(_py_methods(code, scan))  # O(len(code))
     if lang in ("rb", "php", "pl"):  # backticks and qx/%x run shell text  # O(len(code))
         for m in re.finditer(r"`((?:[^`\\]|\\.)*)`|(?:\bqx|%x)\s*([({\[/'\"])", code):  # O(len(code))
             if m.group(1) is not None:  # O(1)
