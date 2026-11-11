@@ -16,6 +16,8 @@ LINE = "- Ruling: T1 also commits src/b.txt - declared before the test run (run_
 
 def prep(tmp_path):
     plan = setup(tmp_path)
+    with (tmp_path / ".git" / "info" / "exclude").open("a", encoding="utf-8") as fh:
+        fh.write("_sl_home/\n")  # the test's superlite home is no project file
     (tmp_path / "src" / "b.txt").write_text("b", encoding="utf-8")
     git(tmp_path, "add", "-A")
     git(tmp_path, "commit", "-q", "-m", "b")
