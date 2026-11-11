@@ -14,6 +14,7 @@ feedback entry (`feedback.add_auto`; a failure to write feedback never fails fin
 A task held by `sl hold` (and not committed) is listed with its reason.
 The output ends with the takeover hint (only when another live session owns the run) and then the last line,
 `next: sl orchestrator end [--plan PLAN]` (#497): the guard blocks every edit until it runs, a merge-conflict fix too.
+Before the takeover hint, `moved_lines` adds one `WARNING:` line per ref of the default branch (local, then `origin/`) that changed files this run owns since the branch left it (#493; warn only, never fails finish).
 Deterministic: the same files give the same text. Stdlib only.
 """
 # Complexity notation:
@@ -418,6 +419,53 @@ def bulk_close_line(incidents):  # O(I)
             f"({'; '.join(parts)})")
 
 
+def _git_files(top, *args):  # O(files) + spawn: NUL-separated names of a git command, [] on failure
+    import worktree  # O(1)
+    rc, out, _ = worktree.git(top, *args)  # O(files) + spawn
+    return [f for f in out.split("\0") if f] if not rc else []  # O(files)
+
+
+def moved_lines(sd, plan=None):  # O(files) + git spawns
+    """-> WARNING lines for the default branch moving in files the run owns (local ref, then origin/<name>); [] on any failure."""
+    try:  # O(1)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+        import worktree  # O(1)
+        g = worktree.git  # O(1)
+        rc, top, _ = g(Path(sd).resolve().parent, "rev-parse", "--show-toplevel")  # O(1) + spawn
+        if rc or not top:  # O(1)
+            return []  # O(1)
+        head = g(top, "symbolic-ref", "-q", "refs/remotes/origin/HEAD")[1].rsplit("/", 1)[-1]  # O(1) + spawn
+        names = [head] if head else []  # O(1)
+        names += [n for n in ("main", "master") if n not in names and g(top, "show-ref", "--verify", "-q", f"refs/heads/{n}")[0] == 0 and not head]  # O(1) + spawns
+        if not names:  # O(1)
+            return []  # O(1)
+        name = names[0]  # O(1)
+        owned = None  # computed once, only when a ref moved | O(1)
+        seen = set()  # O(1)
+        out = []  # O(1)
+        for label, ref in ((name, f"refs/heads/{name}"), (f"origin/{name}", f"refs/remotes/origin/{name}")):  # O(1)
+            rc, sha, _ = g(top, "rev-parse", "--verify", "-q", ref)  # O(1) + spawn
+            if rc or not sha or sha in seen:  # O(1)
+                continue  # O(1)
+            seen.add(sha)  # O(1)
+            rc, base, _ = g(top, "merge-base", "HEAD", ref)  # O(1) + spawn
+            if rc or not base or base == sha:  # O(1) unrelated, or already merged (the ref is the merge-base)
+                continue  # O(1)
+            moved = _git_files(top, "diff", "--name-only", "-z", base, ref)  # O(files) + spawn
+            if owned is None:  # O(1)
+                owned = (worktree._plan_owns(plan) if plan else []) + _git_files(top, "diff", "--name-only", "-z", base, "HEAD") + _git_files(top, "diff", "--name-only", "-z", "HEAD")  # O(files) + spawns
+            hits = worktree.overlaps(moved, owned)  # O(files^2)
+            if not hits:  # O(1)
+                continue  # O(1)
+            k = g(top, "rev-list", "--count", f"{base}..{ref}")[1]  # O(1) + spawn
+            n, c = len(hits), int(k or 0)  # O(1)
+            out.append(f"WARNING: {label} moved in {n} file{'s' if n != 1 else ''} this run owns ({c} commit{'s' if c != 1 else ''} "  # O(1)
+                       f"since this branch left it at {base[:10]}): {worktree.shown_list(hits)}; merge {label} into this branch before shipping (finishing skill: conflict step)")
+        return out  # O(1)
+    except Exception:  # O(1) warn only
+        return []  # O(1)
+
+
 def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # O(R*w + I*w + C + G)
     rulings, commits, _ = read_ledger(ledger)  # O(R*w)
     incidents = open_incidents(log, load_run_summaries(sl_dir or Path(ledger).parent))  # O(I*w + I*S*F)
@@ -475,6 +523,10 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     if incidents:  # the close form for one an obsolete or fixed one (#116) | O(1)
         out.append("- close one: sl incident resolve --file F --line N --ruling \"TEXT\" (file and line as listed)")  # O(1)
         out.append(bulk_close_line(incidents))  # O(I)
+    try:  # warn only (#493) | O(files) + spawns
+        out += moved_lines(Path(ledger).resolve().parent, plan or None)  # O(files) + spawns
+    except Exception:  # O(1)
+        pass  # O(1)
     try:  # a hint only: finish never fails over it | O(d)
         import state  # O(1)
         sd = Path(ledger).resolve().parent  # O(d)
