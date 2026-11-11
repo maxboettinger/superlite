@@ -232,7 +232,15 @@ def _pyproject_deps(root):  # O(pyproject size); (main, optional) normalised nam
         extra += [r for r in v if isinstance(r, str)]  # O(group)
     uv = data.get("tool", {}).get("uv", {}) if isinstance(data.get("tool"), dict) else {}  # O(1)
     extra += list(uv.get("dev-dependencies") or []) if isinstance(uv, dict) else []  # O(deps)
-    return main - {None}, {_req_name(r) for r in extra} - {None}  # O(deps)
+    poetry = data.get("tool", {}).get("poetry", {}) if isinstance(data.get("tool"), dict) else {}  # O(1)
+    poetry = poetry if isinstance(poetry, dict) else {}  # O(1)
+    if isinstance(poetry.get("dependencies"), dict):  # O(1)
+        main |= {_req_name(k) for k in poetry["dependencies"] if k != "python"}  # O(deps)
+    for g in (poetry.get("group") or {}).values():  # O(groups)
+        if isinstance(g, dict) and isinstance(g.get("dependencies"), dict):  # O(1)
+            extra += list(g["dependencies"])  # O(group)
+    main -= {None}  # O(deps)
+    return main, {_req_name(r) for r in extra} - {None} - main  # O(deps)
 
 
 def optional_deps(root):  # O(pyproject size)

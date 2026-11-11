@@ -62,6 +62,13 @@ def test_main_dependency_still_blocks(tmp_path):
 
 
 @NEW_PY
+def test_optional_deps_poetry_groups(tmp_path):
+    write(tmp_path, "pyproject.toml", '[tool.poetry.dependencies]\npython = "^3.11"\nrequests = "^2"\n'
+          '[tool.poetry.group.nb.dependencies]\nmarimo = "*"\nrequests = "*"\n')
+    assert commit_task.optional_deps(tmp_path) == {"marimo"}
+
+
+@NEW_PY
 def test_optional_deps_names(tmp_path):
     write(tmp_path, "pyproject.toml", '[project]\ndependencies = ["requests>=2"]\n'
           '[project.optional-dependencies]\nnotebooks = ["marimo>=0.9", "Plotly.Express"]\n'
