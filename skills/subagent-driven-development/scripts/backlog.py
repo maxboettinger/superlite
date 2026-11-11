@@ -526,6 +526,7 @@ def cmd_plan(a) -> int:
         live = [b for b in data["batches"] if b["state"] != "shipped" and (not a.reset or b["state"] in ("running", "needs_decision"))]
         if live:  # a batch changed while the triage worker ran: never overwrite it
             raise RuntimeError("backlog changed while " + ("the proposal was checked" if proposal else "triage ran") + " (" + ", ".join(f"{b['id']} {b['state']}" for b in live) + ")")
+        shown["dropped"] = copy.deepcopy([b for b in data["batches"] if b["state"] != "shipped"]) if a.reset else []  # O(b)
         data["batches"] = [b for b in data["batches"] if b["state"] == "shipped"]
         data["repo"] = info["nameWithOwner"]
         data["titles"] = {str(t["number"]): t["title"] for t in trusted}
@@ -548,7 +549,13 @@ def cmd_plan(a) -> int:
         data["round"] = [x["id"] for x in new]  # O(b)
         shown["lines"] = bs.status_lines(data)
     bs.update(p, apply)
-    print("\n".join(shown["lines"] + cuts))
+    drops = []  # O(1)
+    if shown.get("dropped"):  # O(1)
+        import backlog_run  # O(1)
+        for b in shown["dropped"]:  # O(b)
+            if b.get("worktree"):  # O(1)
+                drops += backlog_run.drop_worktree(root, b)  # O(git)
+    print("\n".join(shown["lines"] + cuts + drops))
     return 0
 
 
@@ -721,8 +728,29 @@ def cmd_park(a) -> int:
     return _main_only("park", lambda bs, d: bs.park(d, a.batch, a.reason))
 
 
+def refresh_open(root: Path) -> dict:
+    import backlog_state as bs  # O(1)
+    p = bs.path(root)  # O(1)
+    data = bs.load(p)  # O(size)
+    marked = {b["id"]: list(b["open_issues"]) for b in data["batches"] if b.get("open_issues")}  # O(b)
+    if not marked:  # O(1)
+        return {}  # O(1)
+    import backlog_ship  # O(1)
+    fresh = {bid: backlog_ship.open_issues(data.get("repo") or "", old, root, retry=False) for bid, old in marked.items()}  # O(b * network)
+    changed = {}  # O(1)
+
+    def apply(d):
+        for b in d["batches"]:  # O(b)
+            if b["id"] in fresh and b.get("open_issues") == marked[b["id"]] and fresh[b["id"]] != marked[b["id"]]:  # O(issues)
+                b["open_issues"] = fresh[b["id"]]  # O(1)
+                changed[b["id"]] = fresh[b["id"]]  # O(1)
+    bs.update(p, apply)  # O(size)
+    return changed  # O(1)
+
+
 def cmd_status(a) -> int:
     import backlog_state as bs  # O(1)
+    refresh_open(_root())  # O(b * network)
     d = bs.load(bs.path(_root()))  # O(size)
     lines = bs.status_lines(d, all_=getattr(a, "all", False))  # O(b)
     if all(b["state"] == "shipped" for b in d["batches"]):  # O(b) no batch yet, or every batch shipped (#369)
