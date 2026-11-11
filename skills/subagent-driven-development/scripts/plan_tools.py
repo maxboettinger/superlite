@@ -1835,6 +1835,53 @@ def spec_gaps(spec_text: str, plan: "Plan") -> list[str]:  # O(S*(d+covers) + C)
     return gaps  # O(1)
 
 
+PLATFORM_IF_RE = re.compile(r"^\s*#(?:if|elseif)\b")  # O(1)
+PLATFORM_COND_RE = re.compile(r"\b(os|canImport|targetEnvironment)\(([^()]*)\)")  # O(1)
+PLATFORM_BUILD_RE = re.compile(r"-destination\b|\s-sdk\s|--swift-sdk\b|--triple\b")  # O(1)
+
+
+def _platform_conds(lines) -> list[str]:  # O(L*s) os/canImport/targetEnvironment conditions on #if/#elseif lines, first-seen order
+    out: list[str] = []  # O(1)
+    for ln in lines:  # O(L)
+        if PLATFORM_IF_RE.match(ln):  # O(s)
+            for kind, arg in PLATFORM_COND_RE.findall(ln):  # O(s)
+                c = f"{kind}({arg.replace(' ', '')})"  # O(s)
+                if c not in out:  # O(c)
+                    out.append(c)  # O(1)
+    return out  # O(1)
+
+
+def platform_notes(plan: Plan, root: Path | None) -> list[str]:  # O(n*(text + files*size)) #516: code behind #if os(...) needs the other platform's build
+    out: list[str] = []  # O(1)
+    for t in plan.tasks:  # O(n)
+        if t.status == "draft":  # O(k*s)
+            continue  # O(1)
+        conds = _platform_conds(t.text.splitlines())  # O(text)
+        srcs: list[str] = []  # O(1)
+        if root is not None and not t.repo:  # O(k*s)
+            for ent in t.written_owns:  # O(o)
+                if not ent.lower().endswith(".swift"):  # O(s)
+                    continue  # O(1)
+                try:  # O(1)
+                    body = (root / ent).read_text(encoding="utf-8", errors="replace")  # O(size)
+                except (OSError, ValueError):  # missing file, folder, bad path
+                    continue  # O(1)
+                found = _platform_conds(body.splitlines())  # O(size)
+                if found:  # O(1)
+                    srcs.append(ent)  # O(1)
+                    conds.extend(c for c in found if c not in conds)  # O(c^2)
+        if not conds:  # O(1)
+            continue  # O(1)
+        if t.field_text("tests").strip().lower() == "slow" and PLATFORM_BUILD_RE.search(t.text):  # O(text)
+            continue  # O(1)
+        if _platform_conds(t.text.splitlines()):  # O(text)
+            srcs.append("task text")  # O(1)
+        shown = ", ".join(conds[:3]) + (f" +{len(conds) - 3} more" if len(conds) > 3 else "")  # O(c)
+        out.append(f"WARNING: PLATFORM: {t.id} has code behind #if {shown} ({', '.join(srcs)}); a build for the host platform skips it: "  # O(s)
+                   "put that platform's build in the task's steps (e.g. xcodebuild build -destination 'generic/platform=iOS') and set **Tests:** slow")  # O(1)
+    return out  # O(1)
+
+
 def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e*n + C*P + n*p + merge/simulate) total
     issues: list[str] = []  # O(1)
     warnings: list[str] = []  # O(1)
@@ -1942,6 +1989,10 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
     try:  # a SwiftPM import gap is a warning, never an issue; a parser miss must not block a task (#388) | O(1)
         if plan.path:  # O(1)
             warnings.extend(import_issues(plan, stable_root(str(plan.path))))  # O(T*d + files*s)
+    except (OSError, ValueError):  # O(1)
+        pass  # O(1)
+    try:  # #516 Swift code behind #if os(...) needs a second platform build | O(1)
+        warnings.extend(platform_notes(plan, stable_root(str(plan.path)) if plan.path else None))  # O(n*(text + files*size))
     except (OSError, ValueError):  # O(1)
         pass  # O(1)
     import shape  # lazy: shape imports this module | O(1)
