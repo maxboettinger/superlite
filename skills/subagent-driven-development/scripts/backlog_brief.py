@@ -122,7 +122,7 @@ def lead_brief(batch, ctx):  # O(i + f + a)
     out.append("Your run: the worktree you start in, state in .superlite/; pass --plan .superlite to every sl call.")  # O(1)
     out.append(f"First: `{sl} orchestrator set ai --plan .superlite`, then `{sl} fleet on --plan .superlite`.")  # O(1)
     out.append("Build: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, "
-               "superlite:subagent-driven-development with fleet on, the final review, the test layers.")  # O(1)
+               "superlite:subagent-driven-development with fleet on, the final review (UI screenshots go in .superlite/render/, its packet lists them), the test layers.")  # O(1)
     out.append(f"Never end your turn while your workers run: wait with `{sl} fleet wait --timeout 540000 --plan .superlite`.")  # O(1)
     out.append("Escalate a new major decision: let running workers finish, write .superlite/question.json in the "
                "AskUserQuestion shape, end your turn with Status: NEEDS_DECISION.")  # O(1)

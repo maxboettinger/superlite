@@ -17,7 +17,7 @@ GH_LEAD = ('# Lead brief: B1 (t)\nYou are the lead of batch B1 in o/r. Read /x/b
            "Max's decisions: none\nRulings from shipped batches: none\n"
            'Your run: the worktree you start in, state in .superlite/; pass --plan .superlite to every sl call.\n'
            'First: `/x/sl orchestrator set ai --plan .superlite`, then `/x/sl fleet on --plan .superlite`.\n'
-           'Build: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, superlite:subagent-driven-development with fleet on, the final review, the test layers.\n'
+           'Build: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, superlite:subagent-driven-development with fleet on, the final review (UI screenshots go in .superlite/render/, its packet lists them), the test layers.\n'
            'Never end your turn while your workers run: wait with `/x/sl fleet wait --timeout 540000 --plan .superlite`.\n'
            'Escalate a new major decision: let running workers finish, write .superlite/question.json in the AskUserQuestion shape, end your turn with Status: NEEDS_DECISION.\n'
            'Ship: allowed (approved by Max in AskUserQuestion at t). Ship only with `/x/sl backlog ship B1 lock`, then bump, then merge (backlog.md). Run each ship step as one bare command that starts with `/x/sl backlog ship` or `maxapp ship`: no `cd` (you start in your worktree), no pipe, no `echo`, no `&&` chain; the allow rules match nothing else. ' + bb.NOTES_RULE + 'one `Closes #N` line per issue ("Fixes #1, #2" closes only #1); merge adds a missing one and prints `OPEN #N` for an issue still open after the merge.\n'
