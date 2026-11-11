@@ -2554,19 +2554,58 @@ RENDER_EXTS = {".png", ".jpg", ".jpeg"}  # O(1)
 RENDER_MAX = 20  # images listed in the packet | O(1)
 
 
+RENDER_INDEX_LINE = re.compile(r"^\s*(?:[-*+]|\d+[.)])?\s*`?(?P<name>[^`/\\:]+?\.(?:png|jpe?g))`?\s*(?:[:–—-]\s*(?P<cap>.*?))?\s*$", re.IGNORECASE)  # O(1)
+RENDER_CAPTION_MAX = 200  # O(1)
+
+
+def read_render_index(d: Path) -> list[tuple[str, str]]:  # O(L) over the lines of index.md
+    """Ordered, deduplicated `(image name, caption)` pairs of `<d>/index.md`; `[]` when it is no readable file (#558)."""
+    f = d / "index.md"  # O(1)
+    try:  # O(1)
+        text = f.read_text(encoding="utf-8", errors="replace") if f.is_file() else ""  # O(L)
+    except OSError:  # O(1)
+        return []  # O(1)
+    out: dict[str, str] = {}  # O(1)
+    for line in text.splitlines():  # O(L)
+        if line.strip().startswith("#"):  # O(1)
+            continue  # O(1)
+        m = RENDER_INDEX_LINE.match(line)  # O(1)
+        if not m or m.group("name").strip() in out:  # O(1)
+            continue  # O(1)
+        cap = (m.group("cap") or "").strip()  # O(1)
+        if len(cap) > RENDER_CAPTION_MAX:  # O(1)
+            cap = cap[:RENDER_CAPTION_MAX - 3] + "..."  # O(1)
+        out[m.group("name").strip()] = cap  # O(1)
+    return list(out.items())  # O(L)
+
+
 def render_section(root: Path) -> str:  # O(n log n) over the files in .superlite/render
-    """The packet's `## Render evidence` section: the screenshots under .superlite/render, or "" (#490)."""
+    """The packet's `## Render evidence` section: the screenshots under .superlite/render (only those index.md names, when it does), or "" (#490, #558)."""
     d = root / ".superlite" / "render"  # O(1)
     if not d.is_dir():  # O(1)
         return ""  # O(1)
     imgs = sorted((f for f in d.iterdir() if f.is_file() and f.suffix.lower() in RENDER_EXTS), key=lambda f: f.name)  # O(n log n)
     if not imgs:  # O(1)
         return ""  # O(1)
+    entries = read_render_index(d)  # O(L)
+    names = {f.name: f for f in imgs}  # O(n)
+    shown = [(names[n], c) for n, c in entries if n in names]  # O(L)
+    missing = [n for n, _ in entries if n not in names]  # O(L)
     lines = ["## Render evidence",  # O(1)
-             "Open each image with Read and judge the rendered UI against the spec and the Review Focus:",  # O(1)
-             *(f"- {f.resolve().as_posix()}" for f in imgs[:RENDER_MAX])]  # O(RENDER_MAX)
-    if len(imgs) > RENDER_MAX:  # O(1)
-        lines.append(f"- (+{len(imgs) - RENDER_MAX} more not listed)")  # O(1)
+             "Open each image with Read and judge the rendered UI against the spec and the Review Focus:"]  # O(1)
+    if shown:  # O(1)
+        lines += [f"- {f.resolve().as_posix()}" + (f": {c}" if c else "") for f, c in shown[:RENDER_MAX]]  # O(RENDER_MAX)
+        if len(shown) > RENDER_MAX:  # O(1)
+            lines.append(f"- (+{len(shown) - RENDER_MAX} more not listed)")  # O(1)
+        other = len(imgs) - len(shown)  # O(1)
+        if other:  # O(1)
+            lines.append(f"- ({other} other image{'s' if other != 1 else ''} not named in index.md, not listed)")  # O(1)
+    else:  # O(1)
+        lines += [f"- {f.resolve().as_posix()}" for f in imgs[:RENDER_MAX]]  # O(RENDER_MAX)
+        if len(imgs) > RENDER_MAX:  # O(1)
+            lines.append(f"- (+{len(imgs) - RENDER_MAX} more not listed)")  # O(1)
+    if missing:  # O(1)
+        lines.append(f"- (index.md names files not found: {', '.join(missing)})")  # O(L)
     return "\n".join(lines) + "\n"  # O(RENDER_MAX)
 
 
