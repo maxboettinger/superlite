@@ -18,6 +18,9 @@
 #     `sl fleet spawn --role` hint, as the role is a fleet worker then. The message says the block repeats on every call (no retry);
 #     a researcher's message gives the research path (brief under <state folder>/briefs/, spawn, send, `fleet wait Wn`,
 #     report under <state folder>/fleet/reports/). Other agents (Explore, general-purpose) fall through.
+#     Reads the run's own fleet.json: from a linked worktree its .superlite, not a binding's folder in another checkout;
+#     a fleet another session turned on (owner_session, owner_pid) is skipped unless that session is still bound there.
+#     The message names the state folder as PLAN for a build without a plan.
 # The .superlite folder is the session's own (hooks/superlite-state.sh): its binding, else the launch
 # directory's unless another session owns that one.
 # Who judges what: the path of an Edit, Write or NotebookEdit call is judged here (project_code). A Bash or PowerShell
@@ -306,11 +309,61 @@ enforce=0
 { [ "$active" = 1 ] || [ "$human" = 1 ]; } && enforce=1
 
 if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
+  # FSD: the folder whose fleet.json rule 4 reads. $SUPERLITE_STATE_DIR wins; else the linked worktree the call's cwd is in
+  # (nearest `.git` above it is a file `gitdir: .../worktrees/<name>`) gives its own .superlite when $sd lies outside it
+  # (a binding to the main checkout) and is no private folder under sessions/.
+  FSD="$sd"
+  if [ -z "${SUPERLITE_STATE_DIR:-}" ]; then
+    jstr cwd; norm "${REPLY//\\\\//}"; fd="$NORM"; fw=""
+    case "$fd" in
+      /*)
+        while :; do
+          [ -e "$fd/.git" ] && { [ -f "$fd/.git" ] && fw="$fd"; break; }
+          [ -n "$fd" ] && [ "$fd" != / ] && [ "${fd%/*}" != "$fd" ] || break
+          fd="${fd%/*}"
+        done ;;
+    esac
+    if [ -n "$fw" ]; then
+      IFS= read -r fg < "$fw/.git" || true
+      fg="${fg%$'\r'}"; re_gd='^gitdir:[[:space:]]*(.*)$'
+      fw2=""
+      if [[ $fg =~ $re_gd ]]; then
+        norm "${BASH_REMATCH[1]}"; fg="$NORM"; fg="${fg%/*}"
+        [[ $fg == */worktrees ]] && fw2="$fw"
+      fi
+      if [ -n "$fw2" ]; then
+        norm "$sd"; fsn="$NORM"; norm "${SUPERLITE_HOME:-$HOME/.superlite}/sessions"; fss="$NORM"
+        case "$fsn" in
+          "$fw2/.superlite"|"$fw2"/*|"$fss"/*) ;;
+          *) FSD="$fw2/.superlite" ;;
+        esac
+      fi
+    fi
+  fi
   jstr subagent_type
-  if [ -f "$sd/fleet.json" ]; then   # rule 4: fleet on, so a superlite role is a worker, never an in-process Agent
-    IFS= read -r -d '' fj < "$sd/fleet.json"
+  fstale=0
+  if [ -f "$FSD/fleet.json" ]; then   # rule 4: fleet on, so a superlite role is a worker, never an in-process Agent
+    IFS= read -r -d '' fj < "$FSD/fleet.json"
     re_fon='"on"[[:space:]]*:[[:space:]]*true'
     if [[ $fj =~ $re_fon ]]; then
+      # a fleet another session turned on (owner_session) is stale unless that session is still bound to FSD or runs in this Claude process
+      re_os='"owner_session"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'
+      if [ -z "${SUPERLITE_STATE_DIR:-}" ] && [[ $fj =~ $re_os ]]; then
+        fo="${BASH_REMATCH[1]}"; fp=""
+        re_op='"owner_pid"[[:space:]]*:[[:space:]]*([0-9]+)'
+        [[ $fj =~ $re_op ]] && fp="${BASH_REMATCH[1]}"
+        re_sid='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'
+        fsid=""; [[ $input =~ $re_sid ]] && fsid="${BASH_REMATCH[1]}"
+        if [ "$fo" != "$fsid" ] && { [ -z "$fp" ] || [ "$fp" != "${CLAUDE_PID:-}" ]; }; then
+          _sl_line "${SUPERLITE_HOME:-$HOME/.superlite}/sessions/$fo"
+          fb=""
+          if [ -n "$SL_LINE" ]; then norm "$SL_LINE"; fb="$NORM"; fi
+          norm "$FSD"
+          [ "$fb" = "$NORM" ] || fstale=1
+        fi
+      fi
+    fi
+    if [ "$fstale" = 0 ] && [[ $fj =~ $re_fon ]]; then
       frole=""
       lower "$REPLY"; fname="${LOWER#superlite:}"   # `fixer-opus` and `Superlite:Fixer-Opus` name the same role
       case "$fname" in
@@ -322,12 +375,12 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
       esac
       if [ -n "$frole" ]; then
         printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)","rule":"fleet","cwd":"%s"}\n' "$tool" "$REPLY" "$cwdv" \
-          >> "$sd/incidents.jsonl" 2>/dev/null
+          >> "$FSD/incidents.jsonl" 2>/dev/null
         again="It is blocked on every call while fleet is on: do not retry it."
         if [ "$frole" = research ]; then
-          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $sd/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $sd/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $sd/fleet/reports/<name>.md. PLAN is the plan file, or $sd before a plan exists. sl fleet off goes back to in-process agents." >&2
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $FSD/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $FSD/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $FSD/fleet/reports/<name>.md. PLAN is the plan file, or $FSD before a plan exists. sl fleet off goes back to in-process agents." >&2
         else
-          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). sl fleet off goes back to in-process agents." >&2
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents." >&2
         fi
         exit 2
       fi

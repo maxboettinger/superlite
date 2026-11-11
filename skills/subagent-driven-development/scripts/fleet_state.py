@@ -63,10 +63,26 @@ def is_on(sd):  # O(w)
     return bool(load(sd).get("on"))  # O(w)
 
 
+def owner():  # O(1)
+    """Who turns fleet on: this session's id and the Claude process id; a part that is unknown is left out."""
+    import state  # O(1)
+    out = {}  # O(1)
+    sid = state.session_id()  # O(1)
+    if sid is not None:  # O(1)
+        out["owner_session"] = sid  # O(1)
+    pid = os.environ.get("CLAUDE_PID", "")  # O(1)
+    if re.fullmatch(r"[0-9]+", pid):  # O(1)
+        out["owner_pid"] = int(pid)  # O(1)
+    return out  # O(1)
+
+
 def set_on(sd, label, accounts):  # O(w)
     with locked(sd):  # O(1)
         data = load(sd)  # O(w)
         data.update({"on": True, "label": label, "accounts": list(accounts)})  # O(a)
+        data.pop("owner_session", None)  # O(1)
+        data.pop("owner_pid", None)  # O(1)
+        data.update(owner())  # O(1)
         save(sd, data)  # O(w)
         return data  # O(1)
 
