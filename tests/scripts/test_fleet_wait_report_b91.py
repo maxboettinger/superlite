@@ -41,4 +41,4 @@ def test_final_reviewer_fast_path_lists_checked():
         assert s in line, s
     assert "On the fast path reply with the bare verdict line" not in doc
     skill = (ROOT / "skills" / "subagent-driven-development" / "SKILL.md").read_text()
-    assert "fast path too" in skill and "--full" in skill and len(skill) <= 11700
+    assert "fast path too" in skill and "--full" in skill

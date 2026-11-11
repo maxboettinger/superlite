@@ -9,7 +9,7 @@ def read(name):
 
 def test_sdd_fleet_line_sends_every_role_to_fleet():
     sdd = read("SKILL.md")
-    assert LINE in sdd.splitlines() and "with the Agent calls" not in sdd and len(sdd) <= 11700
+    assert LINE in sdd.splitlines() and "with the Agent calls" not in sdd
 
 def test_fleet_md_names_each_role_and_its_command():
     t = read("fleet.md")

@@ -137,7 +137,7 @@ def test_every_bench_prompt_says_the_orchestrator_is_ai():
 def test_skill_size_caps_and_the_new_names():
     skills = REPO / "skills"
     assert len((skills / "using-superlite" / "SKILL.md").read_text(encoding="utf-8")) <= 2000
-    assert len((skills / "subagent-driven-development" / "SKILL.md").read_text(encoding="utf-8")) <= 11700
+    assert len((skills / "subagent-driven-development" / "SKILL.md").read_text(encoding="utf-8")) <= SDD_CAP
     brain = (skills / "brainstorming" / "SKILL.md").read_text(encoding="utf-8")
     assert "Human orchestrator: I approve the plan before it runs" in brain and "AI orchestrator: asks only major questions while planning, then hands off" in brain
     assert brain.count("AskUserQuestion") >= 1 and "ONE `AskUserQuestion` call" in brain
@@ -281,7 +281,7 @@ def test_skills_mention_both_phases_and_keep_their_caps():
         assert ".review.md" in text and "review-plan.md" in text and "approve --review" in text
     assert "**Review plan:**" in plans and "machine plan" in plans and "machine plan" in brain
     assert "approve --review PATH" in sdd and "review plan" in sdd
-    assert len((skills / "using-superlite" / "SKILL.md").read_text(encoding="utf-8")) <= 2000 and len(sdd) <= 11700
+    assert len((skills / "using-superlite" / "SKILL.md").read_text(encoding="utf-8")) <= 2000 and len(sdd) <= SDD_CAP
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     assert "review plan" in readme.lower() and "You approve first" in readme
 
@@ -308,3 +308,132 @@ def test_texts_state_the_hard_rule_plain_text_approval_and_the_small_form():
 def test_readme_has_the_human_mode_sentence():
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     assert "nothing is built, dispatched or written (except the review plan) until you reply approve" in readme
+
+
+SDD_SKILL = REPO / "skills" / "subagent-driven-development" / "SKILL.md"
+SDD_CAP = 13000  # the one size cap of the SDD SKILL.md (#555); other tests pin phrases, never its size
+
+# Every phrase another test in tests/scripts/ pins in the SDD SKILL.md, so a trim fails here first (#555).
+# A test that pins a new SKILL.md phrase adds it here too.
+SDD_PINNED = (
+    # test_agent_mcp_tools.py
+    "approved before dispatch",
+    "background agents",
+    "inherit the session's MCP tools",
+    # test_docs_b10.py
+    "`WAIT FOR T0:`",
+    "hold Tn --reason R",
+    "`<plan>.build-report.md`",
+    # test_docs_b102.py
+    "`description`",
+    "sl:<repo>-<worktree>-<id>",
+    "fleet name",
+    # test_docs_b32_sdd.py
+    "`unstable=Tn <reason>; rerun sl lint --stable`",
+    "then run the printed `wait:` line in the foreground (never as a background command) and end the turn only after it reports)",
+    "prints `Tn <sha>`, `Tn FAILED` or `Tn: no change since its last checkpoint <sha>` (one task: the SHA)",
+    "`depends on unstable <ids>`",
+    "once those ids are committed",
+    # test_docs_b72_skills.py
+    "Dispatched tasks are frozen: keep blocks byte-identical, else lint says `FROZEN:` (restore them). `MISSED TARGET:` warns",
+    "Ask only for an irreversible, destructive, security-sensitive or outward step (merge, push, publish), or a plan so broken all paths are guesses.",
+    # test_docs_b95_sdd.py
+    "--for-review",
+    "--package",
+    "review: Tn",
+    "--full",
+    "review:",
+    "--dismiss",
+    # test_docs_b98_sdd.py
+    "uses that run's summary",
+    "  G[all tasks reviewed + committed] --> ST[run_tests --full, wait]\n  ST --> PK[packet from its summary]\n",
+    "- Every test run is `run_tests ... --background`; wait in Final review 2 and 5.",
+    # test_docs_contract.py
+    "run_tests --fast PATHS --task Tn --background",
+    "--also F --ruling \"...\"",
+    "trees clean",
+    "zsh",
+    "Read <abs>/.superlite/prime.md",
+    "reply READY",
+    "never paste",
+    "**Wave0:** none",
+    "/scripts/sl",
+    "\"$SL\" fleet on",
+    "before the first dispatch",
+    "`fleet.md`",
+    "in-process",
+    # test_fleet_hard_stop.py
+    "report BLOCKED",
+    "never in-process",
+    # test_fleet_roles_skill.py
+    "Fleet mode (user asks): `\"$SL\" fleet on` before the first dispatch, then `fleet.md`: every role a worker, never in-process; missing or BLOCKED: report BLOCKED.",
+    # test_fleet_wait_report_b91.py
+    "fast path too",
+    # test_implementer_red_prime_b65.py
+    "status DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED, files, test result, `Red run:` line, open questions\"",
+    # test_isolation_wording.py
+    "ROOT=<abs run root>",
+    "Run root: a worktree",
+    "worktree ensure",
+    "`**Worktree:** none`",
+    # test_adapter_and_packet.py
+    # B112 (#549, #559, #562, #567)
+    '"$SL" incident add --agent coordinator --file <task file> --line 0 --context "BLOCKED Tn: <why>"',
+    '"$SL" plan_tools packet --inline --spec <spec.md> --base <start-sha>',
+    "UI screenshots (`.png`, `.jpg`, `.jpeg`) go in `.superlite/render/` first",
+    '"$SL" fleet spawn --role final-reviewer --plan $PLAN',
+    "--label FR<round> --plan $PLAN",
+    # main follow-up (#556)
+    "verify command (batch: one per member, each with its own `--task Tn` and PATHS, run on its own: `<abs sl> run_tests --fast PATHS --task Tn --background`",
+    # main follow-up (#558)
+    "Write `.superlite/render/index.md` too, one `- <file>: <caption>` line per current screenshot",
+)
+
+
+def sdd_text() -> str:
+    return SDD_SKILL.read_text(encoding="utf-8")
+
+
+def test_sdd_skill_cap_and_every_pinned_phrase():
+    sdd = sdd_text()
+    assert len(sdd) <= SDD_CAP, len(sdd)
+    missing = [p for p in SDD_PINNED if p not in sdd]
+    assert not missing, missing
+
+
+def test_sdd_final_review_names_fleet_reviewer_inline_packet_and_render():
+    final = sdd_text().split("## Final review", 1)[1].split("## Measure and budget", 1)[0]
+    step2 = next(ln for ln in final.splitlines() if ln.startswith("2. "))
+    step3 = next(ln for ln in final.splitlines() if ln.startswith("3. "))
+    assert '"$SL" plan_tools packet --inline --spec <spec.md> --base <start-sha>`, no `--plan`' in step2
+    assert "(inline: `--inline --spec" not in step2
+    assert "`.superlite/render/`" in step2 and "`## Render evidence`" in step2
+    assert "Fleet on (inline builds too)" in step3 and "Fleet off: Agent `superlite:final-reviewer`" in step3
+    assert step3.index("fleet spawn --role final-reviewer") < step3.index("fleet send Wn --brief") < step3.index("Fleet off")
+    assert "Start `superlite:final-reviewer` then" not in step3
+
+
+def test_sdd_incident_line_is_a_full_call():
+    line = next(ln for ln in sdd_text().splitlines() if ln.startswith("- Incidents:"))
+    assert "`--file`, `--line`, `--context` required" in line and "`incident add --help` lists the kinds" in line
+
+
+def test_sdd_incident_example_runs(tmp_path):
+    log = tmp_path / "incidents.jsonl"
+    cp = run(SCRIPTS / "incident.py", "add", "--agent", "coordinator", "--file", "src/a.py", "--line", "0",
+             "--context", "BLOCKED T3: no fixture", "--log", log)
+    assert cp.returncode == 0, cp.both
+    entry = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+    assert (entry["agent"], entry["file"], entry["line"], entry["context"]) == ("coordinator", "src/a.py", 0, "BLOCKED T3: no fixture")
+
+
+def test_fleet_md_inline_names_the_reviewer_worker():
+    t = (REPO / "skills" / "subagent-driven-development" / "fleet.md").read_text(encoding="utf-8")
+    assert "An inline build without a taskgraph starts no implementer worker (tell the user); its final reviewer is still a worker (`SKILL.md` Final review 3)." in t
+    assert "starts no worker: tell the user" not in t
+
+
+def test_no_other_test_holds_the_sdd_cap():
+    here = Path(__file__).resolve().parent
+    stale = [p.name for p in sorted(here.glob("test_*.py")) if p.name != Path(__file__).name and "<= 11700" in p.read_text(encoding="utf-8")]
+    assert not stale, stale

@@ -12,7 +12,6 @@ def test_sdd_names_in_process_agents():
     t = read(SDD / "SKILL.md")
     line = next(x for x in t.splitlines() if "fleet name" in x)
     assert "`description`" in line and "sl:<repo>-<worktree>-<id>" in line
-    assert len(t) <= 11700
 
 
 def test_fleet_docs_name_the_new_format():
