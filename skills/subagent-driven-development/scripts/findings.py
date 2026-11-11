@@ -178,7 +178,8 @@ def shared_lines(sl_path: str) -> list[str]:  # O(1)
             "`- red: <that run's summary line>`, for example `- red: tests (fast): 0 passed, 1 failed`.",  # O(1)
             "",  # O(1)
             f"Verify: `{sl_path} run_tests --fast <the test files you touched> --background`, then run the printed "  # O(1)
-            "`wait:` line in the foreground (never as a background command) and end your turn only after it reports."]  # O(1)
+            "`wait:` line in the foreground (never as a background command) and end your turn only after it reports.",  # O(1)
+            "The `--background` run prints a `next:` cue and, as its last line, the `wait:` line."]  # O(1)
 
 
 def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int) -> str:  # O(k + o)
