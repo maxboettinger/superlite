@@ -12,6 +12,8 @@ Haiku never fixes: a fix keeps a decision. Haiku stays only as `implementer-haik
 
 **Fleet on:** final-review and package-review findings go through `"$SL" findings route --plan PLAN <report json>...`, which writes one brief per owning task and prints `fixer tier=T brief=P files=F task=Tn`; each line is a fresh fixer worker: `"$SL" fleet spawn --role fixer --tier T --plan PLAN`, then `"$SL" fleet send Wn --brief P --plan PLAN`. Escalation sends the same brief to `--tier` one up.
 
+A file no task owns goes to the closest committed task that is not in progress; a `task=coordinator` line (every owner, or every committed task, in progress) is a brief whose fixer does not commit (`commit: held for the coordinator`): once those tasks are done, commit an owned file with its owner's `commit_task Tn` and an unowned one with `commit_task Tn --also F --ruling "final-review fix outside every Owns"` for a committed task.
+
 - **Escalation:** after 2 failed rounds at a tier, move up one. Log each failed round with `incident`.
 - **Outside Owns:** a fixer touching a file outside its task's Owns runs `commit_task Tn --claim F --ruling "..."` first.
 - **Owner reuse** (fleet off only): if the task's own implementer is idle, within reuse limits (<=3 tasks, <=40k context for fix work, <=50 min idle) and its model matches the tier, send it a fix-only brief instead of a fresh fixer. Over 40k context, start a fresh fixer instead.

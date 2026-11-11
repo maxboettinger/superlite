@@ -4,10 +4,16 @@
     findings.py route --plan P REPORT.json ...      (as `sl findings route --plan P REPORT.json ...`)
 
 Reads the report JSON files `fleet wait` wrote (`<sd>/fleet/reports/<id>.json`), groups every finding by the plan task that
-owns its file (a file in no Owns joins the plan's last task), numbers them `F-<Tn>-<n>` (continuing after the ids already
+owns its file, numbers them `F-<Tn>-<n>` (continuing after the ids already
 in `<sd>/fixes/` and `<sd>/briefs/`), writes `<sd>/briefs/fix-<first id>.md` and prints one line per brief:
 
-    fixer tier=<sonnet|sonnet-high|opus> brief=<abs path> files=<a,b> task=<Tn>
+    fixer tier=<sonnet|sonnet-high|opus> brief=<abs path> files=<a,b> task=<Tn|coordinator>
+
+A finding never goes to a task in progress (busy in `<sd>/pool.json` or `<sd>/fleet.json`). A file a task owns goes to the
+first owner not running. A file no task owns goes to the closest committed task not running (most shared path words, later
+task on a tie); with no commit in the ledger at all, to the last task not running. When every owner, or every candidate,
+is running, the finding joins the `task=coordinator` group (ids `F-C-<n>`): a brief whose fixer does not commit
+(`commit: held for the coordinator`); the coordinator commits those files once the running tasks are done.
 
 No findings: `findings: none`. An unreadable report or plan prints `error: ...` to stderr and exits 2.
 Library: route, main. Stdlib only.
@@ -24,9 +30,63 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import next_tasks as nt  # noqa: E402 | O(1)
 import plan_tools as pt  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
+import commit_task  # noqa: E402 | O(1)
+from pool import currents  # noqa: E402 | O(1)
 
 TIERS = {1: "sonnet", 2: "sonnet-high", 3: "opus"}  # finding tier -> fixer tier name | O(1)
 RULING = "final-review fix outside every Owns"  # the --claim ruling for a file no task owns | O(1)
+
+
+TASK_ID = re.compile(r"^[A-Z]{1,3}\d+[A-Za-z]?$")  # O(1)
+NOISE = {"tests", "test", "src", "py", ""}  # path words that tell nothing about a task | O(1)
+
+
+def _json(path: Path):  # O(file)
+    try:  # O(1)
+        return json.loads(path.read_text(encoding="utf-8"))  # O(file)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+
+
+def running_tasks(sd: Path) -> set[str]:  # O(file + a)
+    """Task ids a busy pool agent or a busy implementer worker of `fleet.json` is on; an unreadable file adds nothing."""
+    sd = Path(sd)  # O(1)
+    out = set()  # O(1)
+    pool = _json(sd / "pool.json")  # O(file)
+    agents = pool.get("agents") if isinstance(pool, dict) else None  # O(1)
+    for ag in agents if isinstance(agents, list) else []:  # O(a) iterations
+        if isinstance(ag, dict) and ag.get("busy"):  # O(1)
+            out.update(t for t in currents(ag) if TASK_ID.match(t))  # O(len)
+    fleet = _json(sd / "fleet.json")  # O(file)
+    workers = fleet.get("workers") if isinstance(fleet, dict) else None  # O(1)
+    for w in workers.values() if isinstance(workers, dict) else []:  # O(a) iterations
+        if isinstance(w, dict) and w.get("state") == "busy" and w.get("role") in (None, "", "implementer"):  # O(1)
+            out.update(t for t in (x.strip() for x in str(w.get("task") or "").split(",")) if TASK_ID.match(t))  # O(len)
+    return out  # O(1)
+
+
+def tokens(path: str) -> set[str]:  # O(s)
+    """Lowercase path words: the `/` parts and the words of the stem, without test/src noise."""
+    p = str(path).replace("\\", "/").lower()  # O(s)
+    parts = [x for x in p.split("/") if x]  # O(s)
+    words = list(parts)  # O(s)
+    if parts:  # O(1)
+        words += re.split(r"[_.\-]", parts[-1])  # O(s)
+    return {w for w in words if w not in NOISE}  # O(s)
+
+
+def closest_task(path: str, tasks: list, committed: set[str], running: set[str]):  # O(n*o)
+    """The committed, not running task sharing most path words with the file (later task on a tie), else None."""
+    mine = tokens(path)  # O(s)
+    best, key = None, None  # O(1)
+    for i, t in enumerate(tasks):  # O(n) iterations
+        if t.id not in committed or t.id in running:  # O(1)
+            continue  # O(1)
+        theirs = set().union(*(tokens(o) for o in t.owns)) if t.owns else set()  # O(o)
+        k = (len(mine & theirs), i)  # O(w)
+        if key is None or k > key:  # O(1)
+            best, key = t, k  # O(1)
+    return best  # O(1)
 
 
 class ReportError(Exception):  # O(1)
@@ -108,6 +168,19 @@ def last_n(sd: Path, tid: str) -> int:  # O(f)
     return top  # O(1)
 
 
+def shared_lines(sl_path: str) -> list[str]:  # O(1)
+    """The Per finding and Verify paragraphs every fixer brief holds."""
+    return ["",  # O(1)
+            "Per finding: read `.superlite/fixes/<id>.md` first if it exists, and rewrite it when you finish (fixing.md format). "  # O(1)
+            "Fix only these findings, one regression test each, except a doc- or comment-only fix (no code a test runs): "  # O(1)
+            "its `FIXED` line ends `- no test: doc-only`. Red run first: run each regression test red before its fix "  # O(1)
+            "(a fix already in place: take it out by hand for that run, then put it back); its `FIXED` line ends "  # O(1)
+            "`- red: <that run's summary line>`, for example `- red: tests (fast): 0 passed, 1 failed`.",  # O(1)
+            "",  # O(1)
+            f"Verify: `{sl_path} run_tests --fast <the test files you touched> --background`, then run the printed "  # O(1)
+            "`wait:` line in the foreground (never as a background command) and end your turn only after it reports."]  # O(1)
+
+
 def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int) -> str:  # O(k + o)
     ids = ", ".join(i["id"] for i in items)  # O(k)
     owns = task.owns  # O(o)
@@ -119,19 +192,28 @@ def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int) -> 
              "", "Findings:"]  # O(1)
     lines += [f"- {i['id']} {i['file']}:{i['line']} - {i['problem']} - {i['fix']} (tier {i['tier']}, from {i['label']})"  # O(k)
               for i in items]  # O(k)
-    lines += ["",  # O(1)
-              "Per finding: read `.superlite/fixes/<id>.md` first if it exists, and rewrite it when you finish (fixing.md format). "  # O(1)
-              "Fix only these findings, one regression test each, except a doc- or comment-only fix (no code a test runs): "  # O(1)
-              "its `FIXED` line ends `- no test: doc-only`. Red run first: run each regression test red before its fix "  # O(1)
-              "(a fix already in place: take it out by hand for that run, then put it back); its `FIXED` line ends "  # O(1)
-              "`- red: <that run's summary line>`, for example `- red: tests (fast): 0 passed, 1 failed`.",  # O(1)
-              "",  # O(1)
-              f"Verify: `{sl_path} run_tests --fast <the test files you touched> --background`, then run the printed "  # O(1)
-              "`wait:` line in the foreground (never as a background command) and end your turn only after it reports.",  # O(1)
-              f"Commit: `{sl_path} commit_task {task.id} --plan {plan}`"]  # O(1)
+    lines += shared_lines(sl_path)  # O(1)
+    lines.append(f"Commit: `{sl_path} commit_task {task.id} --plan {plan}`")  # O(1)
     for f in outside:  # O(k) iterations
         lines.append(f"Before committing {f} (outside {task.id}'s Owns): "  # O(1)
                      f"`{sl_path} commit_task {task.id} --claim {f} --ruling \"{RULING}\" --plan {plan}`")  # O(1)
+    return "\n".join(lines) + "\n"  # O(k)
+
+
+def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, running: list[str]) -> str:  # O(k)
+    ids = ", ".join(i["id"] for i in items)  # O(k)
+    held = ", ".join(running) or "-"  # O(n)
+    lines = [f"# Fix {ids} · tier {tier} · coordinator commit",  # O(1)
+             f"sl (type it literally in every command): {sl_path}",  # O(1)
+             f"PLAN={plan}",  # O(1)
+             f"Task: none · running: {held}",  # O(1)
+             "", "Findings:"]  # O(1)
+    lines += [f"- {i['id']} {i['file']}:{i['line']} - {i['problem']} - {i['fix']} (tier {i['tier']}, from {i['label']})"  # O(k)
+              for i in items]  # O(k)
+    lines += shared_lines(sl_path)  # O(1)
+    lines.append(f"Commit: none by you: no committed task is free ({held} in progress). Do not run commit_task; "  # O(1)
+                 "end your report with `commit: held for the coordinator` instead of the commit id. "  # O(1)
+                 "The coordinator commits these files once those tasks are done.")  # O(1)
     return "\n".join(lines) + "\n"  # O(k)
 
 
@@ -143,25 +225,42 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str) -> list[str]: 
     tasks = pt.Plan.load(str(plan)).tasks  # O(C+L)
     if not tasks:  # O(1)
         raise pt.PlanError(f"plan has no tasks: {plan}")  # O(1)
-    def owner_of(path):  # the first task whose Owns match (file, directory or glob), else the last task | O(o)
-        return next((t for t in tasks if nt.owns_match(path, t.owns)), tasks[-1])  # O(o)
+    committed = commit_task.committed_tasks(sd / "progress.md")  # O(c)
+    running = running_tasks(sd)  # O(file)
+    held = [t.id for t in tasks if t.id in running]  # plan order | O(n)
+    def target(path):  # a task id, or "C" for the coordinator | O(n*o)
+        owners = [t for t in tasks if nt.owns_match(path, t.owns)]  # O(n*o)
+        if owners:  # O(1)
+            free = [t for t in owners if t.id not in running]  # O(n)
+            return free[0].id if free else "C"  # O(1)
+        near = closest_task(path, tasks, committed, running)  # O(n*o)
+        if near:  # O(1)
+            return near.id  # O(1)
+        if not committed:  # O(1)
+            free = [t for t in tasks if t.id not in running]  # O(n)
+            if free:  # O(1)
+                return free[-1].id  # O(1)
+        return "C"  # O(1)
     groups = {t.id: [] for t in tasks}  # O(n)
+    groups["C"] = []  # O(1)
     for f in collect(reports, root):  # O(k) iterations
-        groups[owner_of(f["file"]).id].append(f)  # a file in no Owns belongs to the last task | O(1)
+        groups[target(f["file"])].append(f)  # O(n*o)
     lines = []  # O(1)
-    for t in tasks:  # O(n) iterations
-        items = sorted(groups[t.id], key=lambda f: (f["file"], f["line"]))  # O(k_t log k_t)
+    for t in [*tasks, None]:  # O(n) iterations
+        tid = t.id if t else "C"  # O(1)
+        items = sorted(groups[tid], key=lambda f: (f["file"], f["line"]))  # O(k_t log k_t)
         if not items:  # O(1)
             continue  # O(1)
-        n = last_n(sd, t.id)  # O(f)
+        n = last_n(sd, tid)  # O(f)
         for i, f in enumerate(items, n + 1):  # O(k_t) iterations
-            f["id"] = f"F-{t.id}-{i}"  # O(1)
+            f["id"] = f"F-{tid}-{i}"  # O(1)
         tier = max(f["tier"] for f in items)  # O(k_t)
         brief = sd / "briefs" / f"fix-{items[0]['id']}.md"  # O(1)
         brief.parent.mkdir(parents=True, exist_ok=True)  # O(1) I/O
-        brief.write_text(brief_text(sl_path, plan, t, items, tier), encoding="utf-8")  # O(k_t) I/O
+        text = brief_text(sl_path, plan, t, items, tier) if t else coordinator_text(sl_path, plan, items, tier, held)  # O(k_t)
+        brief.write_text(text, encoding="utf-8")  # O(k_t) I/O
         files = ",".join(sorted({f["file"] for f in items}))  # O(k_t log k_t)
-        lines.append(f"fixer tier={TIERS[tier]} brief={brief} files={files} task={t.id}")  # O(1)
+        lines.append(f"fixer tier={TIERS[tier]} brief={brief} files={files} task={t.id if t else 'coordinator'}")  # O(1)
     return lines  # O(n)
 
 
