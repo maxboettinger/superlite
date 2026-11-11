@@ -1373,6 +1373,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         hint = getattr(testcmd, "missing_reason", None)  # T3's text when present | O(1)
         reason = hint(Path(".")) if hint else ("no test command found: add .superlite/test-cmd.json "  # O(1)
                   '{"language","test","test_file","junit","setup"} or a package.json scripts.test, go.mod, Cargo.toml, *.csproj or pytest project')
+        if a.task:  # a task run names the plan-side fix too (#566) | O(1)
+            reason += f"; or name {a.task}'s own command on its Tests line: **Tests:** fast cmd=<command>"  # O(1)
         print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
         write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
         publish_summary(a)  # O(summary size)

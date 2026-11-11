@@ -2,6 +2,8 @@
 """Resolve the project's test command, language-neutrally.
 
     testcmd.py [--fast PATHS...] [--root .]      print the resolved command as JSON
+    testcmd.py --propose [--root .]              print the proposed project test command, its target file and whether it exists
+    testcmd.py --write [--test CMD] [--test-file T] [--language L] [--root .]   write the proposal to .superlite/test-cmd.json
 
 Order: (a) `.superlite/test-cmd.json` {"language","test","test_file","junit","setup","related"} (JSON; `test_file` is a template
 with {files}; `{junit}` in a command is replaced by the path run_tests wants the JUnit XML at; a literal `junit` path is read
@@ -11,7 +13,7 @@ when the project has no file of its own; (b) detection from the project's own ma
 vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo.toml, Package.swift, *.sln / *.csproj, then Python
 (pyproject.toml, pytest.ini, setup.cfg, tox.ini, conftest.py, or test_*.py files); (c) otherwise None.
 `{only_testing}` expands to one shell-quoted -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing); the target comes from Xcode target membership and Package.swift test targets, else the folder name; a path in no test target runs the unfiltered `test` command.
-Library: resolve, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
+Library: resolve, propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
 """
 # Complexity notation:
 #   m = marker files checked, f = files walked for the Python test-file scan (bounded), o = output lines
@@ -586,14 +588,116 @@ def only_testing(paths, root=".", notes: list | None = None):  # shell-quoted Ta
     return ids  # O(1)
 
 
-def missing_reason(root) -> str:  # why no test command resolved, with a hint for Xcode projects | O(entries)
+def missing_reason(root) -> str:  # why no test command resolved, with a hint for Xcode projects and the setup proposal | O(entries)
     root = Path(root)  # O(1)
     names = [q.name for q in root.iterdir()] if root.is_dir() else []  # O(entries)
+    prop = propose(root)  # O(m + f)
+    tail = (f"; /superlite:setup proposes `{prop['config']['test']}` ({prop['from']}) and writes it to {CONFIG}" if prop
+            else f"; /superlite:setup writes {CONFIG} from the command you name")  # O(1)
     if any(n.endswith((".xcodeproj", ".xcworkspace")) for n in names):  # O(entries)
         dest = "-destination 'platform=iOS Simulator,name=iPhone 16'"  # O(1)
         return (f'no test command found: add .superlite/test-cmd.json, e.g. {{"language": "swift", "test": "xcodebuild test -scheme <Scheme> {dest}", '
-                f'"test_file": "xcodebuild test -scheme <Scheme> {dest} {{only_testing}}"}}; or a "swift" entry in {shown(user_config_path())} for every project without its own')  # O(1)
-    return 'no test command found: add .superlite/test-cmd.json with {"test": ..., "test_file": ...} or a marker file'  # O(1)
+                f'"test_file": "xcodebuild test -scheme <Scheme> {dest} {{only_testing}}"}}; or a "swift" entry in {shown(user_config_path())} for every project without its own' + tail)  # O(1)
+    return 'no test command found: add .superlite/test-cmd.json with {"test": ..., "test_file": ...} or a marker file' + tail  # O(1)
+
+
+SCRIPT_NAMES = ("test.sh", "test", "tests.sh", "tests", "run-tests.sh", "run-tests", "run_tests.sh")  # O(1)
+SCRIPT_DIRS = ("scripts", "script", "bin")  # O(1)
+MAKE_TEST = re.compile(r"^test\s*:(?!=)", re.M)  # O(1)
+
+
+def _find_script(root: Path):  # root-relative path of the project's own test script, else None | O(entries)
+    try:  # O(1)
+        folders = {q.name.lower(): q for q in root.iterdir() if q.is_dir()}  # O(entries)
+    except OSError:  # O(1)
+        return None  # O(1)
+    for name in SCRIPT_NAMES:  # O(1)
+        for d in SCRIPT_DIRS:  # O(1)
+            folder = folders.get(d)  # O(1)
+            if folder is None:  # O(1)
+                continue  # O(1)
+            try:  # O(1)
+                hit = next((q for q in sorted(folder.iterdir()) if q.is_file() and q.name.lower() == name), None)  # O(entries)
+            except OSError:  # O(1)
+                hit = None  # O(1)
+            if hit is not None:  # O(1)
+                return f"{folder.name}/{hit.name}", hit  # O(1)
+    return None  # O(1)
+
+
+def _has_swift_markers(root: Path) -> bool:  # an Xcode project here or a Package.swift one or two folder levels down | O(entries)
+    try:  # O(1)
+        top = list(root.iterdir())  # O(entries)
+        if any(q.name.endswith((".xcodeproj", ".xcworkspace")) for q in top) or (root / "Package.swift").exists():  # O(entries)
+            return True  # O(1)
+        for d in top:  # O(entries)
+            if not d.is_dir() or d.name in SKIP_DIRS or d.name.startswith("."):  # O(1)
+                continue  # O(1)
+            if (d / "Package.swift").exists():  # O(1)
+                return True  # O(1)
+            for e in d.iterdir():  # O(entries)
+                if e.is_dir() and e.name not in SKIP_DIRS and not e.name.startswith(".") and (e / "Package.swift").exists():  # O(1)
+                    return True  # O(1)
+    except OSError:  # O(1)
+        return False  # O(1)
+    return False  # O(1)
+
+
+def _language_for(root: Path, det) -> str | None:  # O(entries)
+    if det is not None and det.get("language"):  # O(1)
+        return det["language"]  # O(1)
+    return "swift" if _has_swift_markers(root) else None  # O(entries)
+
+
+def propose(root: Path):  # {"config", "from"} for the project's own test command, or None | O(m + f)
+    root = Path(root)  # O(1)
+    cfg, source, _ = config_source(root)  # O(m + f)
+    if source == "test-cmd.json":  # O(1)
+        return None  # O(1)
+    det = detect(root)  # O(m + f)
+    lang = _language_for(root, det)  # O(entries)
+    found = _find_script(root)  # O(entries)
+    if found is not None:  # O(1)
+        rel, path = found  # O(1)
+        cmd = rel if os.access(path, os.X_OK) else f"bash {rel}"  # O(1)
+        out = {"language": lang} if lang else {}  # O(1)
+        out["test"] = cmd  # O(1)
+        if lang == "swift":  # O(1)
+            try:  # O(1)
+                with open(path, encoding="utf-8", errors="ignore") as fh:  # O(1)
+                    text = fh.read(65536)  # O(1)
+            except OSError:  # O(1)
+                text = ""  # O(1)
+            if "xcodebuild" in text and "$@" in text:  # O(1)
+                out["test_file"] = f"{cmd} {{only_testing}}"  # O(1)
+        return {"config": out, "from": f"project test script {rel}"}  # O(1)
+    for mk in ("Makefile", "makefile", "GNUmakefile"):  # O(1)
+        try:  # O(1)
+            text = (root / mk).read_text(encoding="utf-8", errors="ignore")  # O(file)
+        except OSError:  # O(1)
+            continue  # O(1)
+        if MAKE_TEST.search(text):  # O(file)
+            out = {"language": lang} if lang else {}  # O(1)
+            out["test"] = "make test"  # O(1)
+            return {"config": out, "from": "Makefile target test"}  # O(1)
+    if det is not None and det.get("language") != "python":  # O(1)
+        keep = {k: v for k, v in det.items() if v != "" and not (k == "env" and not v)}  # O(1)
+        return {"config": keep, "from": "detection"}  # O(1)
+    return None  # O(1)
+
+
+def config_target(root: Path) -> Path:  # where .superlite/test-cmd.json belongs: the main checkout's when root is a linked worktree | O(1)
+    main = _main_checkout_root(Path(root))  # O(1)
+    return (main if main else Path(root)).resolve() / CONFIG  # O(1)
+
+
+def write_config(root: Path, config: dict) -> Path:  # O(file)
+    target = config_target(root)  # O(1)
+    if target.exists():  # O(1)
+        raise FileExistsError(str(target))  # O(1)
+    target.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+    target.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")  # O(file)
+    return target  # O(1)
 
 
 def _pkg(root: Path):  # O(file)
@@ -930,7 +1034,48 @@ def main(argv=None):  # O(m + f)
     ap = argparse.ArgumentParser(description=__doc__.split(chr(10))[0])  # O(1)
     ap.add_argument("--fast", nargs="*", default=[])  # O(1)
     ap.add_argument("--root", default=".")  # O(1)
+    ap.add_argument("--propose", action="store_true")  # O(1)
+    ap.add_argument("--write", action="store_true")  # O(1)
+    ap.add_argument("--test")  # O(1)
+    ap.add_argument("--test-file")  # O(1)
+    ap.add_argument("--language")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    root = Path(a.root)  # O(1)
+    if a.propose:  # O(1)
+        prop, target = propose(root), config_target(root)  # O(m + f)
+        print(json.dumps({"proposal": prop["config"] if prop else None, "from": prop["from"] if prop else None,
+                          "target": target.as_posix(), "exists": target.exists()}))  # O(1)
+        return 0  # O(1)
+    if a.write:  # O(1)
+        _, source, origin = config_source(root)  # O(m + f)
+        target = config_target(root)  # O(1)
+        if source == "test-cmd.json":  # O(1)
+            print(f"testcmd: {origin} already sets the test command; nothing written", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        if target.exists():  # O(1)
+            print(f"testcmd: {target.as_posix()} exists; nothing written", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        prop = propose(root)  # O(m + f)
+        if prop:  # O(1)
+            cfg = dict(prop["config"])  # O(1)
+        else:  # O(1)
+            lang = _language_for(root, detect(root))  # O(m + f)
+            cfg = {"language": lang} if lang else {}  # O(1)
+        if a.test:  # O(1)
+            cfg["test"] = a.test  # O(1)
+            cfg.pop("test_file", None)  # O(1)
+        if a.test_file:  # O(1)
+            cfg["test_file"] = a.test_file  # O(1)
+        if a.language:  # O(1)
+            cfg["language"] = a.language  # O(1)
+        if not cfg.get("test"):  # O(1)
+            print("testcmd: nothing to write: no project test script, Makefile test target or marker file found; pass --test CMD", file=sys.stderr)  # O(1)
+            return 1  # O(1)
+        order = {k: cfg[k] for k in ("language", "test", "test_file") if k in cfg}  # O(1)
+        order.update({k: v for k, v in cfg.items() if k not in order})  # O(1)
+        path = write_config(root, order)  # O(file)
+        print(f"wrote {path.as_posix()}: {order['test']}")  # O(1)
+        return 0  # O(1)
     print(json.dumps(resolve(a.root, a.fast)))  # O(1)
     return 0  # O(1)
 

@@ -2147,6 +2147,27 @@ def tests_issues(plan: Plan, root: Path | None) -> list[Issue]:  # O(n*(o + p)) 
     return out  # O(n)
 
 
+def no_command_warnings(plan: Plan, root: Path | None) -> list[str]:  # O(n*(o + k*s)) #566: no test command resolves and local tasks name no `cmd=`
+    if root is None:  # O(1)
+        return []  # O(1)
+    try:  # O(1)
+        if str(SCRIPT_DIR) not in sys.path:  # O(1)
+            sys.path.insert(0, str(SCRIPT_DIR))  # O(1)
+        import testcmd  # lazy | O(1)
+        if testcmd.resolve(root, ()):  # O(m + f)
+            return []  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return []  # O(1)
+    ids = [t.id for t in plan.tasks if not (t.status == "draft" or t.repo or t.features.get("tests") == "build"  # O(n*k*s)
+                                            or testcmd.task_command(t.field_text("tests"))) and testcmd.verify_paths(t.owns)]  # O(n*o)
+    if not ids:  # O(1)
+        return []  # O(1)
+    shown = ", ".join(ids[:5]) + (f" +{len(ids) - 5} more" if len(ids) > 5 else "")  # O(1)
+    return [f"WARNING: TESTS: no test command resolves for this project; {shown} name no **Tests:** cmd=, "  # O(s)
+            'so their sl run_tests --task stops with "no test command found": run /superlite:setup (it proposes the '  # O(1)
+            "project's test command and writes .superlite/test-cmd.json) or name each task's command: **Tests:** fast cmd=<command>"]  # O(1)
+
+
 def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e*n + C*P + n*p + merge/simulate) total
     issues: list[str] = []  # O(1)
     warnings: list[str] = []  # O(1)
@@ -2267,6 +2288,10 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         pass  # O(1)
     try:  # #475 a task whose tests the project's runner cannot run names its command | O(1)
         issues.extend(tests_issues(plan, stable_root(str(plan.path)) if plan.path else None))  # O(n*(o + p))
+    except (OSError, ValueError):  # O(1)
+        pass  # O(1)
+    try:  # #566 no test command at all: one warning naming setup | O(1)
+        warnings.extend(no_command_warnings(plan, stable_root(str(plan.path)) if plan.path else None))  # O(n*(o + k*s))
     except (OSError, ValueError):  # O(1)
         pass  # O(1)
     import shape  # lazy: shape imports this module | O(1)
