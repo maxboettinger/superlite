@@ -487,6 +487,8 @@ def test_fstring_fields_and_unreadable_code_stay_visible():
     "import sys\nsys.modules['builtins'].exec(s)", "x.eval(s)", "globals()['f'](s)", "vars()", "locals()",
     "import sys\nsys.modules", "k.__dict__", "f.__globals__", "object.__subclasses__()", "import operator",
     "import os as o\no.system('true')",
+    "import sys\nsys.path.insert(0, '/tmp/x')", "os.chdir('/tmp/x')", "import imp", "import zipimport",
+    "import pkgutil", "import site\nsite.addsitedir('/tmp/x')",
 ])
 def test_code_that_can_run_text_keeps_strings_visible(runner):
     code = "import os\ns = \"open('src/a.py', 'w').write('x')\"\n" + runner + "\n"
@@ -519,6 +521,7 @@ def test_helper_parameter_with_an_unreadable_use_stays_unknown(extra):
     "from pathlib import Path\ndef w(path, *rest):\n    Path(path).write_text('x')\nw('docs/a.md')\n",
     "from pathlib import Path\nclass K:\n    def w(self, path):\n        Path(path).write_text('x')\nK().w('docs/a.md')\n",
     "from pathlib import Path\ndef w(path):\n    Path(path).write_text('x')\nw('docs/a.md')\ndef broken(:\n",
+    "from pathlib import Path\n@deco\ndef w(path):\n    Path(path).write_text('x')\nw('docs/a.md')\n",
 ])
 def test_only_plain_module_level_helpers_are_bound(code):
     assert targets(["python3", "-c", code]) == ["?"]

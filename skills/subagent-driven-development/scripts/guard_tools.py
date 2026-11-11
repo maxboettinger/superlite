@@ -1344,6 +1344,7 @@ _RUNS_TEXT = (
     re.compile(r"\.\s*(?:exec|eval|system|popen|execl\w*|execv\w*|spawn\w*|posix_spawn\w*)\s*\("),
     re.compile(r"\b(?:timeit|cProfile|profile|pdb|doctest|operator|globals|vars|locals|create_subprocess_\w+)\b"),
     re.compile(r"\bsys\s*\.\s*modules\b|\b(?:__dict__|__globals__|__subclasses__)\b"),
+    re.compile(r"\bsys\s*\.\s*path\b|\b(?:chdir|imp|zipimport|pkgutil|site)\b"),
 )  # code that can run text keeps its strings visible
 
 
@@ -1397,6 +1398,8 @@ def _params(code: str, known: dict[str, list[str]]) -> list[tuple[int, str, list
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):  # O(1)
             continue  # O(1)
         a = fn.args  # O(1)
+        if fn.decorator_list:  # a decorator may call the function with other arguments  # O(1)
+            continue  # O(1)
         if a.vararg or a.kwarg or a.posonlyargs or a.kwonlyargs or defs.get(fn.name, 0) != 1:  # O(1)
             continue  # O(1)
         names = [x.arg for x in a.args]  # O(1)
