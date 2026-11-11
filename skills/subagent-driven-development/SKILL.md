@@ -70,23 +70,22 @@ flowchart LR
 ## Coordinator batching
 
 - One message per turn: all dispatches, reviews, background starts.
-- Every test run is `run_tests ... --background`; wait once (Final review 5).
+- Every test run is `run_tests ... --background`; wait in Final review 2 and 5.
 
 ## Final review
 
 ```mermaid
 flowchart TB
-  G[all tasks reviewed + committed] --> PK[packet from existing summary]
-  G --> ST[run_tests --full, background]
+  G[all tasks reviewed + committed] --> ST[run_tests --full, wait]
+  ST --> PK[packet from its summary]
   PK --> FR[fresh final-reviewer, findings only]
   FR --> V{findings, suite red?}
-  ST --> V
   V -- yes --> FX[fixers by tier] --> ST2[run_tests --background]
   V -- no --> W[run_tests --wait] --> Z[freeze]
 ```
 
 1. Gate: all tasks and reviews committed, all seams `verified`.
-2. Build the packet: `"$SL" plan_tools packet --plan $PLAN --base <start-sha>` (inline: `--inline --spec <spec.md>`; later rounds `--previous <rounds.md>`) uses the test summary, probe results and incidents, and writes `.superlite/review-packet.md`. Same message: `run_tests --full --background`, no wait.
+2. `run_tests --full --background`, then its `wait:` line. Then build the packet: `"$SL" plan_tools packet --plan $PLAN --base <start-sha>` (inline: `--inline --spec <spec.md>`; later rounds `--previous <rounds.md>`) uses that run's summary, probe results and incidents, and writes `.superlite/review-packet.md`.
 3. Start `superlite:final-reviewer` then, fresh, brief = the absolute `sl` path and "read .superlite/review-packet.md", nothing more. The tree stays frozen. It answers once: `Verdict: APPROVED` or `CHANGES_REQUESTED` plus `file:line - problem - fix - tier N` lines. No `Checked:` block (fast path too) is no review: start a fresh one. Full review asked: `fleet send Wn --brief <packet> --full` (Agent: `Full review` in the brief).
 4. Red suite lines are findings. Send all to fixers (`fixing.md`); then `commit_task Tn` per owning task (`--claim F --ruling TEXT` for files outside Owns) and one more `run_tests --background`. Leftovers: `Ruling:`.
 5. Before the final commit, `"$SL" run_tests --wait`; green means freeze.
