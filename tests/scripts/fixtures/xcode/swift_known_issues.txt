@@ -1,0 +1,18 @@
+​​✔ Suite AlphaTests passed after 0.146 seconds.
+​​​​​​​​​​​​​​​​​​​​​​✔ Test rejects(status:body:) with 5 test cases passed after 0.142 seconds.
+​​✔ Test failsAtFinish() passed after 1.676 seconds.
+━ Test limitFails() recorded a known issue at LockTests.swift:52:25: Issue recorded
+━ Test prepares(mode:) recorded a known issue with 1 argument mode → .short at PrepareTests.swift:32:29: Issue recorded
+━ Test prepares(mode:) recorded a known issue with 1 argument mode → .long at PrepareTests.swift:32:29: Issue recorded
+━ Test prepares(mode:) with 2 test cases passed after 1.680 seconds with 2 known issues.
+━ Suite LockTests passed after 23.281 seconds with 1 known issue.
+━ Test run with 433 tests in 44 suites passed after 23.283 seconds with 4 known issues.
+2026-11-11 00:27:36.597 xcodebuild[33360:136166034] [MT] IDETestOperationsObserverDebug: 31.505 elapsed -- Testing started completed.
+2026-11-11 00:27:36.597 xcodebuild[33360:136166034] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-11 00:27:36.597 xcodebuild[33360:136166034] [MT] IDETestOperationsObserverDebug: 31.505 sec, +31.505 sec -- end
+
+Test session results, code coverage, and logs:
+
+** TEST SUCCEEDED **
+
+Testing started

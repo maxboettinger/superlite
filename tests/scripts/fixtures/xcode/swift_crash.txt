@@ -1,0 +1,624 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -scheme Kit -destination platform=macOS
+
+Resolve Package Graph
+2026-11-11 00:32:44.180 xcodebuild[81249:136819055] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.
+
+
+Resolved source packages:
+  Kit: /Users/u/pkg
+
+--- xcodebuild: WARNING: Using the first of multiple matching destinations:
+{ platform:macOS, arch:arm64, id:00000000-0000000000000000, name:My Mac }
+{ platform:macOS, arch:x86_64, id:00000000-0000000000000000, name:My Mac }
+{ platform:macOS, arch:arm64, variant:Mac Catalyst, id:00000000-0000000000000000, name:My Mac }
+{ platform:macOS, arch:x86_64, variant:Mac Catalyst, id:00000000-0000000000000000, name:My Mac }
+{ platform:macOS, arch:arm64, variant:DriverKit, id:00000000-0000000000000000, name:My Mac }
+{ platform:macOS, arch:arm64, variant:Designed for [iPad,iPhone], id:00000000-0000000000000000, name:My Mac }
+{ platform:macOS, arch:arm64_32, variant:Designed for [iPad,iPhone], id:00000000-0000000000000000, name:My Mac }
+{ platform:macOS, arch:arm64e.x1, variant:Designed for [iPad,iPhone], id:00000000-0000000000000000, name:My Mac }
+Build Preparation
+Build task concurrency set to 9 via user default IDEBuildOperationMaxNumberOfConcurrentCompileTasks
+
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (4 targets)
+    Target 'Kit-product' in project 'Kit'
+        ➜ Explicit dependency on target 'Kit' in project 'Kit'
+    Target 'KitTests-product' in project 'Kit'
+        ➜ Explicit dependency on target 'Kit' in project 'Kit'
+    Target 'OtherTests-product' in project 'Kit'
+        ➜ Explicit dependency on target 'Kit' in project 'Kit'
+    Target 'Kit' in project 'Kit' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
+
+Build description signature: 2bb7aad2c75977023409be9f7e5d9507
+Build description path: /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/XCBuildData/2bb7aad2c75977023409be9f7e5d9507.xcbuilddata
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex
+
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules
+
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/CompilationCache.noindex
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/CompilationCache.noindex
+
+ClangStatCache /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache
+    cd /Users/u/pkg/.swiftpm/xcode
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -o /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache
+
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products
+
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex
+
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/PrecompiledHeaders
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/PrecompiledHeaders
+
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/ExplicitPrecompiledModules
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/ExplicitPrecompiledModules
+
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/EagerLinkingTBDs/Debug
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/EagerLinkingTBDs/Debug
+
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug
+
+CreateBuildDirectory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-create-build-directory /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/OtherTests.DependencyMetadataFileList (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/OtherTests.DependencyMetadataFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/empty-OtherTests.plist (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/empty-OtherTests.plist
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/OtherTests.DependencyStaticMetadataFileList (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/OtherTests.DependencyStaticMetadataFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.SwiftConstValuesFileList (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.SwiftConstValuesFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests_const_extract_protocols.json (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests_const_extract_protocols.json
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.SwiftFileList (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.SwiftFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.LinkFileList (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.LinkFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests-OutputFileMap.json (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests-OutputFileMap.json
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/empty-KitTests.plist (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/empty-KitTests.plist
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.SwiftFileList (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.SwiftFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests_const_extract_protocols.json (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests_const_extract_protocols.json
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.SwiftConstValuesFileList (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.SwiftConstValuesFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.LinkFileList (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.LinkFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests-OutputFileMap.json (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests-OutputFileMap.json
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/KitTests.DependencyStaticMetadataFileList (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/KitTests.DependencyStaticMetadataFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/KitTests.DependencyMetadataFileList (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/KitTests.DependencyMetadataFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.SwiftFileList (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.SwiftFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.SwiftConstValuesFileList (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.SwiftConstValuesFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit_const_extract_protocols.json (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit_const_extract_protocols.json
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.LinkFileList (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.LinkFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-OutputFileMap.json (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-OutputFileMap.json
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Kit.modulemap (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Kit.modulemap
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Kit.DependencyStaticMetadataFileList (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Kit.DependencyStaticMetadataFileList
+
+WriteAuxiliaryFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Kit.DependencyMetadataFileList (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    write-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Kit.DependencyMetadataFileList
+
+MkDir /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /bin/mkdir -p /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest
+
+MkDir /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /bin/mkdir -p /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest
+
+MkDir /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /bin/mkdir -p /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents
+
+MkDir /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /bin/mkdir -p /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents
+
+MkDir /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/MacOS (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /bin/mkdir -p /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/MacOS
+
+MkDir /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/MacOS (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /bin/mkdir -p /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/MacOS
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/GeneratedModuleMaps/Kit.modulemap /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Kit.modulemap (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Kit.modulemap /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/GeneratedModuleMaps
+
+SwiftDriver Kit normal arm64 com.apple.xcode.tools.swift.compiler (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-SwiftDriver -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -parse-as-library -module-name Kit -Onone @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.SwiftFileList -DSWIFT_PACKAGE -DDEBUG -DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE -DXcode -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -target arm64-apple-macos12.0 -g -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -profile-coverage-mapping -profile-generate -enable-testing -index-store-path /Users/u/Library/Developer/Xcode/DerivedData/Kit-aypeackolqktuwbqgxbmobaxdomq/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 6 -I /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j18 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache -output-file-map /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -package-name kit2 -emit-const-values -const-gather-protocols-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit_const_extract_protocols.json -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/include -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/DerivedSources-normal/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/DerivedSources/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/DerivedSources -Xcc -DSWIFT_PACKAGE -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-Swift.h -working-directory /Users/u/pkg/.swiftpm/xcode -experimental-emit-module-separately -disable-cmo
+
+SwiftCompile normal arm64 Compiling\ Kit.swift /Users/u/pkg/Sources/Kit/Kit.swift (in target 'Kit' from project 'Kit')
+
+SwiftCompile normal arm64 /Users/u/pkg/Sources/Kit/Kit.swift (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-SwiftPerFileCompile Kit.swift
+
+SwiftEmitModule normal arm64 Emitting\ module\ for\ Kit (in target 'Kit' from project 'Kit')
+
+SwiftCompile normal arm64 (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    
+
+SwiftDriverJobDiscovery normal arm64 Emitting module for Kit (in target 'Kit' from project 'Kit')
+
+SwiftDriver\ Compilation\ Requirements Kit normal arm64 com.apple.xcode.tools.swift.compiler (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-Swift-Compilation-Requirements -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -parse-as-library -module-name Kit -Onone @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.SwiftFileList -DSWIFT_PACKAGE -DDEBUG -DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE -DXcode -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -target arm64-apple-macos12.0 -g -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -profile-coverage-mapping -profile-generate -enable-testing -index-store-path /Users/u/Library/Developer/Xcode/DerivedData/Kit-aypeackolqktuwbqgxbmobaxdomq/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 6 -I /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j18 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache -output-file-map /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -package-name kit2 -emit-const-values -const-gather-protocols-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit_const_extract_protocols.json -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/include -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/DerivedSources-normal/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/DerivedSources/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/DerivedSources -Xcc -DSWIFT_PACKAGE -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-Swift.h -working-directory /Users/u/pkg/.swiftpm/xcode -experimental-emit-module-separately -disable-cmo
+
+SwiftMergeGeneratedHeaders /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/GeneratedModuleMaps/Kit-Swift.h /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-Swift.h (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-swiftHeaderTool -arch arm64 /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-Swift.h -o /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/GeneratedModuleMaps/Kit-Swift.h
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.swiftmodule/arm64-apple-macos.swiftmodule /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.swiftmodule (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.swiftmodule /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.swiftmodule/arm64-apple-macos.swiftmodule
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.swiftmodule/arm64-apple-macos.abi.json /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.abi.json (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.abi.json /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.swiftmodule/arm64-apple-macos.abi.json
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.swiftmodule/arm64-apple-macos.swiftdoc /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.swiftdoc (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.swiftdoc /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.swiftmodule/arm64-apple-macos.swiftdoc
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.swiftsourceinfo (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.swiftsourceinfo /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo
+
+SwiftDriver OtherTests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-SwiftDriver -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -parse-as-library -module-name OtherTests -Onone @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.SwiftFileList -DSWIFT_PACKAGE -DDEBUG -DXcode -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -target arm64-apple-macos14.0 -g -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -profile-coverage-mapping -profile-generate -enable-testing -index-store-path /Users/u/Library/Developer/Xcode/DerivedData/Kit-aypeackolqktuwbqgxbmobaxdomq/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 6 -I /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j18 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache -output-file-map /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -package-name kit2 -emit-const-values -const-gather-protocols-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests_const_extract_protocols.json -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/include -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/DerivedSources-normal/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/DerivedSources/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/DerivedSources -Xcc -DSWIFT_PACKAGE -Xcc -DDEBUG\=1 -working-directory /Users/u/pkg/.swiftpm/xcode -experimental-emit-module-separately -disable-cmo
+
+SwiftDriver KitTests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-SwiftDriver -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -parse-as-library -module-name KitTests -Onone @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.SwiftFileList -DSWIFT_PACKAGE -DDEBUG -DXcode -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -target arm64-apple-macos14.0 -g -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -profile-coverage-mapping -profile-generate -enable-testing -index-store-path /Users/u/Library/Developer/Xcode/DerivedData/Kit-aypeackolqktuwbqgxbmobaxdomq/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 6 -I /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j18 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache -output-file-map /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -package-name kit2 -emit-const-values -const-gather-protocols-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests_const_extract_protocols.json -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/include -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/DerivedSources-normal/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/DerivedSources/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/DerivedSources -Xcc -DSWIFT_PACKAGE -Xcc -DDEBUG\=1 -working-directory /Users/u/pkg/.swiftpm/xcode -experimental-emit-module-separately -disable-cmo
+
+SwiftDriverJobDiscovery normal arm64 Compiling Kit.swift (in target 'Kit' from project 'Kit')
+
+SwiftDriver\ Compilation Kit normal arm64 com.apple.xcode.tools.swift.compiler (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-Swift-Compilation -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -parse-as-library -module-name Kit -Onone @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.SwiftFileList -DSWIFT_PACKAGE -DDEBUG -DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE -DXcode -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -target arm64-apple-macos12.0 -g -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -profile-coverage-mapping -profile-generate -enable-testing -index-store-path /Users/u/Library/Developer/Xcode/DerivedData/Kit-aypeackolqktuwbqgxbmobaxdomq/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 6 -I /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j18 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache -output-file-map /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -package-name kit2 -emit-const-values -const-gather-protocols-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit_const_extract_protocols.json -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/include -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/DerivedSources-normal/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/DerivedSources/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/DerivedSources -Xcc -DSWIFT_PACKAGE -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit-Swift.h -working-directory /Users/u/pkg/.swiftpm/xcode -experimental-emit-module-separately -disable-cmo
+
+Ld /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.o normal (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-macos12.0 -r -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -O0 -Xlinker -no_warn_duplicate_libraries -F/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/EagerLinkingTBDs/Debug -F/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -iframework /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -filelist /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.LinkFileList -nostdlib -Xlinker -object_path_lto -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit_lto.o -Xlinker -no_deduplicate -Xlinker -debug_variant -Xlinker -dependency_info -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit_dependency_info.dat -fobjc-link-runtime -L/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx -L/usr/lib/swift -Xlinker -add_ast_path -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.swiftmodule -o /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.o
+
+ExtractAppIntentsMetadata (in target 'Kit' from project 'Kit')
+    cd /Users/u/pkg
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --module-name Kit --sdk-root /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk --xcode-version 27B52 --platform-family macOS --deployment-target 12.0 --bundle-identifier kit2.Kit --output /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.appintents --target-triple arm64-apple-macos12.0 --binary-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/Kit.o --dependency-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit_dependency_info.dat --stringsdata-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.SwiftFileList --metadata-file-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Kit.DependencyMetadataFileList --static-metadata-file-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Kit.DependencyStaticMetadataFileList --swift-const-vals-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/Kit-t.build/Objects-normal/arm64/Kit.SwiftConstValuesFileList --force --compile-time-extraction --deployment-aware-processing --no-app-shortcuts-localization
+2026-11-11 00:32:45.072 appintentsmetadataprocessor[81594:136820252] Starting App Intents metadata extraction
+2026-11-11 00:32:45.119 appintentsmetadataprocessor[81594:136820252] Extracted no relevant App Intents symbols, skipping writing output
+
+SwiftExplicitDependencyCompileModuleFromInterface arm64 /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules/Testing-27S1PM70AGZ5Z.swiftmodule
+
+ProcessInfoPlistFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/Info.plist /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/empty-KitTests.plist (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-infoPlistUtility /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/empty-KitTests.plist -producttype com.apple.product-type.bundle.unit-test -expandbuildsettings -platform macosx -o /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/Info.plist /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/empty-OtherTests.plist (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-infoPlistUtility /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/empty-OtherTests.plist -producttype com.apple.product-type.bundle.unit-test -expandbuildsettings -platform macosx -o /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/Info.plist
+
+SwiftEmitModule normal arm64 Emitting\ module\ for\ KitTests (in target 'KitTests-product' from project 'Kit')
+
+SwiftCompile normal arm64 (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    
+
+SwiftCompile normal arm64 Compiling\ SkipTests.swift /Users/u/pkg/Tests/KitTests/SkipTests.swift (in target 'KitTests-product' from project 'Kit')
+
+SwiftCompile normal arm64 /Users/u/pkg/Tests/KitTests/SkipTests.swift (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-SwiftPerFileCompile SkipTests.swift
+
+SwiftCompile normal arm64 Compiling\ CrashTests.swift /Users/u/pkg/Tests/KitTests/CrashTests.swift (in target 'KitTests-product' from project 'Kit')
+
+SwiftCompile normal arm64 /Users/u/pkg/Tests/KitTests/CrashTests.swift (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-SwiftPerFileCompile CrashTests.swift
+
+SwiftDriverJobDiscovery normal arm64 Emitting module for KitTests (in target 'KitTests-product' from project 'Kit')
+
+SwiftDriver\ Compilation\ Requirements KitTests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-Swift-Compilation-Requirements -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -parse-as-library -module-name KitTests -Onone @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.SwiftFileList -DSWIFT_PACKAGE -DDEBUG -DXcode -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -target arm64-apple-macos14.0 -g -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -profile-coverage-mapping -profile-generate -enable-testing -index-store-path /Users/u/Library/Developer/Xcode/DerivedData/Kit-aypeackolqktuwbqgxbmobaxdomq/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 6 -I /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j18 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache -output-file-map /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -package-name kit2 -emit-const-values -const-gather-protocols-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests_const_extract_protocols.json -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/include -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/DerivedSources-normal/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/DerivedSources/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/DerivedSources -Xcc -DSWIFT_PACKAGE -Xcc -DDEBUG\=1 -working-directory /Users/u/pkg/.swiftpm/xcode -experimental-emit-module-separately -disable-cmo
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.swiftmodule/arm64-apple-macos.swiftdoc /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.swiftdoc (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.swiftdoc /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.swiftmodule/arm64-apple-macos.swiftdoc
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.swiftmodule/arm64-apple-macos.abi.json /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.abi.json (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.abi.json /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.swiftmodule/arm64-apple-macos.abi.json
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.swiftmodule/arm64-apple-macos.swiftmodule /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.swiftmodule (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.swiftmodule /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.swiftmodule/arm64-apple-macos.swiftmodule
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.swiftsourceinfo (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.swiftsourceinfo /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules/XCUIAutomation-95QSOTN64J79YTS2MPF9XBPL6.pcm
+
+SwiftExplicitDependencyCompileModuleFromInterface arm64 /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules/XCUIAutomation-3LF7VJDHBFI9M.swiftmodule
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules/XCTest-6YF3Q7A7Y7EGLAR6X3WCVCAAB.pcm
+
+SwiftExplicitDependencyCompileModuleFromInterface arm64 /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules/XCTest-3S7H6DJ7FVAGB.swiftmodule
+
+SwiftDriverJobDiscovery normal arm64 Compiling CrashTests.swift (in target 'KitTests-product' from project 'Kit')
+
+SwiftDriverJobDiscovery normal arm64 Compiling SkipTests.swift (in target 'KitTests-product' from project 'Kit')
+
+SwiftDriver\ Compilation KitTests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-Swift-Compilation -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -parse-as-library -module-name KitTests -Onone @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.SwiftFileList -DSWIFT_PACKAGE -DDEBUG -DXcode -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -target arm64-apple-macos14.0 -g -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -profile-coverage-mapping -profile-generate -enable-testing -index-store-path /Users/u/Library/Developer/Xcode/DerivedData/Kit-aypeackolqktuwbqgxbmobaxdomq/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 6 -I /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j18 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache -output-file-map /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -package-name kit2 -emit-const-values -const-gather-protocols-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests_const_extract_protocols.json -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/include -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/DerivedSources-normal/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/DerivedSources/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/DerivedSources -Xcc -DSWIFT_PACKAGE -Xcc -DDEBUG\=1 -working-directory /Users/u/pkg/.swiftpm/xcode -experimental-emit-module-separately -disable-cmo
+
+Ld /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/MacOS/KitTests normal (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -Xlinker -reproducible -target arm64-apple-macos14.0 -Xlinker -bundle -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -Xlinker -no_warn_duplicate_libraries -L/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/EagerLinkingTBDs/Debug -L/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -L/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/EagerLinkingTBDs/Debug -F/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks -F/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Fsystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.LinkFileList -Xlinker -rpath -Xlinker /usr/lib/swift -Xlinker -rpath -Xlinker @loader_path -Xlinker -rpath -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks -Xlinker -rpath -Xlinker @loader_path/../../.. -Xlinker -rpath -Xlinker @loader_path/Frameworks -Xlinker -rpath -Xlinker @loader_path/../Frameworks -Xlinker -object_path_lto -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests_lto.o -Xclang-linker -rdynamic -Xlinker -no_deduplicate -Xlinker -debug_variant -Xlinker -dependency_info -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests_dependency_info.dat -link-objc-runtime -profile-generate -L/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx -L/usr/lib/swift -Xlinker -add_ast_path -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.swiftmodule -Xlinker -needed_framework -Xlinker XCTest -framework XCTest -Xlinker -needed-lXCTestSwiftSupport -lXCTestSwiftSupport -o /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/MacOS/KitTests -no-stdlib-rpath
+
+SwiftEmitModule normal arm64 Emitting\ module\ for\ OtherTests (in target 'OtherTests-product' from project 'Kit')
+
+SwiftCompile normal arm64 (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    
+
+SwiftCompile normal arm64 Compiling\ OkTests.swift /Users/u/pkg/Tests/OtherTests/OkTests.swift (in target 'OtherTests-product' from project 'Kit')
+
+SwiftCompile normal arm64 /Users/u/pkg/Tests/OtherTests/OkTests.swift (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-SwiftPerFileCompile OkTests.swift
+
+SwiftDriverJobDiscovery normal arm64 Emitting module for OtherTests (in target 'OtherTests-product' from project 'Kit')
+
+SwiftDriver\ Compilation\ Requirements OtherTests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-Swift-Compilation-Requirements -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -parse-as-library -module-name OtherTests -Onone @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.SwiftFileList -DSWIFT_PACKAGE -DDEBUG -DXcode -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -target arm64-apple-macos14.0 -g -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -profile-coverage-mapping -profile-generate -enable-testing -index-store-path /Users/u/Library/Developer/Xcode/DerivedData/Kit-aypeackolqktuwbqgxbmobaxdomq/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 6 -I /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j18 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache -output-file-map /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -package-name kit2 -emit-const-values -const-gather-protocols-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests_const_extract_protocols.json -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/include -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/DerivedSources-normal/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/DerivedSources/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/DerivedSources -Xcc -DSWIFT_PACKAGE -Xcc -DDEBUG\=1 -working-directory /Users/u/pkg/.swiftpm/xcode -experimental-emit-module-separately -disable-cmo
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.swiftmodule/arm64-apple-macos.swiftmodule /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.swiftmodule (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.swiftmodule /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.swiftmodule/arm64-apple-macos.swiftmodule
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.swiftmodule/arm64-apple-macos.swiftdoc /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.swiftdoc (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.swiftdoc /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.swiftmodule/arm64-apple-macos.swiftdoc
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.swiftmodule/arm64-apple-macos.abi.json /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.abi.json (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.abi.json /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.swiftmodule/arm64-apple-macos.abi.json
+
+Copy /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.swiftsourceinfo (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.swiftsourceinfo /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo
+
+CopySwiftLibs /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-swiftStdLibTool --copy --verbose --scan-executable /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/MacOS/KitTests --scan-folder /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/Frameworks --scan-folder /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/PlugIns --scan-folder /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/Library/SystemExtensions --scan-folder /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/Extensions --platform macosx --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/Frameworks --strip-bitcode --scan-executable /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/libXCTestSwiftSupport.dylib --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+Ignoring --strip-bitcode because --sign was not passed
+
+ExtractAppIntentsMetadata (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --module-name KitTests --sdk-root /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk --xcode-version 27B52 --platform-family macOS --deployment-target 14.0 --bundle-identifier kit2.KitTests --output /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/Resources --target-triple arm64-apple-macos14.0 --binary-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest/Contents/MacOS/KitTests --dependency-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests_dependency_info.dat --stringsdata-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.SwiftFileList --metadata-file-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/KitTests.DependencyMetadataFileList --static-metadata-file-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/KitTests.DependencyStaticMetadataFileList --swift-const-vals-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/KitTests-p.build/Objects-normal/arm64/KitTests.SwiftConstValuesFileList --compile-time-extraction --deployment-aware-processing --no-app-shortcuts-localization
+2026-11-11 00:32:45.846 appintentsmetadataprocessor[81989:136820984] Starting App Intents metadata extraction
+2026-11-11 00:32:45.847 appintentsmetadataprocessor[81989:136820984] warning: Metadata extraction skipped, no AppIntents.framework dependency found
+
+RegisterExecutionPolicyException /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-RegisterExecutionPolicyException /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest
+
+Touch /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest (in target 'KitTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /usr/bin/touch -c /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/KitTests.xctest
+
+SwiftDriverJobDiscovery normal arm64 Compiling OkTests.swift (in target 'OtherTests-product' from project 'Kit')
+
+SwiftDriver\ Compilation OtherTests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg/.swiftpm/xcode
+    builtin-Swift-Compilation -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -parse-as-library -module-name OtherTests -Onone @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.SwiftFileList -DSWIFT_PACKAGE -DDEBUG -DXcode -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -target arm64-apple-macos14.0 -g -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -profile-coverage-mapping -profile-generate -enable-testing -index-store-path /Users/u/Library/Developer/Xcode/DerivedData/Kit-aypeackolqktuwbqgxbmobaxdomq/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 6 -I /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks -F /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j18 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/u/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx27.2-26B118-a7ff82d74745d5ef33555b35c4238456.sdkstatcache -output-file-map /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /Users/u/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -package-name kit2 -emit-const-values -const-gather-protocols-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests_const_extract_protocols.json -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/include -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/DerivedSources-normal/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/DerivedSources/arm64 -Xcc -I/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/DerivedSources -Xcc -DSWIFT_PACKAGE -Xcc -DDEBUG\=1 -working-directory /Users/u/pkg/.swiftpm/xcode -experimental-emit-module-separately -disable-cmo
+
+Ld /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/MacOS/OtherTests normal (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -Xlinker -reproducible -target arm64-apple-macos14.0 -Xlinker -bundle -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk -Xlinker -no_warn_duplicate_libraries -L/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/EagerLinkingTBDs/Debug -L/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -L/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/EagerLinkingTBDs/Debug -F/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks -F/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug -Fsystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks @/Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.LinkFileList -Xlinker -rpath -Xlinker /usr/lib/swift -Xlinker -rpath -Xlinker @loader_path -Xlinker -rpath -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/PackageFrameworks -Xlinker -rpath -Xlinker @loader_path/../../.. -Xlinker -rpath -Xlinker @loader_path/Frameworks -Xlinker -rpath -Xlinker @loader_path/../Frameworks -Xlinker -object_path_lto -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests_lto.o -Xclang-linker -rdynamic -Xlinker -no_deduplicate -Xlinker -debug_variant -Xlinker -dependency_info -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests_dependency_info.dat -link-objc-runtime -profile-generate -L/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx -L/usr/lib/swift -Xlinker -add_ast_path -Xlinker /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.swiftmodule -Xlinker -needed_framework -Xlinker XCTest -framework XCTest -Xlinker -needed-lXCTestSwiftSupport -lXCTestSwiftSupport -o /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/MacOS/OtherTests -no-stdlib-rpath
+
+CopySwiftLibs /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-swiftStdLibTool --copy --verbose --scan-executable /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/MacOS/OtherTests --scan-folder /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/Frameworks --scan-folder /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/PlugIns --scan-folder /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/Library/SystemExtensions --scan-folder /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/Extensions --platform macosx --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/Frameworks --strip-bitcode --scan-executable /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/libXCTestSwiftSupport.dylib --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+Ignoring --strip-bitcode because --sign was not passed
+
+ExtractAppIntentsMetadata (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --module-name OtherTests --sdk-root /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk --xcode-version 27B52 --platform-family macOS --deployment-target 14.0 --bundle-identifier kit2.OtherTests --output /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/Resources --target-triple arm64-apple-macos14.0 --binary-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest/Contents/MacOS/OtherTests --dependency-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests_dependency_info.dat --stringsdata-file /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.SwiftFileList --metadata-file-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/OtherTests.DependencyMetadataFileList --static-metadata-file-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/OtherTests.DependencyStaticMetadataFileList --swift-const-vals-list /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/Kit.build/Debug/OtherTests-p.build/Objects-normal/arm64/OtherTests.SwiftConstValuesFileList --compile-time-extraction --deployment-aware-processing --no-app-shortcuts-localization
+2026-11-11 00:32:47.602 appintentsmetadataprocessor[82226:136821635] Starting App Intents metadata extraction
+2026-11-11 00:32:47.603 appintentsmetadataprocessor[82226:136821635] warning: Metadata extraction skipped, no AppIntents.framework dependency found
+
+RegisterExecutionPolicyException /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    builtin-RegisterExecutionPolicyException /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest
+
+Touch /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest (in target 'OtherTests-product' from project 'Kit')
+    cd /Users/u/pkg
+    /usr/bin/touch -c /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Products/Debug/OtherTests.xctest
+
+PruneExplicitPrecompiledModules /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/ExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /Users/u/Library/Developer/Xcode/DerivedData/SDKExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /Users/u/Library/Developer/Xcode/DerivedData/kit2-aypeackolqktuwbqgxbmobaxdomq/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+
+2026-11-11 00:32:47.660 xcodebuild[81249:136819246]  DVTAssertions: Warning in IDEFrameworks/IDEFoundation/Execution/LaunchSystem/IDELaunchSession.m:395
+Details:  setRunnablePIDWithDiagnostics:logSection:andCompletionHandler: called without a completion handler - blocking until diagnostics setup completes. Callers should migrate to using a completion handler for better performance.
+Object:   <IDELaunchSession: 0x7aab09f180>
+Method:   -setRunnablePIDWithDiagnostics:logSection:andCompletionHandler:
+Thread:   <NSThread: 0x7aa8e6c240>{number = 19, name = (null)}
+Please file a bug at https://feedbackassistant.apple.com with this warning message and any useful information you can provide.
+Test Suite 'All tests' started at 2026-11-11 00:32:48.212.
+Test Suite 'OtherTests.xctest' started at 2026-11-11 00:32:48.212.
+Test Suite 'OkTests' started at 2026-11-11 00:32:48.212.
+Test Case '-[OtherTests.OkTests testOk]' started.
+Test Case '-[OtherTests.OkTests testOk]' passed (0.001 seconds).
+Test Suite 'OkTests' passed at 2026-11-11 00:32:48.213.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'OtherTests.xctest' passed at 2026-11-11 00:32:48.214.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'All tests' passed at 2026-11-11 00:32:48.214.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.001 (0.002) seconds
+2026-11-11 00:32:48.484 xcodebuild[81249:136819058]  DVTAssertions: Warning in IDEFrameworks/IDEFoundation/Execution/LaunchSystem/IDELaunchSession.m:395
+Details:  setRunnablePIDWithDiagnostics:logSection:andCompletionHandler: called without a completion handler - blocking until diagnostics setup completes. Callers should migrate to using a completion handler for better performance.
+Object:   <IDELaunchSession: 0x7aab09f000>
+Method:   -setRunnablePIDWithDiagnostics:logSection:andCompletionHandler:
+Thread:   <NSThread: 0x7aa8e72b80>{number = 3, name = (null)}
+Please file a bug at https://feedbackassistant.apple.com with this warning message and any useful information you can provide.
+Test Suite 'All tests' started at 2026-11-11 00:32:48.972.
+Test Suite 'All tests' passed at 2026-11-11 00:32:48.972.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+◇ Test run started.
+↳ Testing Library Version: 2403
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite CrashTests started.
+◇ Suite SkipTests started.
+◇ Test b1() started.
+◇ Test a2() started.
+◇ Test a1() started.
+​➜ Test skipped() skipped: "not today"
+​◇ Test a3() started.
+✔ Test a2() passed after 0.001 seconds.
+✔ Test b1() passed after 0.001 seconds.
+✔ Test a3() passed after 0.001 seconds.
+✔ Test a1() passed after 0.001 seconds.
+✔ Suite SkipTests passed after 0.001 seconds.
+◇ Test b2() started.
+Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+2026-11-11 00:32:48.974085+0100 xctest[82336:136822066] Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+2026-11-11 00:32:49.783 xcodebuild[81249:136819201]  DVTAssertions: Warning in IDEFrameworks/IDEFoundation/Execution/LaunchSystem/IDELaunchSession.m:395
+Details:  setRunnablePIDWithDiagnostics:logSection:andCompletionHandler: called without a completion handler - blocking until diagnostics setup completes. Callers should migrate to using a completion handler for better performance.
+Object:   <IDELaunchSession: 0x7aab1b0780>
+Method:   -setRunnablePIDWithDiagnostics:logSection:andCompletionHandler:
+Thread:   <NSThread: 0x7aa8e6c140>{number = 8, name = (null)}
+Please file a bug at https://feedbackassistant.apple.com with this warning message and any useful information you can provide.
+
+Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.
+
+Test Suite 'Selected tests' started at 2026-11-11 00:32:49.907.
+Test Suite 'Selected tests' passed at 2026-11-11 00:32:49.907.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+◇ Test run started.
+↳ Testing Library Version: 2403
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite CrashTests started.
+◇ Suite SkipTests started.
+◇ Test b1() started.
+◇ Test a3() started.
+◇ Test a1() started.
+◇ Test a2() started.
+✔ Test a2() passed after 0.001 seconds.
+✔ Test a3() passed after 0.001 seconds.
+✔ Test a1() passed after 0.001 seconds.
+✔ Test b1() passed after 0.001 seconds.
+✔ Suite SkipTests passed after 0.001 seconds.
+◇ Test b2() started.
+Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+2026-11-11 00:32:49.909377+0100 xctest[82503:136822337] Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+2026-11-11 00:32:50.337 xcodebuild[81249:136819201]  DVTAssertions: Warning in IDEFrameworks/IDEFoundation/Execution/LaunchSystem/IDELaunchSession.m:395
+Details:  setRunnablePIDWithDiagnostics:logSection:andCompletionHandler: called without a completion handler - blocking until diagnostics setup completes. Callers should migrate to using a completion handler for better performance.
+Object:   <IDELaunchSession: 0x7aab1b0f00>
+Method:   -setRunnablePIDWithDiagnostics:logSection:andCompletionHandler:
+Thread:   <NSThread: 0x7aa8e6c140>{number = 8, name = (null)}
+Please file a bug at https://feedbackassistant.apple.com with this warning message and any useful information you can provide.
+
+Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.
+
+Test Suite 'Selected tests' started at 2026-11-11 00:32:50.443.
+Test Suite 'Selected tests' passed at 2026-11-11 00:32:50.444.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+◇ Test run started.
+↳ Testing Library Version: 2403
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite SkipTests started.
+◇ Test a2() started.
+◇ Suite CrashTests started.
+◇ Test b2() started.
+✔ Test a2() passed after 0.001 seconds.
+Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+✔ Suite SkipTests passed after 0.001 seconds.
+2026-11-11 00:32:50.445066+0100 xctest[82637:136822589] Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+2026-11-11 00:32:50.867 xcodebuild[81249:136819058]  DVTAssertions: Warning in IDEFrameworks/IDEFoundation/Execution/LaunchSystem/IDELaunchSession.m:395
+Details:  setRunnablePIDWithDiagnostics:logSection:andCompletionHandler: called without a completion handler - blocking until diagnostics setup completes. Callers should migrate to using a completion handler for better performance.
+Object:   <IDELaunchSession: 0x7aab1b1680>
+Method:   -setRunnablePIDWithDiagnostics:logSection:andCompletionHandler:
+Thread:   <NSThread: 0x7aa8e72b80>{number = 3, name = (null)}
+Please file a bug at https://feedbackassistant.apple.com with this warning message and any useful information you can provide.
+
+Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.
+
+Test Suite 'Selected tests' started at 2026-11-11 00:32:50.976.
+Test Suite 'Selected tests' passed at 2026-11-11 00:32:50.976.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+◇ Test run started.
+↳ Testing Library Version: 2403
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite SkipTests started.
+✔ Suite SkipTests passed after 0.001 seconds.
+◇ Suite CrashTests started.
+◇ Test b2() started.
+Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+2026-11-11 00:32:50.977470+0100 xctest[82706:136822856] Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+2026-11-11 00:32:51.417 xcodebuild[81249:136819198]  DVTAssertions: Warning in IDEFrameworks/IDEFoundation/Execution/LaunchSystem/IDELaunchSession.m:395
+Details:  setRunnablePIDWithDiagnostics:logSection:andCompletionHandler: called without a completion handler - blocking until diagnostics setup completes. Callers should migrate to using a completion handler for better performance.
+Object:   <IDELaunchSession: 0x7aab1b1e00>
+Method:   -setRunnablePIDWithDiagnostics:logSection:andCompletionHandler:
+Thread:   <NSThread: 0x7aa8e6c100>{number = 7, name = (null)}
+Please file a bug at https://feedbackassistant.apple.com with this warning message and any useful information you can provide.
+
+Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.
+
+Test Suite 'Selected tests' started at 2026-11-11 00:32:51.538.
+Test Suite 'Selected tests' passed at 2026-11-11 00:32:51.538.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+◇ Test run started.
+↳ Testing Library Version: 2403
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite CrashTests started.
+◇ Test b2() started.
+Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+2026-11-11 00:32:51.540001+0100 xctest[82781:136823111] Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+2026-11-11 00:32:51.966 xcodebuild[81249:136819058]  DVTAssertions: Warning in IDEFrameworks/IDEFoundation/Execution/LaunchSystem/IDELaunchSession.m:395
+Details:  setRunnablePIDWithDiagnostics:logSection:andCompletionHandler: called without a completion handler - blocking until diagnostics setup completes. Callers should migrate to using a completion handler for better performance.
+Object:   <IDELaunchSession: 0x7aab1b2580>
+Method:   -setRunnablePIDWithDiagnostics:logSection:andCompletionHandler:
+Thread:   <NSThread: 0x7aa8e72b80>{number = 3, name = (null)}
+Please file a bug at https://feedbackassistant.apple.com with this warning message and any useful information you can provide.
+
+Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.
+
+Test Suite 'Selected tests' started at 2026-11-11 00:32:52.099.
+Test Suite 'Selected tests' passed at 2026-11-11 00:32:52.100.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.001) seconds
+◇ Test run started.
+↳ Testing Library Version: 2403
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite CrashTests started.
+◇ Test b3() started.
+✔ Test b3() passed after 0.001 seconds.
+✔ Suite CrashTests passed after 0.001 seconds.
+✔ Test run with 1 test in 1 suite passed after 0.001 seconds.
+2026-11-11 00:32:58.443 xcodebuild[81249:136819055] [MT] IDETestOperationsObserverDebug: 10.821 elapsed -- Testing started completed.
+2026-11-11 00:32:58.443 xcodebuild[81249:136819055] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-11 00:32:58.443 xcodebuild[81249:136819055] [MT] IDETestOperationsObserverDebug: 10.821 sec, +10.821 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/u/Library/Developer/Xcode/DerivedData/Kit-aypeackolqktuwbqgxbmobaxdomq/Logs/Test/Test-Kit-2026.11.11_00-32-44-+0100.xcresult
+
+Failing tests:
+	SkipTests.a3()
+	SkipTests.a1()
+	SkipTests.a2()
+	CrashTests.b1()
+	CrashTests.b2()
+
+** TEST FAILED **
+
+Testing started

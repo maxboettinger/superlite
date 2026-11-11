@@ -133,8 +133,9 @@ def test_counted_run_unchanged(tmp_path):
     assert cp.stdout.split()[:3] == ["2", "0", "0"]
 
 
-def test_green_exit_without_count_stays_green(tmp_path):
+def test_green_exit_without_count_is_a_stop(tmp_path):
     swift_proj(tmp_path, "Build succeeded")
     cp = go(tmp_path, "--fast", "Tests/AppTests/FooTests.swift")
-    assert cp.returncode == 0, cp.stdout + cp.stderr
-    assert cp.stdout.split()[:3] == ["1", "0", "0"]
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    assert cp.stdout.split()[:3] == ["0", "0", "0"]
+    assert summary(tmp_path)["error"].startswith("no tests ran:")
