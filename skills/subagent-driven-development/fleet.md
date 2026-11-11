@@ -16,7 +16,7 @@ Every other role takes a brief file under `.superlite/briefs/` (never pasted int
 
 - Package reviewer: `fleet spawn --for-review Tn [Tm ...] --plan $PLAN` (or `--package X`) writes the brief, starts the worker and sends it; `fleet spawn --for-dispatch` ends with `review: Tn (<why>)` lines for committed tasks that need a review. By hand: `--role package-reviewer`; the brief holds what the review brief in `SKILL.md` holds. A failed send is retried once (stall or slow Herdr reply).
 - Final reviewer: `--role final-reviewer`, a fresh worker per round: `fleet send Wn --brief <abs>/.superlite/review-packet.md --label FR<round>`; add `--full` to ask for a full review.
-- Fixers: `"$SL" findings route --plan $PLAN <json paths>` prints `fixer tier=T brief=P files=F task=Tn` per finding group. Per line: `fleet spawn --role fixer --tier T`, then `fleet send Wn --brief P`. Escalation: the same brief to a worker one `--tier` up.
+- Fixers: `"$SL" findings route --plan $PLAN <json paths>` prints `fixer tier=T brief=P files=F task=Tn` per finding group. Per line: `fleet spawn --role fixer --tier T`, then `fleet send Wn --brief P`. Escalation: the same brief to a worker one `--tier` up. A line with `task=coordinator` has a brief whose fixer does not commit: it reports `commit: held for the coordinator`, and the coordinator commits the fix itself through `commit_task` with the owning task id once that task is done.
 - Research: `--role research` (read-only `superlite:researcher`).
 - Test layers, in a repo with `scripts/test_layers.py`: `"$SL" fleet run --layer headless|tui|evals --plan $PLAN` runs the layer in a shell pane; no brief.
 
