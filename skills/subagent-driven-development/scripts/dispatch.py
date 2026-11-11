@@ -10,6 +10,7 @@ stdout, one line per batch of ready tasks (one agent, one message), longest pred
     Tn fresh             no eligible idle agent: start a primed implementer
     T0 wave0             synthesized Wave 0 skeleton still pending (`sl wave0`): its own agent, first line;
                          a ledger line `- Ruling: skip T0` silences it
+In fleet mode a worker fleet.json marks busy is not idle: no agent= line offers it, and pool.json is not written (#553).
 A task with a ledger `- Hold Tn: reason` (and no later `- Release Tn`) is never offered; stderr `held=Tn reason`.
 A stable.json `fix` task whose only reasons are `depends on unstable X` is offered once every such X is committed.
 stderr `unstable=Tn reason; rerun sl lint --stable` names each ready task stable.json still holds back.
@@ -195,7 +196,9 @@ def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lan
     lane = cfg.get("lane") or {}  # O(1)
     lane_tier = lane.get("tier")  # O(1)
     agents = pool.get("agents", [])  # O(a)
-    idle = [ag for ag in agents if is_idle(ag)]  # O(a)
+    fleet = bool(fleet_state and sl_dir is not None and fleet_state.is_on(Path(sl_dir)))  # fleet mode never polls | O(1)
+    fleet_busy = set(fleet_state.workers(Path(sl_dir), "busy")) if fleet else set()  # #553: a worker fleet.json marks busy, such as one answering a send --text, is never idle; pool.json stays as it is | O(w)
+    idle = [ag for ag in agents if is_idle(ag) and ag.get("id") not in fleet_busy]  # O(a)
     eligible = {}  # task -> {agent id: score} over eligible idle agents of the task's own tier | O(1)
     eligible_somewhere = set()  # O(1)
     reasons = {}  # O(1)
@@ -222,7 +225,6 @@ def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lan
 
     order = {t: i for i, t in enumerate(ready)}  # O(R)
     taken = set()  # agents on an earlier resolved line (agent= or poll) | O(1)
-    fleet = bool(fleet_state and sl_dir is not None and fleet_state.is_on(Path(sl_dir)))  # fleet mode never polls | O(1)
     decided = {}  # O(1)
     in_lane = [t for t in ready if lane_tier and tier(t) == lane_tier]  # O(R)
     ctx = {ag["id"]: float(ag.get("context_k", 0)) for ag in agents}  # lowest context first | O(a)

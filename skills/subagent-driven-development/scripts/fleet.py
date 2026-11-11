@@ -18,6 +18,7 @@ Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-d
 created, prints `error: --plan P: <reason>; ...` on stderr and exits 2, creating nothing (#372).
 A start that fails with `not an available shell` (a freed pane) is retried once after SHELL_PAUSE_S.
 `spawn --for-dispatch` also stops the ready implementers an earlier dispatch dropped from pool.json (#424).
+`spawn --for-dispatch` sends no task to a worker fleet.json marks busy, such as one still answering a `send --text` (dispatch leaves it out of the idle agents) (#553).
 A stalled prime waits up to STALL_WAIT_MS for a late start, then is resent once; a start that stays slow is retried once on another account (#428).
 `--for-dispatch` ends with one `review: Tn (<why>); run ... fleet spawn --for-review Tn --plan P` line per committed task that matches a review reason and has no review yet (#422).
 A primed worker whose pane shows the folder trust dialog gets Down, Enter and the prime once more; one-turn roles and leads check the screen once after the start; a dialog that stays open is named in the BLOCKED line (#514).
