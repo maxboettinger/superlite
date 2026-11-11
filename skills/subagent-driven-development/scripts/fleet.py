@@ -684,8 +684,12 @@ def main(argv=None):  # O(w) plus command cost
             except hc.HerdrError:  # O(1)
                 pass  # O(1)
     elif a.cmd == "status":  # O(w)
+        import fleet_lead  # noqa: E402 | O(1) lazy
+        hint = fleet_lead.backlog_hint(sd, Path.cwd()) if not a.plan else None  # a plain status only; --plan names a run | O(b)
         if not fs.is_on(sd):  # O(w)
             print("fleet: off")  # O(1)
+            if hint:  # O(1)
+                print(hint)  # O(1)
             return 0  # O(1)
         print("fleet: on")  # O(1)
         import fleet_io as fio  # noqa: E402 | O(1) lazy
@@ -699,6 +703,8 @@ def main(argv=None):  # O(w) plus command cost
                 bk = fio.baseline_k(sd, wid)  # O(file)
                 tail = f" context_k={pooled[wid].get('context_k', '-')} baseline_k={'-' if bk is None else bk}"  # O(1)
             print(f"{wid} {w.get('state')} account={w.get('account')} pane={w.get('pane_id')} task={w.get('task') or '-'}" + (f" role={role}" if role and role != "implementer" else "") + tail)  # O(1)
+        if hint:  # O(1)
+            print(hint)  # O(1)
     elif a.cmd == "spawn":  # O(1)
         if not fs.is_on(sd):  # a worktree run keeps its own fleet.json: the main checkout's `fleet on` does not reach it (#355) | O(w)
             hint = "sl fleet on" + (f" --plan {a.plan}" if a.plan else "")  # O(1) the same --plan resolves the same state dir

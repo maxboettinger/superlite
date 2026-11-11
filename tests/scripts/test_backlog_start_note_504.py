@@ -72,7 +72,7 @@ def test_running_leads_named(run, capsys, tmp_path):
     bs.update(bs.path(run.bk.root), up)
     f = note(tmp_path, "Use uv.")
     out = cli(capsys, "start", "B1", "--note", str(f))[1]
-    assert f'note: B2 lead W5 started before this note; sl fleet send W5 --text "$(cat {shlex.quote(str(f.resolve()))})" tells it' in out
+    assert f'note: B2 lead W5 started before this note; sl backlog tell B2 --text "$(cat {shlex.quote(str(f.resolve()))})" tells it' in out
     d = tmp_path / "a b"
     d.mkdir()
     g = note(d, "Use uv.", "n'x.md")

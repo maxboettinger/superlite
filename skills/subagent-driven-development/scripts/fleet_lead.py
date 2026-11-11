@@ -141,3 +141,21 @@ def _spawn_lead(main_sd, worktree, model, base, after):  # O(a * e + w) plus her
     fleet._launch_line(main_sd, wid, "lead", model, account, pane)  # O(1)
     print(f"{wid} account={account} pane={pane} agent=lead role=lead")  # O(1)
     return {"id": wid, "name": name, "account": account, "pane_id": pane, "agent": "lead", "model": model, "role": "lead", "lead_sd": lsd_s}  # O(1)
+
+
+def backlog_hint(sd, cwd):  # O(b)
+    """One `backlog:` line naming the leads a backlog in the main checkout runs, or None."""
+    if os.environ.get("SUPERLITE_FLEET_WORKER"):  # O(1)
+        return None  # O(1)
+    import backlog_state as bs  # O(1)
+    try:  # O(1)
+        root = bs.main_root(Path(cwd))  # O(1)
+    except RuntimeError:  # O(1)
+        return None  # O(1)
+    if Path(sd).resolve() == (root / ".superlite").resolve():  # O(1)
+        return None  # O(1)
+    rows = [f"{b['id']} {b['lead']}" for b in bs.load(bs.path(root)).get("batches", []) if b.get("state") in ("running", "needs_decision") and b.get("lead")]  # O(b)
+    if not rows:  # O(1)
+        return None  # O(1)
+    one = len(rows) == 1  # O(1)
+    return f"backlog: {len(rows)} lead{'' if one else 's'} run{'s' if one else ''} in {root}/.superlite ({', '.join(rows)}); sl backlog status lists {'it' if one else 'them'}, sl backlog tell B --text T messages {'it' if one else 'one'}"  # O(b)

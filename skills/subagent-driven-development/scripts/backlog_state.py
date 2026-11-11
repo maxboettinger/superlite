@@ -11,9 +11,13 @@ import re
 import subprocess
 from pathlib import Path
 
+import backlog_checks
+
 SHIP_Q = ("Approve that every batch lead ships its own batch (rebase, version bump, maxapp ship into the default "
           "branch) under the ship lock?")
 SHIP_OK, SHIP_NO = "Approve shipping", "Not yet"
+SHIP_MAIN = ("ship: main cannot rule the ship approval; ask the user, or record an approval the user's prompt gave with "
+             "sl backlog decide --approve-ship --source prompt")
 ACTIVE = ("running", "needs_decision")
 
 
@@ -146,10 +150,6 @@ def _admit_q(o: dict) -> str:
 
 def open_questions(data: dict) -> list:
     out = []
-    if data.get("approved_ship") is None and data.get("batches"):
-        out.append({"question": SHIP_Q, "header": "Ship", "multiSelect": False, "options": [
-            {"label": SHIP_OK, "description": "one yes for all batches"},
-            {"label": SHIP_NO, "description": "leads stop before ship"}]})
     for o in admit_entries(data):  # O(outside)
         out.append({"question": _admit_q(o), "header": f"#{o['number']}", "multiSelect": False, "options": [
             {"label": "Admit", "description": "triaged on the next sl backlog plan"},
@@ -157,18 +157,27 @@ def open_questions(data: dict) -> list:
     for b in data.get("batches", []):  # O(batches * questions)
         if b["state"] == "planned":
             out.extend({**q, "question": f"{b['id']}: {q['question']}"} for q in _unanswered(b))
+    if data.get("approved_ship") is None and data.get("batches"):
+        out.append({"question": SHIP_Q, "header": "Ship", "multiSelect": False, "options": [
+            {"label": SHIP_OK + backlog_checks.REC, "description": "one yes for every batch of this plan round; a new plan asks again"},
+            {"label": SHIP_NO, "description": "leads stop before ship"}]})
     return out
 
 
-def answer(data: dict, answers: dict, by: str, now: str) -> list:
+def answer(data: dict, answers: dict, by, now: str) -> list:
     qs = {q["question"] for q in open_questions(data)}
     errs, outside = [], {_admit_q(o): o for o in admit_entries(data)}
+    legacy = isinstance(by, str)  # O(1)
+    who = (lambda q: "user") if legacy else (lambda q: by.get(q, "user"))  # O(1)
     for q, a in answers.items():  # O(answers * batches)
         if q not in qs:
             errs.append(f"no open question: {q}")
         elif q == SHIP_Q:
-            if a == SHIP_OK:
-                data["approved_ship"] = {"by": by, "time": now}
+            if a in (SHIP_OK, SHIP_OK + backlog_checks.REC):
+                if who(q) == "main":
+                    errs.append(SHIP_MAIN)
+                else:
+                    data["approved_ship"] = {"by": by if legacy else "AskUserQuestion", "time": now}
             elif a != SHIP_NO:
                 errs.append(f"ship: answer must be {SHIP_OK} or {SHIP_NO}")
         elif q in outside:
@@ -181,8 +190,22 @@ def answer(data: dict, answers: dict, by: str, now: str) -> list:
         else:
             bid, _, text = q.partition(": ")
             if a:
-                batch(data, bid).setdefault("answers", {})[text] = a
+                bt = batch(data, bid)
+                bt.setdefault("answers", {})[text] = a
+                bt.setdefault("answered_by", {})[text] = who(q)
     return errs
+
+
+def approve_ship(data: dict, source: str, now: str) -> str:
+    if source != "prompt":  # O(1)
+        raise ValueError("--source: only prompt (an AskUserQuestion answer goes through decide --file)")
+    if not data.get("batches"):  # O(1)
+        raise ValueError("no batch planned: run sl backlog plan first")
+    ap = data.get("approved_ship")
+    if ap:  # O(1)
+        return f"ship already approved ({ap['by']} {ap['time']})"
+    data["approved_ship"] = {"by": "prompt", "time": now}
+    return f"ship approved (prompt {now}): every batch of this plan round may ship"
 
 
 def skip_issue(data: dict, n: "int | str") -> str:
@@ -290,7 +313,7 @@ def status_lines(data: dict, all_: bool = False) -> list:
         elif s == "parked":
             nxt = (b.get("reason") or "-")[:40]
         else:
-            nxt = (b.get("version") or "-") + (" OPEN " + " ".join(ref(i) for i in b["open_issues"]) if b.get("open_issues") else "")
+            nxt = (b.get("version") or "-") + "".join(f" {k}={len(b[k])}" for k in ("followups", "undone") if b.get(k)) + (" OPEN " + " ".join(ref(i) for i in b["open_issues"]) if b.get("open_issues") else "")
         issues = " ".join(ref(i) for i in b.get("issues", []))
         lines.append(f"{b['id']} | {issues} | {s} | {b.get('lead') or '-'} | {'#%s' % b['pr'] if b.get('pr') else '-'} | {nxt}")
     lines.extend(left_out_lines(data))

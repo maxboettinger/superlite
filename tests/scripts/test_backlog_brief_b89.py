@@ -54,4 +54,4 @@ def test_triage_open_line():
 
 def test_triage_root_doc_rule():
     t = bb.triage_brief([{"number": 3, "title": "T", "body": "b"}], {"repo": "o/r", "max_batches": 3})
-    assert "Rules: " + bb.ROOT_DOC_TRIAGE + "no two batches share a file" in t
+    assert "Rules: " + bb.ROOT_DOC_TRIAGE + bb.TRIAGE_RUN + "no two batches share a file" in t
