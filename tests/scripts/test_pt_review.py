@@ -524,3 +524,93 @@ def test_locate_prefix_requires_exact_case_of_every_component_348(tmp_path: Path
     assert not pt_review._exact_case(tmp_path / "src" / "dashmax" / "core" / "Sunsama_api.py", 3)
     item = next(p for p in pt_review.planned_items(plan, ["T1"]) if p.qual == "core.sunsama_api.client")
     assert pt_review.locate(tmp_path, plan, item)[0] == "dashmax.core.sunsama_api"
+
+
+# --- #453: a dotted base in a Produces class item ---------------------------------------------------------------------
+
+DOTTED_ERRORS = '''\
+class Base(Exception):
+    pass
+
+
+class ParseError(Base):
+    pass
+
+
+class CodedError(ValueError):
+    def __init__(self, msg: str, code: int = 1) -> None:
+        super().__init__(msg)
+        self.code = code
+
+
+def boom(n: int) -> None:
+    raise ParseError(n)
+'''
+
+
+def _dotted_check(root: Path, produces: str) -> tuple[list[str], int]:
+    (root / "src" / "pkg").mkdir(parents=True)
+    (root / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "src" / "pkg" / "errors.py").write_text(DOTTED_ERRORS, encoding="utf-8")
+    (root / "plan.md").write_text(
+        "# p\n\n```mermaid\nflowchart LR\n%% taskgraph\nT1\n```\n\n"
+        f"### T1 errors · Complexity 3\n**Owns:** src/pkg/errors.py\n**Produces:** {produces}\n\n"
+        "## Review Focus\n- errors: state\n", encoding="utf-8")
+    out, n = pt_review.check_interfaces(pt_review.parse_plan(root / "plan.md"), root, None)
+    return [m.msg for m in out], n
+
+
+@pytest.mark.parametrize("item, want", [
+    ("pkg.errors.ParseError(errors.Base)", ("pkg.errors.ParseError", "errors.Base", None)),
+    ("`pkg.errors.ParseError(Exception, pkg.errors.Base)`",
+     ("pkg.errors.ParseError", "Exception, pkg.errors.Base", None)),
+    ("pkg.errors.ParseError(errors.Base) -> None", ("pkg.errors.ParseError", "errors.Base", "None")),
+    ("pkg.errors.ParseError(typing.Generic[T])", None),
+    ("pkg.errors.ParseError(errors.make())", None),
+    ("pkg.errors.ParseError(errors.Base, metaclass=Meta)", None),
+    ("pkg.errors.ParseError(*errors.bases)", None),
+    ("pkg.errors.ParseError(a.b=1)", None),
+])
+def test_parse_sig_reads_dotted_bases(item, want):
+    assert pt_review.parse_sig(item) == want
+
+
+def test_parse_sig_def_form_unchanged():
+    assert pt_review.parse_sig("pkg.mod.f(a: int, b=1) -> str") == ("pkg.mod.f", "a: int, b=1", "str")
+    assert pt_review.parse_sig("pkg.errors.ParseError(Exception)") == ("pkg.errors.ParseError", "Exception", None)
+    assert pt_review.parse_sig("pkg.mod.f(a b)") is None
+
+
+@pytest.mark.parametrize("args_src, names", [
+    ("errors.Base", ["errors.Base"]),
+    ("Exception, pkg.errors.Base", ["Exception", "pkg.errors.Base"]),
+    ("typing.Generic[T]", None),
+    ("errors.Base, metaclass=Meta", None),
+    ("Exception", ["Exception"]),
+])
+def test_base_names_dotted(args_src, names):
+    assert pt_review._base_names(args_src) == names
+
+
+def test_dotted_base_matches_by_last_name(tmp_path):
+    produces = ("pkg.errors.ParseError(errors.Base) · pkg.errors.ParseError(pkg.errors.Base) · "
+                "pkg.errors.ParseError(builtins.Exception) · pkg.errors.ParseError(Exception, errors.Base)")
+    assert _dotted_check(tmp_path, produces) == ([], 4)
+
+
+def test_wrong_dotted_base_is_a_mismatch(tmp_path):
+    msgs, n = _dotted_check(tmp_path, "pkg.errors.ParseError(errors.KeyError)")
+    assert (msgs, n) == (["T1 Produces: pkg.errors.ParseError: base class 'errors.KeyError' not in its bases "
+                          "(Base, Exception, BaseException, object)"], 1)
+
+
+def test_dotted_base_on_class_with_init_checks_bases_only(tmp_path):
+    assert _dotted_check(tmp_path / "a", "pkg.errors.CodedError(builtins.ValueError)") == ([], 1)
+    msgs, _n = _dotted_check(tmp_path / "b", "pkg.errors.CodedError(errors.Base)")
+    assert msgs == ["T1 Produces: pkg.errors.CodedError: base class 'errors.Base' not in its bases "
+                    "(ValueError, Exception, BaseException, object)"]
+
+
+def test_dotted_base_on_a_function_is_a_mismatch(tmp_path):
+    msgs, n = _dotted_check(tmp_path, "pkg.errors.boom(errors.Base)")
+    assert (msgs, n) == (["T1 Produces: pkg.errors.boom: planned base classes (errors.Base), but it is not a class"], 1)
