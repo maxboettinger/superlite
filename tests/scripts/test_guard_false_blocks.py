@@ -256,3 +256,69 @@ def test_hooks_doc_names_accepted_limits():
     line = [x for x in doc.splitlines() if x.startswith("- `block-coordinator-edits`")][0]
     for s in ("docs.md", "worktree", "quadratic", "nested quotes"):
         assert s in line, s
+
+
+# --- #478: arithmetic is no command, redirect or heredoc; only its substitutions run ---------------------------------
+import sys  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "scripts"))
+import guard_lex  # noqa: E402
+
+
+def test_dollar_arith_keeps_its_text_and_only_its_substitutions():
+    (s,) = guard_lex.split("echo $(( $(date +%s) - start ))")
+    assert s.words == ["echo", "$(( $(date +%s) - start ))"] and s.dyn == [False, True]
+    assert s.bodies == ["date +%s"] and s.redirects == []
+    (s,) = guard_lex.split('echo "t $(( $(date) - s ))s"')
+    assert s.words == ["echo", "t $(( $(date) - s ))s"] and s.bodies == ["date"]
+    (s,) = guard_lex.split("echo $((a>b)) $((c<<2)) ${x:-$((d>e))}")
+    assert s.bodies == [] and s.redirects == [] and s.heredocs == []
+
+
+def test_arith_command_and_for_header():
+    (s,) = guard_lex.split("(( n > 3 ))")
+    assert (s.words, s.redirects, s.subshell, s.arith) == ([], [], None, " n > 3 ")
+    segs = guard_lex.split("for (( i=0; i>5; i++ )); do :; done")
+    assert segs[0].words == ["for"] and segs[0].arith == " i=0; i>5; i++ " and segs[0].subshell is None
+    segs = guard_lex.split("if (( $(date +%s) > 3 )); then :; fi")
+    assert segs[0].words == ["if"] and segs[0].bodies == ["date +%s"] and segs[0].redirects == []
+
+
+def test_unbalanced_double_paren_stays_a_substitution_or_group():
+    (s,) = guard_lex.split("x=$((echo hi > a) )")
+    assert s.bodies == ["(echo hi > a) "]
+    (s,) = guard_lex.split("((echo a) )")
+    assert s.subshell == "(echo a)" and s.arith is None
+
+
+def test_unquoted_heredoc_arith_runs_only_its_substitution():
+    (s,) = guard_lex.split("cat > /tmp/b99.txt <<EOF\nelapsed $(( $(date +%s) - start ))\nEOF")
+    assert s.bodies == ["date +%s"]
+
+
+@pytest.mark.parametrize("cmd", [
+    "start=$(date +%s); sleep 0; echo \"took $(( $(date +%s) - start ))s\"",
+    "start=$(date +%s); x=$(( $(date +%s) - start )); echo $x",
+    "start=$(date +%s); CI=true Scripts/ci.sh ios-test > /tmp/b99-ci.log 2>&1; code=$?; "
+    "echo \"exit=$code seconds=$(( $(date +%s) - start ))\"",
+    "echo $((a>b)) $((c<<2))",
+    "(( n > 3 )) && echo ok",
+    "for (( i=0; i>5; i++ )); do :; done",
+    "while (( n > 0 )); do n=$((n-1)); done",
+    "start=1; cat > /tmp/b99.txt <<EOF\nelapsed $(( $(date +%s) - start ))\nEOF",
+])
+def test_arithmetic_is_no_write_target(proj, cmd):
+    assert bash(proj, cmd).returncode == 0, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "echo $(( $(echo 1 | tee src/a.py) + 1 ))",
+    "(( $(echo 1 > src/a.py) ))",
+    "echo $(( 1 + 2 )) > src/a.py",
+    "x=$((echo hi > src/a.py) )",
+    "((echo hi > src/a.py) )",
+    "v=.superlite/a; while (( v++ < 3 )); do :; done; echo > $v",
+])
+def test_arithmetic_keeps_real_writes_blocked(proj, cmd):
+    assert bash(proj, cmd).returncode == 2, cmd
