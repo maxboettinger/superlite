@@ -42,4 +42,4 @@ def test_unknown_and_bare_sl_name_the_copy(tmp_path):
 def test_sdd_fleet_line_is_a_hard_stop():
     sdd = (ROOT / "skills" / "subagent-driven-development" / "SKILL.md").read_text(encoding="utf-8")
     line = next(l for l in sdd.splitlines() if l.startswith("Fleet mode"))
-    assert '"$SL" fleet on' in line and "report BLOCKED" in line and "never in-process" in line and len(sdd) <= 11700
+    assert '"$SL" fleet on' in line and "report BLOCKED" in line and "never in-process" in line

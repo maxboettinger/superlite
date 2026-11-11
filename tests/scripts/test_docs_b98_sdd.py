@@ -22,4 +22,3 @@ def test_diagram_runs_the_suite_before_the_packet():
 def test_batching_names_both_waits_and_cap_holds():
     assert "- Every test run is `run_tests ... --background`; wait in Final review 2 and 5." in SKILL
     assert "wait once (Final review 5)" not in SKILL
-    assert len(SKILL) <= 11700

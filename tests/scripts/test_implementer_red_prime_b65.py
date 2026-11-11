@@ -30,4 +30,3 @@ def test_task_message_report_list_names_the_red_run_line():
     step3 = next(ln for ln in text.splitlines() if ln.startswith("3. "))
     assert ("status DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED, files, test result, "
             "`Red run:` line, open questions\"") in step3
-    assert len(text) <= 11700

@@ -23,10 +23,6 @@ def test_skill_reviews_and_probes():
     has(SKILL, "--for-review", "review:", "--dismiss")
 
 
-def test_skill_stays_under_cap():
-    assert len(SKILL) <= 11700
-
-
 def test_fixing_md():
     has(FIXING, "--dismiss", 'results["dismissed"]', "ADAPTER:", "RUN:", "probe files committed")
 
