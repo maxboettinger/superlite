@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "skills" / "subagent-driven-development" / "scripts"
 HOOK = ROOT / "hooks" / "compact-nudge"
@@ -166,3 +167,105 @@ def test_hook_fails_open_without_python(tmp_path):
     _sl(tmp_path)
     r = _run(tmp_path, _transcript(tmp_path, _entry(650000)), SUPERLITE_PYTHON=str(tmp_path / "no-such-python"))
     assert r.returncode == 0 and r.stdout == ""
+
+
+# --- session-start: stale stamps and hint markers (#466) -------------------------------------------------------------
+
+START = ROOT / "hooks" / "session-start"
+_START_DROPPED = ("CLAUDE_ENV_FILE", "CLAUDE_PID", "CURSOR_PLUGIN_ROOT", "CURSOR_AGENT", "CURSOR_TRACE_ID",
+                  "COPILOT_CLI", "MUSE_PLUGIN_ROOT")
+KEPT = {MODE_FILE, "compact-hint.live", "compact-hint.s1", "compact-hint", "compact-hint.odd.name", "notes.md"}
+
+
+def _start(tmp_path, source="startup", sid="s1", **extra):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_") and k not in _START_DROPPED}
+    env.update({"CLAUDE_PLUGIN_ROOT": str(ROOT), "CLAUDE_PROJECT_DIR": str(tmp_path),
+                "SUPERLITE_HOME": str(tmp_path / "home")})
+    env.update(extra)
+    inp = {"hook_event_name": "SessionStart", "source": source, "cwd": str(tmp_path)}
+    if sid:
+        inp["session_id"] = sid
+    r = subprocess.run([BASH, str(START)], input=json.dumps(inp), capture_output=True, text=True,
+                       encoding="utf-8", env=env, cwd=str(tmp_path))
+    assert r.returncode == 0, r.stderr
+    json.loads(r.stdout)
+    return r
+
+
+def _stale_folder(tmp_path):
+    sl = _sl(tmp_path)
+    for name in ("last-compact", "last-compact.old-1", "last-compact.old-2", "compact-hint.dead",
+                 "compact-hint.live", "compact-hint.s1", "compact-hint", "compact-hint.odd.name", "notes.md"):
+        (sl / name).write_text("", encoding="utf-8")
+    sessions = tmp_path / "home" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "live").write_text(str(tmp_path / "elsewhere" / ".superlite") + "\n", encoding="utf-8")
+    (sessions / "dead.d").mkdir()                     # a private folder is no binding
+    return sl
+
+
+def _names(sl):
+    return {p.name for p in sl.iterdir()}
+
+
+def test_startup_drops_old_stamps_and_unbound_hint_markers(tmp_path):
+    sl = _stale_folder(tmp_path)
+    r = _start(tmp_path)
+    assert _names(sl) == KEPT
+    assert "You have superlite" in r.stdout
+
+
+def test_clear_drops_them_too(tmp_path):
+    sl = _stale_folder(tmp_path)
+    _start(tmp_path, source="clear", sid="s9")
+    assert _names(sl) == KEPT - {"compact-hint.s1"}    # /clear ended s1: s9 is the session now
+
+
+def test_compact_and_resume_keep_everything(tmp_path):
+    sl = _stale_folder(tmp_path)
+    before = _names(sl)
+    for source in ("compact", "resume"):
+        _start(tmp_path, source=source)
+        assert _names(sl) == before
+
+
+def test_fleet_pane_prunes_nothing(tmp_path):
+    sl = _stale_folder(tmp_path)
+    before = _names(sl)
+    for role in ("implementer", "lead"):
+        _start(tmp_path, SUPERLITE_FLEET_WORKER="W3", SUPERLITE_FLEET_ROLE=role)
+        assert _names(sl) == before
+
+
+def test_another_live_sessions_folder_is_left_alone(tmp_path):
+    sl = _stale_folder(tmp_path)
+    (sl / "session").write_text("owner\n", encoding="utf-8")
+    (tmp_path / "home" / "sessions" / "owner").write_text(str(sl) + "\n", encoding="utf-8")
+    before = _names(sl)
+    _start(tmp_path)
+    assert _names(sl) == before
+
+
+def test_without_a_session_id_nothing_is_removed(tmp_path):
+    sl = _stale_folder(tmp_path)
+    before = _names(sl)
+    _start(tmp_path, sid=None)
+    assert _names(sl) == before
+
+
+def test_folders_with_marker_names_survive(tmp_path):
+    sl = _sl(tmp_path)
+    (sl / "last-compact.dir").mkdir()
+    (sl / "compact-hint.gone").mkdir()
+    (sl / "last-compact").write_text("", encoding="utf-8")
+    _start(tmp_path)
+    assert _names(sl) == {MODE_FILE, "last-compact.dir", "compact-hint.gone"}
+
+
+def test_nothing_left_to_remove_keeps_the_hook_green(tmp_path):
+    sl = _stale_folder(tmp_path)
+    _start(tmp_path)
+    assert _names(sl) == KEPT
+    (sl / "compact-hint.s1").unlink()
+    _start(tmp_path)                # nothing left to remove: the empty list must not fail
+    assert _names(sl) == KEPT - {"compact-hint.s1"}

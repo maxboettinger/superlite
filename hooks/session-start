@@ -47,6 +47,33 @@ re_new='"source"[[:space:]]*:[[:space:]]*"(startup|clear)"'  # O(1)
 if [ -n "$sid" ] && [[ $input =~ $re_new ]] && . "${0%/*}/superlite-state.sh" 2>/dev/null; then  # O(input)
   if superlite_state 2>/dev/null && [ -n "$SL_SD" ] && [ -d "$SL_SD" ]; then  # O(1)
     rm -f "$SL_SD/inline-flow.json" 2>/dev/null || true  # O(1)
+    # Drop the nudge stamps (last-compact, last-compact.<sid>) and the hint markers (compact-hint.<sid>) of sessions that
+    # no longer exist (#466): a marker stays while its session is this one or still has a binding. Not in a fleet pane,
+    # and not in a folder another live session owns.
+    if [ -z "${SUPERLITE_FLEET_WORKER:-}" ]; then  # O(1)
+      sessions="${SUPERLITE_HOME:-$HOME/.superlite}/sessions"  # O(1)
+      owner=""; [ ! -f "$SL_SD/session" ] || { IFS= read -r owner < "$SL_SD/session" || true; }  # O(1)
+      owner="${owner%$'\r'}"  # O(1)
+      if [ -z "$owner" ] || [ "$owner" = "$sid" ] || [ ! -f "$sessions/$owner" ]; then  # O(1)
+        re_marker='^compact-hint\.([A-Za-z0-9_-]+)$'  # O(1)
+        stale=()  # O(1)
+        shopt -s nullglob  # O(1)
+        for f in "$SL_SD"/last-compact "$SL_SD"/last-compact.* "$SL_SD"/compact-hint.*; do  # O(n) entries
+          [ -f "$f" ] || continue  # O(1)
+          name="${f##*/}"  # O(1)
+          case "$name" in  # O(1)
+            last-compact) stale+=("$f") ;;  # O(1)
+            last-compact.*) [[ ${name#last-compact.} =~ ^[A-Za-z0-9_-]+$ ]] && stale+=("$f") ;;  # O(1)
+            *) if [[ $name =~ $re_marker ]]; then  # O(1)
+                 old="${BASH_REMATCH[1]}"  # O(1)
+                 if [ "$old" != "$sid" ] && [ ! -f "$sessions/$old" ]; then stale+=("$f"); fi  # O(1)
+               fi ;;  # O(1)
+          esac  # O(1)
+        done  # O(1)
+        shopt -u nullglob  # O(1)
+        if [ "${#stale[@]}" -gt 0 ]; then rm -f "${stale[@]}" 2>/dev/null || true; fi  # O(n) one process
+      fi  # O(1)
+    fi  # O(1)
   fi  # O(1)
 fi  # O(1)
 

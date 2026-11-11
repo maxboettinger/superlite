@@ -8,7 +8,9 @@
 With an auto-compact window set (`sl setup` offers 400,000 tokens) Claude Code compacts by itself and the context never
 reaches the threshold. A main-conversation request above it means no such window is active, so the agent is asked once
 per session to tell the user how to set one. The size is the input side of the last main-conversation request in the
-transcript (input, cache read and cache write tokens), read from the file's last 256 KB only.
+transcript (input, cache read and cache write tokens), read from the file's last 256 KB only. The markers it leaves
+(`compact-hint.<sid>`, and the nudge stamps `last-compact*`) are removed by hooks/session-start when a later session
+starts (startup or /clear), for sessions that no longer exist.
 
 CLI (hooks/compact-nudge): compact_due.py <sl_dir>, the hook's JSON on stdin (session_id, transcript_path). Prints the
 hint and exits 0 when due, else exits 1. Stdlib only.
