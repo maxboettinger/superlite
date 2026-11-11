@@ -13,7 +13,8 @@ re-run with no change since its own checkpoint (no new commit, no probe or seam 
 task's agent in the pool (`current: Tn`) gets `current` cleared, `busy: false`, and Tn in
 its `tasks`. `--dispatch` then prints `next:` and the `dispatch` lines (ready tasks and
 agents) for the updated ledger, with the run's batch setting (`--batch`, else the plan's experiment claim, as
-`dispatch` does); a dispatch failure only warns, the commits stand.
+`dispatch` does); a dispatch failure only warns, the commits stand. (5) A `--plan` naming a run folder resolves to its plan file (`orchestrator.plan_file`; none: exit 2).
+(6) With `--dispatch` and fleet on, one `review: Tn (why); run sl fleet spawn --for-review Tn --plan P` line per task this call committed that `fleet_io.review_hints` lists.
 
 `--also FILE` (several tasks: the first gets the files; needs `--ruling TEXT`) commits FILE with that task though
 another task owns it or nobody does, and writes `- Ruling: Tn also commits FILE - TEXT` to
@@ -49,6 +50,7 @@ directory of --plan: sibling spec, review) never block and are never staged; own
 A tracked, modified (not new, not deleted) file under a `tests/` folder that no task owns
 commits with the task being committed (a fixer's edit to a shared test): `shared-test <path>`
 on stderr and a `workaround` incident `Tn: shared test adjusted` (resolution `accepted`).
+(8) A shared test that a busy fixer/reviewer worker's brief names (`busy_briefs`; not the calling worker's own) is left uncommitted: `left uncommitted (edited by busy W7 (label); commit_task Tn again once it is done): F`; a task left with nothing fails `nothing to commit; held for busy W7: F`.
 New tests, deletions and source files still block; T0 never takes shared tests.
 An owned file a checkpoint of this plan holds that git status no longer lists (back to its HEAD content, or a new file deleted) is staged again when it differs from the newest checkpoint; a restored one prints `restored F (back to its HEAD content)` on stderr.
 Stdlib only.
@@ -136,14 +138,8 @@ for rel in files:
                 sys.path.append(base)
             importlib.import_module(".".join(dotted))
         else:
-            if dotted and base not in sys.path:
-                sys.path.append(base)
-            name = "_slcheck_" + "_".join(p.replace("-", "_") for p in parts)
-            sys.path.append(os.path.dirname(path))
-            spec = importlib.util.spec_from_file_location(name, path)
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules[name] = mod
-            spec.loader.exec_module(mod)
+            failures.append({"file": rel, "skip": True})
+            continue
     except BaseException as e:
         line = 0
         for fr in traceback.extract_tb(e.__traceback__):
@@ -216,8 +212,45 @@ def syntax_errors(files):  # O(total size of m_py files)
     return errors  # O(1)
 
 
-def import_errors(files, roots=None, root="."):  # O(m_py * import cost) + 1 process spawn (batched)
-    """Import every file once under the project's own interpreter (root/.venv, VIRTUAL_ENV, else ours)."""
+def _req_name(req):  # O(len req)
+    m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req) if isinstance(req, str) else None  # O(len)
+    return re.sub(r"[-.]+", "_", m.group(1)).lower() if m else None  # O(len)
+
+
+def _pyproject_deps(root):  # O(pyproject size); (main, optional) normalised names, empty when unreadable
+    try:  # O(1)
+        import tomllib  # O(1)
+        data = tomllib.loads((Path(root) / "pyproject.toml").read_text(encoding="utf-8"))  # O(size)
+    except (ImportError, OSError, ValueError):  # no tomllib (3.10), no file or broken file | O(1)
+        return set(), set()  # O(1)
+    proj = data.get("project") if isinstance(data.get("project"), dict) else {}  # O(1)
+    main = {_req_name(r) for r in proj.get("dependencies") or []}  # O(deps)
+    extra = []  # O(1)
+    for v in (proj.get("optional-dependencies") or {}).values():  # O(groups)
+        extra += list(v)  # O(group)
+    for v in (data.get("dependency-groups") or {}).values():  # O(groups)
+        extra += [r for r in v if isinstance(r, str)]  # O(group)
+    uv = data.get("tool", {}).get("uv", {}) if isinstance(data.get("tool"), dict) else {}  # O(1)
+    extra += list(uv.get("dev-dependencies") or []) if isinstance(uv, dict) else []  # O(deps)
+    poetry = data.get("tool", {}).get("poetry", {}) if isinstance(data.get("tool"), dict) else {}  # O(1)
+    poetry = poetry if isinstance(poetry, dict) else {}  # O(1)
+    if isinstance(poetry.get("dependencies"), dict):  # O(1)
+        main |= {_req_name(k) for k in poetry["dependencies"] if k != "python"}  # O(deps)
+    for g in (poetry.get("group") or {}).values():  # O(groups)
+        if isinstance(g, dict) and isinstance(g.get("dependencies"), dict):  # O(1)
+            extra += list(g["dependencies"])  # O(group)
+    main -= {None}  # O(deps)
+    return main, {_req_name(r) for r in extra} - {None} - main  # O(deps)
+
+
+def optional_deps(root):  # O(pyproject size)
+    """Normalised names of optional and dev dependencies declared in root/pyproject.toml."""
+    return _pyproject_deps(root)[1]  # O(size)
+
+
+def import_errors(files, roots=None, root=".", notes=None):  # O(m_py * import cost) + 1 process spawn (batched)
+    """Import every file once under the project's own interpreter (root/.venv, VIRTUAL_ENV, else ours).
+    Files no import can name are skipped; a missing optional dependency is a warning. Both go to notes."""
     if not files:  # O(1)
         return []  # O(1)
     py = _pyrun.project_python(root)  # O(1) file lookups, never run
@@ -231,7 +264,21 @@ def import_errors(files, roots=None, root="."):  # O(m_py * import cost) + 1 pro
         out = json.loads(r.stdout.strip().splitlines()[-1])  # O(output)
     except (IndexError, json.JSONDecodeError):  # O(1)
         return [(files[0], 0, f"import check crashed under {os.path.abspath(py)}: {r.stderr.strip()[-150:]}")]  # O(1) absolute, so the log names the exact file
-    return [(f["file"], f["line"], f["error"]) for f in out]  # O(failures)
+    main, optional = _pyproject_deps(root) if any(not f.get("skip") for f in out) else (set(), set())  # O(size)
+    errors = []  # O(1)
+    for f in out:  # O(failures)
+        if f.get("skip"):  # O(1)
+            if notes is not None:  # O(1)
+                notes.append(("skip", f["file"], 0, "no module name"))  # O(1)
+            continue  # O(1)
+        m = re.match(r"ModuleNotFoundError: No module named '([^'.]+)", f["error"])  # O(len)
+        name = re.sub(r"[-.]+", "_", m.group(1)).lower() if m else None  # O(len)
+        if name and name in optional and name not in main:  # O(1)
+            if notes is not None:  # O(1)
+                notes.append(("warn", f["file"], f["line"], f["error"]))  # O(1)
+            continue  # O(1)
+        errors.append((f["file"], f["line"], f["error"]))  # O(1)
+    return errors  # O(failures)
 
 
 def is_module(path):  # O(len path)
@@ -544,6 +591,27 @@ def wave0_stubs(plan):  # O(1) file read
 PROBE_FILE = re.compile(r"(^|/)tests/regression/(test_probe_[^/]+\.py|_probe_adapter\.py)$")  # O(1)
 
 
+def busy_briefs(sd, me):  # O(w + brief size) file reads; {worker id: (task label, brief text)} of busy fixer/reviewer workers
+    import fleet_state  # O(1) lazy
+    out = {}  # O(1)
+    try:  # an unreadable fleet.json holds nothing | O(1)
+        workers = fleet_state.load(sd).get("workers") or {}  # O(w)
+        for wid, w in workers.items():  # O(w) iterations
+            role, label = w.get("role"), w.get("task")  # O(1)
+            if w.get("state") != "busy" or wid == me or not role or role in ("implementer", "lead") or not label:  # O(1)
+                continue  # O(1)
+            brief = Path(sd) / "briefs" / f"{label}.md"  # O(1)
+            if brief.is_file():  # O(1) stat
+                out[wid] = (label, brief.read_text(encoding="utf-8", errors="replace"))  # O(brief size)
+    except (OSError, AttributeError, TypeError):  # O(1)
+        return {}  # O(1)
+    return out  # O(1)
+
+
+def brief_names(text, f):  # O(len text)
+    return re.search(r"(?<![\w./-])" + re.escape(f) + r"(?![\w/-])", text) is not None  # O(len text)
+
+
 def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (status, add, commit, rev-parse)
     """Commit one task; (exit code, sha or None). Files other tasks own are left alone. A task not committed leaves its
     reason in a.failed[tid] for the `Tn FAILED: <reason>` line."""
@@ -564,6 +632,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
 
     call = getattr(a, "task", [tid])  # O(1)
     claimed = {}  # file -> claimer outside this call, no line printed yet | O(1)
+    busy_held = {}  # O(1)
     mine, out_of_scope, theirs = [], [], []  # theirs: files another task owns, no ruling | O(1)
     w0, done = getattr(a, "w0", None), committed_tasks(a.ledger)  # stub record of T0, tasks already committed | O(c)
     skip = plan_folder(a.plan)  # O(1) + process spawn
@@ -622,7 +691,17 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     mine += back  # O(m)
     if cand:  # a shared test already in the parent checkpoint is not this task's change | O(1)
         shared = changed_vs_parent(cand)  # O(m) + process spawns
+        busy_held = {}  # shared test -> [(worker id, label)] of busy workers whose brief names it (#484) | O(1)
+        briefs = busy_briefs(a.sd, os.environ.get("SUPERLITE_FLEET_WORKER")) if shared and getattr(a, "sd", None) else {}  # O(w + brief size)
+        for f in shared:  # O(m) iterations
+            who = [(wid, lab) for wid, (lab, text) in sorted(briefs.items()) if brief_names(text, f)]  # O(w * brief size)
+            if who:  # O(1)
+                busy_held[f] = who  # O(1)
+        shared = [f for f in shared if f not in busy_held]  # O(m)
         mine += shared  # O(m)
+        for f, who in sorted(busy_held.items()):  # O(m) iterations
+            names = ", ".join(f"{wid} ({lab})" for wid, lab in who)  # O(w)
+            note_once(a, f"left uncommitted (edited by busy {names}; commit_task {tid} again once it is done): {f}")  # O(w)
 
     pool_path = getattr(a, "pool", None) or state.pool_path()  # O(1)
     running = others_running(pool_path, call) if theirs or mine or claimed else []  # tasks running outside this call | O(pool bytes)
@@ -677,6 +756,9 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         print(f"nothing to commit for {tid}", file=sys.stderr)  # O(1)
         if held:  # O(1)
             return fail(1, f"nothing to commit; held for running {', '.join(sib)}: {files}")  # O(1)
+        if busy_held:  # O(1)
+            ids = sorted({wid for who in busy_held.values() for wid, _ in who})  # O(m*w)
+            return fail(1, f"nothing to commit; held for busy {', '.join(ids)}: {', '.join(sorted(busy_held))}")  # O(m log m)
         return fail(1, "nothing to commit")  # O(1)
 
     for f in shared:  # O(m) iterations
@@ -685,7 +767,13 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     py = [f for f in present if f.endswith(".py")]  # O(m)
     problems = syntax_errors(py)  # O(size of py files)
     if not problems:  # O(1)
-        problems = import_errors([f for f in py if is_module(f)], a.roots)  # O(m_py * import cost) + process spawn
+        gate = []  # skip and warn notes from the import check | O(1)
+        problems = import_errors([f for f in py if is_module(f)], a.roots, notes=gate)  # O(m_py * import cost) + process spawn
+        for kind, f, line, msg in gate:  # O(notes) iterations
+            if kind == "skip":  # O(1)
+                print(f"import check skipped ({msg}): {f}", file=sys.stderr)  # O(1)
+            else:  # O(1)
+                print(f"import warning {f}:{line} {msg} (optional dependency not installed; not blocking)", file=sys.stderr)  # O(1)
     if problems:  # O(1)
         shown = [f"{'syntax' if msg.startswith('SyntaxError') else 'import'} {f}:{line} {msg}" for f, line, msg in problems]  # O(problems)
         for ln in shown:  # O(problems) iterations
@@ -750,6 +838,14 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     given = bool(a.plan)  # O(1)
     plan_arg = a.plan or nt.DEFAULT_PLAN  # the --plan value as passed, for the dismiss hint | O(1)
     sd = state.for_plan(a.plan) if a.plan else state.resolve()  # the run folder: --plan's own once started (#178), else the session's | O(d)
+    a.sd = sd  # O(1)
+    if a.plan and os.path.isdir(a.plan):  # a run folder as --plan: its plan file (#456) | O(1) stat
+        import orchestrator  # O(1) lazy
+        found = orchestrator.plan_file(state.plan_dir(a.plan))  # O(file)
+        if found is None:  # O(1)
+            print(f"error: --plan {a.plan} is a run folder with no plan file (stable.json, pool.json or plan.md name none); pass the plan file", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        a.plan = str(found)  # O(1)
     a.plan = a.plan or nt.DEFAULT_PLAN  # O(1)
     a.ledger = a.ledger or str(sd / "progress.md")  # defaults follow the parsed --plan, not the session's binding | O(1)
     a.log = a.log or str(sd / "incidents.jsonl")  # O(1)
@@ -852,6 +948,14 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
             dispatch.render(*dispatch.run(a.plan, a.pool, a.ledger, None, a.running, a.cap, batch=batch))  # see dispatch.run
         except (SystemExit, Exception) as e:  # O(1)
             print(f"warning: dispatch failed ({e}); run `dispatch` after fixing it", file=sys.stderr)  # O(1)
+        try:  # review hints for the tasks this call committed, only while fleet is on (#455) | O(1)
+            import fleet_state, fleet_io  # O(1) lazy
+            if committed and fleet_state.is_on(sd):  # O(w)
+                for rtid, reasons in fleet_io.review_hints(sd, a.plan):  # O(n) iterations
+                    if rtid in committed:  # O(t)
+                        print(f"review: {rtid} ({'; '.join(reasons)}); run {nt.SCRIPTS / 'sl'} fleet spawn --for-review {rtid} --plan {a.plan}")  # O(k)
+        except Exception as e:  # O(1)
+            print(f"warning: no review hints ({e})", file=sys.stderr)  # O(1)
     return worst  # O(1)
 
 
