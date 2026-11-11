@@ -10,7 +10,7 @@ UNKNOWN = '  - `UNKNOWN` (no parsable report): `"$SL" fleet report Wn --plan $PL
 FINISH_TAKEOVER = "When `end` refuses because another session owns the run (this session took over a run whose first session ran out of usage or crashed; `finish` names it too), run `<skill-dir>/../subagent-driven-development/scripts/sl orchestrator takeover --plan <absolute plan path>` first, then `end` again."
 R_OUTDATED = "- `OUTDATED:` and `OUTDATED incident:` lines in section 4 are failures whose code changed after that run; the full suite decides, so they are not open and not a finding on their own."
 R_SHARD = "- A `Tests shard:` line in the packet head names `<packet stem>-tests.md`, the full diffs of every changed test file; it carries the truncated marker, so you may read it in full like any truncated file."
-R_IMPORT = "- Plan lint's `WARNING: IMPORT:` (a Swift consumer target uses a type declared in a SwiftPM target its `Package.swift` does not list) is not in the packet: an excerpt that shows such a cross-target use is a finding, tier 2."
+R_IMPORT = "- Plan lint's `WARNING: IMPORT:` covers SwiftPM target dependencies, import-linter contracts and workspace `package.json` dependencies, and is not in the packet: an excerpt that shows such a cross-target use is a finding, tier 2."
 
 
 def test_sdd_fleet_unknown_uses_fleet_report():

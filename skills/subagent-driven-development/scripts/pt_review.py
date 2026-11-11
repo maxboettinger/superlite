@@ -2526,6 +2526,26 @@ def shard_path(out: Path) -> Path:  # O(1)
     return out.with_name(out.stem + "-tests.md")  # O(1)
 
 
+RENDER_EXTS = {".png", ".jpg", ".jpeg"}  # O(1)
+RENDER_MAX = 20  # images listed in the packet | O(1)
+
+
+def render_section(root: Path) -> str:  # O(n log n) over the files in .superlite/render
+    """The packet's `## Render evidence` section: the screenshots under .superlite/render, or "" (#490)."""
+    d = root / ".superlite" / "render"  # O(1)
+    if not d.is_dir():  # O(1)
+        return ""  # O(1)
+    imgs = sorted((f for f in d.iterdir() if f.is_file() and f.suffix.lower() in RENDER_EXTS), key=lambda f: f.name)  # O(n log n)
+    if not imgs:  # O(1)
+        return ""  # O(1)
+    lines = ["## Render evidence",  # O(1)
+             "Open each image with Read and judge the rendered UI against the spec and the Review Focus:",  # O(1)
+             *(f"- {f.resolve().as_posix()}" for f in imgs[:RENDER_MAX])]  # O(RENDER_MAX)
+    if len(imgs) > RENDER_MAX:  # O(1)
+        lines.append(f"- (+{len(imgs) - RENDER_MAX} more not listed)")  # O(1)
+    return "\n".join(lines) + "\n"  # O(RENDER_MAX)
+
+
 def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/python subprocesses total
     inline, plan, previous = packet_inputs(a)  # O(W + L*m + H^2)
     root = Path(a.root).resolve()  # O(1)
@@ -2666,6 +2686,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
             "## 5. Cross-package seams (calls from one package into another)", seam_text, "",  # O(1)
             "## 6. Diff stat", "```\n" + diff + "\n```", "",  # O(1)
             "## 7. Review Focus", focus, "",  # O(1)
+            *([render_section(root)] if render_section(root) else []),  # after the Review Focus section | O(n log n)
             "## 8. Source excerpts (changed hunks of the hot-spot files)", excerpts, ""]  # O(1)
     sec_titles = {  # O(1)
         "incidents": "## 1. Open incidents (repeated file:line first, then unresolved, then low confidence)"  # O(1)
