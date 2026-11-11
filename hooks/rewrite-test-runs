@@ -10,8 +10,8 @@
 # Commands that already contain run_tests, and sessions without a run marker (stable.json,
 # prime.md or pool.json in the state folder) are untouched. Chained commands keep their other work: only the test segment
 # is replaced, separators stay, and the whole command then runs in the background. Anything ambiguous
-# (odd quotes, heredocs, \u escapes) passes unchanged. Each rewrite is logged to
-# $SL_SD/incidents.jsonl (rule-rewrite). DENIED instead (exit 2, rule-block incident): a known test
+# (odd quotes, heredocs, \u escapes) passes unchanged. A pytest -m EXPR (a word or one quoted string) stays on the rewritten command. Each rewrite is logged to
+# $SL_SD/incidents.jsonl (rule-rewrite: target "<original> -> <rewritten>", rule, cwd, command, rewritten). DENIED instead (exit 2, rule-block incident): a known test
 # runner inside an until/while loop, or a test run with stdout sent to /dev/null; also a subagent bare
 # full suite. Only known runners match, so `until curl ...` and `until [ -f x ]` pass.
 # Bash builtins only (each external process costs ~250 ms on Windows). Exit 0 (fail open), except a denial (exit 2).
@@ -87,6 +87,8 @@ files_from_seg() {
 }
 
 ph1=$'\x02'; ph2=$'\x03'
+# A pytest marker after the runner: -m, then a double-quoted string, a single-quoted string or a bare word (group 3), or -m glued to a bare word (group 4).
+re_marker="(^|[[:space:]])-m([[:space:]]+(\"[^\"]*\"|'[^']*'|[^[:space:]\"']+)|([^[:space:]\"'-][^[:space:]\"']*))"
 cmd="${cmd//>&/$ph1}"; cmd="${cmd//&>/$ph2}"   # keep 2>&1 and &> out of the separator split
 
 # Hidden test waits are denied, not rewritten: a known runner inside an until/while loop, or a test run
@@ -261,10 +263,21 @@ while :; do
   q="${seg//[^\"]/}"; q2="${seg//[^\']/}"
   if [ $(( ${#q} % 2 )) = 1 ] || [ $(( ${#q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
   if [[ $seg =~ $re_test ]] && ! [[ $seg =~ $re_co ]]; then
-    case "$seg" in *'"'*|*"'"*) exit 0 ;; esac   # quoted test arguments: leave the command unchanged
-    files_from_seg "$seg"
-    if [ -n "$REPLY" ]; then out="$out $sl_base --fast $REPLY "; used_fast=1
-    else out="$out $sl "; fi
+    mk=""; work="$seg"
+    [[ $seg =~ $re_test ]]   # the re_co test above replaced BASH_REMATCH
+    pre="${BASH_REMATCH[0]}"
+    if [[ $pre =~ (pytest|py\.test)[[:space:]]*$ ]]; then   # a pytest segment: lift -m EXPR out of the text after the runner
+      post="${seg#"$pre"}"
+      if [[ $post =~ $re_marker ]]; then
+        mfull="${BASH_REMATCH[0]}"
+        if [ -n "${BASH_REMATCH[3]}" ]; then mk="${BASH_REMATCH[3]}"; else mk="${BASH_REMATCH[4]}"; fi
+        work="$pre${post%%"$mfull"*} ${post#*"$mfull"}"
+      fi
+    fi
+    case "$work" in *'"'*|*"'"*) exit 0 ;; esac   # quoted test arguments: leave the command unchanged
+    files_from_seg "$work"
+    if [ -n "$REPLY" ]; then out="$out $sl_base --fast $REPLY${mk:+ -m $mk} "; used_fast=1
+    else out="$out $sl${mk:+ -m $mk} "; fi
     changed=1
   else out="$out$seg"; fi
   out="$out$sep"
@@ -272,11 +285,15 @@ while :; do
 done
 [ "$changed" = 1 ] || exit 0
 
-orig="${cmd:0:120}"; orig="${orig//[\"\\$'\n\r\t']/ }"
-printf '{"kind":"rule-rewrite","agent":"coordinator","tool":"Bash","command":"%s"}\n' "$orig" \
-  >> "$sd/incidents.jsonl" 2>/dev/null
-
 out="${out//$ph1/>&}"; out="${out//$ph2/&>}"
+# The rule-rewrite row: original and rewritten command (control characters become spaces, 200 characters at most), rule, cwd.
+orig="${cmd//$ph1/>&}"; orig="${orig//$ph2/&>}"; orig="${orig//[[:cntrl:]]/ }"; orig="${orig:0:200}"
+short="${out//"bash \"$root/skills/subagent-driven-development/scripts/sl\""/sl}"
+short="${short//[[:cntrl:]]/ }"; short="${short#"${short%%[![:space:]]*}"}"; short="${short%"${short##*[![:space:]]}"}"; short="${short:0:200}"
+esc orig; esc short
+printf '{"kind":"rule-rewrite","agent":"coordinator","tool":"Bash","target":"%s -> %s","rule":"raw-test-run","cwd":"%s","command":"%s","rewritten":"%s"}\n' \
+  "$orig" "$short" "$cwdv" "$orig" "$short" >> "$sd/incidents.jsonl" 2>/dev/null
+
 esc out
 if [ "$used_fast" = 1 ]; then mode=fast; else mode=full; fi
 printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"'"$out"'","run_in_background":true,"description":"sl run_tests --'"$mode"' (rewritten from a raw test run)"},"additionalContext":"raw test run rewritten to a background sl run_tests --'"$mode"'; its result arrives as a notification and in .superlite/test-summary.json; use `sl run_tests --wait` only at the final gate"}}'

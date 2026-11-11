@@ -326,3 +326,57 @@ def test_quoted_runner_name_not_denied(proj, cmd, agent):
     extra = {"agent_id": "a1", "agent_type": "implementer"} if agent else {}
     r = run(proj, cmd, **extra)
     assert r.returncode == 0 and r.stderr == ""
+
+
+@pytest.mark.parametrize("cmd,mode,want", [
+    ("uv run pytest -m integration tests/integration", "fast", SLFAST + " tests/integration -m integration"),
+    ('pytest -m "not slow"', "full", SLFULL + ' -m "not slow"'),
+    ("pytest -m 'a or b' tests/x.py", "fast", SLFAST + " tests/x.py -m 'a or b'"),
+    ("pytest -mslow tests/x.py", "fast", SLFAST + " tests/x.py -m slow"),
+    ("python -m pytest -m integration tests", "full", SLFULL + " -m integration"),
+    ("py -3 -m pytest -x", "full", SLFULL),
+])
+def test_marker_kept(proj, cmd, mode, want):
+    assert rewritten(run(proj, cmd), mode=mode).strip() == want
+
+
+def test_marker_in_chain(proj):
+    assert rewritten(run(proj, "cd app && pytest -m integration")) == f"cd app && {SLFULL} -m integration "
+
+
+def test_other_quote_still_unchanged(proj):
+    r = run(proj, 'pytest -m "x" -k "y" tests')
+    assert r.returncode == 0 and r.stdout == ""
+    assert not (proj / ".superlite" / "incidents.jsonl").exists()
+
+
+def test_npm_keeps_no_marker(proj):
+    assert rewritten(run(proj, "npm test -- -m x")).strip() == SLFULL
+
+
+def test_rewrite_row_names_both_commands(proj):
+    import sys
+    sys.path.insert(0, str(ROOT / "skills" / "subagent-driven-development" / "scripts"))
+    import finish
+    cmd = 'pytest -m "not slow" tests/a.py'
+    rewritten(run(proj, cmd, cwd=str(proj)), mode="fast")
+    inc = proj / ".superlite" / "incidents.jsonl"
+    lines = inc.read_text().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    short = 'sl run_tests --fast tests/a.py -m "not slow"'
+    assert rec == {"kind": "rule-rewrite", "agent": "coordinator", "tool": "Bash", "target": f"{cmd} -> {short}",
+                   "rule": "raw-test-run", "cwd": str(proj), "command": cmd, "rewritten": short}
+    assert finish.read_stops(inc) == [("rule-rewrite", "Bash", f"{cmd} -> {short} (rule raw-test-run, cwd {proj})")]
+
+
+def test_rewrite_row_cuts_and_cleans(proj):
+    cmd = "cd app\t&& echo " + "x" * 280 + " && pytest"
+    rewritten(run(proj, cmd))
+    rec = json.loads((proj / ".superlite" / "incidents.jsonl").read_text().splitlines()[0])
+    assert len(rec["command"]) == 200 and "\t" not in rec["command"]
+
+
+def test_subagent_marker_with_file_allowed(proj):
+    r = run(proj, "pytest -m integration tests/integration", agent_id="a1")
+    assert r.returncode == 0 and r.stdout == ""
