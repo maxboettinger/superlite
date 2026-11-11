@@ -21,7 +21,7 @@ def test_fleet_md_names_each_role_and_its_command():
 
 def test_fleet_md_keeps_earlier_contract_words():
     t = read("fleet.md")
-    for s in ("before the first dispatch", "sl-<run folder>-<hash>-w", "implementer", "in-process", "report BLOCKED",
+    for s in ("before the first dispatch", "sl-<repo>-<worktree>-w", "implementer", "in-process", "report BLOCKED",
               "never fall back to in-process", "one taskgraph plan in one checkout", "in addition", "fleet stop --all"):
         assert s in t, s
     assert "Reviewers, fixers and the final reviewer stay in-process" not in t

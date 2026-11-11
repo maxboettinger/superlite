@@ -21,6 +21,6 @@ def test_docs_fleet_md_covers_roles():
 
 def test_docs_fleet_md_keeps_earlier_contract_words():
     t = read("docs/fleet.md")
-    for s in ("before the first dispatch", "sl-<run folder>-<hash>-w", "implementer", "in-process", "report BLOCKED",
+    for s in ("before the first dispatch", "sl-<repo>-<worktree>-w", "implementer", "in-process", "report BLOCKED",
               "never fall back to in-process", "4 panes", "20 rows", "fleet/agents"):
         assert s in t, s
