@@ -12,7 +12,7 @@
 # is replaced, separators stay, and the whole command then runs in the background. Anything ambiguous
 # (odd quotes, heredocs, \u escapes) passes unchanged. A pytest -m EXPR (a word or one quoted string) stays on the rewritten command. Each rewrite is logged to
 # $SL_SD/incidents.jsonl (rule-rewrite: target "<original> -> <rewritten>", rule, cwd, command, rewritten). DENIED instead (exit 2, rule-block incident): a known test
-# runner inside an until/while loop, or a test run with stdout sent to /dev/null; also a subagent bare
+# runner inside an until/while loop, or a test run with its own stdout sent to /dev/null (a redirect inside a quoted launcher argument counts only on a piece that starts with a known runner); also a subagent bare
 # full suite. Only known runners match, so `until curl ...` and `until [ -f x ]` pass.
 # A test run outside the plan root (the payload cwd, then each cd/pushd; a cwd above the plan root, such as the main
 # checkout of a linked worktree, counts as inside), in a directory the hook cannot read (a variable, cd -, popd), or
@@ -305,6 +305,42 @@ project_hit() {
   done
   return 1
 }
+# hidden_hit SEG: 0 when a runner's own stdout is hidden. The unquoted text (an unterminated quote runs to the end) holding the
+# redirect counts when SEG starts with a known or project runner; a quoted piece (split on ; && || |) counts when it starts with a known runner.
+hidden_hit() {
+  local rest="$1" bare="" qt pc m
+  local -a qs=()
+  while [[ $rest =~ ^([^\"\']*)([\"\'])(.*)$ ]]; do
+    bare="$bare${BASH_REMATCH[1]} "; m="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
+    if [[ $rest == *"$m"* ]]; then qt="${rest%%"$m"*}"; rest="${rest#*"$m"}"; else qt="$rest"; rest=""; fi
+    qs+=("$qt")
+  done
+  bare="$bare$rest"
+  if [[ $bare =~ $re_null ]]; then
+    [[ $1 =~ $re_known ]] && return 0
+    [ "${#pp[@]}" -gt 0 ] && project_hit "$1" seg && return 0
+  fi
+  for qt in "${qs[@]}"; do
+    pc="${qt//;/$'\n'}"; pc="${pc//&&/$'\n'}"; pc="${pc//||/$'\n'}"; pc="${pc//|/$'\n'}"
+    while IFS= read -r m; do
+      [[ $m =~ $re_null ]] && [[ $m =~ $re_known ]] && return 0
+    done <<< "$pc"
+  done
+  return 1
+}
+# hidden_rest TEXT: a quote spans a separator, so the command passes unchanged; the segments after the cut still
+# get the hidden-output check (`remote-run exec 'a && npx vitest run >/dev/null'`).
+hidden_rest() {
+  local rest="$1" seg last=0
+  while :; do
+    if [[ $rest =~ $re_seg ]]; then seg="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[3]}"
+    else seg="$rest"; last=1; fi
+    dir_step "$seg"
+    if ! seg_out "$seg" && [[ $seg =~ $re_null ]]; then hidden_hit "$seg" && deny; fi
+    [ "$last" = 1 ] && break
+  done
+  return 0
+}
 deny() {
   local t="${cmd:0:400}"; t="${t//[\"\\$'\n\r\t']/ }"
   t="${t//$ph1/>&}"; t="${t//$ph2/&>}"
@@ -406,10 +442,9 @@ while :; do
     out="$out$seg"
   else
     if [ "$hid" = 1 ] && [[ $seg =~ $re_null ]]; then   # a known runner with stdout sent to /dev/null
-      if [[ $seg =~ $re_known ]]; then deny; fi
-      if [ "${#pp[@]}" -gt 0 ] && project_hit "$seg" seg; then deny; fi
+      hidden_hit "$seg" && deny
     fi
-    if [ $(( ${#q} % 2 )) = 1 ] || [ $(( ${#q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
+    if [ $(( ${#q} % 2 )) = 1 ] || [ $(( ${#q2} % 2 )) = 1 ]; then [ "$hid" = 1 ] && hidden_rest "$rest"; exit 0; fi   # quote spans a separator
     if [[ $seg =~ $re_test ]] && ! [[ $seg =~ $re_co ]]; then
       mk=""; work="$seg"
       [[ $seg =~ $re_test ]]   # the re_co test above replaced BASH_REMATCH
