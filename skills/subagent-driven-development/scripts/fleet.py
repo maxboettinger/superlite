@@ -12,6 +12,7 @@
 
 Roles: implementer (default), fixer, package-reviewer, final-reviewer, research, checker, writer (see fleet_roles). Exit 2 with
 `error: ...` on stderr for an unknown role or tier.
+MCP (#576): implementers, fixers and package reviewers get the servers their project names through a generated `--mcp-config`; a server that fails its check is left out with one stderr line.
 Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-dispatch` prints one
 `Wn Tn[,Tm] sent` line per worker, `BLOCKED: Tn[,Tm] not sent (<reason>)` for a line that got no worker
 (the other lines still go out; exit 3); the Wave 0 line starts a haiku worker and sends it `briefs/wave0.md`.
@@ -324,14 +325,25 @@ def _retry_account(sd, model, env, avoid):  # O(a * e + w): another account than
     return choose_account(sd, model, env)  # O(a * e + w)
 
 
-def lean_argv(argv):  # O(n) a copy of argv with the lean flags before the deny list and the lean names added to it, each once
+def claude_json(config_dir, env=None):  # O(1) the .claude.json of a worker account: next to the default dir's home, else inside the dir
+    base = os.environ if env is None else env  # O(1)
+    if ac.is_default_dir(config_dir, base):  # O(1)
+        return Path(base.get("HOME") or os.path.expanduser("~")) / ".claude.json"  # O(1)
+    return Path(config_dir) / ".claude.json"  # O(1)
+
+
+def lean_argv(argv, mcp_config=None, deny=()):  # O(n) a copy of argv with the lean flags before the deny list and the lean names added to it, each once
     a = list(argv)  # O(n)
     flags = [f for f in LEAN_FLAGS if f not in a]  # O(n)
+    if mcp_config and "--mcp-config" not in a:  # the servers the worker keeps (#576) | O(1)
+        at = flags.index("--strict-mcp-config") + 1 if "--strict-mcp-config" in flags else len(flags)  # O(1)
+        flags[at:at] = ["--mcp-config", str(mcp_config)]  # O(1)
+    extra = [*LEAN_DENY, *(d for d in deny if d not in LEAN_DENY)]  # O(n)
     if "--disallowedTools" not in a:  # O(n)
-        return a + flags + ["--disallowedTools", *LEAN_DENY]  # O(n)
+        return a + flags + ["--disallowedTools", *extra]  # O(n)
     i = a.index("--disallowedTools")  # O(n)
     j = next((k for k in range(i + 1, len(a)) if a[k].startswith("--")), len(a))  # the deny list ends at the next option | O(n)
-    names = [n for n in LEAN_DENY if n not in a[i + 1:j]]  # O(n)
+    names = [n for n in extra if n not in a[i + 1:j]]  # O(n)
     return a[:i] + flags + a[i:j] + names + a[j:]  # O(n)
 
 
@@ -344,6 +356,7 @@ def _live_names():  # names of the live herdr agents on this machine; no agent l
 
 def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0, output=None):  # O(a * e + w) plus herdr calls
     """One worker; a start that stays slow is retried once on another account.
+    Implementers, fixers and package reviewers keep the MCP servers their project names or the stack default (`xcode` for an Xcode project), each checked first (#576).
     Every worker starts lean (#377): no MCP servers, Chrome, skills or slash commands; Artifact, ListAgents, ReadNotifications and ReportFindings denied (LEAN_FLAGS, LEAN_DENY)."""
     busy = ml.gate(f"fleet spawn ({role})", machine_wait, over)  # the first attempt only; the retry below is the same spawn | O(wait)
     if busy:  # O(1)
@@ -378,13 +391,35 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a 
     name = fs.agent_name(sd, wid, taken=_live_names())  # herdr rejects `W1`; every herdr agent call below uses this name | O(a)
     wenv = {**worker_env(sd, wid, agent, cdir, base), **fleet_roles.env(role)}  # O(1)
     cwd = str(project)  # O(1)
-    argv = lean_argv(launch["argv"])  # O(n)
+    kept, names, path = {}, [], None  # O(1)
+    try:  # a lookup or check error never stops a spawn: the worker stays lean (#576) | O(1)
+        import fleet_mcp  # noqa: E402 | O(1)
+        import mcp_check  # noqa: E402 | O(1)
+        found, notes = fleet_mcp.servers(role, project, claude_json(cdir, base))  # O(n + f)
+        for n, d in found.items():  # O(k)
+            why = mcp_check.check(n, d, sd, project)  # O(1)
+            if why:  # O(1)
+                notes.append(f"mcp: {n} left out: {why}")  # O(1)
+            else:  # O(1)
+                kept[n] = d  # O(1)
+        for note in notes:  # O(k)
+            print(f"{wid} {note}", file=sys.stderr)  # O(1)
+        names = sorted(kept)  # O(k)
+        path = fleet_mcp.write_config(sd, kept) if names else None  # O(k)
+    except Exception as e:  # noqa: BLE001 | O(1)
+        kept, names, path = {}, [], None  # O(1)
+        print(f"{wid} mcp: none: {e}", file=sys.stderr)  # O(1)
+    argv = lean_argv(launch["argv"], path, fleet_mcp.deny(names) if names else ())  # O(n)
+    if names and fleet_mcp.usage_note(names):  # O(k)
+        argv += ["--append-system-prompt", fleet_mcp.usage_note(names)]  # O(1)
     try:  # a state dir outside the project (a worktree run) is not readable by default | O(1)
         sd.resolve().relative_to(Path(project).resolve())  # O(len)
     except ValueError:  # O(1)
         argv += ["--add-dir", str(sd.resolve())]  # O(1)
     record = {"name": name, "account": account, "agent": agent, "tier": tier or model, "state": "starting", "task": None, "role": role, "one_turn": launch["one_turn"],  # O(1)
               "launch": {"argv": argv, "env": wenv, "cwd": cwd}}
+    if names:  # O(1)
+        record["mcp"] = names  # O(1)
     try:  # O(1)
         pane = open_pane(sd, wid, cwd, wenv, record)  # O(w + p)
         with contextlib.suppress(OSError):  # the registry only spreads accounts; an unwritable one must not stop a spawn | O(1)
@@ -462,7 +497,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a 
     _store_session(sd, wid, name)  # O(w)
     fs.set_state(sd, wid, "ready")  # O(w)
     _launch_line(sd, wid, agent, model, account, pane)  # O(1)
-    print(f"{wid} account={account} pane={pane} agent={agent}" + ("" if role == "implementer" else f" role={role}"))  # O(1)
+    print(f"{wid} account={account} pane={pane} agent={agent}" + ("" if role == "implementer" else f" role={role}") + (f" mcp={','.join(names)}" if names else ""))  # O(1)
     return {"id": wid, "account": account, "pane_id": pane, "agent": agent, "model": model, "role": role}  # O(1)
 
 
