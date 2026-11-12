@@ -17,6 +17,8 @@ A resumed batch's lead brief ends with the worktree state (commits, uncommitted 
 `wait` tells a live lead once when the Herdr panes of its fleet workers stay gone for GONE_MS (a crash), and flags it.
 `answer` takes one answer rule (backlog_answer, #586): a label, a label plus a note, or free text up to 2000 characters. `_shipped` also runs for a batch without lead or worktree (`ship B done` on a planned batch, #585).
 `remove_worktree` is the git-only worktree and branch removal (a PR head gets `-D`, #589); `_shipped(push=False)` uses it, never maxapp. A failed cleanup line carries git's error and the core.bare cause and is stored as the batch's `cleanup_owed`. `start` blocks a batch whose worktree.ensure raises or gives the main checkout.
+`sync_main` fast-forwards the main checkout to origin's default branch when it is on that branch, clean and behind (cmd_plan calls it, #590); every other state prints one `sync:` line and leaves HEAD alone.
+`run_end` turns main's fleet off when every batch is shipped or parked and only stopped workers remain, or names `sl fleet off` while a worker lives; every `wait` exit but TIMEOUT appends its line (#590).
 Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
 """
 # Complexity notation: b = batches, w = workers, m = lines of metrics.jsonl
@@ -597,21 +599,106 @@ def _round(root, sd, p, states) -> list:
     return out  # O(b)
 
 
+def _git(root, args, timeout=30) -> tuple:  # -> (rc, stdout, last stderr line cut to 200)
+    try:  # O(1)
+        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=timeout)  # O(repo)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:  # O(1) ValueError: UnicodeDecodeError on undecodable output
+        return 1, "", (str(e).strip().splitlines() or [type(e).__name__])[-1][:200]  # O(1)
+    err = [x for x in r.stderr.splitlines() if x.strip()]  # O(len)
+    return r.returncode, r.stdout.strip(), (err[-1].strip()[:200] if err else "")  # O(1)
+
+
+def sync_main(root: Path, repo: str = "") -> list:
+    """Fast-forward the main checkout when it is on the default branch, clean and behind (#590); returns at most one output line."""
+    if os.environ.get("SUPERLITE_FLEET_WORKER"):  # O(1) a lead or worker never moves main's checkout
+        return []  # O(1)
+    rc, out, _ = _git(root, ["remote"])  # O(1)
+    if rc != 0 or "origin" not in out.split():  # O(1)
+        return []  # O(1)
+    tail = "; triage reads the local files"  # O(1)
+    rc, ref, _ = _git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])  # O(1)
+    if rc != 0 or not ref.startswith("origin/"):  # O(1)
+        return ["sync: origin/HEAD is not set; not fast-forwarded (git remote set-head origin --auto sets it)"]  # O(1)
+    d = ref[len("origin/"):]  # O(1)
+    rc, cur, _ = _git(root, ["symbolic-ref", "--short", "HEAD"])  # O(1)
+    if rc != 0 or cur != d:  # O(1)
+        return [f"sync: main checkout is on {cur if rc == 0 else 'a detached HEAD'}, not {d}; not fast-forwarded{tail}"]  # O(1)
+    if repo:  # O(1)
+        import ship_lock
+        try:  # O(1)
+            held = ship_lock.holder(ship_lock.lock_path(repo))  # O(1)
+        except Exception:  # O(1) an unreadable lock dir never stops the plan
+            held = None  # O(1)
+        if isinstance(held, dict) and held.get("batch"):  # O(1)
+            return [f"sync: {held['batch']} holds the ship lock; not fast-forwarded (its merge fast-forwards the checkout)"]  # O(1)
+    rc, _, err = _git(root, ["fetch", "--quiet", "origin", d], 60)  # O(repo)
+    if rc != 0:  # O(1)
+        return [f"sync: git fetch origin {d} failed ({err}){tail}"]  # O(1)
+    rc, behind, err = _git(root, ["rev-list", "--count", f"HEAD..origin/{d}"])  # O(commits)
+    if rc != 0 or not behind.isdigit():  # O(1)
+        return [f"sync: git rev-list failed ({err}){tail}"]  # O(1)
+    if behind == "0":  # O(1)
+        return []  # O(1)
+    rc, ahead, err = _git(root, ["rev-list", "--count", f"origin/{d}..HEAD"])  # O(commits)
+    if rc != 0 or not ahead.isdigit():  # O(1)
+        return [f"sync: git rev-list failed ({err}){tail}"]  # O(1)
+    if ahead != "0":  # O(1)
+        return [f"sync: main checkout is {behind} behind and {ahead} ahead of origin/{d}; not fast-forwarded{tail}"]  # O(1)
+    rc, dirty, _ = _git(root, ["status", "--porcelain", "--untracked-files=no"])  # O(files)
+    if dirty:  # O(1)
+        return [f"sync: main checkout is {behind} behind origin/{d} and has uncommitted changes; not fast-forwarded{tail}"]  # O(1)
+    old = _git(root, ["rev-parse", "--short=7", "HEAD"])[1]  # O(1)
+    rc, _, err = _git(root, ["merge", "--ff-only", "--quiet", f"origin/{d}"])  # O(files)
+    if rc != 0:  # O(1)
+        return [f"sync: git merge --ff-only origin/{d} failed ({err}){tail}"]  # O(1)
+    new = _git(root, ["rev-parse", "--short=7", "HEAD"])[1]  # O(1)
+    return [f"sync: main checkout fast-forwarded {old}..{new} to origin/{d} ({behind} new)"]  # O(1)
+
+
+def run_end(root: Path, sd: Path, p: Path) -> list:
+    """The run end line (#590): every batch shipped or parked and the fleet still on; never stops a live worker."""
+    import contextlib
+    import io
+    if os.environ.get("SUPERLITE_FLEET_WORKER"):  # O(1)
+        return []  # O(1)
+    batches = bs.load(p)["batches"]  # O(b)
+    if not batches or any(b["state"] in ("planned", "running", "needs_decision") for b in batches):  # O(b)
+        return []  # O(1)
+    import fleet
+    import fleet_state
+    if not fleet_state.is_on(sd):  # O(1)
+        return []  # O(1)
+    head = "run end: every batch shipped or parked; "  # O(1)
+    workers = fleet_state.load(sd).get("workers", {})  # O(w)
+    num = lambda w: int(re.sub(r"\D", "", w) or 0)  # O(len)
+    live = sorted((w for w, v in workers.items() if v.get("state") != "stopped"), key=num)  # O(w log w)
+    if live:  # O(1)
+        return [head + f"live workers {' '.join(live)} still run: sl fleet off stops and clears them"]  # O(w)
+    try:  # O(1)
+        with contextlib.redirect_stdout(io.StringIO()):  # O(1)
+            rc = fleet.main(["off", "--plan", str(sd)])  # O(w)
+    except (Exception, SystemExit) as e:  # O(1)
+        return [head + f"sl fleet off failed ({e}): run it again"]  # O(1)
+    if rc:  # O(1)
+        return [head + f"sl fleet off failed ({rc}): run it again"]  # O(1)
+    return [head + f"fleet off (stopped workers cleared: {len(workers)})"]  # O(1)
+
+
 def cmd_wait(a) -> int:
     root = _root()  # O(1)
     sd, p = root / ".superlite", bs.path(root)  # O(1)
     if not any(b["state"] == "running" or (b["state"] == "parked" and b.get("lead")) for b in bs.load(p)["batches"]):  # O(b)
-        print("no running batch")  # O(1)
+        print("\n".join(["no running batch", *run_end(root, sd, p)]))  # O(w)
         return 0  # O(1)
     deadline = time.monotonic() + a.timeout  # O(1)
     while True:  # O(timeout / poll)
         lines = _round(root, sd, p, {})  # O(b * m)
         if lines:  # O(1)
             mline = machine_park_line(lines)  # O(lines)
-            print("\n".join(([mline] if mline else []) + lines))  # O(lines)
+            print("\n".join(([mline] if mline else []) + lines + run_end(root, sd, p)))  # O(lines)
             return 0  # O(1)
         if not any(b["state"] == "running" for b in bs.load(p)["batches"]):  # O(b)
-            print("no running batch")  # O(1)
+            print("\n".join(["no running batch", *run_end(root, sd, p)]))  # O(w)
             return 0  # O(1)
         if time.monotonic() >= deadline:  # O(1)
             print("TIMEOUT")  # O(1)

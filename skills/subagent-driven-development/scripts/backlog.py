@@ -456,6 +456,9 @@ def cmd_plan(a) -> int:
     if open_ and not add and (not a.reset or busy):  # O(1)
         print(open_refusal(open_, busy) + (ADD_HINT if getattr(a, "issues", None) is not None else ""))  # O(b)
         return 2
+    import backlog_run  # O(1)
+    for line in backlog_run.sync_main(root, str(d.get("repo") or "")):  # O(1) one git fast-forward, never raises
+        print(line, flush=True)  # O(1)
     prop = None
     if proposal is not None:
         prop, perr = _read_proposal(proposal)
