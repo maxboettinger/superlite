@@ -68,7 +68,7 @@ def test_tell_text_limits(bk, capsys):
 
 def answer_file(tmp_path, **kw):
     f = tmp_path / "a.json"
-    f.write_text(json.dumps({"answers": {"Keep the v1 API?": "Drop"}, **kw}))
+    f.write_text(json.dumps({"answers": {"Keep the v1 API?": "Drop"}, "by": "user", **kw}))
     return f
 
 

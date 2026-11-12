@@ -22,7 +22,7 @@ def seed(bk, **kw):
 
 def answers_file(tmp_path, answers):
     f = tmp_path / "a.json"
-    f.write_text(json.dumps({"answers": answers}))
+    f.write_text(json.dumps({"answers": answers, "by": "user"}))
     return str(f)
 
 

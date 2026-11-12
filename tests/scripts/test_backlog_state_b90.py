@@ -17,9 +17,9 @@ def data(*batches, **kw):
 
 
 def test_answer_by_examples():
-    assert bc.answer_by({"answers": {"A?": "x"}}, {"A?": "x"}) == ({"A?": "user"}, "")
+    assert bc.answer_by({"by": "user"}, {"A?": "x"}) == ({"A?": "user"}, "")
     assert bc.answer_by({"by": "main"}, {"A?": "x", "B?": "y"}) == ({"A?": "main", "B?": "main"}, "")
-    assert bc.answer_by({"by": {"B?": "main"}}, {"A?": "x", "B?": "y"}) == ({"A?": "user", "B?": "main"}, "")
+    assert bc.answer_by({"by": {"B?": "main", "A?": "user"}}, {"A?": "x", "B?": "y"}) == ({"A?": "user", "B?": "main"}, "")
     assert bc.answer_by({"by": "bot"}, {"A?": "x"}) == ({}, BAD)
     assert bc.answer_by({"by": {"C?": "main"}}, {"A?": "x"}) == ({}, "by: no answer for C?")
     assert bc.answer_by({"by": ["main"]}, {"A?": "x"}) == ({}, BAD)

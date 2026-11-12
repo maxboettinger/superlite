@@ -6,16 +6,17 @@ from test_plan_tools import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 import backlog_run as br  # noqa: E402
 import backlog_state as bs  # noqa: E402
+import backlog_checks as bc  # noqa: E402
 
 KEY = "Keep the v1 API?"
 
 
-def waiting(bk, answers):
+def waiting(bk, answers, by="user"):
     wt = running(bk)
     bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "needs_decision"}))
     (wt / ".superlite" / "question.json").write_text(json.dumps(Q))
     f = bk.root / "a.json"
-    f.write_text(json.dumps({"answers": answers}))
+    f.write_text(json.dumps({"answers": answers, **({"by": by} if by else {})}))
     return wt, f
 
 
@@ -54,3 +55,10 @@ def test_wait_ships_without_worktree_field(bk, capsys):
     assert out[0].startswith("B1 shipped PR #7")
     assert not [c for c in bk.calls if c[0] == "stop"]
     assert not [c for c in bk.calls if c[0] == "run"]
+
+
+def test_answer_refuses_missing_by(bk, capsys):
+    wt, f = waiting(bk, {KEY: "Drop"}, by=None)
+    assert run(capsys, "answer", "B1", "--file", str(f)) == (2, "BLOCKED: " + bc.BY_MISSING + "\n")
+    assert not (wt / ".superlite" / "answer-1.json").exists()
+    assert get(bk, "B1")["state"] == "needs_decision"

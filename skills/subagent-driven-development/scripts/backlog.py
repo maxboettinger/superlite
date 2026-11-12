@@ -758,8 +758,9 @@ def cmd_decide(a) -> int:
     if res["errs"]:
         print("\n".join(res["errs"]))
         return 2
-    ruled = sum(1 for v in by.values() if v == "main")
-    print(f"recorded {len(answers)} answers" + (f" ({ruled} ruled by main)" if ruled else "") + f", {res['open']} open")
+    ruled, own = sum(1 for v in by.values() if v == "main"), sum(1 for v in by.values() if v == "user")  # O(answers)
+    parts = ([f"{own} as the user's"] if own else []) + ([f"{ruled} ruled by main"] if ruled else [])  # O(1)
+    print(f"recorded {len(answers)} answers" + (f" ({', '.join(parts)})" if parts else "") + f", {res['open']} open")
     return 0
 
 
