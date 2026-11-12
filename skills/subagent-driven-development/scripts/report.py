@@ -317,6 +317,59 @@ def report_text(plan_path, sl_dir) -> str:  # O(M + B + n*(n + e))
     return summary(c, md.as_posix())  # O(n)
 
 
+def _latest(rows) -> list:  # O(n)
+    last, order = {}, []  # O(1)
+    for r in rows:  # O(n)
+        if r.get("row") != "batch":  # O(1)
+            continue  # O(1)
+        b = r.get("batch")  # O(1)
+        if b not in last:  # O(1)
+            order.append(b)  # O(1)
+        last[b] = r  # O(1)
+    return [last[b] for b in order]  # O(n)
+
+
+def batches_json(rows) -> dict:  # O(n)
+    bs = _latest(rows)  # O(n)
+    ms = [r for r in rows if r.get("row") == "main"]  # O(n)
+    lead = sum((r.get("lead") or {}).get("cost_usd", 0) or 0 for r in bs)  # O(n)
+    wk = sum((r.get("workers_total") or {}).get("cost_usd", 0) or 0 for r in bs)  # O(n)
+    main = sum(r.get("cost_usd", 0) or 0 for r in ms)  # O(n)
+    share = round(lead / (lead + wk), 4) if lead + wk else 0.0  # O(1)
+    return {"batches": bs, "main": ms, "total": {"batches": len(bs), "lead_usd": round(lead, 6), "workers_usd": round(wk, 6),
+                                                 "lead_share": share, "main_usd": round(main, 6), "rounds": len(ms)}}  # O(1)
+
+
+def _kinds(kinds, top=4) -> str:  # O(k log k)
+    ks = sorted((kinds or {}).items(), key=lambda kv: -((kv[1] or {}).get("cost_usd", 0) or 0))[:top]  # O(k log k)
+    return ", ".join(f"{k} ${(v or {}).get('cost_usd', 0) or 0:.2f}" for k, v in ks)  # O(1)
+
+
+def batches_text(rows) -> str:  # O(n log n)
+    j = batches_json(rows)  # O(n)
+    if not j["batches"] and not j["main"]:  # O(1)
+        return "report: no batch rows\n"  # O(1)
+    out = []  # O(1)
+    for r in j["batches"]:  # O(n)
+        ld, g, wt = r.get("lead") or {}, r.get("grade") or {}, r.get("workers_total") or {}  # O(1)
+        ws = ", ".join(f"{k} {(v or {}).get('n', 0)} ${(v or {}).get('cost_usd', 0) or 0:.2f}"
+                       for k, v in (r.get("workers") or {}).items())  # O(w)
+        line = (f"{r.get('batch')} {r.get('end') or '?'} grade {g.get('letter') or '?'} ({g.get('points', 0)}) | "
+                f"lead ${ld.get('cost_usd', 0) or 0:.2f} {ld.get('turns', 0) or 0} turns, "
+                f"wall {(ld.get('wall_s', 0) or 0) / 60:.1f} min, waits {(ld.get('blocked_wait_s', 0) or 0) / 60:.1f} min | "
+                f"workers ${wt.get('cost_usd', 0) or 0:.2f}" + (f" ({ws})" if ws else ""))  # O(1)
+        k = _kinds(ld.get("kinds"))  # O(k log k)
+        out.append(line + (f" | lead by kind: {k}" if k else ""))  # O(1)
+    t = j["total"]  # O(1)
+    out.append(f"total: {t['batches']} batches, lead ${t['lead_usd']:.2f} ({t['lead_share'] * 100:.0f}% of lead + workers), "
+               f"workers ${t['workers_usd']:.2f}; main ${t['main_usd']:.2f} over {t['rounds']} rounds")  # O(1)
+    for r in j["main"]:  # O(n)
+        k = _kinds(r.get("kinds"))  # O(k log k)
+        out.append(f"main {','.join(map(str, r.get('round') or []))}: ${r.get('cost_usd', 0) or 0:.2f}, "
+                   f"{r.get('turns', 0) or 0} turns" + (f" ({k})" if k else ""))  # O(1)
+    return "\n".join(out) + "\n"  # O(n)
+
+
 def main(argv=None):  # O(M + B + n*(n + e))
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     ap.add_argument("--plan", help="the plan of the build to report on")  # O(1)
@@ -327,8 +380,16 @@ def main(argv=None):  # O(M + B + n*(n + e))
     ap.add_argument("--show", metavar="NAME", help="print a stored build's summary (with --full: its file)")  # O(1)
     ap.add_argument("--plans", default=next((d for d in ("docs/superpowers/plans", "docs/plans") if Path(d).is_dir()), "docs/plans"),
                     help="where the plans and their stored reports are (default: docs/superpowers/plans when it exists, else docs/plans)")  # O(1)
+    ap.add_argument("--batches", action="store_true", help="print the batch cost and quality rows")  # O(1)
+    ap.add_argument("--root", help="the project root holding .superlite/batch-costs.jsonl (default: the main checkout)")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     sys.stdout.reconfigure(encoding="utf-8")  # O(1)
+    if a.batches:  # O(1)
+        import backlog_state  # O(1)
+        import batch_cost  # O(1)
+        rows = batch_cost.read_rows(a.root or backlog_state.main_root(Path.cwd()))  # O(file)
+        sys.stdout.write(json.dumps(batches_json(rows), indent=1) + "\n" if a.json else batches_text(rows))  # O(n)
+        return 0  # O(1)
     if a.list or a.show:  # O(1)
         sys.stdout.write(list_reports(a.plans) if a.list else show_report(a.show, a.plans, a.full))  # O(file)
         return 0  # O(1)
