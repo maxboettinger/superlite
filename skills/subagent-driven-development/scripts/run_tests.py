@@ -215,7 +215,11 @@ def is_ancestor(pid):  # O(64) ps calls; True when pid is a parent, grandparent.
 
 
 @contextlib.contextmanager
-def full_suite_lock(a, label, toolchain="python"):  # O(wait / LOCK_POLL) polls; a full run holds the machine-wide lock around its test command
+def full_suite_lock(a, label, toolchain="python", enabled=True):  # O(wait / LOCK_POLL) polls; a full run holds the machine-wide lock around its test command
+    if label == "full" and not enabled:  # O(1)
+        print('run_tests: no full-suite lock: test-cmd.json sets "lock": false (its test command runs on another machine)', file=sys.stderr)  # O(1)
+        yield  # O(1)
+        return  # O(1)
     if label != "full" or fcntl is None:  # O(1)
         yield  # O(1)
         return  # O(1)
@@ -1715,7 +1719,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                     if warning:  # O(1)
                         warn_once(spec["command"], warning)  # O(warned)
                 spec = {**spec, "env": {"SUPERLITE_DERIVED_DATA_PATH": str(trees.derived_data_path(tree)), **(spec.get("env") or {})}}  # O(env)
-            with full_suite_lock(a, label, lock_toolchain(spec)):  # O(wait / LOCK_POLL)
+            with full_suite_lock(a, label, lock_toolchain(spec), spec.get("lock", True)):  # O(wait / LOCK_POLL)
                 rc = run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
             if tree and rc == 1:  # a red tree run names the changed files the tree lacks (#517) | O(f)
                 try:  # O(1)
@@ -1742,7 +1746,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                 print(honoured[1], file=sys.stderr)  # O(1)
         cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), *(["-m", marker] if marker else []), "-q", "-rP", "-p", "no:cacheprovider",  # O(p) -rP: a passing test's prints reach the output log (#501)
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
-        with full_suite_lock(a, label):  # O(wait / LOCK_POLL)
+        with full_suite_lock(a, label, enabled=spec.get("lock", True) if spec else True):  # O(wait / LOCK_POLL)
             t0 = time.monotonic()  # O(1)
             r = run_captured(cmd, limit=a.limit, env=child_env())  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
             seconds = time.monotonic() - t0  # O(1)

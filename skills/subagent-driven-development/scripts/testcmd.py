@@ -875,6 +875,15 @@ def unrunnable(spec: dict | None, paths: list[str]) -> list[str]:  # O(p)
     return [p for p in paths if posixpath.splitext(p.replace("\\", "/").split("/")[-1])[1].lower() in TEST_CODE_EXT - ok]  # O(p)
 
 
+def lock_enabled(cfg) -> bool:  # False only for an explicit "lock": false; a non-boolean is ignored with a note | O(1)
+    if not isinstance(cfg, dict) or "lock" not in cfg:  # O(1)
+        return True  # O(1)
+    if isinstance(cfg["lock"], bool):  # O(1)
+        return cfg["lock"]  # O(1)
+    print('test-cmd.json "lock" must be true or false; ignored', file=sys.stderr)  # O(1)
+    return True  # O(1)
+
+
 def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
     """-> {"language", "python": bool, "command": str|None, "junit": str, "env": {}, "setup": str, "source"} or None."""
     root = Path(root)  # O(1)
@@ -884,7 +893,7 @@ def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
     lang = cfg.get("language") or "unknown"  # O(1)
     iso = cfg["isolate"] if isinstance(cfg.get("isolate"), bool) else lang in ISOLATE_LANGS  # explicit config wins | O(1)
     if cfg.get("test") is None and cfg.get("language") == "python":  # O(1)
-        return {"language": "python", "python": True, "command": None, "junit": "", "env": {}, "setup": "", "source": src, "origin": origin, "isolate": iso}  # O(1)
+        return {"language": "python", "python": True, "command": None, "junit": "", "env": {}, "setup": "", "source": src, "origin": origin, "isolate": iso, "lock": lock_enabled(cfg)}  # O(1)
     files = " ".join(f'"{p}"' if " " in p else p for p in paths)  # O(p)
     template = cfg.get("test_file") or cfg["test"]  # O(1)
     command = template.replace("{files}", files) if paths else cfg["test"]  # O(1)
@@ -899,7 +908,7 @@ def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
         else:  # O(1)
             command = command.replace("{only_testing}", ids)  # O(p)
     return {"language": lang, "isolate": iso, "python": False, "command": command, "junit": cfg.get("junit") or "",  # O(1)
-            "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src, "origin": origin}
+            "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src, "origin": origin, "lock": lock_enabled(cfg)}
 
 
 NAME_PATTERNS = [r"^--- FAIL: (\S+)", r"^test (\S+) \.\.\. FAILED", r"^\s*(?:FAIL|✗|×|✕)\s+(.+?)\s*$", r"^\s*Failed\s+(\S+)",  # O(1)
