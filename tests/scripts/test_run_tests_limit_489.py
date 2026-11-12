@@ -14,6 +14,7 @@ RUN_TESTS = SCRIPTS / "run_tests.py"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_tests  # noqa: E402
+from _fixtures import DISK_FREE  # noqa: E402
 from test_plan_tools import run  # noqa: E402
 
 HANG = "sh -c 'sleep 60 & echo $! > child.pid; sleep 60'"
@@ -80,6 +81,7 @@ def test_default_limit():
 def test_sigterm_kills_test_processes(tmp_path):
     project(tmp_path, HANG)
     env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_") or k == "SUPERLITE_HOME"}
+    env.update(DISK_FREE)
     p = subprocess.Popen([sys.executable, str(RUN_TESTS), "--full"], cwd=tmp_path, env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:

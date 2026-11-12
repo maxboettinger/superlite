@@ -10,11 +10,12 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-deve
 RUN_TESTS = SCRIPTS / "run_tests.py"
 sys.path.insert(0, str(SCRIPTS))
 import run_tests  # noqa: E402
+from _fixtures import DISK_FREE  # noqa: E402
 
 
 def run(*args, cwd):
     env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_") or k == "SUPERLITE_HOME"}
-    env["PYTHONIOENCODING"] = "utf-8"
+    env.update(DISK_FREE, PYTHONIOENCODING="utf-8")
     cp = subprocess.run([sys.executable, str(RUN_TESTS), *map(str, args)], capture_output=True, cwd=cwd, env=env, timeout=120)
     cp.out, cp.err = cp.stdout.decode("utf-8"), cp.stderr.decode("utf-8")
     return cp

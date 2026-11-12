@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "scripts"))
 import run_tests  # noqa: E402
+from _fixtures import DISK_FREE  # noqa: E402
 
 RUN_TESTS = Path(run_tests.__file__)
 PLAN = """# Plan
@@ -25,7 +26,7 @@ PLAN = """# Plan
 
 def run(tmp_path, *args):
     env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_")}
-    env.update(SUPERLITE_HOME=str(tmp_path / "home"), PYTHONIOENCODING="utf-8")
+    env.update(DISK_FREE, SUPERLITE_HOME=str(tmp_path / "home"), PYTHONIOENCODING="utf-8")
     sl = tmp_path / ".superlite"
     cp = subprocess.run([sys.executable, str(RUN_TESTS), *map(str, args), "--log", str(sl / "incidents.jsonl"),
                          "--ledger", str(sl / "ledger.md"), "--summary", str(sl / "test-summary.json")],
