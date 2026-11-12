@@ -20,3 +20,8 @@ def test_review_finish_predict_and_prime_rows():
         assert s in rows("predict"), s
     assert "## Running the app" in rows("build_prime")
     assert rows("gui_session")
+
+
+def test_added_clauses_are_joined_without_a_stray_period():
+    for s in ("there.; when", "`/superlite:setup`.; a lead", "(#614).; it prints", "(#614); it prints", "T0 wave0` Before"):
+        assert s not in DOC, s
