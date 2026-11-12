@@ -27,3 +27,9 @@ def test_backlog_rows_name_lead_end_states():
 
 def test_worktree_row_names_core_bare():
     assert "core.bare" in rows("worktree")
+
+
+def test_pinned_issue_named_by_merged_pr_uses_already_shipped_question_line():
+    r = rows("backlog")
+    assert "a pinned one is planned anyway" not in r
+    assert "already shipped?:" in r
