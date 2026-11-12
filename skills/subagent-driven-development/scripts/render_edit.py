@@ -79,6 +79,8 @@ def _owner(sd, plan, rel):  # O(n*k*s) the id of a task whose Owns names rel, el
 def _start(root, sd, files, plan):  # O(k*(n + spawn))
     data = _read(sd) or {"files": {}}  # O(file)
     new = {}  # O(1)
+    if not data["files"]:  # O(1)
+        data.pop("started", None)  # O(1) a fresh run, not the stale one
     for raw in files:  # O(k) iterations
         rel = _rel(root, raw)  # O(d)
         if rel is None:  # O(1)
@@ -113,6 +115,7 @@ def _restore(root, sd, files):  # O(a*spawn)
         if have[rel].get("existed"):  # O(1)
             r = _git(root, "checkout", "HEAD", "--", rel)  # O(1) + spawn
             if r.returncode:  # O(1)
+                _write(sd, data)  # O(file) keep what was already restored
                 return _fail(f"cannot restore {rel}: {r.stderr.strip()}")  # O(1)
         elif path.exists():  # O(1)
             path.unlink()  # O(1)

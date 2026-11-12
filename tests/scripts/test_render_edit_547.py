@@ -95,3 +95,16 @@ def test_no_args_prints_usage(tmp_path, monkeypatch, capsys):
     repo(tmp_path, monkeypatch)
     assert render_edit.main([]) == 2
     assert "usage" in capsys.readouterr().err.lower()
+
+
+def test_failed_restore_keeps_progress_and_restart_resets_started(tmp_path, monkeypatch, capsys):
+    r = repo(tmp_path, monkeypatch)
+    f = r / ".superlite" / "render-edits.json"
+    f.write_text(json.dumps({"files": {"Demo/Seed.swift": {"existed": True}, "Demo/Zzz.swift": {"existed": True}},
+                             "started": 1}), encoding="utf-8")
+    (r / "Demo" / "Seed.swift").write_text("x\n", encoding="utf-8")
+    assert render_edit.main(["restore"]) == 2
+    assert render_edit.applied(r / ".superlite") == ["Demo/Zzz.swift"]
+    f.write_text(json.dumps({"files": {}, "started": 1}), encoding="utf-8")
+    assert render_edit.main(["start", "Demo/Seed.swift"]) == 0
+    assert json.loads(f.read_text(encoding="utf-8"))["started"] > 1
