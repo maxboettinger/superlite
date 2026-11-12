@@ -1,0 +1,117 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-12T00:25:41",
+ "headline": {
+  "wall_min": {
+   "projected": 4.733,
+   "actual": 7.168
+  },
+  "cost_usd_agents": {
+   "projected": 0.576311,
+   "actual": 1.408626
+  },
+  "task_min": {
+   "projected": 7.939,
+   "actual": 12.502
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 7
+  }
+ },
+ "cost_split": {
+  "agents_usd": 1.408626,
+  "rework_usd": 0,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 1.408626
+ },
+ "concurrency": {
+  "peak": 3,
+  "projected_peak": 2
+ },
+ "critical_path": {
+  "actual": [
+   "T1",
+   "T2"
+  ],
+  "projected": [
+   "T1",
+   "T2"
+  ],
+  "projected_min": 4.733
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 4,
+   "cost_usd": 1.408626
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 6624,
+   "failed": 0,
+   "skipped": 8,
+   "seconds": 941.6,
+   "recorded": false
+  },
+  "tests_newer": null,
+  "tests_from": "progress.md",
+  "first_time_pass": 4,
+  "first_time_n": 4,
+  "rework_dispatches": 0,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 1.594,
+   "actual_min": 3.76,
+   "delta": {
+    "abs": 2.166,
+    "pct": 135.9
+   },
+   "cost_usd": 0.312848,
+   "first_time_pass": true
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 2.362,
+   "actual_min": 4.323,
+   "delta": {
+    "abs": 1.9613,
+    "pct": 83.0
+   },
+   "cost_usd": 0.51178,
+   "first_time_pass": true
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 1.612,
+   "actual_min": 1.965,
+   "delta": {
+    "abs": 0.353,
+    "pct": 21.9
+   },
+   "cost_usd": 0.288333,
+   "first_time_pass": true
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 2.371,
+   "actual_min": 2.453,
+   "delta": {
+    "abs": 0.0823,
+    "pct": 3.5
+   },
+   "cost_usd": 0.295665,
+   "first_time_pass": true
+  }
+ ]
+}
