@@ -126,3 +126,8 @@ def test_report_dead_worker_prints_last_report(world, capsys):
     (world.sd / "fleet" / "reports").mkdir(parents=True); (world.sd / "fleet" / "reports" / "T3.md").write_text("Status: DONE\n")
     assert fleet.main(["report", "W1"]) == 0
     assert capsys.readouterr().out == "Status: DONE\n"
+
+
+def test_respawn_hint_keeps_research_tier(world):
+    (world.sd / "fleet.json").write_text(json.dumps({"on": True, "workers": {"W3": {"role": "research", "tier": "haiku"}}}))
+    assert fleet.respawn_hint(world.sd, "W3") == f"sl fleet spawn --role research --tier haiku --plan {world.sd}"

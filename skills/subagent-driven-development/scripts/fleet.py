@@ -654,7 +654,7 @@ def respawn_hint(sd, wid, plan=None):  # the `sl fleet spawn` line that starts a
     parts = ["sl fleet spawn"]  # O(1)
     if role != "implementer":  # O(1)
         parts.append(f"--role {role}")  # O(1)
-    if w.get("tier") and role in ("implementer", "fixer"):  # other roles take no --tier | O(1)
+    if w.get("tier") and role in ("implementer", "fixer", "research"):  # other roles take no --tier | O(1)
         parts.append(f"--tier {w['tier']}")  # O(1)
     if w.get("brief"):  # O(1)
         parts.append(f"--brief {w['brief']}")  # O(1)
