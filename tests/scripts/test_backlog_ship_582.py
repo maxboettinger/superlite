@@ -66,3 +66,11 @@ def test_notes_prints_reason_and_full_notes_anywhere(sh, capsys, monkeypatch):
     (sh.sd / "backlog").mkdir(exist_ok=True); (sh.sd / "backlog" / "B1.notes.md").write_text("Ruling: kept\n")
     assert ship(capsys, "B1", "notes")[1].endswith("Ruling: kept\n")
     assert ship(capsys, "B9", "notes")[0] == 2
+
+
+def test_notes_ignores_cwd_when_batch_has_no_worktree(sh, capsys, monkeypatch, tmp_path):
+    monkeypatch.delenv("SUPERLITE_FLEET_ROLE")
+    (tmp_path / ".superlite").mkdir(); (tmp_path / ".superlite" / "notes.md").write_text("Ruling: stray\n")
+    monkeypatch.chdir(tmp_path)
+    bs.update(bs.path(sh.root), lambda d: bs.batch(d, "B1").update({"worktree": None}))
+    assert ship(capsys, "B1", "notes") == (0, "no notes\n")
