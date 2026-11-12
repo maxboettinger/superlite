@@ -17,13 +17,14 @@ Shorthand: `SUPERLITE` = plugin root, two levels above this skill's "Base direct
 
 - Run root: a worktree (`"$SL" worktree ensure <topic>`; plan header `**Worktree:** none`: in place, branch `superlite/<topic>` off the default branch). Write the start SHA to `.superlite/progress.md` (`- start <sha>`). `commit_task` excludes `.superlite/` in `.git/info/exclude` itself. Resuming another session's run: `"$SL" orchestrator takeover --plan $PLAN` first.
 - Wave 0 is not yours: `lint --stable` builds `.superlite/briefs/wave0.md` and prints `START FIRST:` with the Agent line for `superlite:implementer-haiku` (T0; `wave0 --plan $PLAN` reprints). Send it first; stub owners wait (`WAIT FOR T0:`) for `commit_task T0`. `Ruling: skip T0` or `**Wave0:** none` mutes it. Then `"$SL" plan_tools adapter --plan $PLAN`.
+- Inline build (a plan of exactly one task, few files): after `lint --stable` write its Owns yourself (the guard allows them; no implementer), commit with `commit_task T1`, then Final review.
 
 Fleet mode (user asks): `"$SL" fleet on` before the first dispatch, then `fleet.md`: every role a worker, never in-process; missing or BLOCKED: report BLOCKED.
 - Names: each Agent call's `description` is what `"$SL" fleet name <Tn or role> --plan $PLAN` prints (`sl:<repo>-<worktree>-<id>`).
 - Prime: `"$SL" build_prime --plan $PLAN` prints `hash size`, writes `.superlite/prime.md`: slim for sonnet.
 - Incidents: a BLOCKED or NEEDS_CONTEXT report is `"$SL" incident add --agent coordinator --file <task file> --line 0 --context "BLOCKED Tn: <why>"` (`--file`, `--line`, `--context` required; `--kind` optional, `incident add --help` lists the kinds).
 - MCP: agents inherit the session's MCP tools; a project MCP server is approved before dispatch (background agents prompt in the main session).
-- Graphify: `"$SL" graphify_gate` prints JSON. `use` false: skip. Installed: `graphify update .`. `needs_install` and `allowed`: `uv tool install graphifyy`, `graphify extract . --code-only`. Only you run it.
+- Graphify: `"$SL" graphify_gate` prints JSON. `use` false: skip. Installed: `graphify update .`. `needs_install` and `allowed`: `uv tool install graphifyy`, `graphify extract . --code-only`. Only you run it. When `use` is true it also adds `graphify-out/` to the repo's info/exclude, so `git status` and `commit_task` skip it.
 
 ## Planning check
 
