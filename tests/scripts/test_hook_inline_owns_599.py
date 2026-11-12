@@ -63,3 +63,11 @@ def test_block_message_names_inline_build(tmp_path):
     r = run(p, "Edit", str(p / "src" / "other.py"))
     assert r.returncode == 2 and INLINE in r.stderr
     assert r.stderr.rstrip("\n").splitlines()[-1] == "Blocked target: src/other.py"
+
+
+def test_inline_line_sits_before_render_line(tmp_path):
+    p = make(tmp_path, TWO)
+    lines = run(p, "Edit", str(p / "src" / "app.py")).stderr.splitlines()
+    i = lines.index(INLINE)
+    assert lines[i + 1].startswith("- A throwaway edit to check a render")
+    assert "sl orchestrator end" in lines[-2]
