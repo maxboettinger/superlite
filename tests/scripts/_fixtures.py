@@ -39,3 +39,26 @@ def _make():
 
 
 FIXTURES = _make()
+
+# Host-free subprocesses (#631), set on first import like HOST_VARS so every module ENV snapshot and every subprocess
+# carries them: no disk floor or warn level (a 2 GB CI sandbox or a full Mac refused dispatch and run_tests), and a git
+# identity on a host without one. The identity sits in a global config that includes the host's own global files, so a
+# repository's own user.name (test_autocommit asserts it) still wins; a host with an identity keeps its config untouched.
+DISK_FREE = {"SUPERLITE_DISK_FLOOR_GB": "0", "SUPERLITE_DISK_WARN_GB": "0"}  # a test env that drops SUPERLITE_* adds these back
+os.environ.update(DISK_FREE)
+
+
+def _git_identity(base):
+    missing = {k: v for k, v in (("name", "superlite tests"), ("email", "tests@superlite.invalid"))
+               if not subprocess.run(["git", "config", f"user.{k}"], cwd=base, capture_output=True, text=True).stdout.strip()}
+    if not missing:
+        return
+    host = [os.environ.get("GIT_CONFIG_GLOBAL") or str(Path.home() / ".gitconfig"),
+            str(Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "git" / "config")]
+    cfg = base / "gitconfig"  # git skips an include whose file is missing
+    cfg.write_text("".join(f"[include]\n\tpath = {p}\n" for p in host)
+                   + "[user]\n" + "".join(f"\t{k} = {v}\n" for k, v in missing.items()), encoding="utf-8")
+    os.environ["GIT_CONFIG_GLOBAL"] = str(cfg)
+
+
+_git_identity(FIXTURES.parent)

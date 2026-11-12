@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _fixtures import FIXTURES
+from _fixtures import DISK_FREE, FIXTURES
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "scripts"
 RUN_TESTS = SCRIPTS / "run_tests.py"
@@ -17,6 +17,7 @@ NESTED = "Tests/KitTests/Nested.swift"
 
 def rt(cwd, *args):
     env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_") or k == "SUPERLITE_HOME"}
+    env.update(DISK_FREE)
     return subprocess.run([sys.executable, str(RUN_TESTS), *args], cwd=cwd, capture_output=True, text=True, timeout=120, env=env)
 
 

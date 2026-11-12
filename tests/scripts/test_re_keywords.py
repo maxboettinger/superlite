@@ -20,9 +20,15 @@ def test_wave0_header_without_warning():
         assert plan_tools.Plan("**Wave0:** none\n## T1\n").header_wave0_off() is True
 
 
+def tracked_py():  # the checkout's own .py files; a copy without git (a remote sandbox, #631) walks the tree, hidden folders out
+    r = subprocess.run(["git", "ls-files", "*.py"], cwd=ROOT, capture_output=True, text=True)
+    if r.returncode == 0:
+        return r.stdout.split()
+    return [str(p.relative_to(ROOT)) for p in ROOT.rglob("*.py") if not any(x.startswith(".") for x in p.relative_to(ROOT).parts)]
+
+
 def test_no_positional_re_count_or_flags():
-    files = subprocess.run(["git", "ls-files", "*.py"], cwd=ROOT, capture_output=True, text=True,
-                           check=True).stdout.split()
+    files = tracked_py()
     bad = []
     for f in files:
         try:

@@ -7,7 +7,8 @@ import tempfile
 
 import pytest
 
-from _fixtures import HOST_VARS  # importing it drops the host vars and makes the fixture copy before collection
+from _fixtures import HOST_VARS  # importing it drops the host vars, sets the process-wide disk floor 0 and a git
+# identity on a host without one (#631), and makes the fixture copy before collection
 
 # a session home at import: module-level ENV dicts and subprocesses never see the real ~/.superlite (#550)
 _SESSION_HOME = tempfile.mkdtemp(prefix="sl-home-")
