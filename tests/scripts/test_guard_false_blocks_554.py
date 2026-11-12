@@ -419,15 +419,15 @@ def test_cp_r_into_existing_ignored_folder_checks_links_below(G):
 
 
 def test_relative_exclude_file_on_a_tracked_gitignore_elsewhere_does_not_count(G):  # F-T1-11
-    (G / "tests" / "fixtures").mkdir(parents=True)
-    (G / "tests" / "fixtures" / ".gitignore").write_text("*\n")
-    _git(G, "add", "-f", "tests/fixtures/.gitignore")
-    _git(G, "commit", "-q", "-m", "fixtures")
-    _git(G, "config", "core.excludesFile", "tests/fixtures/.gitignore")
+    (G / "tests" / "keep").mkdir(parents=True)
+    (G / "tests" / "keep" / ".gitignore").write_text("*\n")
+    _git(G, "add", "-f", "tests/keep/.gitignore")
+    _git(G, "commit", "-q", "-m", "keep")
+    _git(G, "config", "core.excludesFile", "tests/keep/.gitignore")
     _files(G / "untr", 2100)  # over the limit of the not-ignored rule
     v = jg(G, "echo x > src/new.py")
     assert v is not None and v.why == "not git-ignored", v
     v = jg(G, "rm -rf untr")
     assert v is not None and v.why.startswith("not git-ignored"), v
     assert jg(G, "echo x > tmp/new.log") is None  # the root .gitignore still counts
-    assert jg(G, "echo x > tests/fixtures/new.txt") is None  # a folder holding that .gitignore
+    assert jg(G, "echo x > tests/keep/new.txt") is None  # a folder holding that .gitignore
