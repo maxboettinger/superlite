@@ -4,8 +4,8 @@
     finish.py [--plan PLAN] [--ledger .superlite/progress.md] [--log .superlite/incidents.jsonl]
 
 Collects, from the progress ledger, every `Ruling:` line (in order), the
-commits and the run's test result (the last `tests full` line, recorded ones too, else the newest line; a newer run prints beside it, #498), plus the open incidents from the log. Open means what the
-review packet counts: a location whose newest entry is resolved, and a test-failure the newest
+commits and the run's test result (the last `tests full` line that is not a recorded one, else the newest line; a newer run, a recorded one too, prints beside it with the commits made after the full run, #498, #593), plus the open incidents from the log. Open means what the
+review packet counts: an incident on a file no longer on disk (inside a git checkout) or at a location a ledger `Ruling:` names, a location whose newest entry is resolved, and a test-failure the newest
 covering test summary shows green (a later full run covers every run_tests failure), are not open.
 Ledger and log default to the run folder of `--plan` once it holds a run (else the session's run, #178). The
 superlite-side stops of the run (guard blocks and rewrites, guard errors, test runs with no result, commit scope
@@ -75,9 +75,27 @@ def test_result(ledger):  # O(R*w) (result, newer run, count of runs after the r
             runs.append({"mode": mode, "passed": int(pa), "failed": int(fa), "skipped": int(sk), "seconds": float(sec), "recorded": bool(rec)})  # O(1)
     if not runs:  # O(1)
         return None, None, 0  # O(1)
-    i = max((k for k, r in enumerate(runs) if r["mode"] == "full"), default=len(runs) - 1)  # O(R)
+    i = max((k for k, r in enumerate(runs) if r["mode"] == "full" and not r["recorded"]), default=len(runs) - 1)  # a recorded run never counts as the full run (#593) | O(R)
     after = runs[i + 1:]  # O(R)
     return runs[i], (after[-1] if after else None), len(after)  # O(1)
+
+
+def commits_after_full(ledger):  # O(R*w) task ids committed after the last full (non-recorded) tests line, first-seen order; [] when none
+    try:  # O(1)
+        text = Path(ledger).read_text(encoding="utf-8", errors="replace")  # O(ledger bytes)
+    except OSError:  # O(1)
+        return []  # O(1)
+    out, seen_full = [], False  # O(1)
+    for line in text.replace("\r\n", "\n").split("\n"):  # O(R)
+        m = TESTS.match(line)  # O(w) regex
+        if m:  # O(1)
+            if m.group(1) == "full" and not m.group(6):  # O(1)
+                out, seen_full = [], True  # O(1)
+            continue  # O(1)
+        m = COMMIT.match(line)  # O(w) regex
+        if m and seen_full and m.group(1) not in out:  # O(C)
+            out.append(m.group(1))  # O(1)
+    return out  # O(1)
 
 
 def _pt_review():  # O(1) after the first import; None when pt_review cannot be imported
@@ -130,13 +148,34 @@ def _logged_open(path):  # O(I*w) the plain filter, used when pt_review cannot b
     return out  # O(1)
 
 
-def open_incidents(path, summary=None):  # O(I*w + I*F)
+def _git_top(path):  # O(1) + spawn; the git toplevel of the log's folder, None outside git or on any error
+    try:  # O(1)
+        import worktree  # O(1)
+        rc, top, _ = worktree.git(path.resolve().parent, "rev-parse", "--show-toplevel")  # O(1) + spawn
+        return Path(top.strip()) if not rc and top.strip() else None  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return None  # O(1)
+
+
+def _drop_gone_and_ruled(pt, path, entries, top, ledger=None):  # O(I*R*m + I) outside git (top None) the gone-file filter is skipped
+    try:  # O(1)
+        if top is not None:  # O(1)
+            entries = pt.split_gone(top, entries, None)[0]  # O(I)
+        rulings = pt.ledger_rulings(Path(ledger) if ledger else path.with_name("progress.md"))  # O(ledger bytes)
+        return [e for e in entries if not pt.ruled(e, rulings)]  # O(I*R*m)
+    except Exception:  # noqa: BLE001 | O(1)
+        return entries  # O(1)
+
+
+def open_incidents(path, summary=None, ledger=None):  # O(I*w + I*F)
     """Open incidents as the review packet counts them: a location whose newest entry is resolved is not open,
     and (with a test summary) neither is a test-failure the newest run shows green."""
     pt = _pt_review()  # O(1)
     if pt is None:  # O(1)
         return _logged_open(path)  # O(I*w)
-    entries = pt.read_incidents(Path(path))  # O(I) every parsed entry, resolved ones included
+    top = _git_top(Path(path))  # O(1) + spawn
+    entries = pt.read_incidents(Path(path), top)  # O(I) every parsed entry, resolved ones included; paths as the packet normalizes them
+    entries = _drop_gone_and_ruled(pt, Path(path), entries, top, ledger)  # O(I*R*m + I) as the packet leaves them out (B127)
     entries = [e for e in entries if not _stale(pt, e, summary)]  # the packet drops stale test failures before it looks for superseded locations | O(I*F)
     gone = pt.superseded(entries)  # O(I) before the open filter
     return [e for e in entries  # O(I) iterations
@@ -468,7 +507,7 @@ def moved_lines(sd, plan=None):  # O(files) + git spawns
 
 def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # O(R*w + I*w + C + G)
     rulings, commits, _ = read_ledger(ledger)  # O(R*w)
-    incidents = open_incidents(log, load_run_summaries(sl_dir or Path(ledger).parent))  # O(I*w + I*S*F)
+    incidents = open_incidents(log, load_run_summaries(sl_dir or Path(ledger).parent), ledger)  # O(I*w + I*S*F)
     out = ["# superlite run summary", ""]  # O(1)
     cp = checkpoint_note(ledger)  # checkpoint mode: nothing was committed | O(1) + git spawns
     out.append(f"{'checkpoints' if cp else 'commits'}: {len(commits)}")  # O(1)
@@ -486,12 +525,16 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
         out.append("- release one: sl hold --release Tn")  # O(1)
         out.append("")  # O(1)
     res, newer, n_newer = test_result(ledger)  # O(R*w)
+    nm = lambda r: f"recorded {r['mode']}" if r["recorded"] else r["mode"]  # O(1)
     fmt = lambda r: f"{r['passed']} passed, {r['failed']} failed, {r['skipped']} skipped in {r['seconds']:.1f}s"  # O(1)
     if res:  # O(1)
         out.append(f"tests ({res['mode']}{', recorded' if res['recorded'] else ''}): {fmt(res)}")  # O(1)
         if newer:  # O(1)
-            out.append(f"- newer {newer['mode']} run (not the run's result): {fmt(newer)}" if n_newer == 1
-                       else f"- {n_newer} newer {newer['mode']} runs (not the run's result), newest: {fmt(newer)}")  # O(1)
+            out.append(f"- newer {nm(newer)} run (not the run's result): {fmt(newer)}" if n_newer == 1
+                       else f"- {n_newer} newer {nm(newer)} runs (not the run's result), newest: {fmt(newer)}")  # O(1)
+        after = commits_after_full(ledger) if res["mode"] == "full" and not res["recorded"] else []  # O(R*w)
+        if after:  # O(1)
+            out.append(f"- committed after this full run: {', '.join(after)} (it does not cover them; rerun sl run_tests --full)")  # O(C)
     else:  # O(1)
         out.append("tests: none recorded")  # O(1)
     out += packet_lines(sl_dir or Path(ledger).parent)  # O(S*F)

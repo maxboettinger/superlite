@@ -2549,21 +2549,75 @@ def _summary_rows(d: dict, root: Path | None, changed: set[str] | None) -> tuple
     rows = [f"- passed {d.get('passed', '?')} · failed {total}{f' ({len(old)} outdated)' if old else ''} · skipped {d.get('skipped', len(skipped))}"]  # O(1)
     if d.get("mode") == "fast":  # O(1)
         rows.insert(0, "- full suite not run yet (it runs alongside this review); newest fast run:")  # O(1)
+    elif d.get("mode") == "recorded":  # a run recorded outside run_tests is no full run (#593) | O(1)
+        rows.insert(0, f"- recorded {d.get('scope') or 'external'} run outside run_tests (`{d.get('recorded') or '?'}`), not the full suite:")  # O(1)
     rows += [f"- OUTDATED: {t} ({f} changed after this run; the full suite decides)" for t, f in old[:OUTDATED_LINES]]  # O(min(30, old))
     rows += [f"- FAILING: {t}" for t in cur[:30]]  # O(min(30, cur))
     rows += [f"- SKIPPED: {t}" for t in skipped[:30]]  # O(min(30, skipped))
     return rows, nfail  # O(1)
 
 
+def _started(d: dict) -> float | None:  # O(1)
+    return _num(d.get("started"))  # O(1)
+
+
+def _run_key(r: dict) -> tuple:  # O(1)
+    return (r.get("started"), r.get("mode"), r.get("passed"), r.get("failed"), r.get("skipped"), r.get("task"))  # O(1)
+
+
+def full_and_newer(runs: list[dict]) -> tuple[dict | None, list[dict]]:  # O(S log S + S^2) total
+    """The newest full run with a result (a recorded run is none, #593) and the distinct runs newer than it: timed ones started
+    after it, newest first, then untimed ones (or any run when the full run is untimed) listed before it, in list order."""
+    fulls = [r for r in runs if isinstance(r, dict) and r.get("mode") == "full" and not r.get("recorded") and _has_result(r)]  # O(S)
+    if not fulls:  # O(1)
+        return None, []  # O(1)
+    full = max(fulls, key=lambda r: _started(r) if _started(r) is not None else float("-inf"))  # first of equals | O(S)
+    t0 = _started(full)  # O(1)
+    pos = next(i for i, r in enumerate(runs) if r is full)  # O(S)
+    timed: list[dict] = []  # O(1)
+    untimed: list[dict] = []  # O(1)
+    for i, r in enumerate(runs):  # O(S) iterations
+        if not isinstance(r, dict) or r is full:  # O(1)
+            continue  # O(1)
+        if t0 is not None and _started(r) is not None:  # O(1)
+            if _started(r) > t0:  # O(1)
+                timed.append(r)  # O(1)
+        elif i < pos and _run_key(r) != _run_key(full):  # O(1)
+            (timed if _started(r) is not None else untimed).append(r)  # O(1)
+    timed.sort(key=lambda r: -_started(r))  # O(S log S)
+    newer: list[dict] = []  # O(1)
+    keys: set[tuple] = set()  # O(1)
+    for r in timed + untimed:  # O(S) iterations
+        k = _run_key(r)  # O(1)
+        if k not in keys:  # O(1)
+            keys.add(k)  # O(1)
+            newer.append(r)  # O(1)
+    return full, newer  # O(1)
+
+
+def _run_label(r: dict) -> str:  # O(1)
+    if r.get("mode") == "recorded":  # O(1)
+        return f"recorded {r.get('scope') or 'external'}"  # O(1)
+    return f"recorded {r.get('mode')}" if r.get("recorded") else str(r.get("mode"))  # O(1)
+
+
+def _run_counts(r: dict) -> str:  # O(1)
+    err = f"; error: {str(r['error'])[:120]}" if r.get("error") else ""  # O(1)
+    return f"{r.get('passed', 0)} passed, {r.get('failed', 0)} failed, {r.get('skipped', 0)} skipped{err}"  # O(1)
+
+
 def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | None = None,  # O(file size + F*(B + d)) total
-                      runs: list[dict] | None = None) -> tuple[str, int]:  # O(1)
-    if not path.is_file():  # O(1)
+                      runs: list[dict] | None = None, ledger: Path | None = None) -> tuple[str, int]:  # O(1)
+    full, newer = full_and_newer(runs or [])  # the full run is the result, whatever ran later (#593) | O(S log S)
+    if full is None and not path.is_file():  # O(1)
         return "- no test summary recorded (`run_tests.py --full` runs alongside this review)", 0  # O(1)
-    d = load_summary(path)  # O(file size)
+    d = load_summary(path) if path.is_file() else None  # O(file size)
+    if d is not None and root is not None:  # O(1)
+        d = norm_summary(d, root)  # O(F*m)
+    if full is not None and not (d is not None and d.get("error")):  # O(1)
+        return _full_run_text(full, newer, root, changed, ledger)  # O(F*(B + d))
     if d is None:  # O(1)
         return "- test summary unreadable", 0  # O(1)
-    if root is not None:  # O(1)
-        d = norm_summary(d, root)  # O(F*m)
     if not d.get("error"):  # a summary without `error` reads as before | O(1)
         rows, nfail = _summary_rows(d, root, changed)  # O(F*(B + d))
         return "\n".join(rows), nfail  # O(1)
@@ -2572,11 +2626,35 @@ def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | 
         rows, nfail = [f"- killed run, no result: {err}"], 0  # O(1)
     else:  # O(1)
         rows, nfail = [f"- run without a result: {err}", f"- FAILING: {err}"], 1  # O(1)
-    best = next((r for r in (runs or []) if isinstance(r, dict) and _has_result(r)), None)  # the first run with a result, in run order | O(S)
+    best = full if full is not None else next((r for r in (runs or []) if isinstance(r, dict) and _has_result(r)), None)  # O(S)
     if best is not None:  # O(1)
-        more, n2 = _summary_rows(best, root, changed)  # O(F*(B + d))
+        more, n2 = _summary_rows(norm_summary(best, root) if root is not None and best is full else best, root, changed)  # O(F*(B + d))
         rows += ["- newest run with a result:"] + more  # O(F)
         nfail += n2  # O(1)
+        if full is not None:  # O(1)
+            rows += _newer_and_after(full, [r for r in newer if _run_key(r) != _run_key(d)], ledger)  # O(S + C)
+    return "\n".join(rows), nfail  # O(1)
+
+
+def _newer_and_after(full: dict, newer: list[dict], ledger: Path | None) -> list[str]:  # O(S + C) total
+    rows: list[str] = []  # O(1)
+    if len(newer) == 1:  # O(1)
+        rows.append(f"- newer {_run_label(newer[0])} run (not the full run's result): {_run_counts(newer[0])}")  # O(1)
+    elif newer:  # O(1)
+        rows.append(f"- {len(newer)} newer runs (not the full run's result), newest {_run_label(newer[0])}: {_run_counts(newer[0])}")  # O(1)
+    try:  # O(1)
+        import finish  # lazy | O(1)
+        after = finish.commits_after_full(ledger) if ledger is not None else []  # O(R*w)
+    except Exception:  # noqa: BLE001 | O(1)
+        after = []  # O(1)
+    if after:  # O(1)
+        rows.append(f"- committed after this full run: {', '.join(after)} (it does not cover them; rerun run_tests --full)")  # O(C)
+    return rows  # O(1)
+
+
+def _full_run_text(full: dict, newer: list[dict], root: Path | None, changed: set[str] | None, ledger: Path | None) -> tuple[str, int]:  # O(F*(B + d))
+    rows, nfail = _summary_rows(norm_summary(full, root) if root is not None else full, root, changed)  # O(F*(B + d))
+    rows += _newer_and_after(full, newer, ledger)  # O(S + C)
     return "\n".join(rows), nfail  # O(1)
 
 
@@ -2823,7 +2901,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
                           f"- {m.msg}", m.file, m.line, "pt_review contract check (tool)", True))  # O(1)
     items.sort(key=lambda i: i.rank)  # O(I log I)
     counts = {s: sum(1 for i in items if i.section == s) for s in ("incidents", "probes", "uncovered", "contract", "claimed")}  # O(5*I)
-    tests_text, nfail = read_test_summary(tests, root, changed, runs)  # O(F*(B + d))
+    tests_text, nfail = read_test_summary(tests, root, changed, runs, Path(a.ledger) if getattr(a, "ledger", None) else sl / "progress.md")  # O(F*(B + d))
     shown_old = tests_text.count("\n- OUTDATED: ") + tests_text.startswith("- OUTDATED: ")  # O(len)
     seen_loc: set[tuple] = set()  # O(1)
     for e, why in gone:  # O(K) iterations
