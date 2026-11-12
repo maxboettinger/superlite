@@ -135,7 +135,9 @@ def lead_brief(batch, ctx):  # O(i + f + a)
     out.append("Your run: the worktree you start in, state in .superlite/; pass --plan .superlite to every sl call.")  # O(1)
     out.append(f"First: `{sl} orchestrator set ai --plan .superlite`, then `{sl} fleet on --plan .superlite`.")  # O(1)
     out.append("Build: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, "
-               "superlite:subagent-driven-development with fleet on, the final review (UI screenshots go in .superlite/render/, its packet lists them), the test layers.")  # O(1)
+               "superlite:subagent-driven-development with fleet on, the final review (UI screenshots go in .superlite/render/, its packet lists them), the test layers. "
+               "Build inside your worktree: never pass -derivedDataPath outside it (your session scratchpad included); "
+               "sl run_tests builds each task tree in <tree>/.build/DerivedData and backlog cleanup removes scratchpad build folders when the worktree goes.")  # O(1)
     out.append(f"Never end your turn while your workers run: wait with `{sl} fleet wait --timeout 540000 --plan .superlite` "
                "in the foreground, never as a background command: under memory pressure Claude Code stops an idle session's "
                "background commands, and a restarted wait still reports every worker that finished meanwhile.")  # O(1)

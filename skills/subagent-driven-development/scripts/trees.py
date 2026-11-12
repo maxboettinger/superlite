@@ -13,7 +13,8 @@ A tree is a detached git worktree at `.superlite/trees/<task>` on the base commi
 checkpoint, else HEAD). `prepare` resets it to the base and overlays only the task's own files
 (modified, new or deleted in the main tree). Untracked build output in the tree is never removed by `prepare`.
 Cleanup (GitHub #574): `busy` marks a tree in use (`<key>.busy.<pid>`), `reap` drops the trees of committed tasks and
-stopped workers that are not busy, `sweep_derived_data` removes orphaned DerivedData of removed trees, `disk_gate`
+stopped workers that are not busy, `clean_idle` drops every tree nothing runs in, `sweep_scratch_builds` removes Xcode
+build folders in a removed worktree's Claude Code session scratchpads (#614), `sweep_derived_data` removes orphaned DerivedData of removed trees, `disk_gate`
 refuses on a nearly full disk. Thresholds come from SUPERLITE_DISK_FLOOR_GB (20), SUPERLITE_DISK_WARN_GB (50) and
 SUPERLITE_DERIVED_DATA_HOME, read at call time. Nothing is removed outside .superlite/trees and the DerivedData home.
 Stdlib only.
@@ -233,6 +234,85 @@ def reap(root, committed, stopped, keep=frozenset()):  # drop unneeded, idle tre
         except Exception:  # noqa: BLE001  # O(1) reaping is best effort
             continue  # O(1)
     return dropped  # O(1)
+
+
+def clean_idle(root):  # drop every tree nothing runs in; the dropped keys; never raises | O(T) + drops
+    dropped = []  # O(1)
+    try:  # O(1)
+        keys = sorted(d.name for d in (Path(root) / TREES).iterdir() if d.is_dir())  # O(T log T)
+    except OSError:  # O(1)
+        return dropped  # O(1)
+    for key in keys:  # O(T) iterations
+        try:  # O(1)
+            if not is_busy(root, key) and drop(root, key):  # O(tree size)
+                dropped.append(key)  # O(1)
+        except Exception:  # noqa: BLE001  # O(1) cleanup is best effort
+            continue  # O(1)
+    return dropped  # O(1)
+
+
+def scratch_home(home=None):  # O(1)
+    if home is not None:  # O(1)
+        return Path(home)  # O(1)
+    env = os.environ.get("SUPERLITE_SCRATCH_HOME")  # O(1)
+    if env:  # O(1)
+        return Path(env)  # O(1)
+    return Path(os.environ.get("CLAUDE_CODE_TMPDIR") or "/tmp") / f"claude-{os.getuid()}"  # O(1)
+
+
+def _slug(path):  # O(len path)
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))  # O(len path)
+
+
+def _is_build_folder(d):  # a real directory that holds Xcode build output | O(1)
+    if d.is_symlink() or not d.is_dir():  # O(1)
+        return False  # O(1)
+    if (d / "ModuleCache.noindex").is_dir():  # O(1)
+        return True  # O(1)
+    return (d / "Build").is_dir() and ((d / "Logs").is_dir() or (d / "info.plist").is_file())  # O(1)
+
+
+def _sweep_below(folder, depth):  # remove build folders at most depth levels below folder -> (folders, bytes) | O(entries + files)
+    n = freed = 0  # O(1)
+    try:  # O(1)
+        entries = sorted(folder.iterdir())  # O(entries)
+    except OSError:  # O(1)
+        return 0, 0  # O(1)
+    for e in entries:  # O(entries) iterations
+        try:  # O(1)
+            if e.is_symlink() or not e.is_dir():  # O(1)
+                continue  # O(1)
+            if _is_build_folder(e):  # O(1)
+                size = _size(e)  # O(files)
+                shutil.rmtree(e, ignore_errors=True)  # O(files)
+                if not e.exists():  # O(1)
+                    n += 1  # O(1)
+                    freed += size  # O(1)
+            elif depth > 1:  # O(1)
+                a, b = _sweep_below(e, depth - 1)  # O(entries + files)
+                n += a  # O(1)
+                freed += b  # O(1)
+        except OSError:  # O(1)
+            continue  # O(1)
+    return n, freed  # O(1)
+
+
+def sweep_scratch_builds(worktree, home=None):  # Xcode build folders in the worktree's session scratchpads -> (folders, bytes) | O(entries + files)
+    n = freed = 0  # O(1)
+    try:  # O(1)
+        base = scratch_home(home)  # O(1)
+        paths = list(dict.fromkeys([Path(worktree).absolute(), Path(worktree).resolve()]))  # O(len path)
+        for p in paths:  # O(1) iterations
+            slug = base / _slug(p)  # O(len path)
+            for sess in sorted(slug.glob("*/scratchpad")):  # O(sessions)
+                if sess.is_symlink():  # O(1)
+                    continue  # O(1)
+                a, b = _sweep_below(sess, 3)  # O(entries + files)
+                n += a  # O(1)
+                freed += b  # O(1)
+    except Exception:  # noqa: BLE001  # O(1) cleanup is best effort
+        return n, freed  # O(1)
+    return n, freed  # O(1)
 
 
 def stopped_workers(sd):  # ids of workers whose state is stopped | O(workers)

@@ -15,6 +15,7 @@ A task held by `sl hold` (and not committed) is listed with its reason.
 The output ends with the takeover hint (only when another live session owns the run) and then the last line,
 `next: sl orchestrator end [--plan PLAN]` (#497): the guard blocks every edit until it runs, a merge-conflict fix too.
 Before the takeover hint, `moved_lines` adds one `WARNING:` line per ref of the default branch (local, then `origin/`) that changed files this run owns since the branch left it (#493; warn only, never fails finish).
+Idle test trees of the run and orphaned DerivedData are dropped afterwards (#614).
 Deterministic: the same files give the same text. Stdlib only.
 """
 # Complexity notation:
@@ -582,6 +583,19 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     return "\n".join(out) + "\n"  # O(R + C + G + I) join
 
 
+def drop_trees(sd):  # best effort: drop the run's idle test trees and orphaned DerivedData, one stderr line (#614) | O(T + folders)
+    try:  # O(1)
+        if Path(sd).name != ".superlite":  # O(1)
+            return  # O(1)
+        import trees  # O(1)
+        dropped = trees.clean_idle(Path(sd).parent)  # O(T)
+        n, freed = trees.sweep_derived_data()  # O(folders + files)
+        if dropped or n:  # O(1)
+            print(f"finish: removed {len(dropped)} test tree(s) and {n} orphaned DerivedData folder(s), {freed / 1024 ** 3:.1f} GB", file=sys.stderr)  # O(1)
+    except Exception:  # cleanup never changes the exit code or stdout | O(1)
+        pass  # O(1)
+
+
 def main(argv=None):  # O(R*w + I*w)
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
@@ -596,6 +610,7 @@ def main(argv=None):  # O(R*w + I*w)
     sys.stdout.reconfigure(encoding="utf-8")  # O(1)
     sys.stdout.write(summary(ledger, log, a.lint_log or str(Path(ledger).with_name("lint-log.jsonl")), a.plan))  # O(output)
     log_auto(read_stops(log), str(Path(log).resolve()))  # after the summary: a feedback failure never costs the closing text (#140) | O(I*w)
+    drop_trees(sd)  # the run's trees are not needed after the summary (#614) | O(T + folders)
     return 0  # O(1)
 
 

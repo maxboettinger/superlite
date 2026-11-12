@@ -6,6 +6,7 @@
                       [--also FILE ... --ruling TEXT]
                       [--dispatch [--pool .superlite/pool.json] [--running T3] [--cap 10] [--batch N]]
 
+A checkpointed task's test tree (.superlite/trees/Tn) is dropped unless a run uses it (#614).
 Several ids commit in order in one process (one plan parse, one exclude check). Output:
 the SHA for one task; `Tn <sha>` per task for several (each followed by `Tn: probe files committed: F ... (a background probe_run wrote them; a false positive: sl probe_run --dismiss ID --plan P)` when its new checkpoint took generated `tests/regression/test_probe_*.py` or `_probe_adapter.py` files); `Tn: no change since its last checkpoint <sha>` for a task
 re-run with no change since its own checkpoint (no new commit, no probe or seam check). A task that is not checkpointed prints `Tn FAILED: <reason>`
@@ -936,6 +937,13 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     if a.blocked:  # one hint for every task, not one per task | O(1)
         print("hint: commit or exclude these files, they are outside every Owns: " + ", ".join(sorted(a.blocked)))  # O(b log b)
     release_agents(a.pool, committed)  # O(pool bytes)
+    try:  # a checkpointed task's test tree is not needed again; best effort (#614) | O(c) drops
+        import trees  # O(1) lazy
+        gone = [t for t in committed if not trees.is_busy(".", t) and trees.drop(".", t)]  # O(c) drops
+        if gone:  # O(1)
+            print("commit_task: removed test tree(s) nothing needs: " + ", ".join(gone), file=sys.stderr)  # O(c)
+    except Exception:  # O(1)
+        pass  # O(1)
 
     if a.dispatch:  # O(1)
         print("next:")  # O(1)

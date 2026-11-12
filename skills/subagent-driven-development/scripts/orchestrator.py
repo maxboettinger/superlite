@@ -18,7 +18,7 @@ releases the session's binding, so the coordinator guard stops. `takeover` binds
 session owns (`bind --force` plus a one-line message), so `end` and `set` act on it; `end` refuses another live session's folder and names it. In human mode `plan_tools lint --stable`, `dispatch`,
 `wave0` and `build_prime` refuse to run (exit 4, one line) until `approve` has been recorded; `schedule --insert` and
 `prune` stay allowed so the plan can be shown whole with its Gantt. In AI mode nothing is gated. With no file nothing is
-gated (existing runs behave as before). `--ruling` on `set ai` also appends a `Ruling:` line to `.superlite/progress.md`
+gated (existing runs behave as before). `end` also drops the run's idle test trees and orphaned DerivedData (#614). `--ruling` on `set ai` also appends a `Ruling:` line to `.superlite/progress.md`
 (for a headless run where no human can answer).
 Without --plan, `end` and `set` refuse (exit 2, one line naming both folders) when the cwd is in a linked worktree and the folder found lies outside it, so one worktree never ends or rewrites another worktree's run (#199). Every other command without --plan refuses the same way when the session binding names a folder in another worktree (`state.resolve`, #224); `bind` never resolves and binds the launch folder. A submodule's `.git` file is not a linked worktree (#225).
 In human mode `approve` needs `--review PATH` (the plain-language review plan; refused without it, exit 2; a missing file exit 2)
@@ -347,6 +347,19 @@ def resume(sd: Path, given: str | None) -> int:  # O(t * f) the `resume` command
     return 0  # O(1)
 
 
+def drop_trees(sd):  # best effort: drop the run's idle test trees and orphaned DerivedData, one stderr line (#614) | O(T + folders)
+    try:  # O(1)
+        if Path(sd).name != ".superlite":  # O(1)
+            return  # O(1)
+        import trees  # O(1)
+        dropped = trees.clean_idle(Path(sd).parent)  # O(T)
+        n, freed = trees.sweep_derived_data()  # O(folders + files)
+        if dropped or n:  # O(1)
+            print(f"orchestrator: removed {len(dropped)} test tree(s) and {n} orphaned DerivedData folder(s), {freed / 1024 ** 3:.1f} GB", file=sys.stderr)  # O(1)
+    except Exception:  # cleanup never changes the exit code or stdout | O(1)
+        pass  # O(1)
+
+
 def main(argv=None):  # O(1)
     ap = argparse.ArgumentParser(description=__doc__.split(chr(10))[0])  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
@@ -411,6 +424,7 @@ def main(argv=None):  # O(1)
             print(f"orchestrator: {sd} belongs to session {other}; not ended; take the run over first: sl orchestrator takeover --plan {sd}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         print(end(sd))  # O(files)
+        drop_trees(sd)  # the run's trees end with it (#614) | O(T + folders)
         return 0  # O(1)
     if a.cmd in ("bind", "set", "approve"):  # bind first: it refuses another session's folder and brings a pending gate | O(1)
         try:  # O(1)
