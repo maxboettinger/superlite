@@ -16,6 +16,7 @@ its `tasks`. `--dispatch` then prints `next:` and the `dispatch` lines (ready ta
 agents) for the updated ledger, with the run's batch setting (`--batch`, else the plan's experiment claim, as
 `dispatch` does); a dispatch failure only warns, the commits stand. (5) A `--plan` naming a run folder resolves to its plan file (`orchestrator.plan_file`; none: exit 2).
 (6) With `--dispatch` and fleet on, one `review: Tn (why); run sl fleet spawn --for-review Tn --plan P` line per task this call committed that `fleet_io.review_hints` lists.
+(7) Refuses while .superlite/render-edits.json lists applied render edits (B118 follow-up).
 
 `--also FILE` (several tasks: the first gets the files; needs `--ruling TEXT`) commits FILE with that task though
 another task owns it or nobody does, and writes `- Ruling: Tn also commits FILE - TEXT` to
@@ -848,6 +849,12 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
             return 2  # O(1)
         a.plan = str(found)  # O(1)
     a.plan = a.plan or nt.DEFAULT_PLAN  # O(1)
+    if not a.claim:  # a claim only writes a ruling | O(1)
+        import render_edit  # O(1) lazy
+        left = render_edit.applied(sd)  # O(a log a)
+        if left:  # O(1)
+            print(f"BLOCKED: render edits still applied: {', '.join(left)}; run sl render_edit restore first")  # O(a)
+            return 2  # O(1)
     a.ledger = a.ledger or str(sd / "progress.md")  # defaults follow the parsed --plan, not the session's binding | O(1)
     a.log = a.log or str(sd / "incidents.jsonl")  # O(1)
     a.pool = a.pool or str(sd / "pool.json")  # O(1)

@@ -18,6 +18,8 @@ A file no task owns goes to the closest committed task that is not in progress; 
 - **Outside Owns:** a fixer touching a file outside its task's Owns runs `commit_task Tn --claim F --ruling "..."` first.
 - **Owner reuse** (fleet off only): if the task's own implementer is idle, within reuse limits (<=3 tasks, <=40k context for fix work, <=50 min idle) and its model matches the tier, send it a fix-only brief instead of a fresh fixer. Over 40k context, start a fresh fixer instead.
 
+**After the run:** after `sl finish`, a fix in a fresh worktree runs `"$SL" fleet spawn --role fixer --tier T --brief <abs brief> --wait --plan <worktree>/.superlite` (fleet on: the session's fleet follows there; fleet off: the fixer Agent as usual); the fixer commits with a plain git commit, no commit_task.
+
 ## Fix notes: compaction in a file
 
 Subagents can't compact themselves, so the working state of a fix lives in `.superlite/fixes/<id>.md`, not in a long session. Give each finding an id in the brief (`F-<Tn>-<n>`). Every fixer round ends by rewriting that note, cumulatively, in at most 1,500 chars:

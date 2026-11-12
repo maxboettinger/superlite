@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""The run's fleet state, `<run>/.superlite/fleet.json`: on/off, accounts, workspace and workers."""
+"""The run's fleet state, `<run>/.superlite/fleet.json`: on/off, accounts, workspace and workers.
+
+`remember` stores per session, in `~/.superlite/sessions/<sid>.fleet`, the folder that holds the session's fleet; `session_fleet` reads it
+back; `follow` moves that fleet into the folder a later fleet command or session binding names and leaves `moved_to` behind, which `home`
+follows; each worker record keeps the `state_dir` its stop hook writes to."""
 
 # Complexity notation:
 # w = workers in the fleet, p = panes of a tab, a = agents herdr lists
@@ -9,6 +13,7 @@ import hashlib  # O(1)
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
+import shutil  # O(1)
 import tempfile  # O(1)
 from pathlib import Path  # O(1)
 
@@ -76,15 +81,121 @@ def owner():  # O(1)
     return out  # O(1)
 
 
+def pointer_path(sid):  # O(1)
+    import state  # O(1)
+    return state.home() / "sessions" / f"{sid}.fleet"  # O(1)
+
+
+def remember(sd, sid=None):  # O(1)
+    """Record that the session's fleet lives in `sd`; None without a session id or when the write fails."""
+    if sid is None:  # O(1)
+        import state  # O(1)
+        sid = state.session_id()  # O(1)
+    if sid is None:  # O(1)
+        return None  # O(1)
+    p = pointer_path(sid)  # O(1)
+    try:  # O(1)
+        p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+        p.write_text(str(Path(sd).resolve()) + "\n", encoding="utf-8")  # O(1)
+    except OSError:  # O(1)
+        return None  # O(1)
+    return p  # O(1)
+
+
+def _owned(d, sid):  # O(w)
+    return bool(d) and path(d).exists() and is_on(d) and load(d).get("owner_session") == sid  # O(w)
+
+
+def session_fleet(sid=None):  # O(w)
+    """The folder holding the session's fleet: the remembered one, when its fleet is on and the session owns it."""
+    if sid is None:  # O(1)
+        import state  # O(1)
+        sid = state.session_id()  # O(1)
+    if sid is None:  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        d = Path(pointer_path(sid).read_text(encoding="utf-8").splitlines()[0])  # O(1)
+        return d if _owned(d, sid) else None  # O(w)
+    except (OSError, IndexError, UnicodeError):  # O(1)
+        return None  # O(1)
+
+
+def home(sd):  # O(w)
+    """`sd`, or the folder its fleet moved to (at most 5 hops)."""
+    d = Path(sd)  # O(1)
+    for _ in range(5):  # O(1) iterations (5)
+        data = load(d)  # O(w)
+        nxt = data.get("moved_to")  # O(1)
+        if data.get("on") or not nxt:  # O(1)
+            break  # O(1)
+        d = Path(nxt)  # O(1)
+    return d  # O(1)
+
+
+def _copy_tree(src, dst):  # O(f) f = files under src
+    """Copy the report tree; False when a file failed to copy (the rest still copy)."""
+    ok = True  # O(1)
+    root = src / "fleet"  # O(1)
+    if not root.is_dir():  # O(1)
+        return ok  # O(1)
+    for f in sorted(root.rglob("*")):  # O(f)
+        if f.is_symlink() or not f.is_file():  # O(1)
+            continue  # O(1)
+        t = dst / "fleet" / f.relative_to(root)  # O(1)
+        if t.exists():  # O(1)
+            continue  # O(1)
+        try:  # O(1)
+            t.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+            shutil.copy2(f, t)  # O(size)
+        except OSError:  # O(1)
+            ok = False  # O(1)
+    return ok  # O(1)
+
+
+def _blocked(src, sd):  # O(w)
+    return any(w.get("role") == "lead" and w.get("state") != "stopped" for w in load(src)["workers"].values())  # O(w)
+
+
+def follow(sd, sid=None, fallback=None):  # O(w + f)
+    """Move the session's fleet into `sd`; {"from", "to", "workers"} when it moved, else None."""
+    if sid is None:  # O(1)
+        import state  # O(1)
+        sid = state.session_id()  # O(1)
+    if sid is None:  # O(1)
+        return None  # O(1)
+    src = session_fleet(sid)  # O(w)
+    if src is None and fallback is not None and _owned(Path(fallback), sid):  # O(w)
+        src = Path(fallback)  # O(1)
+    target = Path(sd).resolve()  # O(1)
+    if src is None or src.resolve() == target or is_on(sd) or _blocked(src, sd):  # O(w)
+        return None  # O(1)
+    src = src.resolve()  # O(1)
+    first, second = sorted([src, target], key=str)  # O(1)
+    with locked(first), locked(second):  # O(1)
+        if not _owned(src, sid) or is_on(target) or _blocked(src, target):  # O(w)
+            return None  # O(w)
+        data = load(src)  # O(w)
+        for w in data["workers"].values():  # O(w)
+            w.setdefault("state_dir", str(src))  # O(1)
+        if not _copy_tree(src, target):  # O(f)
+            return None  # O(1); the source stays the only fleet
+        save(target, data)  # O(w)
+        save(src, {**default(), "moved_to": str(target)})  # O(1)
+    remember(target, sid)  # O(1)
+    return {"from": str(src), "to": str(target), "workers": sum(1 for w in data["workers"].values() if w.get("state") != "stopped")}  # O(w)
+
+
 def set_on(sd, label, accounts):  # O(w)
     with locked(sd):  # O(1)
         data = load(sd)  # O(w)
         data.update({"on": True, "label": label, "accounts": list(accounts)})  # O(a)
         data.pop("owner_session", None)  # O(1)
         data.pop("owner_pid", None)  # O(1)
+        data.pop("moved_to", None)  # O(1)
         data.update(owner())  # O(1)
         save(sd, data)  # O(w)
-        return data  # O(1)
+    remember(sd)  # O(1)
+    return data  # O(1)
 
 
 def set_off(sd):  # O(1)
@@ -168,7 +279,7 @@ def worker_name(sd, wid):  # O(w)
 def add_worker(sd, wid, pane_id, account, agent, tier):  # O(w)
     with locked(sd):  # O(1)
         data = load(sd)  # O(w)
-        w = {"name": agent_name(sd, wid), "pane_id": pane_id, "account": account, "agent": agent, "tier": tier, "state": "starting", "task": None}  # O(1)
+        w = {"name": agent_name(sd, wid), "pane_id": pane_id, "account": account, "agent": agent, "tier": tier, "state": "starting", "task": None, "state_dir": str(Path(sd).resolve())}  # O(1)
         data["workers"][wid] = w  # O(1)
         save(sd, data)  # O(w)
         return w  # O(1)

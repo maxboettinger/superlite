@@ -14,6 +14,7 @@ Roles: implementer (default), fixer, package-reviewer, final-reviewer, research 
 Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-dispatch` prints one
 `Wn Tn[,Tm] sent` line per worker, `BLOCKED: Tn[,Tm] not sent (<reason>)` for a line that got no worker
 (the other lines still go out; exit 3); the Wave 0 line starts a haiku worker and sends it `briefs/wave0.md`.
+Every subcommand but name first moves this session's fleet into its folder (#580).
 `--plan P` (or `--plan=P`) is checked first, for every subcommand: a path that is neither file nor folder, or whose state folder cannot be
 created, prints `error: --plan P: <reason>; ...` on stderr and exits 2, creating nothing (#372).
 `spawn --brief F [--label L] [--wait [--timeout T]]` spawns, sends the brief and optionally waits in one call; a failed send stops the worker (`BLOCKED: Wn L not sent (...)`, exit 3) (#578).
@@ -725,6 +726,21 @@ def _report(sd, ids):  # print each worker's last report or a report by label; r
     return 1 if bad else 0  # O(1)
 
 
+def _follow(plan):  # O(w)
+    """Move the session's fleet into the folder this command names; one stderr line when it moved, a warning when it failed."""
+    try:  # O(1)
+        sd = Path(state.resolve(plan)).resolve()  # O(d)
+    except (state.Foreign, OSError):  # O(1)
+        return  # O(1)
+    try:  # O(1)
+        r = fs.follow(sd)  # O(w)
+    except Exception as e:  # noqa: BLE001 | a failed move must not stop the command | O(1)
+        print(f"fleet: warning: fleet not moved ({e})", file=sys.stderr)  # O(1)
+        return  # O(1)
+    if r:  # O(1)
+        print(f"fleet: this session's fleet moved from {r['from']} to {r['to']} ({r['workers']} workers)", file=sys.stderr)  # O(1)
+
+
 def main(argv=None):  # O(w) plus command cost
     argv = list(sys.argv[1:] if argv is None else argv)  # O(n)
     plan = _plan_arg(argv)  # O(n)
@@ -732,6 +748,8 @@ def main(argv=None):  # O(w) plus command cost
     if why:  # O(1)
         print(f"error: --plan {plan}: {why}; pass the plan file or the run's .superlite folder, or leave --plan out to use the current directory's run", file=sys.stderr)  # O(1)
         return 2  # O(1)
+    if argv and argv[0] != "name" and not argv[0].startswith("-"):  # Every subcommand but name first moves this session's fleet into its folder (#580) | O(1)
+        _follow(plan)  # O(w)
     if argv and argv[0] in ("send", "keys", "wait"):  # O(1)
         return importlib.import_module("fleet_io").main(argv)  # O(1) delegated
     if argv and argv[0] == "run":  # a layer run: a shell pane per layer | O(1)
@@ -797,7 +815,8 @@ def main(argv=None):  # O(w) plus command cost
         import fleet_lead  # noqa: E402 | O(1) lazy
         hint = fleet_lead.backlog_hint(sd, Path.cwd()) if not a.plan else None  # a plain status only; --plan names a run | O(b)
         if not fs.is_on(sd):  # O(w)
-            print("fleet: off")  # O(1)
+            moved = fs.load(sd).get("moved_to")  # O(w)
+            print(f"fleet: off (moved to {moved})" if moved else "fleet: off")  # O(1)
             if hint:  # O(1)
                 print(hint)  # O(1)
             return 0  # O(1)
@@ -831,7 +850,9 @@ def main(argv=None):  # O(w) plus command cost
     elif a.cmd == "spawn":  # O(1)
         if not fs.is_on(sd):  # a worktree run keeps its own fleet.json: the main checkout's `fleet on` does not reach it (#355) | O(w)
             hint = "sl fleet on" + (f" --plan {a.plan}" if a.plan else "")  # O(1) the same --plan resolves the same state dir
-            print(f"BLOCKED: fleet is off in {sd}; run {hint} first (a worktree run keeps its own fleet.json)")  # O(1)
+            moved = fs.load(sd).get("moved_to")  # O(w)
+            tail = f"this fleet moved to {moved}: pass --plan {moved}" if moved else "a worktree run keeps its own fleet.json"  # O(1)
+            print(f"BLOCKED: fleet is off in {sd}; run {hint} first" + (f"; {tail}" if moved else f" ({tail})"))  # O(1)
             return 3  # O(1) before dispatch: no task marked, no pane, no worker id
         if a.cmd == "spawn" and a.wait and not a.brief:  # before any pane | O(1)
             print("error: --wait needs --brief", file=sys.stderr)  # O(1)

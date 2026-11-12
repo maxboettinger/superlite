@@ -330,7 +330,7 @@ def _move_gate(old: Path, new: Path) -> None:  # O(1)
 
 def bind(sd, sid=None, force=False):  # O(b + d)
     """Bind the session to sd (its binding file and sd/session); returns the session id, or None without one or when
-    the binding cannot be written (a warning on stderr). Raises Owned when another live session owns sd (unless force)."""
+    the binding cannot be written (a warning on stderr). A session that moved takes its fleet along (#580). Raises Owned when another live session owns sd (unless force)."""
     sid = sid or session_id()  # O(1)
     if not sid:  # O(1)
         return None  # O(1)
@@ -357,6 +357,14 @@ def bind(sd, sid=None, force=False):  # O(b + d)
     except OSError as e:  # a read-only home must not stop the run | O(1)
         print(f"superlite: session binding not written ({e}); hooks fall back to the launch directory", file=sys.stderr)  # O(1)
         return None  # O(1)
+    if old is not None and _abs(old) != sd:  # the session moved: its fleet follows (#580) | O(d)
+        try:  # O(1)
+            import fleet_state  # noqa: E402 | O(1) lazy
+            r = fleet_state.follow(sd, sid, fallback=old)  # O(w)
+            if r:  # O(1)
+                print(f"fleet: this session's fleet moved from {r['from']} to {r['to']} ({r['workers']} workers)", file=sys.stderr)  # O(1)
+        except Exception:  # noqa: BLE001 | a fleet that cannot move must not fail the binding | O(1)
+            pass  # O(1)
     return sid  # O(1)
 
 
