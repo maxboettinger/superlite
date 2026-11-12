@@ -14,7 +14,7 @@ GH_LEAD = ('# Lead brief: B1 (t)\nYou are the lead of batch B1 in o/r. Read /x/b
            'Issues (you have a shell: read each body yourself with `gh issue view <n>`):\n- #7 Seven\n'
            'Files this batch may touch: a.py. Another lead may own any other file.\n'
            + bb.ROOT_DOC_RULE + "\n"
-           "Max's decisions: none\nRulings from shipped batches: none\n"
+           "Max's decisions: none\n" + bb.ATTRIBUTION + "\nRulings from shipped batches: none\n"
            'Your run: the worktree you start in, state in .superlite/; pass --plan .superlite to every sl call.\n'
            'First: `/x/sl orchestrator set ai --plan .superlite`, then `/x/sl fleet on --plan .superlite`.\n'
            'Build: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, superlite:subagent-driven-development with fleet on, the final review (UI screenshots go in .superlite/render/, its packet lists them), the test layers.\n'

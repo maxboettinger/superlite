@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Briefs for backlog mode: the lead's brief, the triage brief and the shipped-batch summary (pure text)."""
+"""Briefs for backlog mode: the lead's brief, the triage brief and the shipped-batch summary (pure text). A summary carries one generated `Decisions:` line naming who answered each recorded decision (#557)."""
 
 # Complexity notation:
 # i = issues, f = files, a = answers, n = lines
@@ -25,7 +25,12 @@ ROOT_DOC_TRIAGE = ("List a shared root doc (CLAUDE.md, AGENTS.md, README.md) in 
                    "the rule that no two batches share a file holds for it too; ")  # O(1)
 TRIAGE_RUN = ("offer no decision option a batch lead cannot carry out: a lead has no deploy, production, migration-run or other "
               "remote-host access (the auto-mode classifier denies those commands), so such a step is main's after the batch ships; ")  # O(1)
-MAIN_HEAD = "Main's rulings (main decided these as AI orchestrator, not Max; record each as main's ruling, never as Max's decision):"  # O(1)
+MAIN_HEAD = "Main's rulings (orchestrator rulings: main decided these as AI orchestrator, not Max; record each as main's ruling, never as Max's decision):"  # O(1)
+ATTRIBUTION = ("Attribution: name Max in notes.md, pr-body.md and commit messages only for a decision listed under Max's decisions above, "
+               "one an answer file's by marks user, or one a shipped summary's `Decisions:` line marks (Max); main's rulings, your own "
+               "choices and a decision whose source you do not know are rulings: write them as main's or your own, never as Max's.")  # O(1)
+WHO = {"user": "Max", "main": "main's ruling"}  # O(1)
+DECISIONS_MAX = 4  # O(1)
 NOTES_RULE = ("First write .superlite/notes.md (at most 6 lines, each one self-contained line of at most 400 characters: "
               "`Ruling: ...` lines that change later batches, one `Follow-up: ...` line per follow-up issue (main files it) and one "
               "`Left undone: ...` line per decided step you could not run, such as a denied remote or production command) "
@@ -111,6 +116,7 @@ def lead_brief(batch, ctx):  # O(i + f + a)
     if main:  # O(1)
         out.append(MAIN_HEAD)  # O(1)
         out += [f"- {clean(q)}: {clean(a)}" for q, a in main]  # O(a)
+    out.append(ATTRIBUTION)  # O(1)
     if ctx.get("note"):  # O(1)
         out.append(NOTE_HEAD)  # O(1)
         out += ["    " + CTRL.sub("", ln.rstrip("\r")) for ln in str(ctx["note"]).splitlines()]  # O(n)
@@ -197,15 +203,33 @@ def triage_brief(issues, ctx):  # O(i)
     return "\n".join(out) + "\n"  # O(n)
 
 
+def decisions_line(batch):  # O(a)
+    by = batch.get("answered_by") or {}  # O(1)
+    items = []  # O(1)
+    for q, a in (batch.get("answers") or {}).items():  # O(a)
+        if by.get(q) not in WHO:  # O(1)
+            continue  # O(1)
+        a2 = clean(a, None)  # O(len)
+        a2 = a2[:-len(bc.REC)] if a2.endswith(bc.REC) else a2  # O(len)
+        items.append(f"{bc._word(clean(q, None), 60)}: {bc._word(a2, 50)} ({WHO[by[q]]})")  # O(len)
+    if not items:  # O(1)
+        return None  # O(1)
+    rest = len(items) - DECISIONS_MAX  # O(1)
+    return "Decisions: " + "; ".join(items[:DECISIONS_MAX]) + (f"; +{rest} more" if rest > 0 else "")  # O(a)
+
+
 def summary(batch, notes):  # O(n)
     nums = " ".join(ref(n) for n in batch.get("issues", []))  # O(i)
     head = [f"{batch['id']} shipped: {nums}", f"PR: {('#' + str(batch['pr'])) if batch.get('pr') else '-'}",
             f"Version: {batch.get('version') or '-'}"]  # O(1)
+    dec = decisions_line(batch)  # O(a)
+    if dec is not None:  # O(1)
+        head.append(dec)  # O(1)
     full = f"{batch['id']}.notes.md"  # O(1)
     lines = [clean(x, None) for x in str(notes).splitlines() if x.strip()]  # O(n)
-    if len(lines) > 7:  # O(1)
-        lines = lines[:6] + [f"+{len(lines) - 6} more note lines: full text in {full}"]  # O(n)
-        extra = [cut_note(x, full) for x in lines[:6]] + lines[6:]  # O(n)
+    room = SUMMARY_LINES - len(head)  # O(1)
+    if len(lines) > room:  # O(1)
+        extra = [cut_note(x, full) for x in lines[:room - 1]] + [f"+{len(lines) - (room - 1)} more note lines: full text in {full}"]  # O(n)
     else:  # O(1)
         extra = [cut_note(x, full) for x in lines]  # O(n)
     return "\n".join((head + extra)[:SUMMARY_LINES]) + "\n"  # O(n)
