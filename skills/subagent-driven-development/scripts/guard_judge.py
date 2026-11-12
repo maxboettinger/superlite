@@ -1186,6 +1186,29 @@ def _worktrees(ctx):  # O(git) | the real paths of the linked worktrees of the p
     return ctx.wts  # O(1)
 
 
+def _write_through_why(top, projreal):  # O(MAX_TREE) | why writing into this existing folder could reach a file elsewhere: a hard-linked file or a symlink into the project; "" when ok
+    try:  # O(1)
+        n, todo = 0, [top]  # O(1)
+        while todo:  # O(MAX_TREE)
+            with os.scandir(todo.pop()) as it:  # O(1)
+                for e in it:  # O(entries)
+                    n += 1  # O(1)
+                    rel = os.path.relpath(e.path, top).replace(os.sep, "/")  # O(p)
+                    if n > MAX_TREE:  # O(1)
+                        return f"more than {MAX_TREE} entries"  # O(1)
+                    if e.is_symlink():  # O(1)
+                        real = os.path.realpath(e.path)  # O(p)
+                        if real == projreal or real.startswith(projreal.rstrip("/") + "/"):  # O(p)
+                            return f"symlink {rel}"  # O(1)
+                    elif e.is_dir(follow_symlinks=False):  # O(1)
+                        todo.append(e.path)  # O(1)
+                    elif e.is_file(follow_symlinks=False) and e.stat(follow_symlinks=False).st_nlink != 1:  # O(1)
+                        return f"hard link {rel}"  # O(1)
+        return ""  # O(1)
+    except OSError:  # O(1)
+        return "unreadable folder"  # O(1)
+
+
 def _housekeeping(v, ctx, folders, write=False):  # O(p) + git | (ok, why): may the coordinator remove (folders: a folder too) or write this literal target as housekeeping in an active run? (False, "") when the rule does not apply
     try:  # O(1)
         if ctx.mode != "active" or v.rel in ("?", ".") or "?" in v.abs:  # O(1)
@@ -1229,6 +1252,10 @@ def _housekeeping(v, ctx, folders, write=False):  # O(p) + git | (ok, why): may 
         if ign:  # ignored: no size, symlink or link check | O(1)
             if write and _hardlinked(v.abs):  # a write through another name reaches that file | O(1)
                 return False, "hard link"  # O(1)
+            if write and isdir:  # a copy into an existing folder writes through links below it | O(MAX_TREE)
+                why = _write_through_why(v.abs, os.path.realpath(ctx.projreal))  # O(MAX_TREE)
+                if why:  # O(1)
+                    return False, why  # O(1)
             if isdir:  # O(1)
                 wts = _worktrees(ctx)  # O(git)
                 if wts is None:  # O(1)

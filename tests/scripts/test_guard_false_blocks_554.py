@@ -398,3 +398,21 @@ def test_find_exec_keeps_the_per_command_home(H):  # F-T1-9
                 "env HOME=$PWD find . -maxdepth 0 -exec sh -c 'rm -rf \"$HOME/src\"' \\;"):
         v = jh(cmd, H)
         assert v is not None and v.word.startswith("$HOME/"), cmd
+
+
+def test_cp_r_into_existing_ignored_folder_checks_links_below(G):
+    out = G / ".build" / "out"
+    (out / "src").mkdir(parents=True)
+    os.link(G / "src" / "a.py", out / "src" / "a.py")
+    v = jg(G, "cp -r src .build/out")  # writes through the hard link into src/a.py
+    assert v is not None and v.why == "hard link a.py", v
+    (out / "src" / "a.py").unlink()
+    (out / "src").rmdir()
+    (out / "src").mkdir()
+    os.symlink(G / "src", out / "src" / "lnk")
+    v = jg(G, "cp -r src .build/out")  # a folder symlink into the project
+    assert v is not None and v.why == "symlink lnk", v
+    (out / "src" / "lnk").unlink()
+    os.symlink("/tmp", out / "src" / "lnk")  # outside the project: fine
+    assert jg(G, "cp -r src .build/out") is None
+    assert jg(G, "cp -r src .build/fresh") is None
