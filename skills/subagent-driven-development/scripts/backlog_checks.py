@@ -142,12 +142,13 @@ def normalise_topics(obj: object) -> list[str]:
     batches = obj.get("batches") if isinstance(obj, dict) else None
     for k, b in enumerate(batches if isinstance(batches, list) else [], 1):  # O(batches * len)
         t = b.get("topic") if isinstance(b, dict) else None
-        if not isinstance(t, str) or TOPIC_RE.match(t):  # O(1)
+        if not isinstance(t, str) or TOPIC_RE.fullmatch(t):  # O(1)
             continue
         new = topic_slug(t)  # O(len)
         if not new:  # O(1)
             continue
         bid = b.get("id")
+        bid = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", bid).split()) if isinstance(bid, str) else bid
         old = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", t).split())[:60]  # O(len)
         b["topic"] = new
         notes.append(f'topic: "{bid if isinstance(bid, str) else f"batch {k}"}" "{old}" -> {new}')  # O(1)
@@ -263,7 +264,7 @@ def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> t
             errs.append(f"batch {n}: not an object")
             continue
         bid = b.get("id")
-        if not isinstance(bid, str) or not ID_RE.match(bid):
+        if not isinstance(bid, str) or not ID_RE.fullmatch(bid):
             errs.append(f"batch {n}: id must be B<n>, B1 to B999999 (got {bid!r})")
             continue
         if bid in ids:
@@ -271,7 +272,7 @@ def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> t
             continue
         ids.add(bid)
         topic = b.get("topic")
-        if not isinstance(topic, str) or not TOPIC_RE.match(topic):
+        if not isinstance(topic, str) or not TOPIC_RE.fullmatch(topic):
             errs.append(f"{bid}: topic must be lowercase words joined by -, at most 40 characters")
         issues = b.get("issues")
         if not isinstance(issues, list) or not issues or not all(isinstance(i, int) and not isinstance(i, bool) for i in issues):

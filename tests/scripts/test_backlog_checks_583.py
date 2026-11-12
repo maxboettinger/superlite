@@ -57,3 +57,18 @@ def test_local_id_wins_over_backlog_id():
 def test_unknown_depends_still_rejected():
     out, errs = bc.check_proposal({"batches": [bt("B1", depends=["B7"])]}, {1}, frozenset({"B1"}))
     assert out == [] and "B1: depends on unknown batch B7" in errs
+
+
+def test_trailing_newline_id_and_topic_rejected():
+    out, errs = bc.check_proposal({"batches": [bt("B1\n")]}, {1})
+    assert out == [] and errs
+    out, errs = bc.check_proposal({"batches": [bt("B1", topic="ok\n")]}, {1})
+    assert any("topic must be" in e for e in errs)
+    obj = {"batches": [{"id": "B1", "topic": "ok\n"}]}
+    assert bc.normalise_topics(obj) == ['topic: "B1" "ok" -> ok'] and obj["batches"][0]["topic"] == "ok"
+
+
+def test_normalise_note_drops_control_characters_in_id():
+    obj = {"batches": [{"id": "B1\x1b[2J", "topic": "Two Words"}]}
+    notes = bc.normalise_topics(obj)
+    assert len(notes) == 1 and "\x1b" not in notes[0]
