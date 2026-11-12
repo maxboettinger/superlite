@@ -6,8 +6,8 @@ sys.path.insert(0, str(SCRIPTS))
 import guard_judge as gj  # noqa: E402
 
 BLOCK_LINE = ("- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
-              "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a "
-              "file or folder git does not track and no task Owns.")
+              "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, rm a "
+              "file or folder git does not track and no task Owns, and write or rm a git-ignored path no task Owns.")
 
 
 def git(P, *a):

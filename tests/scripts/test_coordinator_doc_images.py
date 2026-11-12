@@ -12,7 +12,7 @@ _GIT_BASH = r"C:\Program Files\Git\bin\bash.exe"
 BASH = _GIT_BASH if os.name == "nt" and os.path.exists(_GIT_BASH) else shutil.which("bash")
 LINE = ("- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, "
         "SPEC*.md, docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and "
-        ".superlite/**, and rm a file or folder git does not track and no task Owns.")
+        ".superlite/**, rm a file or folder git does not track and no task Owns, and write or rm a git-ignored path no task Owns.")
 
 
 @pytest.fixture
