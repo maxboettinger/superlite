@@ -394,7 +394,7 @@ def test_bare_cd_and_tilde_loop_use_the_assigned_home(H):  # F-T1-8
 
 
 def test_find_exec_keeps_the_per_command_home(H):  # F-T1-9
-    for cmd in ("HOME=$PWD find . -maxdepth 0 -exec sh -c 'rm -rf \"$HOME/src\"' \;",
-                "env HOME=$PWD find . -maxdepth 0 -exec sh -c 'rm -rf \"$HOME/src\"' \;"):
+    for cmd in ("HOME=$PWD find . -maxdepth 0 -exec sh -c 'rm -rf \"$HOME/src\"' \\;",
+                "env HOME=$PWD find . -maxdepth 0 -exec sh -c 'rm -rf \"$HOME/src\"' \\;"):
         v = jh(cmd, H)
         assert v is not None and v.word.startswith("$HOME/"), cmd
