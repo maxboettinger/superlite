@@ -48,7 +48,14 @@ auto-downgrading optional reviewers to the haiku tier; stopping the run at 100%.
   (`coordinator $2.10 | agents $3.05 | total $5.15 of $8 cap`) and hints when the coordinator is 40%+ of the cost with 30+ turns at 60k+
   median context.
 - Transcripts store an early snapshot of `output_tokens` per streamed message (one message id spans several entries), so output is
-  topped up from text, thinking and tool-input length at 3.5 chars per token; thinking tokens are not stored and stay uncounted.
+  topped up from text, thinking and tool-input length at 3.5 chars per token; thinking tokens are read from `usage.output_tokens_details.thinking_tokens` (part of output; `session_usage` reports them beside it).
 - `metrics.py --reconcile STREAM_LOG` compares the coordinator's session + agents with the stream-json log's last `total_cost_usd`
   (diff, percent, which side is higher). On the z2 benchmark-style run (agents killed at the $3 budget): 2.78 vs 3.09 USD, -9.9%
   (metrics lower; before the output top-up it was -23%).
+
+## Batch cost record
+
+- `batch_cost.record` appends one `"row": "batch"` line per batch to `.superlite/batch-costs.jsonl` (next to `backlog.json`, append-only) when the batch ships, finds no change or parks. Fields: `lead` (model, effort, turns, tokens with thinking, `cost_usd`, `wall_s`, `blocked_wait_s`, `wakeups` by kind, `kinds` = cost by turn kind), `workers` by role and `workers_total`, `tests` (full and fast runs with minutes) and `grade`.
+- `grade` counts tasks, first-time passes, package findings, final rounds, fixer rounds, red CI runs, ship reruns and questions; `letter` is A (0 points), B (1-3), C (4-7) or D (8+). The worktree's `.superlite` is saved as a snapshot before ship removes it.
+- Main's cost per plan round is one `"row": "main"` line written at the run end: sessions, `unmeasured` sessions, turns, tokens, cost and turns by backlog subcommand. `sl report --batches` prints both.
+- Unmeasured: main turns of a session that never ran `backlog start` or `backlog wait`; a main session after `/clear` until it runs one; worker panes without a stop record; layer panes (shell, no tokens); lead effort when the launch has no `--effort`; list prices (not billed amounts).
