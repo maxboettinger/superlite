@@ -15,8 +15,11 @@ checkpoint, else HEAD). `prepare` resets it to the base and overlays only the ta
 Cleanup (GitHub #574): `busy` marks a tree in use (`<key>.busy.<pid>`), `reap` drops the trees of committed tasks and
 stopped workers that are not busy, `clean_idle` drops every tree nothing runs in, `sweep_scratch_builds` removes Xcode
 build folders in a removed worktree's Claude Code session scratchpads (#614), `sweep_derived_data` removes orphaned DerivedData of removed trees, `disk_gate`
-refuses on a nearly full disk. Thresholds come from SUPERLITE_DISK_FLOOR_GB (20), SUPERLITE_DISK_WARN_GB (50) and
+refuses on a nearly full disk (`disk_levels` gives its two levels). Thresholds come from SUPERLITE_DISK_FLOOR_GB (20), SUPERLITE_DISK_WARN_GB (50) and
 SUPERLITE_DERIVED_DATA_HOME, read at call time. Nothing is removed outside .superlite/trees and the DerivedData home.
+Simulators (#672): `listed_simulators` reads a worktree's .superlite/simulators.txt, `remove_simulators` shuts down and
+deletes each listed one (argv list, never a shell; `simctl_argv` is `xcrun simctl` or SUPERLITE_SIMCTL),
+`simulator_devices` lists the devices, `present_simulators` keeps the entries a device still matches.
 Stdlib only.
 """
 # Complexity notation: f = changed files in the main tree, o = Owns globs, T = trees
@@ -25,6 +28,7 @@ import json  # O(1)
 import os  # O(1)
 import plistlib  # O(1)
 import re  # O(1)
+import shlex  # O(1)
 import time  # O(1)
 import shutil  # O(1)
 import subprocess  # O(1)
@@ -421,9 +425,12 @@ def _env_gb(name, default):  # O(1)
         return float(default)  # O(1)
 
 
+def disk_levels():  # -> (floor GB, warn GB) | O(1)
+    return _env_gb("SUPERLITE_DISK_FLOOR_GB", 20), _env_gb("SUPERLITE_DISK_WARN_GB", 50)  # O(1)
+
+
 def disk_gate(path):  # -> ("ok" | "warn" | "refuse", one line) | O(1)
-    floor = _env_gb("SUPERLITE_DISK_FLOOR_GB", 20)  # O(1)
-    warn = _env_gb("SUPERLITE_DISK_WARN_GB", 50)  # O(1)
+    floor, warn = disk_levels()  # O(1)
     shown = Path(path).resolve()  # O(len path)
     try:  # O(1)
         free = free_gb(shown)  # O(1)
@@ -434,6 +441,107 @@ def disk_gate(path):  # -> ("ok" | "warn" | "refuse", one line) | O(1)
     if warn > 0 and free < warn:  # O(1)
         return "warn", f"disk: WARNING: {free:.1f} GB free on {shown}, below {warn:g} GB; run sl trees clean soon"  # O(1)
     return "ok", ""  # O(1)
+
+
+SIMULATORS = Path(".superlite") / "simulators.txt"  # O(1)
+UDID = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")  # O(1)
+SIMCTL_TIMEOUT = 60  # O(1) seconds per simctl call
+
+
+def listed_simulators(worktree):  # -> entries in order, deduplicated | O(lines)
+    try:  # O(1)
+        text = (Path(worktree) / SIMULATORS).read_text(encoding="utf-8")  # O(size)
+    except (OSError, UnicodeDecodeError):  # O(1)
+        return []  # O(1)
+    out = []  # O(1)
+    for raw in text.splitlines():  # O(lines)
+        line = raw.strip()  # O(len line)
+        if not line or line.startswith(("#", "-")) or any(ord(c) < 32 or ord(c) == 127 for c in line):  # O(len line)
+            continue  # O(1)
+        first = line.split()[0]  # O(len line)
+        entry = first.upper() if UDID.fullmatch(first) else line  # O(1)
+        if entry not in out:  # O(entries)
+            out.append(entry)  # O(1)
+    return out  # O(1)
+
+
+def simctl_argv():  # O(len env)
+    raw = os.environ.get("SUPERLITE_SIMCTL", "")  # O(1)
+    return shlex.split(raw) if raw.strip() else ["xcrun", "simctl"]  # O(len raw)
+
+
+def _last_line(text):  # O(len text)
+    lines = [x.strip() for x in (text or "").splitlines() if x.strip()]  # O(len text)
+    return (lines[-1] if lines else "")[:120]  # O(1)
+
+
+def simulator_devices():  # -> {UDID: name}; raises RuntimeError(one-line reason) | O(devices)
+    try:  # O(1)
+        r = subprocess.run(simctl_argv() + ["list", "devices", "-j"], capture_output=True, text=True, timeout=SIMCTL_TIMEOUT)  # O(simctl)
+    except OSError as e:  # O(1)
+        raise RuntimeError(f"simctl not runnable: {e}")  # O(1)
+    except subprocess.TimeoutExpired:  # O(1)
+        raise RuntimeError(f"simctl list timed out after {SIMCTL_TIMEOUT} s")  # O(1)
+    if r.returncode != 0:  # O(1)
+        raise RuntimeError(f"simctl list exit {r.returncode}: {_last_line(r.stdout + chr(10) + r.stderr)}")  # O(len output)
+    try:  # O(1)
+        groups = json.loads(r.stdout)["devices"].values()  # O(len output)
+        return {str(d["udid"]).upper(): str(d.get("name", "")) for g in groups for d in g}  # O(devices)
+    except (ValueError, KeyError, TypeError, AttributeError):  # O(1)
+        raise RuntimeError("simctl list gave no device JSON")  # O(1)
+
+
+def _matches(entry, devices):  # -> UDIDs of the devices an entry names | O(devices)
+    if UDID.fullmatch(entry) and entry.upper() in devices:  # O(1)
+        return [entry.upper()]  # O(1)
+    if UDID.fullmatch(entry):  # O(1)
+        return []  # O(1)
+    return [u for u, n in devices.items() if n == entry]  # O(devices)
+
+
+def remove_simulators(worktree):  # -> (removed, already gone, [{"sim", "why"}]); never raises | O(entries x devices)
+    entries = listed_simulators(worktree)  # O(file)
+    if not entries:  # O(1)
+        return [], [], []  # O(1)
+    try:  # O(1)
+        devices = simulator_devices()  # O(simctl)
+    except RuntimeError as e:  # O(1)
+        return [], [], [{"sim": x, "why": str(e)} for x in entries]  # O(entries)
+    removed, gone, owed = [], [], []  # O(1)
+    for entry in entries:  # O(entries)
+        found = _matches(entry, devices)  # O(devices)
+        if not found:  # O(1)
+            gone.append(entry)  # O(1)
+            continue  # O(1)
+        if len(found) > 1:  # O(1)
+            owed.append({"sim": entry, "why": f"{len(found)} simulators share this name; list its UDID"})  # O(1)
+            continue  # O(1)
+        udid = found[0]  # O(1)
+        try:  # O(1)
+            subprocess.run(simctl_argv() + ["shutdown", udid], capture_output=True, text=True, timeout=SIMCTL_TIMEOUT)  # O(simctl)
+        except (OSError, subprocess.SubprocessError):  # O(1)
+            pass  # O(1) shutdown result is ignored
+        try:  # O(1)
+            r = subprocess.run(simctl_argv() + ["delete", udid], capture_output=True, text=True, timeout=SIMCTL_TIMEOUT)  # O(simctl)
+        except OSError as e:  # O(1)
+            owed.append({"sim": entry, "why": f"simctl not runnable: {e}"})  # O(1)
+            continue  # O(1)
+        except subprocess.SubprocessError:  # O(1)
+            owed.append({"sim": entry, "why": f"delete timed out after {SIMCTL_TIMEOUT} s"})  # O(1)
+            continue  # O(1)
+        if r.returncode == 0:  # O(1)
+            removed.append(entry)  # O(1)
+        else:  # O(1)
+            owed.append({"sim": entry, "why": f"delete failed: {_last_line(r.stderr + chr(10) + r.stdout)}"})  # O(len output)
+    return removed, gone, owed  # O(1)
+
+
+def present_simulators(sims):  # -> the entries a device still matches, or None when the list fails | O(entries x devices)
+    try:  # O(1)
+        devices = simulator_devices()  # O(simctl)
+    except RuntimeError:  # O(1)
+        return None  # O(1)
+    return [s for s in sims if _matches(s, devices)]  # O(entries x devices)
 
 
 def main(argv=None):  # O(T) + spawns
