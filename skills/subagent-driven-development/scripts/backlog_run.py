@@ -19,7 +19,7 @@ A resumed batch's lead brief ends with the worktree state (commits, uncommitted 
 `remove_worktree` is the git-only worktree and branch removal (a PR head gets `-D`, #589); `_shipped(push=False)` uses it, never maxapp. A failed cleanup line carries git's error and the core.bare cause and is stored as the batch's `cleanup_owed`. `start` blocks a batch whose worktree.ensure raises or gives the main checkout.
 `sync_main` fast-forwards the main checkout to origin's default branch when it is on that branch, clean and behind (cmd_plan calls it, #590); every other state prints one `sync:` line and leaves HEAD alone.
 `run_end` turns main's fleet off when every batch is shipped or parked and only stopped workers remain, or names `sl fleet off` while a worker lives; every `wait` exit but TIMEOUT appends its line (#590).
-Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
+`start` lets two batches share a file both list in `append_only` (#602). Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
 """
 # Complexity notation: b = batches, w = workers, m = lines of metrics.jsonl
 import argparse  # O(1)
@@ -172,7 +172,7 @@ def _pick(data: dict, bids: list, cap: int, live: dict) -> tuple:
         if wait:  # O(1)
             msgs.append(f"{bid} waits for {wait}")  # O(1)
             continue  # O(1)
-        other = next((o for o in active if set(b.get("files", [])) & set(o.get("files", []))), None)  # O(b * files)
+        other = next((o for o in active if bc.serial_files(b, o)), None)  # O(b * files)
         if other:  # O(1)
             msgs.append(f"{bid} shares files with running {other['id']}")  # O(1)
             continue  # O(1)

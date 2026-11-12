@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585); unskip <issue> and reset B [--discard] undo a skip and a started batch, --help lists every subcommand, a status with only parked batches ends with next:, decide --file takes the one answer rule (a label, or a label plus a note) and a pinned skipped issue names unskip, and plan offers sl backlog ship B done --pr N for a batch whose issues a merged PR already names (#586)."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585); unskip <issue> and reset B [--discard] undo a skip and a started batch, --help lists every subcommand, a status with only parked batches ends with next:, decide --file takes the one answer rule (a label, or a label plus a note) and a pinned skipped issue names unskip, and plan offers sl backlog ship B done --pr N for a batch whose issues a merged PR already names (#586); a file two batches only append to (append_only) shows an overlap line without a hold, and `notes B` prints a batch's notes through ship (#602)."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -383,17 +383,22 @@ ADD_HINT = "; --add plans the --issues next to them"  # O(1) #505
 
 def open_batches(data: dict) -> list:
     """The batches not shipped yet as {id, state, files}, in id order."""
-    rows = [{"id": b["id"], "state": b["state"], "files": list(b.get("files", []))} for b in data.get("batches", []) if b["state"] != "shipped"]  # O(b * files)
+    rows = [{"id": b["id"], "state": b["state"], "files": list(b.get("files", [])), **({"append_only": list(b["append_only"])} if b.get("append_only") else {})} for b in data.get("batches", []) if b["state"] != "shipped"]  # O(b * files)
     return sorted(rows, key=lambda b: _num(b["id"]))  # O(b log b)
 
 
 def overlap_lines(new: list, open_: list) -> list:
     """One line per new batch and open batch that share files; says who holds the files."""
+    import backlog_checks as bc  # O(1)
     out = []  # O(1)
     for n in new:  # O(new * open * files)
         for o in open_:  # O(open * files)
-            both = sorted(set(n.get("files", [])) & set(o.get("files", [])))  # O(files)
+            both = bc.serial_files(n, o)  # O(files)
             if not both:  # O(1)
+                shared = bc.appended_files(n, o)  # O(files)
+                if shared:  # O(1)
+                    shown = ", ".join(shared[:3]) + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else "")  # O(1)
+                    out.append(f"overlap: {n['id']} shares {shown} with {o['id']} ({o['state']}): append-only in both, no hold; conflicts resolve at the ship rebase")  # O(1)
                 continue  # O(1)
             shown = ", ".join(both[:3]) + (f" (+{len(both) - 3} more)" if len(both) > 3 else "")  # O(1)
             tail = f"start holds {n['id']} until {o['id']} ships" if o["state"] in ("running", "needs_decision") else "whichever starts first holds the files"  # O(1)
@@ -544,6 +549,8 @@ def cmd_plan(a) -> int:
     ref = br["name"] if isinstance(br, dict) and isinstance(br.get("name"), str) and br["name"] else "HEAD"  # O(1)
     subjects = _subjects(root, ref)  # O(2000)
     merged = bi.merged_refs(subjects, jira)  # O(2000)
+    trusted, cnotes = bi.with_comments(trusted, info.get("nameWithOwner") or "", public, jira)  # O(i * comments)
+    notes += cnotes  # O(i)
     trusted, more, lines = bi.split_shipped(trusted, d["batches"], merged, pin or [])  # O(i * b)
     outside += [_left_out(m["number"], m["title"], m["reason"], carry) for m in more]  # O(i)
     notes += lines  # O(i)
@@ -923,6 +930,12 @@ def main(argv=None) -> int:
     if argv and argv[0] == "ship":
         import backlog_ship  # O(1)
         return backlog_ship.main(argv[1:])
+    if argv and argv[0] == "notes":
+        if len(argv) < 2 or argv[1].startswith("-"):  # O(1)
+            print("BLOCKED: usage: sl backlog notes B")  # O(1)
+            return 2  # O(1)
+        import backlog_ship  # O(1)
+        return backlog_ship.main([argv[1], "notes"] + argv[2:])  # O(1)
     ap = argparse.ArgumentParser(prog="sl backlog")
     sub = ap.add_subparsers(dest="cmd", required=True)
     st = sub.add_parser("status", help="batches, questions and the next step")  # O(1)
@@ -946,7 +959,8 @@ def main(argv=None) -> int:
                        ("wait", "wait for running batches to finish or ask"),
                        ("answer", "answer a lead's question: answer B --file FILE"),
                        ("tell", "message a running lead: tell B --text T"),
-                       ("ship", "ship a batch: ship B merge|done|...")):  # O(1) routed before parsing; listed for --help
+                       ("ship", "ship a batch: ship B merge|done|..."),
+                       ("notes", "print a batch's full reason, no-change text and notes: notes B")):  # O(1) routed before parsing; listed for --help
         sub.add_parser(name, help=text)  # O(1)
     de = sub.add_parser("decide", help="record the user's answers (--print, --file FILE, --approve-ship --source prompt)")
     de.add_argument("--print", action="store_true")

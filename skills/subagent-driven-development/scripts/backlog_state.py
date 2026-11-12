@@ -87,7 +87,7 @@ def _shipped(data: dict, bid: str) -> bool:
 
 def _clash(b: dict, others: list):
     for o in others:  # O(batches * files)
-        if set(b.get("files", [])) & set(o.get("files", [])):
+        if backlog_checks.serial_files(b, o):
             return o
     return None
 
