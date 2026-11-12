@@ -56,8 +56,8 @@ def test_done_is_main_only_and_needs_a_merged_pr(dn, capsys, monkeypatch):
     check((("B1", "done", "--pr", "262"), (2, "refused: PR #262 is OPEN, not merged\n")))
     sh.replies = {"gh pr view": (1, "no such PR")}
     check((("B1", "done", "--pr", "262"), None))
-    setb(sh, state="planned")
-    check((("B1", "done", "--pr", "262"), (2, "refused: B1 is planned, not running or parked\n")))
+    setb(sh, state="shipped")
+    check((("B1", "done", "--pr", "262"), (2, "refused: B1 is shipped, not planned, running or parked\n")))
 
 
 def test_done_takes_the_version_flag_and_names_open_issues(dn, capsys):
@@ -69,3 +69,29 @@ def test_done_takes_the_version_flag_and_names_open_issues(dn, capsys):
     assert "B1 OPEN #5" in out.splitlines()
     r = b1(sh)
     assert r["version"] == "1.6.0" and r["open_issues"] == [5]
+
+
+def test_done_still_refuses_a_shipped_batch(dn, capsys):
+    setb(dn, state="shipped")
+    assert ship(capsys, "B1", "done", "--pr", "262") == (2, "refused: B1 is shipped, not planned, running or parked\n")
+
+
+def test_done_records_a_planned_batch_without_lead_or_worktree(dn, capsys):
+    sh = dn
+    setb(sh, state="planned", lead=None, worktree=None, agent=None)
+    sh.replies = {"gh pr view": (0, "MERGED\n")}
+    rc, out = ship(capsys, "B1", "done", "--pr", "262", "--version", "1.2.3")
+    assert rc == 0 and out.splitlines()[0].startswith("B1 shipped PR #262")
+    r = b1(sh)
+    assert r["state"] == "shipped" and r["merged"] is True
+    assert sh.stops == []
+    assert not any(c[:2] == ["maxapp", "ship"] for c in sh.calls)
+    assert (sh.sd / "backlog" / "B1.md").is_file()
+
+
+def test_done_with_a_vanished_worktree_folder_never_runs_maxapp_on_none(dn, capsys):
+    sh = dn
+    setb(sh, state="parked", worktree=str(sh.root / "gone"), version="1.2.3")
+    sh.replies = {"gh pr view": (0, "MERGED\n")}
+    assert ship(capsys, "B1", "done", "--pr", "262")[0] == 0
+    assert not any(c[:2] == ["maxapp", "ship"] for c in sh.calls)

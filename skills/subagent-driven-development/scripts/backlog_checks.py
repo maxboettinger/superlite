@@ -399,11 +399,15 @@ def left_out_reasons(obj: object, known: set) -> dict:
     return out
 
 
+BY_MISSING = ('by: missing; name who answered: "by": "user" for AskUserQuestion answers, "by": "main" for main\'s rulings, '
+              'or a {question: "user"|"main"} map naming every answered question')
 BY_ERR = 'by: "user", "main" or a {question: "user"|"main"} map'
 
 
 def answer_by(obj: dict, answers: dict) -> tuple[dict, str]:
-    by = obj.get("by", "user") if isinstance(obj, dict) else "user"  # O(1)
+    if not isinstance(obj, dict) or "by" not in obj:  # O(1)
+        return {}, BY_MISSING  # O(1)
+    by = obj["by"]  # O(1)
     if isinstance(by, str) and by in ("user", "main"):  # O(1)
         return {q: by for q in answers}, ""  # O(answers)
     if not isinstance(by, dict) or any(v not in ("user", "main") for v in by.values()):  # O(by)
@@ -411,4 +415,7 @@ def answer_by(obj: dict, answers: dict) -> tuple[dict, str]:
     for q in by:  # O(by)
         if q not in answers:
             return {}, f"by: no answer for {q}"  # O(1)
-    return {q: by.get(q, "user") for q in answers}, ""  # O(answers)
+    for q in answers:  # O(answers)
+        if q not in by:  # O(1)
+            return {}, "by: the map names no one for " + "".join("?" if _ctrl(c) else c for c in str(q))[:60]  # O(len)
+    return {q: by[q] for q in answers}, ""  # O(answers)

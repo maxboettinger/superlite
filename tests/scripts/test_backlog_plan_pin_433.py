@@ -1,8 +1,8 @@
 """sl backlog plan --issues takes GitHub numbers, and issues an earlier cap left out are ranked first (#433)."""
 import pytest
 
-import backlog_brief as bb
 from test_backlog_cli import bk, cli, load, BATCH, bl, bs  # noqa: F401  bk is the CLI fixture
+import backlog_brief as bb  # noqa: E402
 from test_backlog_jira_208 import jk  # noqa: F401  jk is the acli fixture
 
 CAP = "not planned (cap)"
@@ -57,8 +57,8 @@ def test_bad_pin_lists_refused_before_any_call(bk, capsys, no_acli):
 
 def test_pinned_skipped_issue_refused(bk, capsys, no_acli):
     seed(bk, skipped=[2, "PIX-1"])
-    assert cli(capsys, "plan", "--issues", "1,2") == (2, "BLOCKED: --issues: #2 is skipped\n")
-    assert cli(capsys, "plan", "--issues", "pix-1") == (2, "BLOCKED: --issues: PIX-1 is skipped\n")
+    assert cli(capsys, "plan", "--issues", "1,2") == (2, "BLOCKED: --issues: #2 is skipped; sl backlog unskip 2 takes it back\n")
+    assert cli(capsys, "plan", "--issues", "pix-1") == (2, "BLOCKED: --issues: PIX-1 is skipped; sl backlog unskip PIX-1 takes it back\n")
     assert bk.gh == []
 
 

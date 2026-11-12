@@ -103,8 +103,8 @@ def test_decide_print_and_file(bk, capsys, tmp_path):
     cli(capsys, "plan")
     qs = json.loads(cli(capsys, "decide", "--print")[1])["questions"]
     assert qs[-1]["question"] == bs.SHIP_Q and qs[0]["question"].startswith("Admit outside issue #3")
-    f = tmp_path / "a.json"; f.write_text(json.dumps({"answers": {bs.SHIP_Q: "Approve shipping", qs[0]["question"]: "Skip"}}))
-    assert cli(capsys, "decide", "--file", str(f)) == (0, "recorded 2 answers, 0 open\n")
+    f = tmp_path / "a.json"; f.write_text(json.dumps({"answers": {bs.SHIP_Q: "Approve shipping", qs[0]["question"]: "Skip"}, "by": "user"}))
+    assert cli(capsys, "decide", "--file", str(f)) == (0, "recorded 2 answers (2 as the user's), 0 open\n")
     assert load(bk)["approved_ship"]["by"] == "AskUserQuestion" and load(bk)["skipped"] == [3]
     wt = tmp_path / "wt"; (wt / ".superlite").mkdir(parents=True); q = wt / ".superlite" / "question.json"
     bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "needs_decision", "worktree": str(wt)}))

@@ -113,7 +113,7 @@ def test_wait_ignores_old_stops_and_herdr_outages(bk, capsys):
 def test_answer_sends_the_file_and_resumes_the_lead(bk, capsys, tmp_path):
     wt = running(bk); waiting = lambda: bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "needs_decision"}))
     waiting(); (wt / ".superlite" / "question.json").write_text(json.dumps(Q))
-    f = tmp_path / "a.json"; f.write_text(json.dumps({"answers": {"Keep the v1 API?": "Drop"}})); ans = wt / ".superlite" / "answer-1.json"
+    f = tmp_path / "a.json"; f.write_text(json.dumps({"answers": {"Keep the v1 API?": "Drop"}, "by": "user"})); ans = wt / ".superlite" / "answer-1.json"
     assert run(capsys, "answer", "B1", "--file", str(f)) == (0, "B1 answered: answer-1.json sent to W1\n")
     assert json.loads(ans.read_text()) == {"answers": {"Keep the v1 API?": "Drop"}, "by": {"Keep the v1 API?": "user"}} and (wt / ".superlite" / "question-1.json").exists()
     text = next(c[1] for c in bk.calls if c[0] == "text")
@@ -121,7 +121,7 @@ def test_answer_sends_the_file_and_resumes_the_lead(bk, capsys, tmp_path):
     x = get(bk, "B1")
     assert (x["state"], x["since"], x["questions"], x["answers"]) == ("running", 5000, 1, {"Keep the v1 API?": "Drop"})
     assert run(capsys, "answer", "B1", "--file", str(f))[0] == 2
-    waiting(); f.write_text(json.dumps({"answers": {"K?": "x\x1b[2J"}}))
+    waiting(); f.write_text(json.dumps({"answers": {"K?": "x\x1b[2J"}, "by": "user"}))
     assert run(capsys, "answer", "B1", "--file", str(f))[0] == 2
 
 def test_start_passes_summary_paths_not_contents(bk, capsys, monkeypatch):

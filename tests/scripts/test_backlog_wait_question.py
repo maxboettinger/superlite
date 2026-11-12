@@ -87,7 +87,7 @@ def test_start_and_answer_reset_the_question_reprompt(bk, capsys, tmp_path):
     bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "needs_decision"}))
     qfile(wt, Q)
     f = tmp_path / "a.json"
-    f.write_text(json.dumps({"answers": {"Keep the v1 API?": "Drop"}}))
+    f.write_text(json.dumps({"answers": {"Keep the v1 API?": "Drop"}, "by": "user"}))
     assert run(capsys, "answer", "B1", "--file", str(f))[0] == 0
     assert get(bk, "B1")["question_reprompted"] is False
     put(bk, b("B2", ["b.py"], question_reprompted=True))

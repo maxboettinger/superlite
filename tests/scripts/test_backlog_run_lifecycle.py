@@ -87,7 +87,7 @@ def test_answer_and_start_reset_the_reprompt(bk, capsys, tmp_path):
     bs_update = sys.modules["backlog_state"].update
     bs_update(sys.modules["backlog_state"].path(bk.root), lambda d: sys.modules["backlog_state"].batch(d, "B1").update({"state": "needs_decision"}))
     (wt / ".superlite" / "question.json").write_text(json.dumps(Q))
-    f = tmp_path / "a.json"; f.write_text(json.dumps({"answers": {"Keep the v1 API?": "Drop"}}))
+    f = tmp_path / "a.json"; f.write_text(json.dumps({"answers": {"Keep the v1 API?": "Drop"}, "by": "user"}))
     assert run(capsys, "answer", "B1", "--file", str(f))[0] == 0 and get(bk, "B1")["reprompted"] is False
     put(bk, b("B2", ["b.py"], reprompted=True))
     assert run(capsys, "start", "B2")[0] == 0 and get(bk, "B2")["reprompted"] is False
