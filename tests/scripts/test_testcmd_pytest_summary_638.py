@@ -56,3 +56,9 @@ def test_example_names():
          "FAILED tests/a.py::test_x - AssertionError: 1 failed, 2 passed in 0.1s\n1 failed, 1 passed in 0.50s\n")
     r = testcmd.parse_output(t, 1)
     assert triple(r) == (1, 1, 0) and r["names"] == ["tests/a.py::test_x"] and r["counted"] is True
+
+
+def test_names_without_header_use_run_above_summary():
+    t = ("FAILED tests/old.py::t\nnoise line\nFAILED tests/a.py::t1 - x\nERROR tests/b.py::t2\n1 failed, 1 error, 3 passed in 0.5s\n")
+    r = testcmd.parse_output(t, 1)
+    assert r["names"] == ["tests/a.py::t1", "tests/b.py::t2"] and triple(r) == (3, 2, 0)
