@@ -446,3 +446,15 @@ def test_link_made_earlier_in_the_command_blocks_later_writes(G):
     os.symlink("../src", G / ".build" / "s")
     v = jg(G, "echo hi > .build/s/a.py")
     assert v is not None and v.rel == "src/a.py"
+
+
+def test_home_with_ifs_character_splits_unquoted_only(H, tmp_path, monkeypatch):
+    sp = (tmp_path / "a b").resolve()
+    sp.mkdir()
+    monkeypatch.setenv("HOME", str(sp))
+    assert jh("rm -rf $HOME/x", H) is not None
+    assert jh('rm -rf "$HOME/x"', H) is None
+    assert jh("echo hi > $HOME/x.log", H) is not None
+    assert jh('echo hi > "$HOME/x.log"', H) is None
+    monkeypatch.setenv("HOME", str((tmp_path / "home").resolve()))
+    assert jh("rm -rf $HOME/x", H) is None

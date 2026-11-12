@@ -436,7 +436,7 @@ def _expand(text, st, ctx, split=True, quoted=False):  # O(p + v) | ~ and the va
         val = ctx.projn if name == "CLAUDE_PROJECT_DIR" else st.here[0] if (name == "PWD" and len(st.here) == 1 and st.here[0]) else ctx.tmpdir if name == "TMPDIR" else _home_env() if name == "HOME" else None  # O(1)
         if val is None:  # O(1)
             return m.group(0)  # O(1)
-        if cut and ifs != DEFAULT_IFS and (ifs is None or any(ch in val for ch in ifs)):  # O(p)
+        if cut and (name == "HOME" or ifs != DEFAULT_IFS) and (ifs is None or any(ch in val for ch in ifs)):  # an unquoted $HOME splits like any value, the default IFS included | O(p)
             return m.group(0)  # O(1)
         return val  # O(1)
     out = VAR.sub(sub, text)  # O(p)
