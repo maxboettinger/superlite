@@ -49,6 +49,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import accounts as ac  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
 import herdr_client as hc  # noqa: E402 | O(1)
+import machine_load as ml  # noqa: E402 | O(1)
 import pool  # noqa: E402 | O(1)
 import routing  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
@@ -411,6 +412,8 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus
         _register_pool(sd, wid, model, account)  # O(w)
     fs.set_state(sd, wid, "ready")  # O(w)
     _launch_line(sd, wid, agent, model, account, pane)  # O(1)
+    with contextlib.suppress(OSError):  # the machine count is advisory; an unwritable registry must not fail a started worker | O(1)
+        ml.register(name, role, str(project))  # O(1)
     print(f"{wid} account={account} pane={pane} agent={agent}" + ("" if role == "implementer" else f" role={role}"))  # O(1)
     return {"id": wid, "account": account, "pane_id": pane, "agent": agent, "model": model, "role": role}  # O(1)
 
@@ -752,6 +755,8 @@ def main(argv=None):  # O(w) plus command cost
     s.add_argument("--label", default="")  # O(1) the brief's task label
     s.add_argument("--wait", action="store_true")  # O(1) then waits for its report
     s.add_argument("--timeout", default=None)  # O(1) with --wait: ms, 580s, 9m
+    s.add_argument("--over-limit", action="store_true")  # O(1) skip the machine-wide cap for a fixer
+    s.add_argument("--machine-wait", type=float, default=100.0)  # O(1) seconds a fixer spawn waits for the machine to free up
     s.add_argument("--for-dispatch", action="store_true")  # O(1) run dispatch, spawn per `fresh` line, send each line's tasks
     s = sub.add_parser("stop", help="close workers")  # O(1)
     s.add_argument("ids", nargs="*")  # O(1)
@@ -862,6 +867,11 @@ def main(argv=None):  # O(w) plus command cost
                 return 3  # O(1) before any pane
             if level == "warn":  # O(1)
                 print(f"fleet: {line}", file=sys.stderr)  # O(1)
+        if a.role == "fixer" and not a.for_dispatch and a.for_review is None and not a.package:  # a fixer is the machine-wide load; implementers are not gated | O(wait)
+            busy = ml.gate("fleet spawn", a.machine_wait, a.over_limit)  # O(wait)
+            if busy:  # O(1)
+                print(f"BLOCKED: fleet spawn: {busy}; rerun later, or pass --over-limit")  # O(1)
+                return 3  # O(1) before any pane
         if a.for_dispatch:  # O(1)
             return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent)  # O(R * (spawn + send))
         if a.for_review is not None or a.package:  # O(1)
