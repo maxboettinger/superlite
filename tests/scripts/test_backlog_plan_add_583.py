@@ -115,3 +115,10 @@ def test_tracked_reads_ls_files_and_fails_soft(tmp_path, monkeypatch):
         raise OSError("no git")
     monkeypatch.setattr(bl.subprocess, "run", boom)
     assert bl._tracked(tmp_path) == []
+
+
+def test_reset_rejects_depends_on_dropped_batch(bk, capsys):
+    state(bk, "planned")
+    bk.batches = [{**NEW, "id": "B9", "depends": ["B1"]}]
+    rc, out = cli(capsys, "plan", "--reset")
+    assert rc == 3 and "depends on unknown batch B1" in out

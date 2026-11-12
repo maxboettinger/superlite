@@ -276,7 +276,7 @@ def _renumber(new: list, kept: list) -> list:
     return new
 
 
-def _tracked(root: Path) -> list:
+def _tracked(root: Path) -> list[str]:
     """The files git tracks in root; [] when git fails."""
     try:  # O(1)
         r = subprocess.run(["git", "-C", str(root), "ls-files"], capture_output=True, text=True, timeout=60)  # O(files)
@@ -285,7 +285,7 @@ def _tracked(root: Path) -> list:
     return r.stdout.splitlines() if r.returncode == 0 else []  # O(files)
 
 
-def _subjects(root: Path, ref: str) -> list:
+def _subjects(root: Path, ref: str) -> list[str]:
     """First-parent subjects of ref as 'sha<TAB>subject' lines, newest first; [] when git fails."""
     try:  # O(1)
         r = subprocess.run(["git", "-C", str(root), "log", "--first-parent", "-n", "2000", "--format=%h%x09%s", ref], capture_output=True, text=True, timeout=60)  # O(2000)
@@ -294,7 +294,7 @@ def _subjects(root: Path, ref: str) -> list:
     return r.stdout.splitlines() if r.returncode == 0 else []  # O(2000)
 
 
-def added_lines(data: dict, ids: list, pin: list) -> list:
+def added_lines(data: dict, ids: list, pin: list) -> list[str]:
     """What --add prints: the table header and the rows of the added batches, the pinned issues left out, the open-questions line (#583)."""
     import backlog_state as bs  # O(1)
     rows = bs.status_lines(data, all_=True)  # O(b)
@@ -541,7 +541,7 @@ def cmd_plan(a) -> int:
             return 3
     topics = bc.normalise_topics(prop)  # O(b)
     cuts = bc.cut_lines(bc.fit_proposal(prop))  # O(q)
-    known_b = frozenset(b["id"] for b in d["batches"])  # O(b)
+    known_b = frozenset(b["id"] for b in d["batches"] if b["state"] == "shipped" or add)  # O(b) only batches that survive this plan
     if jira:
         cp, back = _key_proposal(prop, [t["number"] for t in trusted])
         batches, errs = bc.check_proposal(cp, set(range(1, len(trusted) + 1)), known_b)
