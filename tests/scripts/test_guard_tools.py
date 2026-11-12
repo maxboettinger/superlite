@@ -652,3 +652,10 @@ def test_why_names_the_token():
     assert _gt665.why(w, text="git lfs env | grep -e 'git config filter'") == ""
     assert _gt665.why(["git", "add", "--pathspec-from-file=f"]) == "--pathspec-from-file"
     assert _gt665.why(["python3", "-c", "open(input(), 'w')"]) == ""
+
+
+def test_rg_pre_runs_its_command_so_git_config_stays_live():
+    for t in ("rg --pre 'git config alias.lfs x' foo; git lfs env", "rg --pre='git config alias.lfs x' foo; git lfs env",
+              "rg --hostname-bin 'git config alias.lfs x' foo; git lfs env"):
+        assert _gt665.targets(["git", "lfs", "env"], text=t) == ["?"], t
+    assert _gt665.targets(["git", "lfs", "env"], text="rg -e 'git config x' foo; git lfs env") == []
