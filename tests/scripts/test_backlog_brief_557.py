@@ -57,6 +57,6 @@ def test_summary_with_decisions_stays_at_ten_lines():
     six = bb.summary(b, "\n".join(f"n{i}" for i in range(6))).splitlines()
     assert len(six) == 10 and six[3] == "Decisions: Lock path?: Per tree (Max)" and six[9] == "n5"
     nine = bb.summary(b, "\n".join(f"n{i}" for i in range(9))).splitlines()
-    assert len(nine) == 10 and nine[8] == "n4" and nine[9] == "+4 more note lines: full text in B4.notes.md"
+    assert len(nine) == 10 and nine[8] == "n4" and nine[9] == "+4 more note lines: sl backlog ship B4 notes prints them"
     plain = bb.summary(B, "\n".join(f"n{i}" for i in range(7))).splitlines()
     assert len(plain) == 10 and plain[9] == "n6"

@@ -4,8 +4,8 @@ from test_plan_tools import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 import backlog_brief as bb  # noqa: E402
 
-F = "B1.notes.md"
-TAIL = " [cut: full text in B1.notes.md]"
+F = "B1"
+TAIL = " [cut: sl backlog ship B1 notes prints the full text]"
 B = {"id": "B1", "topic": "t", "issues": [1], "files": ["a.py"], "version": "1.0", "pr": 5}
 CTX = {"sl": "/p/sl", "backlog_md": "/p/backlog.md", "repo": "o/r", "approved": {"by": "AskUserQuestion", "time": "T0"}}
 
@@ -23,7 +23,7 @@ def test_summary_marks_cuts_and_overflow():
     notes = "Ruling: ok\n" + "y" * 500 + "\n" + "\n".join(f"n{i}" for i in range(8))
     lines = bb.summary(B, notes).splitlines()
     assert lines[3] == "Ruling: ok" and lines[4] == "y" * 400 + TAIL
-    assert len(lines) == 10 and lines[9] == "+4 more note lines: full text in B1.notes.md"
+    assert len(lines) == 10 and lines[9] == "+4 more note lines: sl backlog ship B1 notes prints them"
     seven = bb.summary(B, "\n".join(f"n{i}" for i in range(7))).splitlines()
     assert len(seven) == 10 and not any(x.startswith("+") for x in seven)
 

@@ -14,6 +14,7 @@ GH_LEAD = ('# Lead brief: B1 (t)\nYou are the lead of batch B1 in o/r. Read /x/b
            + "Issues (you have a shell: read each body and its latest 3 comments yourself with `gh issue view <n> --json title,body,stateReason,comments --jq '{title, body, stateReason, comments: [.comments[-3:][] | {author: .author.login, authorAssociation, body}]}'`):\n- #7 Seven\n"
            + 'Files this batch may touch: a.py. Another lead may own any other file.\n'
            + bb.ROOT_DOC_RULE + "\n"
+           "Tracker: change no issue state yourself (merge and main close and move issues); the one exception is a comment with evidence (a duplicate's link, a measurement) when your issue or a standing note asks for one.\n"
            "Max's decisions: none\n" + bb.ATTRIBUTION + "\nRulings from shipped batches: none\n"
            'Your run: the worktree you start in, state in .superlite/; pass --plan .superlite to every sl call.\n'
            'First: `/x/sl orchestrator set ai --plan .superlite`, then `/x/sl fleet on --plan .superlite`.\n'
@@ -23,8 +24,9 @@ GH_LEAD = ('# Lead brief: B1 (t)\nYou are the lead of batch B1 in o/r. Read /x/b
            "Evals layer red on a case your batch's files do not touch: never stamp it yourself (no `test_layers.py stamp`); "
            "write .superlite/question.json naming the case and its failing graders (options: main stamps it by ruling, "
            "or the batch waits for the case's fix), then end your turn with Status: NEEDS_DECISION.\n"
+           'Acceptance: a step your issue\'s acceptance asks for that you cannot run (the running-app check, the project suite green, a production step) is a decision, never a follow-up: let workers finish, ask "Ship without <step>?" in .superlite/question.json and end with Status: NEEDS_DECISION.\n'
            'Ship: allowed (approved by Max in AskUserQuestion at t). Ship only with `/x/sl backlog ship B1 lock`, then bump, then merge (backlog.md). Run each ship step as one bare command that starts with `/x/sl backlog ship` or `maxapp ship`: no `cd` (you start in your worktree), no pipe, no `echo`, no `&&` chain; the allow rules match nothing else. ' + bb.NOTES_RULE + 'one `Closes #N` line per issue ("Fixes #1, #2" closes only #1); merge adds a missing one and prints `OPEN #N` for an issue still open after the merge.\n'
-           'End: Status: DONE once merge printed shipped; otherwise Status: BLOCKED with the reason. Then the JSON block.\n')
+           "End: Status: DONE once merge printed shipped; Status: DONE no-change: <reason> when your issues need no code change (a duplicate: name the issue it duplicates; write no plan, ship nothing; main closes the issues); otherwise Status: BLOCKED with the reason. Then the JSON block.\n")
 
 
 def test_lead_brief_lists_keys_and_acli():
