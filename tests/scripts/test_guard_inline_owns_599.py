@@ -101,3 +101,24 @@ def test_code_message_has_inline_line():
     lines = gj.MESSAGES["code"]
     i = lines.index(INLINE)
     assert lines[i + 1].startswith("- A throwaway edit to check a render")
+
+
+@pytest.mark.parametrize("stable", [True, False])
+def test_allowed_write_skips_plan_load(tmp_path, stable):
+    p = make(tmp_path, stable=stable)
+    code = (
+        "import sys, json\n"
+        f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "import guard_judge as gj\n"
+        f"p = {str(p)!r}\n"
+        "sd = (p + '/.superlite',)\n"
+        "r = gj.judge('echo x > docs/a.md', p, p, 'active', sd)\n"
+        "print(json.dumps([r is None or not r, 'plan_tools' in sys.modules]))\n"
+        "o = gj.judge('echo x > src/app.py', p, p, 'active', sd)\n"
+        "print(json.dumps(not o))\n"
+    )
+    out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, cwd=str(p))
+    lines = out.stdout.strip().splitlines()
+    assert json.loads(lines[0])[1] is False, out.stderr
+    if stable:
+        assert json.loads(lines[1]) is True

@@ -113,9 +113,9 @@ class Verdict:  # O(1)
 
 def inline_owns(sd):  # O(plan) | (realpath of the plan's root, Owns) when the run's plan holds exactly one local task, else None
     try:  # O(1)
-        import plan_tools  # lazy | O(1)
-        with open(os.path.join(sd, "stable.json"), encoding="utf-8") as f:  # O(1)
+        with open(os.path.join(sd, "stable.json"), encoding="utf-8") as f:  # no stable.json: no import | O(1)
             plan = json.load(f)["plan"]  # O(1)
+        import plan_tools  # lazy | O(1)
         tasks = plan_tools.Plan.load(plan).tasks  # O(plan)
         if len(tasks) != 1 or tasks[0].repo:  # O(1)
             return None  # O(1)
@@ -131,6 +131,12 @@ def _inline_for(sd, projreal):  # O(plan) | the inline Owns when the plan's root
 
 
 class _Ctx:  # O(p)
+    @property
+    def inline(self):  # O(plan) once | Owns of the one task of an inline build; loaded at most once, only when a verdict needs it
+        if self._inline is None:  # O(1)
+            self._inline = _inline_for(self.sd, self.projreal) if self.mode == "active" else []  # O(plan)
+        return self._inline  # O(1)
+
     def __init__(self, command, project, mode, sds=()):  # O(n + p)
         self.mode = mode  # O(1)
         self.sd = next((d for d in sds if isinstance(d, str) and d), None)  # first state folder | O(s)
@@ -160,7 +166,7 @@ class _Ctx:  # O(p)
         self.caches = {d.rstrip("/") + "/python" for d in self.cache_dirs}  # protected in every mode | O(1)
         folders = [_clean(_winpath(d)) for d in sds if isinstance(d, str) and d and "\0" not in d]  # O(s * p)
         self.render = _render_files(self.sd) if mode == "active" else frozenset()  # files `sl render_edit start` recorded | O(f)
-        self.inline = _inline_for(self.sd, self.projreal) if mode == "active" else []  # Owns of the one task of an inline build | O(plan)
+        self._inline = None  # the inline Owns, loaded on first use | O(1)
         self.prot_abs = {x.lower() for d in folders for n in NAMES for x in (d.rstrip("/") + "/" + n, os.path.realpath(d).rstrip("/") + "/" + n)}  # run files of state folders, by absolute path | O(s * p)
 
 
@@ -363,11 +369,11 @@ def _judge_path(path, base, ctx, name=None, stays=True):  # O(p + depth) | the p
     wt = _wt_rel(rel, ctx.projreal) if (ctx.enforce or rel.lower().endswith(NAMES)) else None  # O(depth)
     if wt is not None and wt.lower() in PROTECTED:  # also inside a linked worktree | O(p)
         return Verdict(rel, absolute, "protected")  # O(1)
-    if ctx.inline and _owned(rel, ctx):  # the one task of an inline build: its Owns | O(owns)
-        return None  # O(1)
     if not ctx.enforce or _allowed(rel, ctx.mode):  # O(patterns)
         return None  # O(1)
     if wt is not None and _allowed(wt, ctx.mode):  # judged from the worktree's root | O(patterns)
+        return None  # O(1)
+    if ctx.inline and _owned(rel, ctx):  # the one task of an inline build: its Owns, loaded only now | O(owns)
         return None  # O(1)
     return Verdict(rel, absolute, ctx.kind)  # O(1)
 
