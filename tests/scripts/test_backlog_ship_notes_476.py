@@ -8,11 +8,11 @@ import backlog_run  # noqa: E402
 
 
 def test_note_items_examples():
-    assert bsh.note_items("Ruling: x\nFollow-up: docs/tools.md lacks tell\n- Left undone: run the migration on prod\n") == {"followups": ["docs/tools.md lacks tell"], "undone": ["run the migration on prod"]}
-    assert bsh.note_items("Ruling: a; follow-up (outside B27's files): fix SKILL.md") == {"followups": ["fix SKILL.md"], "undone": []}
-    assert bsh.note_items("Follow-up issue: x\x1b[2J\ty") == {"followups": ["x[2J y"], "undone": []}
-    assert bsh.note_items("") == {"followups": [], "undone": []}
-    assert bsh.note_items("Left undone: a") == {"followups": [], "undone": ["a"]}
+    assert bsh.note_items("Ruling: x\nFollow-up: docs/tools.md lacks tell\n- Left undone: run the migration on prod\n") == {"followups": ["docs/tools.md lacks tell"], "undone": ["run the migration on prod"], "unverified": [], "kind": None}
+    assert bsh.note_items("Ruling: a; follow-up (outside B27's files): fix SKILL.md") == {"followups": ["fix SKILL.md"], "undone": [], "unverified": [], "kind": None}
+    assert bsh.note_items("Follow-up issue: x\x1b[2J\ty") == {"followups": ["x[2J y"], "undone": [], "unverified": [], "kind": None}
+    assert bsh.note_items("") == {"followups": [], "undone": [], "unverified": [], "kind": None}
+    assert bsh.note_items("Left undone: a") == {"followups": [], "undone": ["a"], "unverified": [], "kind": None}
 
 
 def test_merge_keeps_notes_and_items(sh, capsys):
