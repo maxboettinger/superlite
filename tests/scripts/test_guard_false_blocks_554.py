@@ -281,3 +281,39 @@ def test_unknown_git_target_names_its_token(H):
     assert v.word == "? (from git: lfs: no git command, read as an alias while the command names git config)"
     v = jh("perl -e 'alarm 30; system @ARGV' echo hi", H)
     assert v.word == "? (from perl)"
+
+
+# --- only a tracked .gitignore makes a path housekeeping (F-T1-1) and every non-git writer is covered (F-T1-2) ---
+def test_exclude_file_ignore_does_not_count(G):
+    with open(G / ".git" / "info" / "exclude", "a") as f:
+        f.write("gen/\n")
+    _files(G / "gen", 2100)  # over the 2000-entry limit of the not-ignored rule
+    v = jg(G, "echo hi > gen/new.py")
+    assert v is not None and v.why == "not git-ignored"
+    v = jg(G, "rm -r gen")
+    assert v is not None and v.why.startswith("not git-ignored")
+
+
+def test_untracked_gitignore_does_not_count(G):
+    (G / "extra").mkdir()
+    (G / "extra" / ".gitignore").write_text("*.dat\n")
+    v = jg(G, "echo hi > extra/a.dat")
+    assert v is not None and v.why == "not git-ignored"
+
+
+def test_negated_pattern_does_not_count(G):
+    (G / ".gitignore").write_text(".build/\n*.log\n!keep.log\ntmp/\n")
+    _git(G, "add", ".gitignore")
+    _git(G, "commit", "-q", "-m", "neg")
+    assert jg(G, "echo hi > other.log") is None
+    v = jg(G, "echo hi > keep.log")
+    assert v is not None and v.why == "not git-ignored"
+
+
+def test_every_non_git_writer_covers_ignored_paths(G):
+    (G / ".build").mkdir()
+    (G / ".build" / "x.log").write_text("a")
+    assert jg(G, "sed -i '' s/a/b/ .build/x.log") is None
+    assert jg(G, "python3 -c \"open('.build/y.log','w')\"") is None
+    v = jg(G, "sed -i '' s/a/b/ src/a.py")
+    assert v is not None and v.kind == "code"
