@@ -1,5 +1,6 @@
 """Coordinator guard (#547): files listed in .superlite/render-edits.json may be edited in an active run."""
 import json
+import os
 
 import pytest
 
@@ -53,3 +54,39 @@ def test_quoted_key_only(tree):
     record(tree, "Demo/Seed.swift.bak")
     assert run(tree, "Edit", {"file_path": "Demo/Seed.swift"}).returncode == 2
     assert bash(tree, "sed -i '' s/a/b/ Demo/Seed.swift").returncode == 2
+
+
+def test_render_edits_file_is_protected(tree):
+    record(tree, "Demo/Seed.swift")
+    target = tree / ".superlite" / "render-edits.json"
+    for tool in ("Edit", "Write"):
+        assert run(tree, tool, {"file_path": str(target)}).returncode == 2
+        assert run(tree, tool, {"file_path": ".superlite/render-edits.json"}).returncode == 2
+    assert bash(tree, "echo '{}' > .superlite/render-edits.json").returncode == 2
+    assert bash(tree, "cp /tmp/x .superlite/render-edits.json").returncode == 2
+
+
+def test_recorded_hardlink_is_blocked(tree):
+    (tree / "src").mkdir()
+    (tree / "src" / "app.py").write_text("a\n")
+    try:
+        os.link(tree / "src" / "app.py", tree / "Demo" / "Hard.swift")
+    except OSError:
+        pytest.skip("no hard links")
+    record(tree, "Demo/Hard.swift")
+    assert run(tree, "Write", {"file_path": str(tree / "Demo" / "Hard.swift")}).returncode == 2
+    assert run(tree, "Write", {"file_path": "Demo/Hard.swift"}).returncode == 2
+    assert bash(tree, "sed -i '' s/a/b/ Demo/Hard.swift").returncode == 2
+
+
+def test_recorded_symlink_is_blocked(tree):
+    (tree / "src").mkdir()
+    (tree / "src" / "app.py").write_text("a\n")
+    try:
+        os.symlink(tree / "src" / "app.py", tree / "Demo" / "Link.swift")
+    except OSError:
+        pytest.skip("no symlinks")
+    record(tree, "Demo/Link.swift")
+    assert run(tree, "Write", {"file_path": str(tree / "Demo" / "Link.swift")}).returncode == 2
+    assert run(tree, "Write", {"file_path": "Demo/Link.swift"}).returncode == 2
+    assert bash(tree, "sed -i '' s/a/b/ Demo/Link.swift").returncode == 2
