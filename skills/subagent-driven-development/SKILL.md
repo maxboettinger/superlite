@@ -23,7 +23,7 @@ Fleet mode (user asks): `"$SL" fleet on` before the first dispatch, then `fleet.
 - Prime: `"$SL" build_prime --plan $PLAN` prints `hash size`, writes `.superlite/prime.md`: slim for sonnet.
 - Incidents: a BLOCKED or NEEDS_CONTEXT report is `"$SL" incident add --agent coordinator --file <task file> --line 0 --context "BLOCKED Tn: <why>"` (`--file`, `--line`, `--context` required; `--kind` optional, `incident add --help` lists the kinds).
 - MCP: agents inherit the session's MCP tools; a project MCP server is approved before dispatch (background agents prompt in the main session).
-- Graphify: `"$SL" graphify_gate` prints JSON. `use` false: skip. Installed: `graphify update .`. `needs_install` and `allowed`: `uv tool install graphifyy`, `graphify extract . --code-only`. Only you run it. `use` true also adds `graphify-out/` to info/exclude.
+- Graphify: `"$SL" graphify_gate` prints JSON. `use` false: skip. Installed: `graphify update .`. `needs_install` and `allowed`: `uv tool install graphifyy`, `graphify extract . --code-only`. Only you run it.
 
 ## Planning check
 

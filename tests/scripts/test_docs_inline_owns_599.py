@@ -11,9 +11,9 @@ def test_using_superlite_one_task():
     assert "one chain" not in USING
 
 
-def test_sdd_inline_and_graphify_lines():
+def test_sdd_keeps_main_text():
     assert "- Inline build (a plan of exactly one task" not in SDD
-    assert " `use` true also adds `graphify-out/` to info/exclude." in SDD
+    assert "graphify-out" not in SDD
 
 
 def test_hooks_doc_names_owns_exclude_moved():
