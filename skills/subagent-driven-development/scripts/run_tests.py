@@ -9,6 +9,9 @@
 The test command comes from, in order: the project's `.superlite/test-cmd.json`, the main checkout's, the user-level entry for the detected language (`~/.config/superlite/test-cmd.json`), then detection.
 Every exit path leaves a summary: a usage error, an unknown task, a missing pytest, an unprepared tree or a crash (`run_tests crashed: ...`, exit 2) writes a red zero summary; `--wait` names a background run whose process died (its pid sits in `<summary>.pid`) and the log of one that timed out.
 A foreground full run also keeps its summary as `test-summary-full.json` beside the summary; no later fast, recorded or failed run overwrites it (#593). A `--fast` test file carrying a marker the project's addopts `-m` deselects runs with `-m "<marker> or (<addopts expr>)"` and says so on stderr; an explicit `-m` wins.
+A macOS `xcodebuild test` outside the desktop login session (`launchctl managername` not `Aqua`) stops before any run with an ENV-ERROR (exit 2); `SUPERLITE_GUI_CHECK=0` and `"lock": false` skip the check (#561).
+A red xcodebuild run that never reached its test runner (testmanagerd) is the same ENV-ERROR stop, not a failing test (#561).
+A red pytest id in the output is placed at its file with its message and line when the file exists, else it stays `-::<id>: <message>` (B119).
 A red Swift (xcodebuild) run reports each failure at its file and line (`failure_sites`, #499); a counted `--fast` run limited to Swift files covers them, so a later green run closes those files' located failures and an uncounted run closes none.
 When a run prints no test count and exits 0, the stop names the runner's own "no tests" line (`; runner: <line>`).
 Every run keeps its full output (pytest with `-rP`, so a passing test's prints show) in `<summary stem>.output.log` beside the summary (newest 20 kept); the summary's `output` names it, a foreground run prints `run_tests: output <path>` and `--wait` prints `output: <path>` right before its summary line (#501).
@@ -95,6 +98,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(path list)
 import _pyrun as pyrun  # noqa: E402  # O(1) module load
 import testcmd  # noqa: E402  # O(1) module load
 import failure_sites  # noqa: E402  # O(1) module load
+import gui_session  # noqa: E402  # O(1) module load
 import commit_task as ct  # noqa: E402  # O(1) module load
 import state  # noqa: E402  # O(1) module load
 import next_tasks as nt  # noqa: E402  # O(1) module load
@@ -1471,16 +1475,19 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
         for stale in (literal, alt):  # a stale report must not count | O(1)
             if stale and stale.exists():  # O(1)
                 stale.unlink()  # O(1)
-        marker = Path(cwd) / ".superlite-setup.done" if cwd else Path(".superlite") / "setup.done"  # setup runs once per run directory (per tree) | O(1)
-        if spec["setup"] and not marker.exists():  # O(1)
-            run_captured(sub(spec["setup"]), limit=a.limit, shell=True, env=env, cwd=cwd)  # O(o)
-            marker.parent.mkdir(parents=True, exist_ok=True)  # O(1)
-            marker.write_text("ok\n", encoding="utf-8")  # O(1)
         dests = chosen_destinations(a, spec, label)  # O(d)
         if dests and not XCODEBUILD.search(spec["command"]):  # O(len)
             print(f"run_tests: WARNING: destinations need an xcodebuild command; ran `{spec['command']}` once", file=sys.stderr)  # O(len)
             dests = []  # O(1)
         runs = [(d, testcmd.with_destination(sub(spec["command"]), d) or sub(spec["command"])) for d in dests] or [(None, sub(spec["command"]))]  # O(d * len)
+        gui = gui_session.preflight([c for _, c in runs]) if spec.get("lock") is not False else None  # a macOS xcodebuild test outside the desktop session (#561) | O(d * len)
+        if gui:  # O(1)
+            return usage_error(a, label, gui)  # O(summary size)
+        marker = Path(cwd) / ".superlite-setup.done" if cwd else Path(".superlite") / "setup.done"  # setup runs once per run directory (per tree) | O(1)
+        if spec["setup"] and not marker.exists():  # O(1)
+            run_captured(sub(spec["setup"]), limit=a.limit, shell=True, env=env, cwd=cwd)  # O(o)
+            marker.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+            marker.write_text("ok\n", encoding="utf-8")  # O(1)
         global WARNING  # O(1)
         if label == "full":  # a full run names the declared platforms it did not build (#598) | O(entries)
             declared = testcmd.declared_platforms(root)  # O(entries)
@@ -1511,8 +1518,17 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
                 p = testcmd.parse_output(strip_ansi(text), r.returncode)  # O(o)
             counts = {"passed": p["passed"], "failed": p["failed"], "skipped": p["skipped"], "skipped_tests": []}  # O(1)
             last = next((ln for ln in reversed(p["tail"]) if ln.strip()), "no output")  # O(1)
-            failures = [("-", 0, f"{n}: failed") for n in p["names"]]  # O(k)
             files = {}  # O(1)
+            reasons = p.get("reasons", {})  # pytest ids with their message and line (B119) | O(1)
+            failures = []  # O(1)
+            for n in p["names"]:  # a pytest id whose file exists is placed there, else it stays unlocated | O(k)
+                msg, line = reasons[n] if n in reasons else (None, 0)  # O(1)
+                path, _, rest = n.partition("::")  # O(len)
+                if n in reasons and path and ((Path(cwd) if cwd else root) / path).is_file():  # O(1)
+                    failures.append((path, line, f"{rest}: {msg or 'failed'}" if rest else msg or "failed"))  # O(1)
+                    files.setdefault(path, [0, 0])[1] += 1  # O(1)
+                else:  # O(1)
+                    failures.append(("-", 0, f"{n}: {msg or 'failed'}" if n in reasons else f"{n}: failed"))  # O(1)
             if XCODE_OUT.search(text) or spec.get("language") == "swift":  # xcodebuild output: failures with file and line (#499) | O(o)
                 sites = failure_sites.failures(strip_ansi(text), str(Path(cwd) if cwd else root), paths, p["names"])  # O(o + f*n)
                 if sites:  # O(1)
@@ -1523,6 +1539,14 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
             covered = None  # O(1)
             if p["counted"]:  # a counted run (it compiled; an XCTest failure line is no build error) covers its files: a full run all, a fast run the Swift files it was limited to (#499) | O(p)
                 covered = True if label == "full" else [f.replace("\\", "/") for f in paths if f.replace("\\", "/").endswith(".swift")] if label == "fast" else None  # O(p)
+            if r.returncode and gui_session.runner_unreachable(strip_ansi(text)):  # xcodebuild could not reach its test runner: no result, not a red test (#561) | O(o)
+                reason = gui_session.unreachable_reason(gui_session.session_kind() if spec.get("lock") is not False else None)  # O(1)
+                print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+                write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
+                publish_summary(a)  # O(summary size)
+                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*p["tail"]], cwd)  # O(40 + c)
+                print(f"0 0 0 {seconds:.1f}")  # O(1)
+                return 2  # O(1)
             sig = signal_name(r.returncode) if r.returncode and not (p["counted"] or p["passed"] or p["skipped"] or p["names"]) else None  # a kill with no result at all | O(1)
             if sig:  # the test processes were killed from outside: no result, not a failing test (#548) | O(1)
                 reason = killed_reason(sig, r.returncode)  # O(registry + p)
