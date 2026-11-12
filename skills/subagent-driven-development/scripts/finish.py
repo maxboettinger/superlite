@@ -244,6 +244,8 @@ def read_stops(path):  # O(I*w) the stops of a run: (kind, tool, target) per inc
                 continue  # O(1)
         elif kind not in STOP_KINDS:  # O(1)
             continue  # O(1)
+        if kind == "no-result" and e.get("signal"):  # a signal-killed run is no bug (#548) | O(1)
+            continue  # O(1)
         file = str(e.get("file") or "")  # O(1)
         target = str(e.get("target") or ("" if file in ("", "-") else file))  # O(1)
         if kind == "exception" and e.get("agent") == "commit_task" and file not in ("", "-") and not e.get("target"):  # O(1)
@@ -596,6 +598,14 @@ def drop_trees(sd):  # best effort: drop the run's idle test trees and orphaned 
         pass  # O(1)
 
 
+def open_render_edits(sd):  # O(a) the root-relative files of `.superlite/render-edits.json` still applied (#547); [] when none or unreadable
+    try:  # O(1)
+        files = json.loads((Path(sd) / "render-edits.json").read_text(encoding="utf-8")).get("files")  # O(file)
+    except (OSError, ValueError, AttributeError):  # O(1)
+        return []  # O(1)
+    return sorted(files) if isinstance(files, dict) else []  # O(a log a)
+
+
 def main(argv=None):  # O(R*w + I*w)
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
@@ -608,6 +618,10 @@ def main(argv=None):  # O(R*w + I*w)
     sd = state.for_plan(a.plan) if a.plan else state.resolve()  # the defaults follow --plan once its run started (#178) | O(d)
     ledger, log = a.ledger or str(sd / "progress.md"), a.log or str(sd / "incidents.jsonl")  # O(1)
     sys.stdout.reconfigure(encoding="utf-8")  # O(1)
+    open_edits = open_render_edits(Path(ledger).parent)  # the ledger sits in the run folder (#547) | O(a log a)
+    if open_edits:  # O(1)
+        print(f"BLOCKED: render edits still applied: {', '.join(open_edits)}; run sl render_edit restore first")  # O(a)
+        return 2  # O(1)
     sys.stdout.write(summary(ledger, log, a.lint_log or str(Path(ledger).with_name("lint-log.jsonl")), a.plan))  # O(output)
     log_auto(read_stops(log), str(Path(log).resolve()))  # after the summary: a feedback failure never costs the closing text (#140) | O(I*w)
     drop_trees(sd)  # the run's trees are not needed after the summary (#614) | O(T + folders)
