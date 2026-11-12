@@ -82,7 +82,8 @@ def example_issues(plan, frozen=()) -> list:  # O(n*q)
             continue  # O(1)
         if structured(psig["ret"]) and not has_example(plan.by_id[pid], psig) and (cid, psig["name"]) not in seen:  # O(k*s)
             seen.add((cid, psig["name"]))  # O(1)
-            hint = f" (producer {pid} is dispatched and frozen: drop this Consumes entry or move it to a follow-up task)" if pid in frozen else ""  # O(1)
+            hint = (f" (producer {pid} is dispatched and frozen: add the hard edge \"{pid} -->|hard| {cid}\" to the taskgraph "  # O(1)
+                    f"so {cid} builds against the built {pid}, or drop this Consumes entry)") if pid in frozen else ""  # O(1)
             issues.append(pt.Issue(f"EXAMPLE: {cid} consumes {psig['name']} but its Produces line has no e.g.{hint}", [cid]))  # O(1)
     return issues  # O(q)
 
@@ -140,9 +141,10 @@ def split_notes(plan) -> list:  # O(n*q)
     return out  # O(n)
 
 
-def chain_id(cp, ctimes) -> str:  # O(path)
-    """Short hash of the chain's task ids and predicted minutes: a ruling written before lint cannot match it."""
-    key = "|".join(cp) + ":" + "|".join(f"{m:.1f}" for m in ctimes)  # O(path)
+def chain_id(cp, ctimes=None) -> str:  # O(path log path)
+    """Short hash of the chain's member task ids, sorted: the same members keep the id whatever their minutes or order
+    (ctimes stays for callers and is unused), so a ruling written before a minutes edit still matches."""
+    key = "|".join(sorted(set(cp)))  # O(path log path)
     return "chain-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:4]  # O(path)
 
 

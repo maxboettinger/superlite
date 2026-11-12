@@ -62,4 +62,5 @@ def test_example_hint_for_frozen_producer(tmp_path):
     (sl / "progress.md").write_text("- unblocked: dispatched T1\n", encoding="utf-8")
     out = lint(p)
     assert ("EXAMPLE: T2 consumes lang.parse but its Produces line has no e.g. "
-            "(producer T1 is dispatched and frozen: drop this Consumes entry or move it to a follow-up task)") in out
+            "(producer T1 is dispatched and frozen: add the hard edge \"T1 -->|hard| T2\" to the taskgraph "
+            "so T2 builds against the built T1, or drop this Consumes entry)") in out
