@@ -2,7 +2,7 @@
 """Fleet roles: which agent, model and effort a worker of each superlite role starts with.
 
 Library: launch(role, tier, cfg, agents_dir) -> the claude argv and flags for one worker; env(role) -> the env a
-worker of that role gets. Roles: implementer (the default), fixer, package-reviewer, final-reviewer, research.
+worker of that role gets. Roles: implementer (the default), fixer, package-reviewer, final-reviewer, research, checker.
 Effort comes from the agent file's frontmatter, since frontmatter `effort` is ignored in a main-thread session
 (`--effort` is passed instead). Stdlib only.
 """
@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import routing  # noqa: E402 | O(1)
 
 AGENTS = Path(__file__).resolve().parents[3] / "agents"  # O(1)
-ROLES = ("implementer", "fixer", "package-reviewer", "final-reviewer", "research")  # O(1)
+ROLES = ("implementer", "fixer", "package-reviewer", "final-reviewer", "research", "checker")  # O(1)
 FIXER_AGENTS = {"1": "superlite:fixer-sonnet", "sonnet": "superlite:fixer-sonnet",  # O(1) tiers of fixing.md
                 "2": "superlite:fixer-sonnet-high", "sonnet-high": "superlite:fixer-sonnet-high",
                 "3": "superlite:fixer-opus", "opus": "superlite:fixer-opus"}
@@ -57,6 +57,10 @@ def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS) ->
     elif role == "research":  # O(1)
         agent = "superlite:researcher"  # O(1)
         pin = tier or "sonnet"  # O(1) researchers default to sonnet
+    elif role == "checker":  # O(1)
+        if tier is not None:  # O(1)
+            raise ValueError("checker takes no --tier")  # O(1)
+        agent = "superlite:checker"  # O(1)
     else:  # O(1)
         if tier is not None:  # O(1)
             raise ValueError("%s takes no --tier" % role)  # O(1)

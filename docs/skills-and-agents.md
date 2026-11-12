@@ -18,3 +18,4 @@ Agents (`agents/`):
 - `fixer-sonnet` (sonnet, medium): tier 1, cause known (including a fully specified change), fix confined to one module.
 - `fixer-sonnet-high` (sonnet, high): tier 2, cause known but the fix spans modules or a seam, or a known probe class.
 - `fixer-opus` (opus, high): tier 3, cause unknown (it diagnoses), or a lower tier failed twice.
+- `checker` (sonnet, high): a one-turn worker that runs the built app, widget or extension once on its own simulator (or on macOS, or in a browser) and reports each listed check PASS, FAIL or NOT REACHABLE with screenshots; never fixes.
