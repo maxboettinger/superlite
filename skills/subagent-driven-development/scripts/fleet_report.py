@@ -24,6 +24,7 @@ import metrics as mx  # noqa: E402 | O(1)
 STATUSES = ("APPROVED", "CHANGES_REQUESTED", "DONE_WITH_CONCERNS", "DONE", "NEEDS_CONTEXT", "BLOCKED")  # O(1)
 BLOCK = re.compile(r"^[ \t]*```json[^\n]*\n(.*?)\n?^[ \t]*```[ \t]*$", re.DOTALL | re.M)  # a fenced json block; only a fence line closes it, so a fence inside a string does not | O(s) per opener
 VERDICT = re.compile(r"^\s*\**Verdict:\**\s*(APPROVED|CHANGES_REQUESTED)\b", re.M)  # O(1)
+PARTIAL = re.compile(r"^\s*\**Verdict:\**\s*APPROVED\s*\(partial\b", re.M | re.I)  # O(1)
 RED_LINE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?([*`]*)Red run([*`]*):([*`]*)[ \t]*(\S.*?)[ \t]*\r?$", re.M)  # O(1)
 FINDING_LINE = re.compile(r"^\s*(?:[-*]\s+)?(\S+?):(\d+)\s+-\s+(.+?)\s+-\s+(.+)\s+-\s+tier\s+([123])\s*$", re.M)  # O(1)
 LABEL = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?[*_`]*(files changed|changed files|files touched|files|tests?(?: command| results?)?|results?|summary|concerns|open questions|questions)"
@@ -150,6 +151,10 @@ def _from_json(text: str) -> dict | None:  # O(s)
     if not (isinstance(concerns, list) and concerns and all(isinstance(x, str) for x in concerns)):  # else the labelled lines | O(f)
         concerns = _labelled(text)["concerns"]  # O(s)
     return {"status": status, "files": files, "tests": tests, "red": red or _red_line(text), "findings": findings, "summary": summary, "concerns": concerns, "valid": True}  # O(1)
+
+
+def partial(text: str) -> bool:  # an APPROVED verdict that left packet lines unread | O(s)
+    return bool(PARTIAL.search(text if isinstance(text, str) else ""))  # O(s)
 
 
 def parse(text: str, label: str = "", allow_json: bool = True) -> dict:  # O(s)

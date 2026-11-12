@@ -33,6 +33,11 @@ def inc(kind: str, ctx: str, file: str = "tests/a.py", line: int = 1) -> dict:
 
 
 def write_log(proj: Path, entries: list[dict]) -> None:
+    for e in entries:
+        f = e.get("file", "")
+        if f and f != "-" and not (proj / f).exists():
+            (proj / f).parent.mkdir(parents=True, exist_ok=True)
+            (proj / f).write_text("# placeholder\n", encoding="utf-8")
     (proj / ".superlite" / "incidents.jsonl").write_text(
         "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
 

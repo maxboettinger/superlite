@@ -24,10 +24,11 @@ Every other role takes a brief file under `.superlite/briefs/` (never pasted int
 
 Run `"$SL" fleet wait --any --timeout 540000 --plan $PLAN` as a background command (the harness wakes you when a worker finishes) instead of waiting for SendMessage replies. Act on its lines, not on report text. Run it again while workers are busy. `BUSY Wn Wm` lists the workers still running. A lead that must not end its turn may run it in the foreground. One-turn workers are stopped by `fleet wait`.
 
-- `Wn <label> <STATUS> findings=<n> [concerns=N] <sd>/fleet/reports/<id>.json`: ` concerns=N` counts a report's concerns; `<id>` is the label's first comma part; ` (screen)` marks the screen fallback.
+- `Wn <label> <STATUS> findings=<n> [concerns=N] [partial] <sd>/fleet/reports/<id>.json`: ` concerns=N` counts a report's concerns; `<id>` is the label's first comma part; ` (screen)` marks the screen fallback.
   - Task labels (`DONE`, `DONE_WITH_CONCERNS`): `commit_task` as usual.
   - `findings=` above 0 or `CHANGES_REQUESTED`: `findings route` with the JSON paths, then the fixer lines above.
   - `BLOCKED`: treat the task as BLOCKED.
+  - ` partial` (a final reviewer's APPROVED that left packet lines unread): no approval; start a fresh final reviewer for the round.
   - `UNKNOWN` (no parsable report): `"$SL" fleet report Wn --plan $PLAN` prints the saved `.superlite/fleet/reports/<id>.md` (read-only; a busy worker or one with no collected report exits 1); read it once, then decide.
   - `NEEDS_CONTEXT`: answer with `"$SL" fleet send Wn --text "..."`, then wait again.
 - `Wn <label> ASKED`: the turn ended without a report; the worker was asked once. Wait again; a second miss reports UNKNOWN.

@@ -1602,7 +1602,83 @@ def cmd_adapter(a: argparse.Namespace) -> int:  # O(template size) + file write 
 # --------------------------------------------------------------------------- packet command
 
 
-def read_incidents(path: Path) -> list[dict]:  # O(file size) total, single pass
+def norm_path(root: Path, file: str) -> str:  # O(m + d) path syscalls total
+    """A repo-relative path: the root prefix and `./` dropped, a doubled leading folder (`pkg/pkg/x`) resolved once when only the shorter path exists."""
+    f = str(file).replace("\\", "/")  # O(m)
+    if f in ("", "-"):  # O(1)
+        return f  # O(1)
+    f = _rel(f, root)  # O(m)
+    parts = f.split("/")  # O(m)
+    while len(parts) > 2 and parts[0] == parts[1] and not (root / "/".join(parts)).exists() and (root / "/".join(parts[1:])).exists():  # O(d) iterations
+        parts = parts[1:]  # O(d)
+    return "/".join(parts)  # O(m)
+
+
+def on_disk(root: Path, file: str) -> bool:  # O(1) stat calls
+    """`-` and an empty file name stand for no file; any other must be a file under the root or its src folder."""
+    if file in ("", "-"):  # O(1)
+        return True  # O(1)
+    return (root / file).exists() or (root / "src" / file).exists()  # a directory counts as present | O(1)
+
+
+def split_gone(root: Path, entries: list[dict], changed: set[str] | None) -> tuple[list[dict], list[dict]]:  # O(K*F)
+    """(kept, gone): verified entries are always kept; an entry whose file is missing but is the one changed path ending in `/file` is rewritten to it."""
+    kept: list[dict] = []  # O(1)
+    gone: list[dict] = []  # O(1)
+    for e in entries:  # O(K) iterations
+        f = str(e["file"])  # O(1)
+        if e.get("kind") == "verified" or on_disk(root, f) or f in (changed or ()):  # a file this run's diff deleted is still an open finding | O(1)
+            kept.append(e)  # O(1)
+            continue  # O(1)
+        hits = [c for c in (changed or ()) if c.endswith("/" + f.lstrip("/"))]  # O(F)
+        if len(hits) == 1:  # O(1)
+            kept.append({**e, "file": hits[0]})  # O(1)
+        else:  # O(1)
+            gone.append(e)  # O(1)
+    return kept, gone  # O(1)
+
+
+def ledger_rulings(path: Path) -> list[str]:  # O(file size) total
+    """The text of every `- Ruling:` line of the ledger."""
+    if not path.is_file():  # O(1)
+        return []  # O(1)
+    out: list[str] = []  # O(1)
+    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():  # O(L) iterations
+        m = re.match(r"\s*[-*]\s*Ruling:\s*(.+)", ln)  # O(m)
+        if m:  # O(1)
+            out.append(m.group(1).strip())  # O(m)
+    return out  # O(L)
+
+
+def ruled(entry: dict, rulings: list[str]) -> bool:  # O(R*m) total
+    """A ledger ruling names the entry's `file:line` (no digit after the line) or, for a test failure, its `file::test`."""
+    file, line = str(entry.get("file", "")), entry.get("line", 0)  # O(1)
+    if file in ("", "-"):  # O(1)
+        return False  # O(1)
+    pats = [rf"(?<![\w./-]){re.escape(file)}:{line}(?!\d)"]  # O(m)
+    tid = str(entry.get("context", "")).split(": ", 1)[0]  # O(m)
+    if entry.get("kind") == "test-failure" and "::" in tid and tid.startswith(file):  # O(1)
+        pats.append(rf"(?<![\w./-]){re.escape(tid)}(?!\w)")  # O(m)
+    return any(re.search(pt_, r) for r in rulings for pt_ in pats)  # O(R*m)
+
+
+def killed(summary: dict) -> bool:  # O(1)
+    """A run that was stopped or killed (its `error` says so): no result."""
+    err = str(summary.get("error") or "")  # O(1)
+    return bool(err) and ("stopped by" in err or "were killed" in err or "SIGTERM" in err)  # O(1)
+
+
+def norm_summary(d: dict, root: Path) -> dict:  # O(F*m) total
+    """A copy of a test summary whose `files` keys and failure file parts went through norm_path."""
+    out = dict(d)  # O(F)
+    if isinstance(d.get("files"), dict):  # O(1)
+        out["files"] = {norm_path(root, k): v for k, v in d["files"].items()}  # O(F*m)
+    if isinstance(d.get("failures"), list):  # O(1)
+        out["failures"] = [norm_path(root, str(f).split("::", 1)[0]) + "::" + str(f).split("::", 1)[1] if "::" in str(f) else f for f in d["failures"]]  # O(F*m)
+    return out  # O(1)
+
+
+def read_incidents(path: Path, root: Path | None = None) -> list[dict]:  # O(file size) total, single pass
     out: list[dict] = []  # O(m)
     if path.is_file():  # O(m)
         for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():  # O(K) iterations
@@ -1615,6 +1691,8 @@ def read_incidents(path: Path) -> list[dict]:  # O(file size) total, single pass
                 continue  # O(m)
             if isinstance(e, dict) and "file" in e:  # O(m)
                 e["file"] = str(e.get("file", "")).replace("\\", "/")  # O(m)
+                if root is not None:  # O(m)
+                    e["file"] = norm_path(root, e["file"])  # O(m)
                 try:  # O(m)
                     e["line"] = int(e.get("line") or 0)  # O(m)
                 except (TypeError, ValueError):  # O(m)
@@ -1713,10 +1791,14 @@ def claimed_fix_items(entries: list[dict], changed: set[str], root: Path | None 
     for e in entries:  # O(K) iterations
         if e.get("kind") != "verified":  # O(1)
             newest[(_rel(e.get("file", ""), root), e.get("line", 0))] = e  # a later entry overwrites | O(1)
+    runs_decide = {(_rel(e.get("file", ""), root), e.get("line", 0)) for e in entries  # locations a test run decided | O(K)
+                   if e.get("kind") in ("test-failure", "no-result") or e.get("agent") == "run_tests"}  # O(K)
     items: list[Item] = []  # O(1)
     for (file, line), e in newest.items():  # O(groups) iterations
-        if str(e.get("resolution", "")).lower() != "fixed" or not file or file in changed:  # O(1)
+        if str(e.get("resolution", "")).lower() != "fixed" or not file or file in changed or (file, line) in runs_decide:  # O(1)
             continue  # O(1)
+        if any(_rel(w, root) in changed for w in re.findall(r"[\w./-]+", str(e.get("context", "")))):  # the claim names a changed file | O(m)
+            continue  # O(m)
         agent = e.get("agent") or "unknown"  # O(1)
         items.append(Item("claimed", (3, "\uffff", file, line),  # O(1)
                           f"{file}:{line}  claimed fixed by {agent}, file unchanged since base",  # O(1)
@@ -2356,14 +2438,29 @@ def _started_before(summary: dict, entry: dict) -> bool:  # O(1) total
     return started is not None and logged is not None and started <= logged  # O(1)
 
 
+def _has_result(summary: dict) -> bool:  # O(1) total
+    """A run that ran tests: no `error`, and passed + failed + skipped above zero."""
+    return not summary.get("error") and sum(v for k in ("passed", "failed", "skipped") if isinstance((v := summary.get(k)), int)) > 0  # O(1)
+
+
 def stale_in_run(entry: dict, summaries: list[dict]) -> bool:  # O(S*F) total
     """The newest summary that covers the entry decides; none covers it: not stale. A summary covers an entry when
     it holds the entry's file or lists the failure; a full run also covers every `run_tests` failure, so a later
     full run closes each one it does not list, `-` entries from runners without JUnit included (#81). A run that
     started before the entry was logged covers nothing (#101)."""
-    if entry.get("kind") != "test-failure":  # O(1)
-        return False  # O(1)
+    kind = entry.get("kind")  # O(1)
     file = str(entry.get("file", ""))  # O(1)
+    if kind == "no-result" or (kind == "test-failure" and file == "-"):  # a later run with a result closes it | O(1)
+        task = entry.get("task")  # O(1)
+        for s in summaries:  # O(S)
+            if not isinstance(s, dict) or _started_before(s, entry) or not _has_result(s) or s.get("recorded"):  # O(1)
+                continue  # O(1)
+            if (task and s.get("task") == task) or (kind == "no-result" and s.get("mode") == "full"):  # the newest matching run decides | O(1)
+                return kind == "no-result" or (not s.get("failed") and not s.get("failures"))  # a `-` failure needs it green | O(1)
+        if kind == "no-result":  # O(1)
+            return False  # O(1)
+    if kind != "test-failure":  # O(1)
+        return False  # O(1)
     for s in summaries:  # O(S)
         if not isinstance(s, dict) or _started_before(s, entry):  # O(1)
             continue  # O(1)
@@ -2431,12 +2528,7 @@ def outdated_failure(root: Path, test_file: str, when: float, changed: set[str] 
     return changed_after(root, test_inputs(root, test_file, changed), when)  # O(B + F*d)
 
 
-def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | None = None) -> tuple[str, int]:  # O(file size + F*(B + d)) total
-    if not path.is_file():  # O(1)
-        return "- no test summary recorded (`run_tests.py --full` runs alongside this review)", 0  # O(1)
-    d = load_summary(path)  # O(file size)
-    if d is None:  # O(1)
-        return "- test summary unreadable", 0  # O(1)
+def _summary_rows(d: dict, root: Path | None, changed: set[str] | None) -> tuple[list[str], int]:  # O(F*(B + d)) total
     failed = d.get("failures") or d.get("failed_tests") or []  # O(1)
     skipped = d.get("skipped_tests") or []  # O(1)
     started = _num(d.get("started"))  # a summary without a start time is never outdated | O(1)
@@ -2460,6 +2552,31 @@ def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | 
     rows += [f"- OUTDATED: {t} ({f} changed after this run; the full suite decides)" for t, f in old[:OUTDATED_LINES]]  # O(min(30, old))
     rows += [f"- FAILING: {t}" for t in cur[:30]]  # O(min(30, cur))
     rows += [f"- SKIPPED: {t}" for t in skipped[:30]]  # O(min(30, skipped))
+    return rows, nfail  # O(1)
+
+
+def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | None = None,  # O(file size + F*(B + d)) total
+                      runs: list[dict] | None = None) -> tuple[str, int]:  # O(1)
+    if not path.is_file():  # O(1)
+        return "- no test summary recorded (`run_tests.py --full` runs alongside this review)", 0  # O(1)
+    d = load_summary(path)  # O(file size)
+    if d is None:  # O(1)
+        return "- test summary unreadable", 0  # O(1)
+    if root is not None:  # O(1)
+        d = norm_summary(d, root)  # O(F*m)
+    if not d.get("error"):  # a summary without `error` reads as before | O(1)
+        rows, nfail = _summary_rows(d, root, changed)  # O(F*(B + d))
+        return "\n".join(rows), nfail  # O(1)
+    err = str(d["error"])[:200]  # O(1)
+    if killed(d):  # O(1)
+        rows, nfail = [f"- killed run, no result: {err}"], 0  # O(1)
+    else:  # O(1)
+        rows, nfail = [f"- run without a result: {err}", f"- FAILING: {err}"], 1  # O(1)
+    best = next((r for r in (runs or []) if isinstance(r, dict) and _has_result(r)), None)  # the first run with a result, in run order | O(S)
+    if best is not None:  # O(1)
+        more, n2 = _summary_rows(best, root, changed)  # O(F*(B + d))
+        rows += ["- newest run with a result:"] + more  # O(F)
+        nfail += n2  # O(1)
     return "\n".join(rows), nfail  # O(1)
 
 
@@ -2468,7 +2585,7 @@ def outdated_incidents(root: Path, entries: list[dict], changed: set[str] | None
     out: list[tuple[dict, str]] = []  # O(1)
     for e in entries:  # O(K) iterations
         epoch = e.get("epoch")  # O(1)
-        if e.get("kind") != "test-failure" or e.get("agent") != "run_tests" or _num(epoch) is None or not e.get("file"):  # O(1)
+        if e.get("kind") != "test-failure" or e.get("agent") != "run_tests" or _num(epoch) is None or e.get("file") in ("", "-"):  # O(1)
             continue  # O(1)
         why = outdated_failure(root, str(e["file"]), float(epoch), changed)  # O(B + F*d)
         if why:  # O(1)
@@ -2496,6 +2613,7 @@ def cap_text(s: str, limit: int, note: str = "(truncated)") -> str:  # O(len(s))
     return s[: max(0, limit - len(note) - 1)].rstrip() + "\n" + note  # O(len(s))
 
 
+N_TOKEN, CUT_TOKEN = "@@N@@", "@@CUT@@"  # O(1) placeholders of the packet head, filled once the packet is assembled
 SPEC_CHARS = 6000  # O(1) cap on an inline packet's spec section (#130)
 PREVIOUS_CHARS = 4000  # O(1) cap on the earlier review rounds section (#130)
 COVERAGE_CHARS = 3000  # O(1) cap on a plan packet's coverage section (#144)
@@ -2510,6 +2628,53 @@ def spec_text(plan: Plan) -> str:  # O(L) total
     if drop:  # O(1)
         lines = lines[:drop[0]] + lines[drop[1]:]  # O(L)
     return "\n".join(lines).strip()  # O(L)
+
+
+RULING_LINE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?(?:\*\*)?Ruling\b[^:\n]{0,40}:")  # O(1)
+
+
+def marked_cap(s: str, limit: int, what: str, path: Path | str) -> tuple[str, list[str]]:  # O(len(s)) total
+    """S cut to LIMIT chars ending `(truncated: WHAT cut at LIMIT of N characters; read PATH in full)`, plus its note."""
+    if len(s) <= limit:  # O(1)
+        return s, []  # O(1)
+    return (cap_text(s, limit, f"(truncated: {what} cut at {limit} of {len(s)} characters; read {path} in full)"),  # O(len(s))
+            [f"{what} cut at {limit} of {len(s)} characters (read {path} in full)"])  # O(1)
+
+
+def spec_section(plan: Plan, spec: Path, limit: int = SPEC_CHARS) -> tuple[str, list[str]]:  # O(L) total
+    """Section 0's text and its cut notes: the spec's `Ruling:` lines go first (from the last one back, one marker where
+    the first cut one stood), then the text from its end; both markers name `spec` to read in full."""
+    text = spec_text(plan) or "(empty spec)"  # O(L)
+    if len(text) <= limit:  # O(1)
+        return text, []  # O(1)
+    lines = text.split("\n")  # O(L)
+    idx = [i for i, ln in enumerate(lines) if RULING_LINE.match(ln)]  # O(L)
+    notes: list[str] = []  # O(1)
+    if idx:  # O(1)
+        total = len(idx)  # O(1)
+        keep = total  # O(1)
+        size = len(text)  # O(1)
+        while keep >= 0:  # drop rulings from the last one back until text and marker fit | O(R) iterations
+            if keep == total:  # O(1)
+                keep -= 1  # O(1)
+                size -= len(lines[idx[keep]]) + 1  # O(1)
+                continue  # O(1)
+            marker = f"(truncated: {total - keep} of {total} ruling lines cut at the spec cap; read {spec} in full)"  # O(1)
+            if size + len(marker) + 1 <= limit or keep == 0:  # O(1)
+                break  # O(1)
+            keep -= 1  # O(1)
+            size -= len(lines[idx[keep]]) + 1  # O(1)
+        cut = set(idx[keep:])  # O(R)
+        out = []  # O(1)
+        for i, ln in enumerate(lines):  # O(L) iterations
+            if i == idx[keep]:  # O(1)
+                out.append(marker)  # O(1)
+            if i not in cut:  # O(1)
+                out.append(ln)  # O(1)
+        text = "\n".join(out)  # O(L)
+        notes.append(f"section 0: {total - keep} of {total} ruling lines cut (read {spec} in full)")  # O(1)
+    text, more = marked_cap(text, limit, "spec", spec)  # O(L)
+    return text, notes + [f"section 0: {n}" for n in more]  # O(1)
 
 
 def packet_inputs(a: argparse.Namespace) -> tuple[bool, Plan, str]:  # O(W + L*m + H^2) total
@@ -2625,9 +2790,9 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     wait_for_full(tests, a.wait_timeout)  # O(timeout / 0.5)
     tests = newest_summary_path(tests)  # O(1)
     summary = load_summary(tests)  # O(file size)
-    entries = read_incidents(log)  # O(file size)
-    n_all = len(entries)  # O(1)
+    entries = read_incidents(log, root)  # O(file size)
     runs = run_summaries(Path(a.tests) if a.tests else sl / "test-summary.json") or ([summary] if summary else [])  # O(S log S)
+    runs = [norm_summary(r, root) for r in runs]  # O(S*F*m)
     base_ok = False  # O(1)
     if a.base:  # O(1)
         try:  # O(1)
@@ -2636,6 +2801,11 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         except (OSError, subprocess.TimeoutExpired):  # git missing or hanging: treat as no base | O(1)
             base_ok = False  # O(1)
     changed = changed_since(root, a.base) if base_ok else None  # O(F)
+    entries, gone_files = split_gone(root, entries, changed)  # incidents on files no longer on disk are left out | O(K*F)
+    rulings = ledger_rulings(Path(a.ledger) if getattr(a, "ledger", None) else sl / "progress.md")  # O(file size)
+    ruled_out = [e for e in entries if ruled(e, rulings)]  # O(K*R*m)
+    entries = [e for e in entries if not ruled(e, rulings)]  # O(K*R*m)
+    n_all = len(entries)  # O(1)
     entries = [e for e in entries if not stale_in_run(e, runs)]  # O(K*S*F)
     gone = outdated_incidents(root, entries, changed)  # run_tests failures whose code changed after the run | O(K*(B + F*d))
     gone_ids = {id(e) for e, _ in gone}  # O(K)
@@ -2653,7 +2823,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
                           f"- {m.msg}", m.file, m.line, "pt_review contract check (tool)", True))  # O(1)
     items.sort(key=lambda i: i.rank)  # O(I log I)
     counts = {s: sum(1 for i in items if i.section == s) for s in ("incidents", "probes", "uncovered", "contract", "claimed")}  # O(5*I)
-    tests_text, nfail = read_test_summary(tests, root, changed)  # O(F*(B + d))
+    tests_text, nfail = read_test_summary(tests, root, changed, runs)  # O(F*(B + d))
     shown_old = tests_text.count("\n- OUTDATED: ") + tests_text.startswith("- OUTDATED: ")  # O(len)
     seen_loc: set[tuple] = set()  # O(1)
     for e, why in gone:  # O(K) iterations
@@ -2669,10 +2839,13 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
 
     seams = cross_package_calls(root)  # O(S*B)
     seam_text = "\n".join(seams) if seams else "- none"  # O(1)
-    seam_text = cap_text(seam_text, 5000, f"- (+ more calls omitted; {len(seams)} total)")  # O(1)
-    focus = cap_text(plan.review_focus() or "(plan has no Review Focus section)", 3000)  # O(1)
+    cuts: list[str] = []  # every cut of the packet, named in its head and on stdout (#591) | O(1)
+    if len(seam_text) > 5000:  # O(1)
+        seam_text = cap_text(seam_text, 5000, f"- (+ more calls omitted; {len(seams)} total)")  # O(1)
+        cuts.append(f"section 5: {len(seams)} seam calls, some omitted")  # O(1)
+    focus = plan.review_focus() or "(plan has no Review Focus section)"  # never cut | O(1)
     ranges = run_ranges(root, a.base)  # one range resolution for the stat and the hunks (#113) | O(F + file size) + git spawns
-    diff = cap_text(git_diff_stat(root, a.base, ranges, extra), 2000)  # O(X) + git spawns
+    diff = git_diff_stat(root, a.base, ranges, extra)  # never cut | O(X) + git spawns
     if n_more:  # the note survives the stat cap | O(1)
         diff += f"\n(+{n_more} more untracked files not shown)"  # O(1)
     hot: list[str] = []  # hot-spot files: those the ranked items point at, in rank order | O(1)
@@ -2687,6 +2860,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         ex_budget = min(max(ex_budget, excerpt_need(got[1])), int(AUTO_MAX_TOKENS * CHARS_PER_TOKEN) - rest)  # O(X)
         cap = rest + ex_budget  # O(1)
     raw_ex = render_excerpts(*got, budget=ex_budget, hot=hot) if got is not None else "- (not a git repository)"  # O(X)
+    shown_diffs = got  # what section 8 renders from, to shrink it again when the packet is over the cap | O(1)
     shard = shard_path(out)  # O(1)
     shard_text, shard_line = "", ""  # O(1)
     if got is not None and any(is_test_path(f) for f in cut_files(raw_ex)):  # a changed test file would not show in full: all go to the shard (#381) | O(X)
@@ -2698,6 +2872,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
             ex_budget = min(max(ex_init, excerpt_need(n_diffs)), int(AUTO_MAX_TOKENS * CHARS_PER_TOKEN) - rest)  # O(X)
             cap = rest + ex_budget  # O(1)
         raw_ex = render_excerpts([f for f in got[0] if not is_test_path(f) or f in hot], n_diffs, budget=ex_budget, hot=hot)  # O(X)
+        shown_diffs = ([f for f in got[0] if not is_test_path(f) or f in hot], n_diffs)  # O(F*H)
         shard_cap = int((AUTO_MAX_TOKENS if a.max_tokens is None else a.max_tokens) * CHARS_PER_TOKEN)  # O(1)
         shard_head = ("# Review packet shard: test files\n"  # O(1)
                       f"packet: {out.absolute()}\n"  # O(1)
@@ -2707,21 +2882,25 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
                                                            budget=max(0, shard_cap - len(shard_head)), hot=t_changed), shard_cap)  # O(X)
         shard_line = (f"Tests shard: {len(t_changed)} changed test file(s) are not in section 8 "  # O(1)
                       f"(truncated: test diffs over the size limit; read {shard.absolute()} in full)")  # O(1)
-    left_line = raw_ex.split("\n", 1)[0] if raw_ex.startswith("Left out: ") else ""  # O(1)
-    excerpts = cap_text(raw_ex, ex_budget)  # O(X)
 
     front: list[str] = []  # an inline build's spec, then earlier review rounds (#130) | O(1)
     if inline:  # O(1)
-        front += ["## 0. Spec", cap_text(spec_text(plan) or "(empty spec)", SPEC_CHARS), ""]  # O(L)
+        spec_body, spec_notes = spec_section(plan, Path(a.spec).absolute(), SPEC_CHARS)  # O(L)
+        front += ["## 0. Spec", spec_body, ""]  # O(L)
+        cuts += spec_notes  # O(1)
     if previous:  # O(1)
-        front += ["## 0b. Earlier review rounds (findings and their fixes)", cap_text(previous, PREVIOUS_CHARS), ""]  # O(P)
+        prev_body, prev_notes = marked_cap(previous, PREVIOUS_CHARS, "earlier rounds", Path(a.previous).absolute())  # O(P)
+        front += ["## 0b. Earlier review rounds (findings and their fixes)", prev_body, ""]  # O(P)
+        cuts += [f"section 0b: {n}" for n in prev_notes]  # O(1)
     if not inline:  # a plan's decision-category table; an inline packet's section 0 already shows the spec's (#144) | O(L)
         from plan_tools import load_coverage  # lazy: plan_tools imports this module | O(1)
         coverage = load_coverage()  # O(1)
         span = coverage.section_span(plan.lines)  # O(L)
         if span:  # O(1)
             body = "\n".join(plan.lines[span[0] + 1:span[1]]).strip()  # O(L)
-            front += ["## 0c. Coverage (decision categories from the plan)", cap_text(body, COVERAGE_CHARS), ""]  # O(L)
+            cov_body, cov_notes = marked_cap(body, COVERAGE_CHARS, "coverage", plan.path.absolute())  # O(L)
+            front += ["## 0c. Coverage (decision categories from the plan)", cov_body, ""]  # O(L)
+            cuts += [f"section 0c: {n}" for n in cov_notes]  # O(1)
     if a.max_tokens is None:  # the default cap grows by these sections, as it does for the excerpts | O(1)
         cap += len("\n".join(front))  # O(1)
     title = ("FAST PATH" if fast else "REVIEW REQUIRED (inline build)" if inline  # O(1)
@@ -2729,10 +2908,14 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     head = [  # O(1)
         f"# Review packet: {title}",  # O(1)
         f"{'spec' if inline else 'plan'}: {plan.path.name}",  # O(1)
-        "Answer in one turn, no tools: a verdict, then findings as `file:line - problem - fix`. "  # O(1)
-        "Anything marked unverified is judged from its excerpt or listed as a finding.",  # O(1)
+        "Answer in one turn: a verdict, then findings as `file:line - problem - fix`. Read the whole packet first; "  # O(1)
+        "beyond it, Read only a file a `read <path> in full` marker or the Cut line names, the Render evidence images "  # O(1)
+        "and what your brief names. Anything marked unverified is judged from its excerpt or listed as a finding.",  # O(1)
+        f"This packet has {N_TOKEN} lines and ends with `End of packet ({N_TOKEN} lines)`; when one Read stops early, Read on with an offset. "  # O(1)
+        "An APPROVED that leaves lines unread is `Verdict: APPROVED (partial: lines A-B not read)`.",  # O(1)
+        CUT_TOKEN,  # the Cut line, or nothing | O(1)
         ("Nothing is open: no open incidents, probe failures, unverified categories, contract mismatches or "  # O(1)
-         "failing tests. Reply with a short APPROVED (about 10 s)." if fast else  # O(1)
+         "failing tests. Reply with a short APPROVED once you read it all." if fast else  # O(1)
          f"Open items: {n_open} (incidents {counts['incidents']}, probe failures {counts['probes']}, "  # O(1)
          f"unverified categories {counts['uncovered']}, contract mismatches {counts['contract']}, claimed fixes {counts['claimed']}, "  # O(1)
          f"failing tests {nfail}). Excerpts are +-12 lines."),  # O(1)
@@ -2745,16 +2928,27 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         "",  # O(1)
         *front,  # O(1)
     ]  # O(1)
-    tail = ["## 4. Test summary", tests_text, "",  # O(1)
-            "## 5. Cross-package seams (calls from one package into another)", seam_text, "",  # O(1)
-            "## 6. Diff stat", "```\n" + diff + "\n```", "",  # O(1)
-            "## 7. Review Focus", focus, "",  # O(1)
-            *([render_section(root)] if render_section(root) else []),  # after the Review Focus section | O(n log n)
-            "## 8. Source excerpts (changed hunks of the hot-spot files)", excerpts, ""]  # O(1)
+    render = [render_section(root)] if render_section(root) else []  # after the Review Focus section | O(n log n)
+
+    def tail_of(excerpts: str) -> list[str]:  # O(sum of text sizes)
+        return ["## 4. Test summary", tests_text, "",  # O(1)
+                "## 5. Cross-package seams (calls from one package into another)", seam_text, "",  # O(1)
+                "## 6. Diff stat", "```\n" + diff + "\n```", "",  # O(1)
+                "## 7. Review Focus", focus, "",  # O(1)
+                *render,  # O(1)
+                "## 8. Source excerpts (changed hunks of the hot-spot files)", excerpts, ""]  # O(1)
+    excerpts = raw_ex  # O(1)
+    tail = tail_of(excerpts)  # O(sum of text sizes)
+    names = list(dict.fromkeys(e["file"] for e in gone_files))  # O(K)
+    ruled_locs = list(dict.fromkeys(f"{e['file']}:{e.get('line')}" for e in ruled_out))  # O(K)
+    ruled_names = ", ".join(ruled_locs[:5]) + (f", +{len(ruled_locs) - 5} more" if len(ruled_locs) > 5 else "")  # O(1)
+    gone_names = ", ".join(names[:5]) + (f", +{len(names) - 5} more" if len(names) > 5 else "")  # O(1)
     sec_titles = {  # O(1)
         "incidents": "## 1. Open incidents (repeated file:line first, then unresolved, then low confidence)"  # O(1)
                      + (f"\ndropped {n_stale} stale test-failure incident(s)" if n_stale else "")  # O(1)
-                     + (f"\nmoved {n_gone} outdated test-failure incident(s) to section 4" if n_gone else ""),  # O(1)
+                     + (f"\nmoved {n_gone} outdated test-failure incident(s) to section 4" if n_gone else "")  # O(1)
+                     + (f"\nleft out {len(gone_files)} incident(s) on files no longer on disk: {gone_names}" if gone_files else "")  # O(1)
+                     + (f"\nleft out {len(ruled_out)} incident(s) a ledger Ruling: names: {ruled_names}" if ruled_out else ""),  # O(1)
         "probes": "## 2. Probe results: failures still open and unverified categories",  # O(1)
         "claimed": "## 3b. Claimed fixes not on disk (a reviewer logged these fixed, the file is unchanged since base)",  # O(1)
         "contract": ("## 3. Contract check: not run (inline build)" if inline else  # O(1)
@@ -2762,14 +2956,18 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
                      f"{len(mismatches)} mismatch(es))"),  # O(1)
     }  # O(1)
     fixed_len = len("\n".join(head + tail)) + 400 + sum(len(t) + 40 for t in sec_titles.values())  # O(sum of text sizes)
-    budget = cap - fixed_len  # O(1)
+    if fixed_len > cap and shown_diffs is not None:  # over the cap only section 8 shrinks; the stat and the Review Focus stay whole (#591) | O(X)
+        excerpts = render_excerpts(*shown_diffs, budget=max(0, len(raw_ex) - (fixed_len - cap)), hot=hot)  # O(X)
+        tail = tail_of(excerpts)  # O(sum of text sizes)
+        fixed_len = len("\n".join(head + tail)) + 400 + sum(len(t) + 40 for t in sec_titles.values())  # O(sum of text sizes)
+    budget = max(cap - fixed_len, 3000)  # floor: a cut-proof stat and focus must not push every open item out of sections 1-3 | O(1)
     chosen: list[tuple[Item, str]] = []  # O(1)
     used, shown = 0, set()  # O(1)
     omitted = {s: 0 for s in counts}  # O(1)
     stopped = False  # O(1)
     for n, it in enumerate(items, 1):  # O(I) iterations
         text = render_item(root, it, shown, f"[{n}]")  # O(B) per item, runs even after budget exhausted
-        if stopped or used + len(text) > budget:  # O(1)
+        if stopped or (used + len(text) > budget and chosen):  # the first item always fits | O(1)
             stopped = True  # O(1)
             omitted[it.section] += 1  # O(1)
             continue  # O(1)
@@ -2784,15 +2982,29 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         if om:  # O(1)
             parts.append(f"- ({om} lower-ranked item(s) omitted to stay within the size cap)\n")  # O(1)
     parts.extend(tail)  # O(1)
-    text = "\n".join(parts)  # O(output size)
-    if len(text) > cap:  # O(1)
-        text = cap_text(text, cap, "(packet truncated at the size cap)")  # O(output size)
-    if left_line and left_line not in text:  # the Left out line survives every cap | O(output size)
-        text = cap_text(text, max(0, cap - len(left_line) - 1), "(packet truncated at the size cap)") + "\n" + left_line  # O(output size)
+    if sum(omitted.values()):  # O(1)
+        cuts.append(f"sections 1-3: {sum(omitted.values())} lower-ranked item(s) omitted")  # O(1)
+    if excerpts.startswith("Left out: "):  # O(1)
+        cuts.append("section 8 " + "left out: " + excerpts.split("\n", 1)[0][len("Left out: "):])  # O(len)
+    for ln in excerpts.splitlines():  # O(lines) iterations
+        mt = re.match(r"\(truncated: .*; read (.+) in full\)$", ln)  # O(len(ln))
+        if mt:  # O(1)
+            cuts.append(f"section 8 truncated: {mt.group(1)}")  # O(1)
+    parts = [(f"Cut to fit the size cap: {'; '.join(cuts)}" if cuts else None) if x == CUT_TOKEN else x for x in parts]  # O(parts)
+    body = "\n".join(x for x in parts if x is not None).rstrip("\n")  # O(output size)
+    n_lines = body.count("\n") + 1 + 2  # the blank line and the End line; the N digits add no line | O(output size)
+    n_at = next(i for i, x in enumerate(head) if N_TOKEN in x)  # the packet-size line, ahead of the spec, rounds and coverage in `front` | O(head)
+    parts = [x.replace(N_TOKEN, str(n_lines)) if i == n_at else x for i, x in enumerate(parts)]  # that line only: a spec, round or excerpt holding the token stays as is | O(parts)
+    body = "\n".join(x for x in parts if x is not None).rstrip("\n")  # O(output size)
+    text = body + f"\n\nEnd of packet ({n_lines} lines)\n"  # O(output size)
     out.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     out.write_text(text, encoding="utf-8", newline="\n")  # O(1)
     print(f"wrote {out} ({len(text)} chars, ~{int(len(text) / CHARS_PER_TOKEN)} tokens) - "  # O(1)
           f"{'FAST PATH' if fast else f'{n_open} open item(s)'}{', inline build' if inline else ''}")  # O(1)
+    for note in cuts:  # O(cuts) iterations
+        print(f"cut: {note}")  # O(1)
+    if len(text) > cap:  # the packet stays whole: only section 8 shrank | O(1)
+        print(f"packet over the size cap by {len(text) - cap} chars (the diff stat and the Review Focus are never cut)")  # O(1)
     if shard_text:  # O(1)
         shard.write_text(shard_text, encoding="utf-8", newline="\n")  # O(1)
         print(f"wrote {shard.absolute()} ({len(shard_text)} chars) - test files, full diffs")  # O(1)
@@ -2823,6 +3035,7 @@ def build_parser() -> argparse.ArgumentParser:  # O(1) total
         elif name == "packet":  # O(1)
             sp.add_argument("--log")  # O(1)
             sp.add_argument("--probes")  # O(1)
+            sp.add_argument("--ledger", help="plan ledger whose `- Ruling:` lines leave incidents out (default .superlite/progress.md)")  # O(1)
             sp.add_argument("--out")  # O(1)
             sp.add_argument("--max-tokens", type=_positive_int, default=None,  # O(1)
                             help="packet size cap; default 20000, grown to fit every changed file's hunks up to 60000")  # O(1)
