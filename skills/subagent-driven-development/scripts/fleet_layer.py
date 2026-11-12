@@ -5,6 +5,7 @@
 
 Prints `Wn layer-<L> started account=<a> pane=<p>`. The pane's shell runs `scripts/test_layers.py run <L>`, writes
 `<sd>/fleet/layers/<Wn>-<L>.log` and, when it ends, the exit code to `<Wn>-<L>.exit`; `result` reads both for `fleet wait`.
+The shell first writes its own pid to `<Wn>-<L>.pid`; `alive` reads it so a restore can tell a dead layer run.
 Exit 2 for a bad layer or a missing scripts/test_layers.py, 3 with a `BLOCKED: ...` line when no pane can be opened.
 """
 
@@ -38,6 +39,29 @@ def _files(sd, wid, layer):  # O(1)
     return d / f"{wid}-{layer}.log", d / f"{wid}-{layer}.exit"  # O(1)
 
 
+def _pid_file(sd, wid, layer):  # O(1)
+    return _dir(sd) / f"{wid}-{layer}.pid"  # O(1)
+
+
+def alive(sd, wid, w):  # O(1)
+    """Whether the layer shell of worker `wid` still runs: True or False by its pid file, None when there is none or it is unreadable."""
+    try:  # O(1)
+        pid = int(_pid_file(sd, wid, w.get("layer", "")).read_text().strip())  # O(1)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+    if pid <= 0:  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        os.kill(pid, 0)  # O(1)
+    except ProcessLookupError:  # O(1)
+        return False  # O(1)
+    except PermissionError:  # O(1)
+        return True  # O(1)
+    except OSError:  # O(1)
+        return None  # O(1)
+    return True  # O(1)
+
+
 def run(sd, layer, root, env=None):  # O(a + w) plus herdr calls
     sd = Path(sd)  # as given, never resolved: main passes a resolved one | O(1)
     if layer not in LAYERS:  # O(1)
@@ -59,8 +83,10 @@ def run(sd, layer, root, env=None):  # O(a + w) plus herdr calls
     log, ex = _files(sd, wid, layer)  # O(1)
     log.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     ex.unlink(missing_ok=True)  # a stale exit file would read as finished | O(1)
+    pidf = _pid_file(sd, wid, layer)  # O(1)
+    pidf.unlink(missing_ok=True)  # a stale pid would read as a live shell | O(1)
     q = shlex.quote  # O(1)
-    command = f"cd {q(str(root))} && {q(sys.executable)} -u scripts/test_layers.py run {layer} > {q(str(log))} 2>&1; echo $? > {q(str(ex))}"  # O(1)
+    command = f"echo $$ > {q(str(pidf))}; cd {q(str(root))} && {q(sys.executable)} -u scripts/test_layers.py run {layer} > {q(str(log))} 2>&1; echo $? > {q(str(ex))}"  # O(1)
     try:  # O(1)
         pane = fleet.open_pane(sd, wid, str(root), pane_env, record)  # O(w)
     except HerdrError as e:  # O(1)
