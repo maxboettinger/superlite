@@ -1263,14 +1263,44 @@ def _error_marker(lines: list) -> dict:  # first compiler error line and the las
     return {"error": err, "marker": mark}  # O(1)
 
 
+PYTEST_SUMMARY = re.compile(r"^(?:=+ )?(\d+ [a-z]+(?:, \d+ [a-z]+)*) in \d+(?:\.\d+)?(?:s| seconds)(?: \(\d+:\d\d:\d\d\))?(?: =+)?$")  # pytest's final line, anchored so quoted summaries in failure output never match | O(1)
+NOISE = re.compile(r"^job\.sh: waiting for a free job slot")  # the remote server's placement line is never test output | O(1)
+
+
+def _parse_pytest(lines: list[str], rc: int) -> tuple[int, int, int, list[str]] | None:  # O(o)
+    """Counts and short-summary ids from pytest's last summary line, or None when there is none."""
+    idx = [i for i, ln in enumerate(lines) if PYTEST_SUMMARY.match(ln.strip())]  # O(o)
+    if not idx:  # O(1)
+        return None  # O(1)
+    end = idx[-1]  # the last summary line wins | O(1)
+    word = {}  # O(1)
+    for n, w in re.findall(r"(\d+) ([a-z]+)", PYTEST_SUMMARY.match(lines[end].strip()).group(1)):  # O(1)
+        word[w] = word.get(w, 0) + int(n)  # O(1)
+    passed = word.get("passed", 0) + word.get("xpassed", 0)  # O(1)
+    failed = word.get("failed", 0) + word.get("error", 0) + word.get("errors", 0)  # O(1)
+    skipped = word.get("skipped", 0) + word.get("xfailed", 0)  # O(1)
+    heads = [i for i in range(end) if re.match(r"^=+ short test summary info =+$", lines[i].strip())]  # O(o)
+    names: list[str] = []  # O(1)
+    for ln in lines[heads[-1] + 1:end] if heads and rc else []:  # O(o)
+        m = re.match(r"^(?:FAILED|ERROR) (.+?)(?: - .*)?$", ln.strip())  # O(w)
+        if m and m.group(1) not in names and len(names) < 50:  # O(1)
+            names.append(m.group(1)[:120])  # O(1)
+    return passed, failed, skipped, names  # O(1)
+
+
 def parse_output(text: str, rc: int) -> dict:  # O(o)
-    """Best-effort counts and failing test names from a runner's plain output (no JUnit)."""
+    """Best-effort counts and failing test names from a runner's plain output (no JUnit).
+
+    A pytest branch reads the last summary line and the short summary's FAILED/ERROR ids; the remote
+    server's `job.sh: waiting for a free job slot` line is dropped before parsing."""
     lines = [ANSI.sub("", ln).replace("\u200b", "").rstrip() for ln in text.splitlines()]  # zero-width spaces prefix some Swift Testing lines | O(o)
+    lines = [ln for ln in lines if not NOISE.match(ln)]  # O(o)
     xc = _parse_xcode(lines, rc)  # O(o)
     if xc is not None:  # O(1)
         return xc  # O(1)
     names: list[str] = []  # O(1)
-    for ln in lines if rc else []:  # names are failures: only a red exit collects them | O(o)
+    py = _parse_pytest(lines, rc)  # O(o)
+    for ln in lines if rc and py is None else []:  # names are failures: only a red exit collects them | O(o)
         for pat in NAME_PATTERNS:  # O(1)
             m = re.match(pat, ln)  # O(w)
             if m and re.search(r"\s[\d.]+s$", m.group(1)):  # go's `FAIL<TAB>package<TAB>0.003s` summary line is not a test | O(1)
@@ -1280,7 +1310,9 @@ def parse_output(text: str, rc: int) -> dict:  # O(o)
                 break  # O(1)
     blob = "\n".join(lines)  # O(o)
     summary = [ln for ln in lines if re.match(r"\s*Tests:?\s+\d", ln)]  # vitest `Tests  3 failed | 15 passed (18)`, jest `Tests: 3 failed, 15 passed, 18 total` | O(o)
-    if summary:  # the runner's own total wins over per-file and per-test lines | O(1)
+    if py is not None:  # pytest: the last summary line and the short summary ids | O(1)
+        passed, failed, skipped, names = py  # O(1)
+    elif summary:  # the runner's own total wins over per-file and per-test lines | O(1)
         part = lambda word: sum(int(x) for x in re.findall(rf"(\d+)\s+{word}\b", summary[-1]))  # O(w)
         passed, failed, skipped = part("passed"), part("failed"), part("skipped") + part("todo") + part("pending")  # O(w)
     else:  # O(1)
