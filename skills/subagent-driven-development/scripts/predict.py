@@ -10,6 +10,12 @@ Prices and speeds live in config/models.json; coefficients in config/predictor.j
 --refit fits the time coefficients to predicted-against-actual data (ridge toward the
 current coefficients) and writes them back. With LANG_MIN_ROWS history rows of the project's
 language, its time is scaled by their median actual/predicted ratio (clamped). Stdlib only.
+
+Live inputs (#605): with no explicit --coef and SUPERLITE_FORECAST_LIVE not "0", load_coef adds the project's
+test-run minutes (test-cmd.json run_min, else the run ledgers) and the contention of other live runs
+(predict_live.py): each task adds its test runs to its time, the size band's high end and the schedule tail rise,
+and the JSON names them under `live`. A task owning only prose files (or Kind: prose) counts the prose
+time and calls factors. Any failure reading them leaves the coefficients as they were.
 """
 
 # Complexity notation:
@@ -26,6 +32,7 @@ import math
 import os  # O(1)
 import statistics  # O(1)
 import sys  # O(1)
+import time  # O(1)
 from pathlib import Path  # O(1)
 
 SCRIPT_DIR = Path(__file__).resolve().parent  # O(1)
@@ -68,6 +75,11 @@ SLOW_MIN_ROWS = 8  # slow-test rows needed before a refit moves slow_tests_min o
 LANG_MIN_ROWS = 20  # history rows of one language needed before its time scale applies | O(1)
 LANG_CLAMP = (0.5, 3.0)  # bounds of a language's time scale | O(1)
 _HIST_CACHE: dict = {}  # O(1)
+LIVE_ENV = "SUPERLITE_FORECAST_LIVE"  # "0" turns the live inputs off | O(1)
+LIVE_TTL = 10.0  # seconds a read of the live inputs is reused | O(1)
+_LIVE_CACHE: dict = {}  # O(1)
+TEST_COST_DEFAULTS = {"runs": {"fast": 3, "slow": 3, "build": 1}, "included_run_min": 0.5, "included_full_min": 1.0}  # O(1)
+PROSE_DEFAULTS = {"extensions": [".md", ".mdx", ".markdown", ".rst", ".txt", ".adoc"], "time_factor": 2.0, "calls_factor": 3.0}  # O(1)
 
 
 def history_observations(rows: list) -> list:  # O(R)
@@ -113,6 +125,21 @@ def load_coef(path=None) -> dict:  # O(S) shipped; O(R) with enough history
     coef = _load_json(Path(path) if path else CONFIG_DIR / "predictor.json", "predictor file")  # O(S)
     if path:  # O(1)
         return coef  # O(1)
+    return _with_live(_history_coef(coef))  # O(S) + live read
+
+
+def _with_live(coef: dict) -> dict:  # O(size of coef) plus the live read, cached
+    """coef with the live inputs applied; any failure, or SUPERLITE_FORECAST_LIVE=0, keeps coef."""
+    if os.environ.get(LIVE_ENV) == "0":  # O(1)
+        return coef  # O(1)
+    try:  # O(1)
+        live = live_inputs(coef)  # O(1) cached, else the reads
+        return apply_live(coef, live) if live else coef  # O(size of coef)
+    except Exception:  # noqa: BLE001 | O(1)
+        return coef  # O(1)
+
+
+def _history_coef(coef: dict) -> dict:  # O(R) with enough history
     try:  # history never breaks a prediction | O(1)
         import history  # O(1)
         hp = history.home() / "history.jsonl"  # O(1)
@@ -139,6 +166,87 @@ def load_coef(path=None) -> dict:  # O(S) shipped; O(R) with enough history
         return coef  # O(1)
 
 
+def live_inputs(coef: dict) -> dict | None:  # O(1) cached; else the reads of predict_live
+    """The project's test minutes and the contention, read once per LIVE_TTL seconds."""
+    import run_tests  # O(1)
+    import state  # O(1)
+    root = run_tests.project_root(Path.cwd()) or Path.cwd()  # O(d)
+    key = (str(root.resolve()), str(state.home()), os.environ.get("SUPERLITE_USER_TEST_CMD", ""))  # O(1)
+    hit = _LIVE_CACHE.get(key)  # O(1)
+    if hit and time.monotonic() - hit[0] < LIVE_TTL:  # O(1)
+        return hit[1]  # O(1)
+    live = _read_live(root, coef)  # O(reads)
+    _LIVE_CACHE[key] = (time.monotonic(), live)  # O(1)
+    return live  # O(1)
+
+
+def _read_live(root: Path, coef: dict) -> dict:  # O(reads)
+    import predict_live  # O(1)
+    tests = predict_live.project_tests(root, coef.get("tests") or {})  # O(ledgers)
+    return {"tests": tests, "contention": predict_live.contention(root, coef.get("contention") or {}, tests.get("slots"))}  # O(sessions)
+
+
+def _num_or_none(v):  # O(1)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # O(1)
+
+
+def test_extra_min(feats: dict, coef: dict) -> float:  # O(1)
+    """Minutes the task's test runs add beyond what the time coefficients already hold (0 without live inputs)."""
+    lv = coef.get("live") or {}  # O(1)
+    fast = _num_or_none((lv.get("tests") or {}).get("fast_min"))  # O(1)
+    if fast is None:  # O(1)
+        return 0.0  # O(1)
+    cfg = dict(TEST_COST_DEFAULTS, **(coef.get("tests") or {}))  # O(1)
+    mode = feats.get("tests")  # O(1)
+    runs = cfg["runs"].get(mode, cfg["runs"]["fast"])  # unknown: fast | O(1)
+    factor = _num_or_none((lv.get("contention") or {}).get("factor")) or 1.0  # O(1)
+    slow = coef["time"]["slow_tests_min"] if mode == "slow" else 0.0  # O(1)
+    return max(0.0, runs * fast * factor - runs * cfg["included_run_min"] - slow)  # O(1)
+
+
+def apply_live(coef: dict, live: dict) -> dict:  # O(size of coef)
+    """A copy of coef with the live inputs: a `live` block, size_band.high_min and schedule.tail_min raised."""
+    out = json.loads(json.dumps(coef))  # O(size of coef)
+    band, sched = out.setdefault("size_band", {"low_min": 1.5, "high_min": 6.0}), out.setdefault("schedule", {"tail_min": 3.5})  # O(1)
+    base = {"tail_min": sched.get("tail_min", 3.5), "high_min": band.get("high_min", 6.0)}  # O(1)
+    out["live"] = {"tests": live.get("tests") or {}, "contention": live.get("contention") or {}, "base": base}  # O(1)
+    task_min = round(test_extra_min({"tests": "fast"}, out), 3)  # O(1)
+    full = _num_or_none((live.get("tests") or {}).get("full_min"))  # O(1)
+    cfg = dict(TEST_COST_DEFAULTS, **(coef.get("tests") or {}))  # O(1)
+    ff = _num_or_none((live.get("contention") or {}).get("full_factor")) or 1.0  # O(1)
+    tail_add = round(max(0.0, full * ff - cfg["included_full_min"]), 3) if full is not None else 0.0  # O(1)
+    out["live"]["task_test_min"], out["live"]["tail_add_min"] = task_min, tail_add  # O(1)
+    if task_min > 0:  # O(1)
+        band["high_min"] = round(base["high_min"] + task_min, 3)  # O(1)
+    if tail_add > 0:  # O(1)
+        sched["tail_min"] = round(base["tail_min"] + tail_add, 3)  # O(1)
+    return out  # O(1)
+
+
+def strip_live(coef: dict) -> dict:  # O(size of coef)
+    """A copy of coef without the live block, the band and tail back to their base values."""
+    out = json.loads(json.dumps(coef))  # O(size of coef)
+    lv = out.pop("live", None)  # O(1)
+    if lv and lv.get("base"):  # O(1)
+        if lv.get("task_test_min", 0) > 0 and "size_band" in out:  # O(1)
+            out["size_band"]["high_min"] = lv["base"]["high_min"]  # O(1)
+        if lv.get("tail_add_min", 0) > 0 and "schedule" in out:  # O(1)
+            out["schedule"]["tail_min"] = lv["base"]["tail_min"]  # O(1)
+    return out  # O(1)
+
+
+def is_prose(task, coef: dict) -> bool:  # O(owns)
+    """Kind: prose, or every owned file has a prose extension; Kind: mechanical never."""
+    kind = str(task.field_text("kind") or "").lower()  # O(1)
+    if "mechanical" in kind:  # O(1)
+        return False  # O(1)
+    if "prose" in kind:  # O(1)
+        return True  # O(1)
+    exts = tuple(e.lower() for e in (coef.get("prose") or PROSE_DEFAULTS)["extensions"])  # O(1)
+    owns = [o for o in (getattr(task, "owns", None) or []) if str(o).strip()]  # O(owns)
+    return bool(owns) and all(str(o).strip().lower().endswith(exts) for o in owns)  # O(owns)
+
+
 def resolve_model(name: str | None, models: dict, coef: dict) -> str:  # O(M)
     table = models["models"]  # O(1)
     wanted = (name or coef.get("default_model", "sonnet")).lower()  # O(1)
@@ -163,7 +271,8 @@ def time_from(feats: dict, model: str, models: dict, coef: dict) -> float:  # O(
     t = coef["time"]  # O(1)
     return (t["base_min"] + t["per_component_min"] * feats["components"]  # O(1)
             + (t["slow_tests_min"] if feats["tests"] == "slow" else 0.0)  # O(1)
-            + t["per_loc_min"] * feats["loc"] * speed_scale(model, models, coef)) * t.get("language_scale", 1.0)  # O(1)
+            + t["per_loc_min"] * feats["loc"] * speed_scale(model, models, coef)) * t.get("language_scale", 1.0) \
+        * (float((coef.get("prose") or PROSE_DEFAULTS)["time_factor"]) if feats.get("prose") else 1.0) + test_extra_min(feats, coef)  # O(1)
 
 
 def context_from(task, feats: dict, coef: dict) -> int:  # O(1)
@@ -182,6 +291,8 @@ def cost_from(feats: dict, peak: int, model: str, models: dict, coef: dict) -> d
     c, price = coef["cost"], models["models"][model]  # O(1)
     prefix = coef["context"]["prefix"]  # O(1)
     calls = c["calls_base"] + c["calls_per_100_loc"] * feats["loc"] / 100  # O(1)
+    if feats.get("prose"):  # O(1)
+        calls *= float((coef.get("prose") or PROSE_DEFAULTS)["calls_factor"])  # O(1)
     variable = max(0, peak - prefix)  # O(1)
     avg_ctx = prefix + variable / 2  # O(1)
     tokens = {  # O(1)
@@ -209,6 +320,7 @@ def task_features(task, coef: dict) -> tuple[dict, str]:  # O(1)
         "kind": raw.get("kind"),  # O(1) mechanical|design, informational
         "docs_chars": raw.get("docs_chars"),  # O(1)
         "reads_loc": raw.get("reads_loc"),  # O(1)
+        "prose": True if is_prose(task, coef) else None,  # O(owns)
     }  # O(1)
     source = "features" if task.has_features else ("parenthetical" if "loc" in raw else "defaults")  # O(1)
     return feats, source  # O(1)
@@ -220,7 +332,7 @@ def predict_task(task, models: dict, coef: dict) -> dict:  # O(M) via resolve_mo
     minutes = time_from(feats, model, models, coef)  # O(1)
     peak = context_from(task, feats, coef)  # O(1)
     cost = cost_from(feats, peak, model, models, coef)  # O(1)
-    return {  # O(1)
+    out = {  # O(1)
         "task": task.id,  # O(1)
         "model": model,  # O(1)
         "features": {k: v for k, v in feats.items() if v is not None},  # O(1)
@@ -233,6 +345,9 @@ def predict_task(task, models: dict, coef: dict) -> dict:  # O(M) via resolve_mo
         "cost": cost["usd"],  # O(1)
         "tokens": cost["tokens"],  # O(1)
     }  # O(1)
+    if "live" in coef:  # O(1)
+        out["test_min"] = round(test_extra_min(feats, coef), 3)  # O(1)
+    return out  # O(1)
 
 
 def predict_plan(plan, models: dict, coef: dict) -> dict:  # O(n)
@@ -255,6 +370,9 @@ def predict_plan(plan, models: dict, coef: dict) -> dict:  # O(n)
     }  # O(1)
     if coef.get("language"):  # the history time scale in force, so a scaled forecast says so | O(1)
         out["language"] = coef["language"]  # O(1)
+    lv = coef.get("live")  # O(1)
+    if lv:  # the live inputs in force, so the forecast names them | O(1)
+        out["live"] = {k: lv[k] for k in ("tests", "contention", "task_test_min", "tail_add_min") if k in lv}  # O(1)
     return out  # O(1)
 
 
@@ -357,6 +475,7 @@ def refit_band(obs: list[dict], coef: dict) -> dict:  # O(N log N)
 def refit(obs: list[dict], models: dict, coef: dict, ridge: float = 0.25) -> tuple[dict, dict]:  # O(N*M + N*k^2)
     if len(obs) < 4:  # O(1)
         raise PredictError(f"need at least 4 usable observations to refit, got {len(obs)}")  # O(1)
+    coef = strip_live(coef)  # no live value is ever written | O(size of coef)
     t = coef["time"]  # O(1)
     prior = [t["base_min"], t["per_component_min"], t["per_loc_min"] * 100, t["slow_tests_min"]]  # O(1)
     fit_slow = sum(1 for o in obs if o["slow"]) >= SLOW_MIN_ROWS  # too few slow rows: keep the prior, one outlier would set it | O(N)
