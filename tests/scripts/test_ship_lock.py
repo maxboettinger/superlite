@@ -19,15 +19,15 @@ def test_lock_path(tmp_path, monkeypatch):
 
 def test_acquire_reentry_release(tmp_path):
     p = sl.lock_path("o/r", tmp_path)
-    assert sl.acquire(p, B1, {"a2"}, 1000) == {"acquired": True, "holder": None, "took_over": False}
+    assert sl.acquire(p, B1, {"a2"}, 1000) == {"acquired": True, "holder": None, "took_over": False, "place": 0, "queued": 0, "first": None}
     assert sl.holder(p) == {**B1, "time": 1000} and oct(p.stat().st_mode & 0o777) == "0o600"
     assert sl.acquire(p, B1, {"a2"}, 5000)["acquired"] and sl.holder(p)["time"] == 1000
-    assert sl.acquire(p, B2, {"a2", "a3"}, 6000) == {"acquired": False, "holder": {**B1, "time": 1000}, "took_over": False}
+    assert sl.acquire(p, B2, {"a2", "a3"}, 6000) == {"acquired": False, "holder": {**B1, "time": 1000}, "took_over": False, "place": 1, "queued": 1, "first": {"batch": "B2", "lead": "W3", "agent": "a3", "time": 6000, "seen": 6000}}
     assert not sl.release(p, "B2") and sl.release(p, "B1") and sl.holder(p) is None and not p.exists()
 
 def test_stale_holders(tmp_path):
     p = sl.lock_path("o/r", tmp_path); sl.acquire(p, B1, None, 1000)
-    assert sl.acquire(p, B2, {"a3"}, 2000) == {"acquired": True, "holder": {**B1, "time": 1000}, "took_over": True}
+    assert sl.acquire(p, B2, {"a3"}, 2000) == {"acquired": True, "holder": {**B1, "time": 1000}, "took_over": True, "place": 0, "queued": 0, "first": None}
     assert not sl.acquire(p, B1, None, 2000 + H2)["acquired"] and sl.acquire(p, B1, None, 2001 + H2)["took_over"]
 
 def test_unreadable_or_symlinked_lock_is_held_and_never_followed(tmp_path):
