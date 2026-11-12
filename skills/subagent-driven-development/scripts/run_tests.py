@@ -58,7 +58,7 @@ A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is
 SIGTERM and SIGHUP on a run kill its test processes and leave a red summary (`run_tests stopped by SIGTERM; ...`, exit 2).
 With `--task Tn` every summary carries `"task"` and `--background` also writes `test-summary-<Tn>.latest`; `--wait <earlier run of Tn>` then waits on Tn's newest run and says so on stderr.
 `-m EXPR` selects a pytest marker (`-m EXPR` goes onto the pytest argv, or onto a test-cmd.json pytest command; a runner that is not pytest is a usage error, exit 2) and makes the run a fast (narrowed) run. A pytest exit 5 stops with `pytest collected nothing (exit 5): <cause>`: all tests deselected (by `-m`, or by a deselecting `-m` in the project's addopts), or the paths hold no tests.
-A `--full` run holds a machine-wide lock per toolchain (`<superlite home>/locks/full-suite-<toolchain>.lock`, flock; the OS frees it when the process ends; toolchain = python, xcode, or the test-cmd.json language, shell by default) around its test command, so full suites of one toolchain on one machine run one at a time while other toolchains run alongside (#550). A waiting run prints `run_tests: waiting for the python full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS, N min ago; its last full run took M min); python full runs on one machine run one at a time, in arrival order: queue place N of M` (a free lock with another waiter first: `(next in line: pid Q in ROOT)`; waiters queue first come first served in `<lock>.queue`, #655), then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for; every waiting run writes `<summary>.lockwait` (lock, holder, pid, since, place, queued). A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
+A `--full` run holds a machine-wide lock per toolchain (`<superlite home>/locks/full-suite-<toolchain>.lock`, flock; the OS frees it when the process ends; toolchain = python, xcode, or the test-cmd.json language, shell by default) around its test command, so full suites of one toolchain on one machine run one at a time while other toolchains run alongside (#550). A waiting run prints `run_tests: waiting for the python full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS, N min ago; its last full run took M min); python full runs on one machine run one at a time, in arrival order: queue place N of M` (a free lock with another waiter first: `(next in line: pid Q in ROOT)`; waiters queue first come first served in `<lock>.queue`, #655), then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for; every waiting run writes `<summary>.lockwait` (lock, holder, pid, since, place, queued). `~/.superlite/machine.json` `{"admission": ["<gate>", "run", "--"]}` replaces the lock for a full run: its commands run behind that argv prefix with no lock (`run_tests: full run through the admission command <gate> ...`), the wait for the gate's start shows once as `waiting for the admission command <gate> to start the full run` (and `--wait` names it), the wait is left out of the run's seconds, and `--lock-wait S` bounds it (exit 2, red summary `admission: <gate> did not start the full run after S s`). A key that is not a list, a missing command, or a gate that exits before the tests start prints one warning and the run takes the lock (#655). A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
 A run in an isolated tree builds there: an `xcodebuild` word in the command (not `-list`, not one that already has `-derivedDataPath`) gets `-derivedDataPath <tree>/.build/DerivedData`, so the build output (module cache included) goes with the tree (#574); the tree is marked busy while the run lasts.
 Before each run (the run process, not the `--background` parent) the disk is checked (`trees.disk_gate`): below the floor the run stops (exit 2, red summary `disk: ...`, no tree made), below the warn level it prints a `disk: WARNING` line. Each run also removes the trees nothing needs (committed tasks, stopped workers' trees; never its own or a busy one) and orphaned DerivedData of removed trees. An `ENOSPC` anywhere ends the run with one `run_tests: disk full (ENOSPC): ...` line, exit 2, no traceback.
 A tree run exports `SUPERLITE_DERIVED_DATA_PATH=<tree>/.build/DerivedData` to the test command and its setup (a test-cmd.json `env` entry of that name wins), so a project script can pass it to xcodebuild (#614).
@@ -99,6 +99,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(path list)
 import _pyrun as pyrun  # noqa: E402  # O(1) module load
 import testcmd  # noqa: E402  # O(1) module load
 import full_queue  # noqa: E402  # O(1) module load
+import full_gate  # noqa: E402  # O(1) module load
 import failure_sites  # noqa: E402  # O(1) module load
 import gui_session  # noqa: E402  # O(1) module load
 import commit_task as ct  # noqa: E402  # O(1) module load
@@ -197,6 +198,16 @@ def note_holder(note):  # O(file) the lock's current holder named by a .lockwait
     current = lock_holder(data["lock"]) if isinstance(data["lock"], str) else None  # O(file)
     inner = data.get("holder")  # O(1)
     return current or (inner if isinstance(inner, dict) and isinstance(inner.get("pid"), int) else None)  # O(1)
+
+
+def admission_note(note):  # O(file) the .lockwait note of a run waiting for the admission command, None for any other note or a dead pid
+    try:  # O(1)
+        data = json.loads(Path(note).read_text(encoding="utf-8"))  # O(file)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+    if not isinstance(data, dict) or not isinstance(data.get("admission"), str) or not isinstance(data.get("pid"), int):  # O(1)
+        return None  # O(1)
+    return data if full_queue.pid_alive(data["pid"]) else None  # O(1)
 
 
 def lock_name(note):  # O(file) the toolchain in a .lockwait note's lock path, python for an old-style note
@@ -303,6 +314,48 @@ def full_suite_lock(a, label, toolchain="python", enabled=True):  # O(wait / LOC
         with contextlib.suppress(OSError):  # O(1)
             note.unlink()  # O(1)
         os.close(fd)  # O(1)
+
+
+class Gate:  # O(1) where a full run's commands run: through the admission command, or under the full-suite lock (#655)
+    def __init__(self, a=None, toolchain="python", prefix=None, stack=None):  # O(1)
+        self.a, self.toolchain, self.prefix, self.stack = a, toolchain, prefix, stack  # O(1)
+        self.waited = 0.0  # seconds the admission command held the run before its tests started | O(1)
+
+    def run(self, cmd, limit=None, shell=False, env=None, cwd=None):  # O(o) + the run; LimitHit past `limit` seconds
+        if self.prefix:  # O(1)
+            try:  # O(1)
+                r = full_gate.run_admitted(self.prefix, cmd, limit, self.a.lock_wait, {**(env if env is not None else os.environ), LOCK_ENV: str(os.getpid())}, cwd,  # O(o)
+                                           Path(self.a.summary).with_suffix(".lockwait"))  # O(1)
+                self.waited += r.waited  # O(1)
+                return r  # O(1)
+            except full_gate.NotAdmitted as e:  # one warning, then the lock for the rest of the run | O(1)
+                print(f"run_tests: admission command {os.path.basename(self.prefix[0])} {e.reason}; running under the {self.toolchain} full-suite lock", file=sys.stderr)  # O(1)
+                self.prefix = None  # O(1)
+                self.stack.enter_context(full_suite_lock(self.a, "full", self.toolchain))  # O(wait / LOCK_POLL)
+            except subprocess.TimeoutExpired:  # O(1)
+                raise LimitHit(limit, "", cmd if isinstance(cmd, str) else shlex.join(cmd)) from None  # O(1)
+        return run_captured(cmd, limit=limit, **({"shell": True} if shell else {}), **({"env": env} if env is not None else {}), **({"cwd": cwd} if cwd else {}))  # O(o) + the run
+
+
+@contextlib.contextmanager
+def full_run_gate(a, label, toolchain="python", enabled=True):  # O(wait / LOCK_POLL); the admission command when machine.json names one, else the full-suite lock
+    prefix = None  # O(1)
+    if label == "full" and enabled:  # O(1)
+        prefix, warning = full_gate.admission_command()  # O(file)
+        if warning:  # O(1)
+            print(f"run_tests: {warning}", file=sys.stderr)  # O(1)
+        outer = os.environ.get(LOCK_ENV, "")  # O(1)
+        if prefix and outer.isdigit() and is_ancestor(int(outer)):  # an outer run covers this one | O(64)
+            yield Gate(a, toolchain)  # O(1)
+            return  # O(1)
+    if prefix:  # O(1)
+        print(f'run_tests: full run through the admission command {os.path.basename(prefix[0])} (machine.json "admission"); no full-suite lock', file=sys.stderr)  # O(1)
+        with contextlib.ExitStack() as stack:  # O(1)
+            yield Gate(a, toolchain, prefix, stack)  # O(1)
+        return  # O(1)
+    with contextlib.ExitStack() as stack:  # O(1)
+        stack.enter_context(full_suite_lock(a, label, toolchain, enabled))  # O(wait / LOCK_POLL)
+        yield Gate(a, toolchain)  # O(1)
 
 
 class Stopped(Exception):  # O(1) SIGTERM or SIGHUP reached run_tests; run_tree kills the test processes on the way out
@@ -585,7 +638,10 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
                 pass  # O(1)
             alive = f" (pid {pid} still running)" if pid and pid > 0 and pid_alive(mine) else ""  # O(1)
             note = mine.with_suffix(".lockwait")  # O(1)
-            if note.exists():  # the run still waits for the full-suite lock | O(1)
+            adm = admission_note(note)  # O(file)
+            if adm:  # the run still waits for the admission command | O(1)
+                print(f"run_tests: {mine} is waiting for the admission command {adm['admission']} (since {time.strftime('%H:%M:%S', time.localtime(adm.get('since') or time.time()))})", file=sys.stderr)  # O(1)
+            elif note.exists():  # the run still waits for the full-suite lock | O(1)
                 held = note_holder(note)  # O(file)
                 print(f"run_tests: {mine} is waiting for the {lock_name(note)} full-suite lock (held by {wait_detail(held)})", file=sys.stderr)  # O(file)
             print(f"tests: no result yet after {limit:g} s{alive}; run again: {wait_line(mine)[len('wait: '):]}", file=sys.stderr)  # O(1)
@@ -1371,6 +1427,13 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         publish_summary(a)  # O(summary size)
         print("0 0 0 0.0")  # O(1)
         return 2  # O(1)
+    except full_gate.AdmissionBusy as e:  # O(1)
+        reason = f"admission: {e.name} did not start the full run after {e.seconds:g} s (run_tests --lock-wait S; 0 = no limit)"  # O(1)
+        print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+        write_summary(a.summary, "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
+        publish_summary(a)  # O(summary size)
+        print("0 0 0 0.0")  # O(1)
+        return 2  # O(1)
     except BaseException as e:  # a crash still leaves a (red) summary and the zero line | O(1)
         if isinstance(e, SystemExit) and e.code in (0, None):  # O(1)
             raise  # O(1)
@@ -1472,7 +1535,7 @@ def behind_main():  # O(1) spawns: (commits, branch) when this linked worktree l
     return (n, branch.stdout.strip()) if n > 0 else None  # O(1)
 
 
-def run_other(a, spec, paths, label, cwd=None):  # one runner command (any language) | O(X + o) + the run
+def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command (any language) | O(X + o) + the run
     """Run the resolved non-Python command: JUnit when the runner wrote one, else exit code plus output parsing."""
     if getattr(a, "passthrough", None):  # O(1)
         spec = {**spec, "command": with_args(spec["command"], a.passthrough)}  # O(len)
@@ -1503,7 +1566,7 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
             return usage_error(a, label, gui)  # O(summary size)
         marker = Path(cwd) / ".superlite-setup.done" if cwd else Path(".superlite") / "setup.done"  # setup runs once per run directory (per tree) | O(1)
         if spec["setup"] and not marker.exists():  # O(1)
-            run_captured(sub(spec["setup"]), limit=a.limit, shell=True, env=env, cwd=cwd)  # O(o)
+            (gate.run if gate else run_captured)(sub(spec["setup"]), limit=a.limit, shell=True, env=env, cwd=cwd)  # O(o)
             marker.parent.mkdir(parents=True, exist_ok=True)  # O(1)
             marker.write_text("ok\n", encoding="utf-8")  # O(1)
         global WARNING  # O(1)
@@ -1513,9 +1576,9 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
             WARNING = platform_warning(declared, built)  # O(d)
             if WARNING:  # O(1)
                 print(f"run_tests: WARNING: {WARNING}", file=sys.stderr)  # O(1)
-        t0 = time.monotonic()  # O(1)
-        results = [(d, run_captured(c, limit=a.limit, shell=True, env=env, cwd=cwd)) for d, c in runs]  # one run per destination, in order | O(o) + the runs
-        seconds = time.monotonic() - t0  # O(1)
+        t0, w0 = time.monotonic(), gate.waited if gate else 0.0  # O(1)
+        results = [(d, (gate.run if gate else run_captured)(c, limit=a.limit, shell=True, env=env, cwd=cwd)) for d, c in runs]  # one run per destination, in order | O(o) + the runs
+        seconds = time.monotonic() - t0 - ((gate.waited - w0) if gate else 0.0)  # the admission wait is not test time | O(1)
         texts = [(d, (x.stdout or "") + (x.stderr or "")) for d, x in results]  # O(o)
         text = "".join(f"run_tests: destination {d}\n{t}" if d else t for d, t in texts)  # O(o)
         rc0 = next((x.returncode for _, x in results if x.returncode), 0)  # the first non-zero exit | O(d)
@@ -1924,8 +1987,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                     if warning:  # O(1)
                         warn_once(spec["command"], warning)  # O(warned)
                 spec = {**spec, "env": {"SUPERLITE_DERIVED_DATA_PATH": str(trees.derived_data_path(tree)), **(spec.get("env") or {})}}  # O(env)
-            with full_suite_lock(a, label, lock_toolchain(spec), spec.get("lock", True)):  # O(wait / LOCK_POLL)
-                rc = run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
+            with full_run_gate(a, label, lock_toolchain(spec), spec.get("lock", True)) as gate:  # O(wait / LOCK_POLL)
+                rc = run_other(a, spec, paths, label, cwd=tree, gate=gate)  # O(X + o)
             if tree and rc == 1:  # a red tree run names the changed files the tree lacks (#517) | O(f)
                 try:  # O(1)
                     out = outside_tree(".", overlay_now)  # O(f log f)
@@ -1951,10 +2014,10 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                 print(honoured[1], file=sys.stderr)  # O(1)
         cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), *(["-m", marker] if marker else []), "-q", "-rP", "-p", "no:cacheprovider",  # O(p) -rP: a passing test's prints reach the output log (#501)
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}", *(getattr(a, "passthrough", None) or [])]  # O(1)
-        with full_suite_lock(a, label, enabled=spec.get("lock", True) if spec else True):  # O(wait / LOCK_POLL)
+        with full_run_gate(a, label, enabled=spec.get("lock", True) if spec else True) as gate:  # O(wait / LOCK_POLL)
             t0 = time.monotonic()  # O(1)
-            r = run_captured(cmd, limit=a.limit, env=child_env(getattr(a, "cli_env", None)))  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
-            seconds = time.monotonic() - t0  # O(1)
+            r = gate.run(cmd, limit=a.limit, env=child_env(getattr(a, "cli_env", None)))  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
+            seconds = time.monotonic() - t0 - gate.waited  # the admission wait is not test time | O(1)
         save_output(a, shlex.join(cmd), r.returncode, r.stdout + r.stderr)  # O(o)
         has_xml = xml_path.exists() and xml_path.stat().st_size > 0  # O(1)
         parsed = collection_report(xml_path) if r.returncode == 2 and has_xml else None  # a collection error stops pytest with exit 2 (#196) | O(X + T*d)
