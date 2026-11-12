@@ -375,3 +375,26 @@ def test_per_command_home_does_not_reach_a_nested_shell(H, monkeypatch, tmp_path
     assert jh('bash -c \'echo hi > "$TMPDIR/x.py"\'', H) is None
     v = jh('TMPDIR=src bash -c \'echo hi > "$TMPDIR/x.py"\'', H)
     assert v is not None and v.word.startswith("$TMPDIR/")
+
+
+def test_env_split_string_skips_leading_assignments(H):  # F-T1-7
+    v = jh("env -S 'X=1 rm -rf src'", H)
+    assert v is not None and v.rel == "src"
+    v = jh("env -S \"HOME=x sh -c 'echo hi > \\$HOME/a'\"", H)
+    assert v is not None and v.word.startswith("$HOME/")
+
+
+def test_bare_cd_and_tilde_loop_use_the_assigned_home(H):  # F-T1-8
+    v = jh("HOME=src; cd; rm a.py", H)
+    assert v is not None and v.rel in ("src/a.py", "?")
+    v = jh("HOME=src cd; rm src/a.py", H)
+    assert v is not None and v.rel == "src/a.py"
+    v = jh("HOME=src; for d in ~; do echo hi > $d/x; done", H)
+    assert v is not None
+
+
+def test_find_exec_keeps_the_per_command_home(H):  # F-T1-9
+    for cmd in ("HOME=$PWD find . -maxdepth 0 -exec sh -c 'rm -rf \"$HOME/src\"' \;",
+                "env HOME=$PWD find . -maxdepth 0 -exec sh -c 'rm -rf \"$HOME/src\"' \;"):
+        v = jh(cmd, H)
+        assert v is not None and v.word.startswith("$HOME/"), cmd
