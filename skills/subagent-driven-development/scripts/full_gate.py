@@ -115,7 +115,7 @@ def run_admitted(prefix: list, cmd: str | list, limit: float | None = None, wait
                     if note:  # O(1)
                         Path(note).write_text(json.dumps({"admission": name, "pid": os.getpid(), "since": t0}), encoding="utf-8")  # O(1)
             elif limit and now - admitted >= limit:  # O(1)
-                raise subprocess.TimeoutExpired(argv, limit)  # O(1)
+                raise subprocess.TimeoutExpired(argv, limit, output=(_text(out_f) + _text(err_f)).encode())  # the output so far stays in the log | O(o)
             time.sleep(POLL)  # O(1)
     finally:  # O(D) kill
         if proc is not None and proc.poll() is None:  # O(1)

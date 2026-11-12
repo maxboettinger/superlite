@@ -159,3 +159,9 @@ def test_limit_counts_from_admission(gate):
     with pytest.raises(subprocess.TimeoutExpired):
         full_gate.run_admitted([gate, "run", "--"], "sleep 10", limit=1, env={**os.environ, "GATE_SLEEP": "2"})
     assert 2.9 <= time.time() - t0 <= 8
+
+
+def test_timeout_carries_output(gate):
+    with pytest.raises(subprocess.TimeoutExpired) as ei:
+        full_gate.run_admitted([gate, "run", "--"], "echo before-limit; sleep 10", limit=1)
+    assert b"before-limit" in (ei.value.output or b"")
