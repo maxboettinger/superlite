@@ -11,13 +11,15 @@ ledger lines (runs that ran nothing do not count) in the repository's checkouts 
 Contention: other runs are session bindings with a live pid, a started run (`state.has_run`) outside `root` (this run's task
 trees included) and a marker or ledger changed within `active_window_min`; two sessions of one run count once. The full-suite
 lock (any toolchain's) counts when a live process outside `root` holds it. factor = max(1, (1 + others) / slots); full_factor = 1 +
-full_wait_share x max(others, 1 when the lock is held). Stdlib only; predict.py wraps every call, so a failure here never
+full_wait_share x max(others, 1 when the lock is held). A live `.lockwait` note with "admission" outside `root` (a run waiting
+at the machine's admission command) counts like a held lock (#659). Stdlib only; predict.py wraps every call, so a failure here never
 breaks a prediction.
 """
 # Complexity notation:
 #   c = checkouts, f = ledger files read, L = lines in them, s = session bindings
 from __future__ import annotations  # O(1)
 
+import json  # O(1)
 import os  # O(1)
 import statistics  # O(1)
 import sys  # O(1)
@@ -182,12 +184,56 @@ def other_runs(root: Path, window_min: float, now: float | None = None) -> int: 
     return len(seen)  # O(1)
 
 
-def full_lock_held(root: Path) -> bool:  # a live process outside root holds any toolchain's full-suite lock | O(l)
+def _run_folders(root: Path) -> list[Path]:  # run folders outside root: session bindings, then the checkouts' .superlite | O(s + c)
+    mine = Path(root).resolve()  # O(1)
+    cands: list[Path] = []  # O(1)
+    try:  # O(1)
+        entries = sorted((state.home() / "sessions").iterdir())  # O(s log s)
+    except OSError:  # O(1)
+        entries = []  # O(1)
+    for f in entries:  # O(s) iterations
+        try:  # O(1)
+            if f.is_dir():  # O(1)
+                continue  # O(1)
+            cands.append(Path(f.read_text(encoding="utf-8").splitlines()[0].strip()))  # O(file)
+        except (OSError, ValueError, IndexError):  # O(1)
+            continue  # O(1)
+    cands.extend(c / ".superlite" for c in checkouts(mine))  # O(c)
+    out: list[Path] = []  # O(1)
+    for c in cands:  # O(s + c) iterations
+        try:  # O(1)
+            if not c.is_absolute() or not c.is_dir():  # O(1)
+                continue  # O(1)
+            c = c.resolve()  # O(1)
+        except (OSError, ValueError):  # O(1)
+            continue  # O(1)
+        if c not in out and not _inside(c, mine):  # O(s + c)
+            out.append(c)  # O(1)
+    return out  # O(1)
+
+
+def admission_waiting(root: Path) -> bool:  # a live run outside root waits at an admission command (#659) | O(s + c + n)
+    for folder in _run_folders(root):  # O(s + c) iterations
+        try:  # O(1)
+            notes = sorted(folder.glob("test-summary*.lockwait"))  # O(n log n)
+        except OSError:  # O(1)
+            continue  # O(1)
+        for n in notes:  # O(n) iterations
+            try:  # O(1)
+                data = json.loads(n.read_text(encoding="utf-8"))  # O(file)
+            except (OSError, ValueError):  # O(1)
+                continue  # O(1)
+            if isinstance(data, dict) and isinstance(data.get("admission"), str) and is_alive(data.get("pid")):  # O(1)
+                return True  # O(1)
+    return False  # O(1)
+
+
+def full_lock_held(root: Path) -> bool:  # a live process outside root holds any toolchain's full-suite lock, or one waits at admission | O(l)
     mine = Path(root).resolve()  # O(1)
     try:  # O(1)
         locks = sorted(run_tests.full_lock_path("x").parent.glob("full-suite-*.lock"))  # O(l log l)
     except OSError:  # O(1)
-        return False  # O(1)
+        return admission_waiting(mine)  # O(s + c + n)
     for lock in locks:  # O(l) iterations
         info = run_tests.lock_holder(lock)  # O(file)
         if not info or not is_alive(info.get("pid")):  # O(1)
@@ -195,7 +241,7 @@ def full_lock_held(root: Path) -> bool:  # a live process outside root holds any
         where = info.get("root")  # O(1)
         if not isinstance(where, str) or not where or not _inside(Path(where).resolve(), mine):  # O(d)
             return True  # O(1)
-    return False  # O(1)
+    return admission_waiting(mine)  # O(s + c + n)
 
 
 def contention(root: Path, cfg: dict, slots: int | None = None) -> dict:  # others, lock, factors | O(s)
