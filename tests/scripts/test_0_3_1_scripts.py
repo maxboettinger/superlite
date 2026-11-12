@@ -23,9 +23,14 @@ ENV = {k: v for k, v in os.environ.items() if k != "SUPERLITE_SL"}
 ENV["PYTHONIOENCODING"] = "utf-8"
 
 
+def _env():
+    """The env at call time: the per-test SUPERLITE_HOME and friends, with this module's overrides."""
+    return {**{k: v for k, v in os.environ.items() if k != "SUPERLITE_SL"}, "PYTHONIOENCODING": "utf-8"}
+
+
 def run(script, *args, cwd=None):
     return subprocess.run([sys.executable, str(SCRIPTS / f"{script}.py"), *map(str, args)],
-                          capture_output=True, text=True, cwd=cwd, env=ENV, encoding="utf-8",
+                          capture_output=True, text=True, cwd=cwd, env=_env(), encoding="utf-8",
                           timeout=240)
 
 

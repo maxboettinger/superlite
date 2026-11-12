@@ -1,8 +1,18 @@
 """Keep the user's real ~/.superlite history out of the script tests: lint, schedule and predict read it.
 The host's session id and state override stay out too: a test that wants a session sets one."""
+import atexit
+import os
+import shutil
+import tempfile
+
 import pytest
 
 from _fixtures import HOST_VARS  # importing it drops the host vars and makes the fixture copy before collection
+
+# a session home at import: module-level ENV dicts and subprocesses never see the real ~/.superlite (#550)
+_SESSION_HOME = tempfile.mkdtemp(prefix="sl-home-")
+os.environ["SUPERLITE_HOME"] = _SESSION_HOME
+atexit.register(shutil.rmtree, _SESSION_HOME, True)
 
 
 @pytest.fixture(autouse=True)
