@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn reviewer findings into fixer briefs: one brief per owning task, at the highest tier of its findings.
 
-    findings.py route --plan P REPORT.json ...      (as `sl findings route --plan P REPORT.json ...`)
+    findings.py route --plan P [--also [Tn=]FILE ...] REPORT.json ...      (as `sl findings route --plan P ...`)
 
 Reads the report JSON files `fleet wait` wrote (`<sd>/fleet/reports/<id>.json`), groups every finding by the plan task that
 owns its file, numbers them `F-<Tn>-<n>` (continuing after the ids already
@@ -15,8 +15,13 @@ task on a tie); with no commit in the ledger at all, to the last task not runnin
 is running, the finding joins the `task=coordinator` group (ids `F-C-<n>`): a brief whose fixer does not commit
 (`commit: held for the coordinator`); the coordinator commits those files once the running tasks are done.
 
+`--also FILE` adds a file the fix may edit beyond its findings (the call must write one task brief; `--also Tn=FILE` names the
+task's brief): the brief lists it and carries its `commit_task --claim` line. Every brief copies the standing note of
+`<sd>/briefs/lead.md`, carries the format rule, and in another superlite checkout names that worktree's `sl` for the tools it
+touches; a task brief says a hidden checkpoint leaves files modified in `git status`.
+
 No findings: `findings: none`. An unreadable report or plan prints `error: ...` to stderr and exits 2.
-Library: route, main. Stdlib only.
+Library: route, standing_note, main. Stdlib only.
 """
 # Complexity notation:
 #   r = reports, k = findings overall, n = plan tasks, o = owned paths overall, f = files in <sd>/fixes and <sd>/briefs
@@ -35,6 +40,16 @@ from pool import currents  # noqa: E402 | O(1)
 
 TIERS = {1: "sonnet", 2: "sonnet-high", 3: "opus"}  # finding tier -> fixer tier name | O(1)
 RULING = "final-review fix outside every Owns"  # the --claim ruling for a file no task owns | O(1)
+ALSO_RULING = "coordinator ruling: the fix needs this file (findings route --also)"  # the --claim ruling for an --also file | O(1)
+FORMAT_RULE = ("Format only the files you changed: pass their paths to the project's format command, never run it over the whole tree; "  # O(1)
+               "a format command that takes no paths is the coordinator's, once at the final-review gate.")  # O(1)
+CHECKPOINT_RULE = ("commit_task stores a hidden checkpoint under `refs/superlite/` (not a commit on the branch), so your files stay "  # O(1)
+                   "modified in `git status` after it: that is normal, not a concern to report.")  # O(1)
+ALSO_RE = re.compile(r"^([A-Z]{1,3}\d+[A-Za-z]?)=(.+)$")  # an --also value `Tn=FILE` | O(1)
+
+
+class AlsoError(ValueError):  # O(1)
+    """An --also value that names no brief this call writes, or a bare file when the call writes not exactly one."""
 
 
 TASK_ID = re.compile(r"^[A-Z]{1,3}\d+[A-Za-z]?$")  # O(1)
@@ -168,6 +183,24 @@ def last_n(sd: Path, tid: str) -> int:  # O(f)
     return top  # O(1)
 
 
+def standing_note(sd: Path) -> list[str]:  # O(file)
+    """The standing-note line of `<sd>/briefs/lead.md` and the four-space lines right after it; [] when absent."""
+    import backlog_brief as bb  # lazy, as fleet_io below | O(1)
+    try:  # O(1)
+        rows = (Path(sd) / "briefs" / "lead.md").read_text(encoding="utf-8").splitlines()  # O(file)
+    except OSError:  # O(1)
+        return []  # O(1)
+    for i, ln in enumerate(rows):  # O(file) iterations
+        if ln == bb.NOTE_HEAD:  # O(len)
+            out = [ln]  # O(1)
+            for nxt in rows[i + 1:]:  # O(file) iterations
+                if not nxt.startswith("    "):  # O(1)
+                    break  # O(1)
+                out.append(nxt)  # O(1)
+            return out  # O(1)
+    return []  # O(1)
+
+
 def shared_lines(sl_path: str) -> list[str]:  # O(1)
     """The Per finding and Verify paragraphs every fixer brief holds."""
     return ["",  # O(1)
@@ -179,36 +212,53 @@ def shared_lines(sl_path: str) -> list[str]:  # O(1)
             "",  # O(1)
             f"Verify: `{sl_path} run_tests --fast <the test files you touched> --background`, then run the printed "  # O(1)
             "`wait:` line in the foreground (never as a background command) and end your turn only after it reports.",  # O(1)
-            "The `--background` run prints a `next:` cue and, as its last line, the `wait:` line."]  # O(1)
+            "The `--background` run prints a `next:` cue and, as its last line, the `wait:` line.",  # O(1)
+            FORMAT_RULE]  # O(1)
+
+def head_lines(sl_path: str, plan: Path, note: list[str], wt) -> list[str]:  # the sl, PLAN and worktree-sl lines | O(1)
+    import fleet_io  # lazy: it imports herdr_client | O(1)
+    out = [f"sl (type it literally in every command): {sl_path}"]  # O(1)
+    if wt:  # O(1)
+        out += [f"Worktree sl (live checks of the tools this fix touches: {', '.join(wt[1])}; type it literally): {wt[0]}",  # O(1)
+                fleet_io.WORKTREE_REST]  # O(1)
+    return out + [f"PLAN={plan}"]  # O(1)
 
 
-def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int) -> str:  # O(k + o)
+
+def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, note=(), wt=None, extras=()) -> str:  # O(k + o)
     ids = ", ".join(i["id"] for i in items)  # O(k)
     owns = task.owns  # O(o)
     outside = sorted({i["file"] for i in items if not nt.owns_match(i["file"], owns)})  # files no Owns of this task lists | O(k)
+    found = {i["file"] for i in items}  # O(k)
+    extra_outside = sorted(e for e in extras if e not in found and not nt.owns_match(e, owns))  # O(e*o)
     lines = [f"# Fix {ids} · tier {tier} · task {task.id}",  # O(1)
-             f"sl (type it literally in every command): {sl_path}",  # O(1)
-             f"PLAN={plan}",  # O(1)
-             f"Task: {task.id} · Owns: {', '.join(owns)}",  # O(o)
-             "", "Findings:"]  # O(1)
+             *head_lines(sl_path, plan, note, wt),  # O(1)
+             f"Task: {task.id} · Owns: {', '.join(owns)}"]  # O(o)
+    if extras:  # O(1)
+        lines.append(f"Extra files (findings route --also; the fix may edit them too): {', '.join(extras)}")  # O(e)
+    lines += ["", *note, "", "Findings:"] if note else ["", "Findings:"]  # O(note)
     lines += [f"- {i['id']} {i['file']}:{i['line']} - {i['problem']} - {i['fix']} (tier {i['tier']}, from {i['label']})"  # O(k)
               for i in items]  # O(k)
     lines += shared_lines(sl_path)  # O(1)
     lines.append(f"Commit: `{sl_path} commit_task {task.id} --plan {plan}`")  # O(1)
+    if not commit_task.autocommit.is_on():  # autocommit makes real commits: a dirty status then means files left uncommitted | O(1)
+        lines.append(CHECKPOINT_RULE)  # O(1)
     for f in outside:  # O(k) iterations
         lines.append(f"Before committing {f} (outside {task.id}'s Owns): "  # O(1)
                      f"`{sl_path} commit_task {task.id} --claim {f} --ruling \"{RULING}\" --plan {plan}`")  # O(1)
+    for f in extra_outside:  # O(e) iterations
+        lines.append(f"Before committing {f} (outside {task.id}'s Owns): "  # O(1)
+                     f"`{sl_path} commit_task {task.id} --claim {f} --ruling \"{ALSO_RULING}\" --plan {plan}`")  # O(1)
     return "\n".join(lines) + "\n"  # O(k)
 
 
-def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, running: list[str]) -> str:  # O(k)
+def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, running: list[str], note=(), wt=None) -> str:  # O(k)
     ids = ", ".join(i["id"] for i in items)  # O(k)
     held = ", ".join(running) or "-"  # O(n)
     lines = [f"# Fix {ids} · tier {tier} · coordinator commit",  # O(1)
-             f"sl (type it literally in every command): {sl_path}",  # O(1)
-             f"PLAN={plan}",  # O(1)
-             f"Task: none · running: {held}",  # O(1)
-             "", "Findings:"]  # O(1)
+             *head_lines(sl_path, plan, note, wt),  # O(1)
+             f"Task: none · running: {held}"]  # O(1)
+    lines += ["", *note, "", "Findings:"] if note else ["", "Findings:"]  # O(note)
     lines += [f"- {i['id']} {i['file']}:{i['line']} - {i['problem']} - {i['fix']} (tier {i['tier']}, from {i['label']})"  # O(k)
               for i in items]  # O(k)
     lines += shared_lines(sl_path)  # O(1)
@@ -218,7 +268,8 @@ def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, run
     return "\n".join(lines) + "\n"  # O(k)
 
 
-def route(sd: Path, plan: Path, reports: list[str], sl_path: str) -> list[str]:  # O(r + k log k + n*o + f)
+def route(sd: Path, plan: Path, reports: list[str], sl_path: str, also: list[str] | None = None,  # O(r + k log k + n*o + f)
+          superlite_root: str | None = None) -> list[str]:
     """Write one fixer brief per owning task; return the `fixer ...` lines in plan task order."""
     sd = Path(sd).resolve()  # O(d)
     root = Path(state.git_root(sd) or sd.parent)  # the project root, as fleet.py does | O(d)
@@ -246,6 +297,24 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str) -> list[str]: 
     groups["C"] = []  # O(1)
     for f in collect(reports, root):  # O(k) iterations
         groups[target(f["file"])].append(f)  # O(n*o)
+    import fleet_io  # lazy: it imports herdr_client | O(1)
+    sroot = superlite_root or Path(__file__).resolve().parents[3]  # O(1)
+    briefed = [t.id for t in tasks if groups[t.id]]  # task briefs this call writes, plan order | O(n)
+    names = ", ".join(briefed) or "none"  # O(n)
+    extras = {}  # task id -> extra files | O(1)
+    for v in (also or []) if any(groups.values()) else []:  # O(a) iterations
+        m = ALSO_RE.match(v)  # O(len)
+        if m:  # O(1)
+            tid, ef = m.group(1), rel(m.group(2), root)  # O(len)
+            if tid not in briefed:  # O(1)
+                raise AlsoError(f"--also {v}: {tid} gets no brief in this call ({names})")  # O(1)
+        elif len(briefed) == 1:  # O(1)
+            tid, ef = briefed[0], rel(v, root)  # O(len)
+        else:  # O(1)
+            raise AlsoError(f"--also {v} needs one task brief; this call writes {len(briefed)} ({names}): pass --also Tn={v}")  # O(1)
+        if ef not in extras.setdefault(tid, []):  # O(e)
+            extras[tid].append(ef)  # O(1)
+    note = standing_note(sd)  # O(file)
     lines = []  # O(1)
     for t in [*tasks, None]:  # O(n) iterations
         tid = t.id if t else "C"  # O(1)
@@ -258,9 +327,13 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str) -> list[str]: 
         tier = max(f["tier"] for f in items)  # O(k_t)
         brief = sd / "briefs" / f"fix-{items[0]['id']}.md"  # O(1)
         brief.parent.mkdir(parents=True, exist_ok=True)  # O(1) I/O
-        text = brief_text(sl_path, plan, t, items, tier) if t else coordinator_text(sl_path, plan, items, tier, held)  # O(k_t)
+        ex = extras.get(tid, [])  # O(1)
+        found = [f["file"] for f in items]  # O(k_t)
+        wt = fleet_io.worktree_sl(root, sroot, [*(t.owns if t else []), *found, *ex])  # O(k_t)
+        text = (brief_text(sl_path, plan, t, items, tier, note, wt, ex) if t  # O(k_t)
+                else coordinator_text(sl_path, plan, items, tier, held, note, wt))  # O(k_t)
         brief.write_text(text, encoding="utf-8")  # O(k_t) I/O
-        files = ",".join(sorted({f["file"] for f in items}))  # O(k_t log k_t)
+        files = ",".join(sorted({*found, *ex}))  # O(k_t log k_t)
         lines.append(f"fixer tier={TIERS[tier]} brief={brief} files={files} task={t.id if t else 'coordinator'}")  # O(1)
     return lines  # O(n)
 
@@ -270,13 +343,17 @@ def main(argv=None) -> int:  # O(d + route)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
     r = sub.add_parser("route", help="write one fixer brief per owning task and print the fixer lines")  # O(1)
     r.add_argument("--plan", required=True)  # O(1)
+    r.add_argument("--also", action="append", default=[], metavar="[Tn=]FILE", help="an extra file the fix may edit (repeatable)")  # O(1)
     r.add_argument("reports", nargs="+", metavar="REPORT.json")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     sl_path = str(Path(__file__).resolve().parent / "sl")  # O(1)
     try:  # O(1)
-        lines = route(state.resolve(a.plan), Path(a.plan), a.reports, sl_path)  # O(route)
+        lines = route(state.resolve(a.plan), Path(a.plan), a.reports, sl_path, also=a.also)  # O(route)
     except ReportError as exc:  # O(1)
         print(f"error: cannot read report {exc}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    except AlsoError as exc:  # O(1)
+        print(f"error: {exc}", file=sys.stderr)  # O(1)
         return 2  # O(1)
     except pt.PlanError as exc:  # O(1)
         print(f"error: {exc}", file=sys.stderr)  # O(1)
