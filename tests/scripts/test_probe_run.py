@@ -5,7 +5,6 @@ the runner against it as a subprocess, so nothing here touches the real tree.
 """
 import ast
 import importlib.util
-import tempfile
 import json
 import os
 import re
@@ -310,6 +309,8 @@ def test_commit_mode_via_sl_launcher_and_default_paths(tmp_path):
 def test_commit_mode_probes_the_commit_not_the_working_tree(tmp_path):
     """HEAD has the guarded parser; the working tree has an unguarded, uncommitted one. Probing
     HEAD must pass, and the temp checkout must be gone afterwards."""
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
     proj = make_project(tmp_path)
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-C", str(proj)]
     subprocess.run([*git, "init", "-q"], check=True)
@@ -317,16 +318,17 @@ def test_commit_mode_probes_the_commit_not_the_working_tree(tmp_path):
     subprocess.run([*git, "commit", "-q", "-m", "good"], check=True)
     parser = proj / "src" / "parser.py"
     parser.write_text(parser.read_text().replace("GUARD = True", "GUARD = False"))
-    res = run(proj, "--commit", "HEAD", "--categories", "deep", "--files", "src/parser.py")
+    res = run(proj, "--commit", "HEAD", "--categories", "deep", "--files", "src/parser.py",
+          env={"TMPDIR": str(tmp)})
     assert res["categories"]["deep"]["status"] == "pass" and not res["failures"], res
     assert res["commit"] == "HEAD"
     wt = subprocess.run([*git, "worktree", "list", "--porcelain"], capture_output=True, text=True).stdout
     assert wt.count("worktree ") == 1
-    assert not list(Path(tempfile.gettempdir()).glob("probe-commit-*/tree/.git"))
+    assert not list(tmp.glob("probe-commit-*/tree/.git"))
     # Committing the unguarded parser makes --commit HEAD fail, with the incident under the real root.
     subprocess.run([*git, "add", "-A"], check=True)
     subprocess.run([*git, "commit", "-q", "-m", "bad"], check=True)
-    res = run(proj, "--commit", "HEAD", "--categories", "deep")
+    res = run(proj, "--commit", "HEAD", "--categories", "deep", env={"TMPDIR": str(tmp)})
     assert [g["kind"] for g in res["failures"]] == ["crash"] and res["failures"][0]["file"] == "src/parser.py"
     assert any(e["kind"] == "exception" for e in incidents(proj))
     assert (proj / "tests" / "regression").is_dir()
