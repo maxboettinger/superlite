@@ -311,7 +311,7 @@ def test_readme_has_the_human_mode_sentence():
 
 
 SDD_SKILL = REPO / "skills" / "subagent-driven-development" / "SKILL.md"
-SDD_CAP = 13000  # the one size cap of the SDD SKILL.md (#555); other tests pin phrases, never its size
+SDD_CAP = 12990  # the one size cap of the SDD SKILL.md (#555); other tests pin phrases, never its size
 
 # Every phrase another test in tests/scripts/ pins in the SDD SKILL.md, so a trim fails here first (#555).
 # A test that pins a new SKILL.md phrase adds it here too.
@@ -387,6 +387,14 @@ SDD_PINNED = (
     "verify command (batch: one per member, each with its own `--task Tn` and PATHS, run on its own: `<abs sl> run_tests --fast PATHS --task Tn --background`",
     # main follow-up (#558)
     "Write `.superlite/render/index.md` too, one `- <file>: <caption>` line per current screenshot",
+    # B117 (#574)
+    "`WARNING: TESTS: no test command resolves`",
+    "`\"$SL\" testcmd --propose`",
+    "`**Tests:** fast cmd=`",
+    "before DONE remove what you created (simulators, build folders, temp files)",
+    "`-derivedDataPath` folders in your session scratchpad",
+    "`--module-cache-hours 24`",
+    "refuse below 20 GB free (warn below 50)",
 )
 
 
