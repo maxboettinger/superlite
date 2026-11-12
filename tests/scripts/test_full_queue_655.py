@@ -66,3 +66,23 @@ def test_pid_alive():
     import os
     assert full_queue.pid_alive(os.getpid())
     assert not full_queue.pid_alive(2 ** 22 + 12345678)
+
+
+def test_pid_alive_rejects_bad_pids():
+    for bad in (None, "x", 0, -1, True, 1.5):
+        assert not full_queue.pid_alive(bad)
+
+
+def test_join_survives_broken_pid_entries(tmp_path):
+    lock = tmp_path / "l.lock"
+    bad = [{"id": "n", "pid": None, "seen": 1.0}, {"id": "s", "pid": "x", "seen": 1.0}, {"id": "z", "pid": 0, "seen": 1.0}]
+    Path(str(lock) + ".queue").write_text(json.dumps(bad), encoding="utf-8")
+    assert full_queue.join(lock, entry("a", 11), now=1.0)["place"] == 1
+
+
+def test_symlinked_queue_reads_empty(tmp_path):
+    lock = tmp_path / "l.lock"
+    real = tmp_path / "real.json"
+    real.write_text(json.dumps([entry("a", 11)]), encoding="utf-8")
+    Path(str(lock) + ".queue").symlink_to(real)
+    assert full_queue.read(lock) == []

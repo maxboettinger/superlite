@@ -24,6 +24,8 @@ STALE = 600.0  # O(1) seconds a waiter may go unseen before its place is dropped
 
 
 def pid_alive(pid):  # O(1) True when a process with this pid exists; PermissionError counts alive
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:  # O(1)
+        return False  # O(1)
     try:  # O(1)
         os.kill(pid, 0)  # O(1)
     except PermissionError:  # O(1)
@@ -38,6 +40,8 @@ def queue_path(lock):  # O(1) the queue file next to a lock file
 
 
 def read(lock):  # O(file) the queue entries, [] when the file is missing or broken
+    if queue_path(lock).is_symlink():  # O(1)
+        return []  # O(1)
     try:  # O(1)
         data = json.loads(queue_path(lock).read_text(encoding="utf-8"))  # O(file)
     except (OSError, ValueError):  # O(1)
