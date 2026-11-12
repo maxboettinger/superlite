@@ -20,7 +20,7 @@ def test_feedback_mark_splits_checks_and_takes_hosts():
 
 
 def test_fleet_spawn_retry_and_rerun_hint():
-    check("fleet", "`not an available shell`", "retried once on the same pane after 3 s", "`; retried once`",
+    check("fleet", "`not an available shell`", "retried once after a 3 s pause", "`; retried in a fresh pane after Wn`", "`; retried once`",
           "`; rerun sl fleet spawn --for-dispatch`", "only when the reason holds `not an available shell`")
 
 

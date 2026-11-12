@@ -1,0 +1,156 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-12T17:10:29 (plan edited since)",
+ "headline": {
+  "wall_min": {
+   "projected": 22.676,
+   "actual": 19.802
+  },
+  "cost_usd_agents": {
+   "projected": 0.335187,
+   "actual": 2.808271
+  },
+  "task_min": {
+   "projected": 45.285,
+   "actual": 17.103
+  },
+  "agents": {
+   "projected": 6,
+   "actual": 12
+  }
+ },
+ "cost_split": {
+  "agents_usd": 2.597252,
+  "rework_usd": 0.211019,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 2.808271
+ },
+ "concurrency": {
+  "peak": 4,
+  "projected_peak": 4
+ },
+ "critical_path": {
+  "actual": [
+   "T1",
+   "T5",
+   "T6",
+   "T7"
+  ],
+  "projected": [
+   "T1",
+   "T5",
+   "T6"
+  ],
+  "projected_min": 22.676
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 7,
+   "cost_usd": 2.8082710000000004
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 7791,
+   "failed": 0,
+   "skipped": 9,
+   "seconds": 164.8,
+   "recorded": false
+  },
+  "tests_newer": null,
+  "tests_from": "progress.md",
+  "first_time_pass": 2,
+  "first_time_n": 7,
+  "rework_dispatches": 2,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 7.55,
+   "actual_min": 1.407,
+   "delta": {
+    "abs": -6.1433,
+    "pct": -81.4
+   },
+   "cost_usd": 0.28684,
+   "first_time_pass": false
+  },
+  {
+   "task": "T5",
+   "model": "sonnet",
+   "pred_min": 7.563,
+   "actual_min": 1.702,
+   "delta": {
+    "abs": -5.8613,
+    "pct": -77.5
+   },
+   "cost_usd": 0.333279,
+   "first_time_pass": true
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 7.523,
+   "actual_min": 2.022,
+   "delta": {
+    "abs": -5.5013,
+    "pct": -73.1
+   },
+   "cost_usd": 0.42009,
+   "first_time_pass": false
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 7.509,
+   "actual_min": 2.022,
+   "delta": {
+    "abs": -5.4873,
+    "pct": -73.1
+   },
+   "cost_usd": 0.327271,
+   "first_time_pass": false
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 7.577,
+   "actual_min": 3.185,
+   "delta": {
+    "abs": -4.392,
+    "pct": -58.0
+   },
+   "cost_usd": 0.733065,
+   "first_time_pass": false
+  },
+  {
+   "task": "T6",
+   "model": "sonnet",
+   "pred_min": 7.563,
+   "actual_min": 4.407,
+   "delta": {
+    "abs": -3.1563,
+    "pct": -41.7
+   },
+   "cost_usd": 0.405917,
+   "first_time_pass": true
+  },
+  {
+   "task": "T7",
+   "model": "sonnet",
+   "pred_min": null,
+   "actual_min": 2.36,
+   "delta": {
+    "abs": null,
+    "pct": null
+   },
+   "cost_usd": 0.301809,
+   "first_time_pass": false
+  }
+ ]
+}
