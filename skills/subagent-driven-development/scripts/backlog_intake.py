@@ -94,13 +94,17 @@ def named_files(body: str, tracked: list) -> list:
 
 
 def _vt(v: str) -> tuple:
-    p = [int(x) for x in v.split(".")]  # O(1)
+    m = re.match(r"\d+(?:\.\d+){0,2}", str(v).lstrip("vV"))  # O(1)
+    p = [int(x) for x in m.group(0).split(".")] if m else []  # O(1)
     return tuple(p + [0] * (3 - len(p)))  # O(1)
 
 
 def blocked_lines(prop: dict, pin: list, version: object) -> list:
     """One check line per pinned issue left out as blocked without naming a missing thing, or naming a version already reached."""
     reasons = bc.left_out_reasons(prop, set(pin))
+    version = _clean(version) if version else None  # O(len)
+    if version and not re.match(r"[vV]?\d", version):  # O(1)
+        version = None
     out = []
     for n in pin:  # O(pin * len)
         r = reasons.get(n)
@@ -118,6 +122,7 @@ def blocked_lines(prop: dict, pin: list, version: object) -> list:
 
 
 def pinned_rule(head: object, version: object) -> str:
+    head, version = (_clean(head) if head else None), (_clean(version) if version else None)  # O(len)
     at = ", ".join(x for x in (f"at {head}" if head else "", f"version {version}" if version else "") if x)  # O(1)
     where = f" ({at})" if at else ""  # O(1)
     return ("Pinned: main chose these issues with --issues; plan each one. Leave a pinned issue out only as an umbrella or tracking issue, "

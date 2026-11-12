@@ -123,3 +123,13 @@ def test_insert_before_rules():
     assert bi.insert_before_rules("# T\nx\nRules: a\nEnd\n", ["P"]) == "# T\nx\nP\nRules: a\nEnd\n"
     assert bi.insert_before_rules("# T\nx\n", ["P", "Q"]) == "# T\nx\nP\nQ\n"
     assert bi.insert_before_rules("# T", ["P"]) == "# T\nP"
+
+
+def test_version_with_suffix_or_control_chars():
+    prop = {"left_out": [{"issues": [1], "reason": "needs 1.5.1 first"}]}
+    assert len(bi.blocked_lines(prop, [1], "1.5.125-rc1")) == 1
+    assert len(bi.blocked_lines(prop, [1], "v1.5.125")) == 1
+    assert bi.blocked_lines(prop, [1], "dev") == []
+    got = bi.blocked_lines(prop, [1], "1.5.125\x1b[31m")
+    assert got and "\x1b" not in got[0]
+    assert "\x1b" not in bi.pinned_rule("ab\x1bcd", "1.5\x1b")
