@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585)."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585); unskip <issue> and reset B [--discard] undo a skip and a started batch, --help lists every subcommand, a status with only parked batches ends with next:, decide --file takes the one answer rule (a label, or a label plus a note) and a pinned skipped issue names unskip, and plan offers sl backlog ship B done --pr N for a batch whose issues a merged PR already names (#586)."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -410,6 +410,32 @@ def _left_out(n, title: str, why: str, carry: dict) -> dict:
     return e  # O(1)
 
 
+def offer_lines(new: list, merged: dict) -> list[str]:
+    """One offer per new batch whose issues all name the same merged PR: `ship B done --pr N` records it (#586)."""
+    import backlog_state as bs  # O(1)
+    out = []  # O(1)
+    for b in new:  # O(new * issues)
+        iss = b.get("issues") or []  # O(1)
+        refs = {merged.get(n) for n in iss}  # O(issues)
+        if not iss or len(refs) != 1:  # O(1)
+            continue  # O(1)
+        m = re.fullmatch(r"PR #(\d+)", str(next(iter(refs))))  # O(1)
+        if m:  # O(1)
+            out.append(f"offer: {b['id']} holds only {' '.join(bs.ref(n) for n in iss)}, named by merged PR #{m.group(1)}: "
+                       f"sl backlog ship {b['id']} done --pr {m.group(1)} records it as shipped (no lead, no worktree)")  # O(issues)
+    return out  # O(new)
+
+
+def parked_next(data: dict) -> str | None:
+    """The next: line when every open batch is parked (#586); None otherwise."""
+    open_ = [b for b in data.get("batches", []) if b["state"] != "shipped"]  # O(b)
+    if not open_ or any(b["state"] != "parked" for b in open_):  # O(b)
+        return None  # O(1)
+    one = len(open_) == 1  # O(1)
+    return (f"next: sl backlog start {' '.join(b['id'] for b in open_)} resumes the parked batch{'' if one else 'es'}, "
+            f"or sl backlog plan --reset drops {'it' if one else 'them'} and plans every open issue again")  # O(b)
+
+
 def cmd_plan(a) -> int:
     import backlog_checks as bc  # O(1)
     import backlog_intake as bi  # O(1)
@@ -454,7 +480,8 @@ def cmd_plan(a) -> int:
             return 2
         for n in pin:  # O(pin * skipped)
             if n in d["skipped"]:  # O(skipped)
-                print(f"BLOCKED: --issues: {'#' + str(n) if isinstance(n, int) else n} is skipped")  # O(1)
+                r = '#' + str(n) if isinstance(n, int) else n  # O(1)
+                print(f"BLOCKED: --issues: {r} is skipped; sl backlog unskip {n} takes it back")  # O(1)
                 return 2  # O(1)
         keys = pin if pin_jira else None  # O(1)
         if add:  # O(1)
@@ -514,7 +541,8 @@ def cmd_plan(a) -> int:
     br = info.get("defaultBranchRef") if isinstance(info, dict) else None  # O(1)
     ref = br["name"] if isinstance(br, dict) and isinstance(br.get("name"), str) and br["name"] else "HEAD"  # O(1)
     subjects = _subjects(root, ref)  # O(2000)
-    trusted, more, lines = bi.split_shipped(trusted, d["batches"], bi.merged_refs(subjects, jira), pin or [])  # O(i * b)
+    merged = bi.merged_refs(subjects, jira)  # O(2000)
+    trusted, more, lines = bi.split_shipped(trusted, d["batches"], merged, pin or [])  # O(i * b)
     outside += [_left_out(m["number"], m["title"], m["reason"], carry) for m in more]  # O(i)
     notes += lines  # O(i)
     if not trusted and proposal is None and (more or lines):  # O(1)
@@ -584,7 +612,8 @@ def cmd_plan(a) -> int:
                 for t in trusted if t["number"] not in planned]  # O(i)
     outside += [_left_out(i["number"], i.get("title", ""), f"not triaged ({ISSUE_LIMIT} cap)", carry)
                 for i in rest if i["number"] not in skipped]  # O(i)
-    shown = {}
+    shown = {}  # O(1)
+    made: list = []  # O(1)
 
     def apply(data):
         if add:  # O(1) open batches stay; only a pinned issue now in one of them refuses
@@ -599,6 +628,7 @@ def cmd_plan(a) -> int:
             new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
             data["batches"] += new  # O(b)
             data["round"] = (data["round"] if isinstance(data.get("round"), list) else [b["id"] for b in was]) + [x["id"] for x in new]  # O(b)
+            made[:] = new  # O(b)
             shown["lines"] = added_lines(data, [x["id"] for x in new], pin) + overlap_lines(new, was)  # O(b)
             return
         live = [b for b in data["batches"] if b["state"] != "shipped" and (not a.reset or b["state"] in ("running", "needs_decision"))]
@@ -626,6 +656,7 @@ def cmd_plan(a) -> int:
         new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
         data["batches"] += new  # O(b)
         data["round"] = [x["id"] for x in new]  # O(b)
+        made[:] = new  # O(b)
         shown["lines"] = added_lines(data, [x["id"] for x in new], pin) if add_flag else bs.status_lines(data)  # O(b)
     bs.update(p, apply)
     drops = []  # O(1)
@@ -634,7 +665,7 @@ def cmd_plan(a) -> int:
         for b in shown["dropped"]:  # O(b)
             if b.get("worktree"):  # O(1)
                 drops += backlog_run.drop_worktree(root, b)  # O(git)
-    print("\n".join(shown["lines"] + notes + topics + cuts + drops))
+    print("\n".join(shown["lines"] + offer_lines(made, merged) + notes + topics + cuts + drops))
     return 0
 
 
@@ -697,6 +728,22 @@ def cmd_decide(a) -> int:
     if err:
         print(f"BLOCKED: {err}")
         return 2
+    import backlog_answer  # O(1)
+    qs = {q["question"]: q for q in bs.open_questions(d)}  # O(q)
+    bad = []  # O(1)
+    for t in list(answers):  # O(answers)
+        if t not in qs:  # O(1) bs.answer reports it
+            continue  # O(1)
+        fixed = t == bs.SHIP_Q or t.startswith("Admit outside issue #")  # O(1)
+        text, why = backlog_answer.answer_text(answers[t], backlog_answer.labels_of(qs[t]), fixed)  # O(len)
+        if text is None:  # O(1)
+            shown_t = "".join("?" if ord(c) < 32 or ord(c) == 127 else c for c in t)[:60]  # O(len)
+            bad.append(f"BLOCKED: bad answer for {shown_t}: {why}")  # O(1)
+        else:  # O(1)
+            answers[t] = text  # O(1)
+    if bad:  # O(1)
+        print("\n".join(bad))  # O(answers)
+        return 2  # O(1)
     res = {}
 
     def apply(data):
@@ -803,6 +850,18 @@ def cmd_skip(a) -> int:
     return rc  # O(1)
 
 
+def cmd_unskip(a) -> int:
+    import backlog_undo  # O(1)
+    return _main_only("unskip", lambda bs, d: backlog_undo.unskip_issue(d, a.issue))  # O(skipped)
+
+
+def cmd_reset(a) -> int:
+    import backlog_undo  # O(1)
+    rc, lines = backlog_undo.reset_batch(_root(), a.batch, a.discard)  # O(git)
+    print("\n".join(lines))  # O(lines)
+    return rc  # O(1)
+
+
 def cmd_park(a) -> int:
     return _main_only("park", lambda bs, d: bs.park(d, a.batch, a.reason))
 
@@ -836,6 +895,9 @@ def cmd_status(a) -> int:
     lines = bs.status_lines(d, all_=getattr(a, "all", False))  # O(b)
     if all(b["state"] == "shipped" for b in d["batches"]):  # O(b) no batch yet, or every batch shipped (#369)
         lines.append("next: sl backlog plan")  # O(1)
+    nxt = parked_next(d)  # O(b)
+    if nxt is not None:  # O(1)
+        lines.append(nxt)  # O(1)
     print("\n".join(lines))  # O(lines)
     return 0  # O(1)
 
@@ -860,10 +922,10 @@ def main(argv=None) -> int:
         return backlog_ship.main(argv[1:])
     ap = argparse.ArgumentParser(prog="sl backlog")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    st = sub.add_parser("status")  # O(1)
+    st = sub.add_parser("status", help="batches, questions and the next step")  # O(1)
     st.add_argument("--all", action="store_true", help="list every batch, also the shipped batches of earlier plan rounds (#406)")  # O(1)
     st.set_defaults(fn=cmd_status)  # O(1)
-    pl = sub.add_parser("plan")
+    pl = sub.add_parser("plan", help="triage the open issues into batches (--issues pins, --add, --reset, --proposal FILE)")
     pl.add_argument("--tier", default="sonnet")
     pl.add_argument("--timeout-min", type=int, default=60)
     pl.add_argument("--reset", action="store_true", help="drop the planned and parked batches and plan every open issue again; "
@@ -877,20 +939,33 @@ def main(argv=None) -> int:
     pl.add_argument("--max-batches", type=int, metavar="N", help="batches one plan round holds, 1 to 20 (default 7)")  # O(1)
     src.add_argument("--issues", metavar="LIST", help="pin the plan to these issues: GitHub numbers (362,#433) or Jira keys (PIX-1,PIX-2); the first item picks the source")  # O(1)
     pl.set_defaults(fn=cmd_plan)
-    de = sub.add_parser("decide")
+    for name, text in (("start", "start the planned batches' leads (--note FILE stores a standing note)"),
+                       ("wait", "wait for running batches to finish or ask"),
+                       ("answer", "answer a lead's question: answer B --file FILE"),
+                       ("tell", "message a running lead: tell B --text T"),
+                       ("ship", "ship a batch: ship B merge|done|...")):  # O(1) routed before parsing; listed for --help
+        sub.add_parser(name, help=text)  # O(1)
+    de = sub.add_parser("decide", help="record the user's answers (--print, --file FILE, --approve-ship --source prompt)")
     de.add_argument("--print", action="store_true")
     de.add_argument("--batch")
     de.add_argument("--file")
     de.add_argument("--approve-ship", action="store_true", help="record a ship approval the user's prompt gave (needs --source prompt)")
     de.add_argument("--source")
     de.set_defaults(fn=cmd_decide)
-    sk = sub.add_parser("skip")
+    sk = sub.add_parser("skip", help="keep an issue out of every later plan")
     sk.add_argument("issue", type=_issue_arg)
     sk.set_defaults(fn=cmd_skip)
-    pk = sub.add_parser("park")
+    us = sub.add_parser("unskip", help="take an issue off the skipped list")  # O(1)
+    us.add_argument("issue", type=_issue_arg)  # O(1)
+    us.set_defaults(fn=cmd_unskip)  # O(1)
+    pk = sub.add_parser("park", help="park a planned batch: park B --reason R")
     pk.add_argument("batch")
     pk.add_argument("--reason", required=True)
     pk.set_defaults(fn=cmd_park)
+    rs = sub.add_parser("reset", help="stop a batch's lead and set it back to planned in a fresh worktree (--discard drops unmerged work)")  # O(1)
+    rs.add_argument("batch")  # O(1)
+    rs.add_argument("--discard", action="store_true")  # O(1)
+    rs.set_defaults(fn=cmd_reset)  # O(1)
     a = ap.parse_args(argv)
     try:
         return a.fn(a)
