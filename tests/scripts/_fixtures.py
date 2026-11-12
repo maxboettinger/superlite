@@ -48,6 +48,10 @@ DISK_FREE = {"SUPERLITE_DISK_FLOOR_GB": "0", "SUPERLITE_DISK_WARN_GB": "0"}  # a
 os.environ.update(DISK_FREE)
 
 
+def _git_quote(value):  # a git config value as one quoted string: a path with a backslash, #, ; or " stays one path
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _git_identity(base):
     missing = {k: v for k, v in (("name", "superlite tests"), ("email", "tests@superlite.invalid"))
                if not subprocess.run(["git", "config", f"user.{k}"], cwd=base, capture_output=True, text=True).stdout.strip()}
@@ -57,7 +61,7 @@ def _git_identity(base):
     host = [own] if own else [str(Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "git" / "config"),
                               str(Path.home() / ".gitconfig")]
     cfg = base / "gitconfig"  # git skips an include whose file is missing
-    cfg.write_text("".join(f"[include]\n\tpath = {p}\n" for p in host)
+    cfg.write_text("".join(f"[include]\n\tpath = {_git_quote(p)}\n" for p in host)
                    + "[user]\n" + "".join(f"\t{k} = {v}\n" for k, v in missing.items()), encoding="utf-8")
     os.environ["GIT_CONFIG_GLOBAL"] = str(cfg)
 
