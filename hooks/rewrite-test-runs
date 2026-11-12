@@ -14,6 +14,10 @@
 # $SL_SD/incidents.jsonl (rule-rewrite: target "<original> -> <rewritten>", rule, cwd, command, rewritten). DENIED instead (exit 2, rule-block incident): a known test
 # runner inside an until/while loop, or a test run with stdout sent to /dev/null; also a subagent bare
 # full suite. Only known runners match, so `until curl ...` and `until [ -f x ]` pass.
+# A test run outside the plan root (the payload cwd, then each cd/pushd; a cwd above the plan root, such as the main
+# checkout of a linked worktree, counts as inside), in a directory the hook cannot read (a variable, cd -, popd), or
+# naming an absolute or .. path outside it, is left as written with no rewrite and no denial; a redirect target is
+# never a test path.
 # Bash builtins only (each external process costs ~250 ms on Windows). Exit 0 (fail open), except a denial (exit 2).
 
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
@@ -38,6 +42,7 @@ jstr() {
 }
 # Working directory of the call (the payload's cwd), once, for the incident rows: no quote, backslash or control character, 300 characters at most.
 jstr cwd
+rawcwd="$REPLY"   # raw, for the directory walk (cwdv below drops backslashes)
 cwdv="${REPLY//[[:cntrl:]]/}"; cwdv="${cwdv//[\"\\]/}"; cwdv="${cwdv:0:300}"
 re_co='(^|[[:space:]])--(collect-only|co)([[:space:]]|$)'
 # esc VAR: JSON-escape the string in VAR.
@@ -51,6 +56,123 @@ esc() {
 superlite_state || exit 0
 sd="$SL_SD"
 [ -f "$sd/stable.json" ] || [ -f "$sd/prime.md" ] || [ -f "$sd/pool.json" ] || exit 0
+
+# Directory walk: where each segment runs. here = normalized absolute directory ("" = unknown), here_in = 1 when a run
+# there counts as inside the plan root (the root or below, or a directory above it such as the main checkout).
+# norm_path P: absolute P with \ to /, // collapsed, . dropped, .. resolved, no trailing /, into REPLY.
+norm_path() {
+  local p="${1//\\//}" pre="" parts=() x out=() n=0 i
+  if [[ $p =~ ^[A-Za-z]: ]]; then pre="${p:0:2}"; p="${p:2}"; fi
+  IFS=/ read -r -a parts <<< "$p"
+  for x in "${parts[@]}"; do
+    case "$x" in
+      ""|.) ;;
+      ..) [ "$n" -gt 0 ] && { n=$((n-1)); unset 'out[n]'; } ;;
+      *) out[n]="$x"; n=$((n+1)) ;;
+    esac
+  done
+  REPLY=""
+  for ((i=0; i<n; i++)); do REPLY="$REPLY/${out[i]}"; done
+  REPLY="$pre${REPLY:-/}"
+}
+# real_of P: the physical path of P (nearest existing folder's real path plus the rest) into REPLY; 1 when unreadable.
+real_of() {
+  local d="$1" rest="" saved="$PWD"
+  while [ -n "$d" ] && [ "$d" != / ] && [ ! -d "$d" ]; do rest="/${d##*/}$rest"; d="${d%/*}"; done
+  [ -n "$d" ] || d=/
+  builtin cd -P -- "$d" >/dev/null 2>&1 || return 1
+  REPLY="${PWD%/}$rest"
+  builtin cd -- "$saved" >/dev/null 2>&1
+  return 0
+}
+# under_root P: 0 when the normalized absolute P is the plan root or below it.
+under_root() {
+  local p="$1" pr
+  [ "$root_n" = / ] && return 0
+  [[ $p == "$root_n" || $p == "$root_n"/* ]] && return 0
+  if [ -z "${root_real+x}" ]; then
+    root_real=""
+    real_of "$root_n" && root_real="$REPLY"
+  fi
+  [ -n "$root_real" ] || return 1
+  real_of "$p" || return 1
+  pr="$REPLY"
+  [[ $pr == "$root_real" || $pr == "$root_real"/* ]]
+}
+dir_start() {
+  local c="${rawcwd//\\//}"
+  here=""; here_in=0
+  if [ -z "$c" ]; then here="$root_n"; here_in=1; return 0; fi
+  case "$c" in /*|?:/*) ;; *) c="$root_n/$c" ;; esac
+  norm_path "$c"; here="$REPLY"
+  if [ "$here" = / ] || [[ $root_n == "$here"/* ]] || under_root "$here"; then here_in=1; return 0; fi
+  # a cwd spelled through a symlink that holds the plan root: compare physical paths
+  if [ -z "${root_real+x}" ]; then root_real=""; real_of "$root_n" && root_real="$REPLY"; fi
+  if [ -n "$root_real" ] && real_of "$here" && { [ "$REPLY" = / ] || [[ $root_real == "$REPLY"/* ]]; }; then here_in=1; fi
+}
+re_lead='^[[:space:](){!]*(.*)$'
+re_sq="^'([^']*)'([[:space:]]|\$)"
+re_dq='^"([^"$`\\]*)"([[:space:]]|$)'
+# dir_step SEG: a cd / pushd segment moves here; popd, cd -, ~user, or an operand with a variable or glob makes it unknown.
+dir_step() {
+  local s="$1" w op rest lit=0 tp='[![:space:])}]'
+  [[ $s =~ $re_lead ]] && s="${BASH_REMATCH[1]}"
+  s="${s%"${s##*$tp}"}"
+  w="${s%%[[:space:]]*}"
+  case "$w" in
+    cd|pushd) ;;
+    popd) here=""; here_in=0; return 0 ;;
+    *) return 0 ;;
+  esac
+  rest="${s#"$w"}"
+  while :; do
+    rest="${rest#"${rest%%[![:space:]]*}"}"
+    w="${rest%%[[:space:]]*}"
+    case "$w" in -L|-P|-e|-@|--) rest="${rest#"$w"}"; continue ;; esac
+    break
+  done
+  if [[ $rest =~ $re_sq ]]; then op="${BASH_REMATCH[1]}"; lit=1
+  elif [[ $rest =~ $re_dq ]]; then op="${BASH_REMATCH[1]}"; lit=1
+  else
+    op="${rest%%[[:space:]]*}"
+    case "$op" in *'$'*|*'`'*|*'\'*|*'*'*|*'?'*|*'['*|*'{'*|*'"'*|*"'"*) here=""; here_in=0; return 0 ;; esac
+    case "$op" in -|"~"[!/]*) here=""; here_in=0; return 0 ;; esac
+    case "$op" in
+      "") op="${HOME//\\//}"; [ -n "$op" ] || { here=""; here_in=0; return 0; } ;;
+      "~") op="${HOME//\\//}"; [ -n "$op" ] || { here=""; here_in=0; return 0; } ;;
+      "~/"*) [ -n "$HOME" ] || { here=""; here_in=0; return 0; }; op="${HOME//\\//}/${op:2}" ;;
+    esac
+  fi
+  op="${op//\\//}"
+  case "$op" in
+    /*|?:/*) norm_path "$op"; here="$REPLY" ;;
+    *) if [ -n "$here" ]; then norm_path "$here/$op"; here="$REPLY"; else here_in=0; return 0; fi ;;
+  esac
+  here_in=0
+  under_root "$here" && here_in=1
+  return 0
+}
+# seg_out SEG: 0 when the segment runs outside the plan root, or a test run names an absolute or .. path outside it.
+seg_out() {
+  local w
+  [ "$here_in" = 0 ] && return 0
+  [[ $1 =~ $re_test ]] || return 1
+  files_from_seg "$1"
+  for w in $REPLY; do
+    w="${w//\\//}"
+    case "$w" in
+      "~/"*) [ -n "$HOME" ] || continue; w="${HOME//\\//}/${w:2}" ;;
+      /*|?:/*|..|../*|*/../*|*/..) ;;
+      *) continue ;;
+    esac
+    case "$w" in /*|?:/*) ;; *) w="$here/$w" ;; esac
+    norm_path "$w"
+    under_root "$REPLY" || return 0
+  done
+  return 1
+}
+norm_path "$SL_PROJ"; root_n="$REPLY"
+here=""; here_in=0
 
 jstr command; cmd="$REPLY"
 [ -n "$cmd" ] || exit 0
@@ -72,12 +194,19 @@ re_test='^[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]*[[:space:]]+)*((uv|po
 re_seg='^([^&|;'$'\n'']*)(&&|\|\||;|\||'$'\n''|&)(.*)$'
 
 # files_from_seg SEG: path-like args after the runner into REPLY (empty = bare / full suite).
+# A redirect operator (and the word after it) or a redirect glued to its target (>/tmp/x.log, 2>err.txt) is no test path.
+ph1=$'\x02'; ph2=$'\x03'
+re_redir_op='^[0-9]*(>>?|>\||<>?|<<<|'"$ph1|$ph2"'>?)$'
+re_redir_glued='^[0-9]*(>|<|'"$ph1|$ph2"')'
 files_from_seg() {
-  local rest w
+  local rest w skip=0
   REPLY=""
   [[ $1 =~ $re_test ]] || return 0
   rest="${1#"${BASH_REMATCH[0]}"}"
   for w in $rest; do
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    if [[ $w =~ $re_redir_op ]]; then skip=1; continue; fi
+    [[ $w =~ $re_redir_glued ]] && continue
     case "$w" in
       -*|--[[:alnum:]-]*) continue ;;
       /dev/null|[Nn][Uu][Ll]|*/null) continue ;;  # redirects, not test paths
@@ -86,7 +215,6 @@ files_from_seg() {
   done
 }
 
-ph1=$'\x02'; ph2=$'\x03'
 # A pytest marker after the runner: -m, then a double-quoted string, a single-quoted string or a bare word (group 3), or -m glued to a bare word (group 4).
 re_marker="(^|[[:space:]])-m([[:space:]]+(\"[^\"]*\"|'[^']*'|[^[:space:]\"']+)|([^[:space:]\"'-][^[:space:]\"']*))"
 cmd="${cmd//>&/$ph1}"; cmd="${cmd//&>/$ph2}"   # keep 2>&1 and &> out of the separator split
@@ -220,19 +348,23 @@ if [ "$has_agent" = 1 ] || [ -n "$fleet_worker" ]; then
   fi
   _dq='"'; _sq="'"
   _rest="$cmd"; _last=0
+  dir_start
   while :; do
     if [[ $_rest =~ $re_seg ]]; then _seg="${BASH_REMATCH[1]}"; _rest="${BASH_REMATCH[3]}"; _last=0
     else _seg="$_rest"; _last=1; fi
     _q="${_seg//[^\"]/}"; _q2="${_seg//[^\']/}"
     if [ $(( ${#_q} % 2 )) = 1 ] || [ $(( ${#_q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
-    [ "$iso" = 1 ] && project_hit "$_seg" seg && deny_isolate "$iso_task"
-    if [[ $_seg =~ $re_test ]]; then
-      files_from_seg "$_seg"
-      if [ -z "$REPLY" ]; then   # a quoted path ("my test.py") is a path; a quoted flag value (-m "not slow") is not
-        _nq=${_seg//[$_dq$_sq]/}
-        files_from_seg "$_nq"
+    dir_step "$_seg"
+    if ! seg_out "$_seg"; then   # a run outside the plan root is not ours to judge
+      [ "$iso" = 1 ] && project_hit "$_seg" seg && deny_isolate "$iso_task"
+      if [[ $_seg =~ $re_test ]]; then
+        files_from_seg "$_seg"
+        if [ -z "$REPLY" ]; then   # a quoted path ("my test.py") is a path; a quoted flag value (-m "not slow") is not
+          _nq=${_seg//[$_dq$_sq]/}
+          files_from_seg "$_nq"
+        fi
+        [ -z "$REPLY" ] && ! [[ $_seg =~ $re_co ]] && deny_subagent_full
       fi
-      [ -z "$REPLY" ] && ! [[ $_seg =~ $re_co ]] && deny_subagent_full
     fi
     [ "$_last" = 1 ] && break
   done
@@ -247,39 +379,56 @@ if [ "$hid" = 1 ]; then
   while [[ $scan =~ $re_quoted ]]; do unq="$unq${BASH_REMATCH[1]}Q"; scan="${BASH_REMATCH[3]}"; done
   unq="$unq$scan"
   if [[ $unq =~ $re_loop ]]; then
-    [[ $unq =~ $re_in_loop ]] && deny
-    [ "${#pp[@]}" -gt 0 ] && project_hit "$unq" loop && deny
+    any_out=0; dir_start; _rest="$cmd"
+    while :; do   # does any segment run outside the plan root?
+      if [[ $_rest =~ $re_seg ]]; then _seg="${BASH_REMATCH[1]}"; _rest="${BASH_REMATCH[3]}"; _last=0
+      else _seg="$_rest"; _last=1; fi
+      dir_step "$_seg"
+      seg_out "$_seg" && any_out=1
+      [ "$_last" = 1 ] && break
+    done
+    if [ "$any_out" = 0 ]; then
+      [[ $unq =~ $re_in_loop ]] && deny
+      [ "${#pp[@]}" -gt 0 ] && project_hit "$unq" loop && deny
+    fi
   fi
 fi
 
 out=""; rest="$cmd"; changed=0; used_fast=0
+dir_start
 while :; do
   if [[ $rest =~ $re_seg ]]; then seg="${BASH_REMATCH[1]}"; sep="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"; last=0
   else seg="$rest"; sep=""; last=1; fi
-  if [ "$hid" = 1 ] && [[ $seg =~ $re_null ]]; then   # a known runner with stdout sent to /dev/null
-    if [[ $seg =~ $re_known ]]; then deny; fi
-    if [ "${#pp[@]}" -gt 0 ] && project_hit "$seg" seg; then deny; fi
-  fi
   q="${seg//[^\"]/}"; q2="${seg//[^\']/}"
-  if [ $(( ${#q} % 2 )) = 1 ] || [ $(( ${#q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
-  if [[ $seg =~ $re_test ]] && ! [[ $seg =~ $re_co ]]; then
-    mk=""; work="$seg"
-    [[ $seg =~ $re_test ]]   # the re_co test above replaced BASH_REMATCH
-    pre="${BASH_REMATCH[0]}"
-    if [[ $pre =~ (pytest|py\.test)[[:space:]]*$ ]]; then   # a pytest segment: lift -m EXPR out of the text after the runner
-      post="${seg#"$pre"}"
-      if [[ $post =~ $re_marker ]]; then
-        mfull="${BASH_REMATCH[0]}"
-        if [ -n "${BASH_REMATCH[3]}" ]; then mk="${BASH_REMATCH[3]}"; else mk="${BASH_REMATCH[4]}"; fi
-        work="$pre${post%%"$mfull"*} ${post#*"$mfull"}"
-      fi
+  dir_step "$seg"
+  if seg_out "$seg"; then   # outside the plan root: copied as written, never denied
+    if [ $(( ${#q} % 2 )) = 1 ] || [ $(( ${#q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
+    out="$out$seg"
+  else
+    if [ "$hid" = 1 ] && [[ $seg =~ $re_null ]]; then   # a known runner with stdout sent to /dev/null
+      if [[ $seg =~ $re_known ]]; then deny; fi
+      if [ "${#pp[@]}" -gt 0 ] && project_hit "$seg" seg; then deny; fi
     fi
-    case "$work" in *'"'*|*"'"*) exit 0 ;; esac   # quoted test arguments: leave the command unchanged
-    files_from_seg "$work"
-    if [ -n "$REPLY" ]; then out="$out $sl_base --fast $REPLY${mk:+ -m $mk} "; used_fast=1
-    else out="$out $sl${mk:+ -m $mk} "; fi
-    changed=1
-  else out="$out$seg"; fi
+    if [ $(( ${#q} % 2 )) = 1 ] || [ $(( ${#q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
+    if [[ $seg =~ $re_test ]] && ! [[ $seg =~ $re_co ]]; then
+      mk=""; work="$seg"
+      [[ $seg =~ $re_test ]]   # the re_co test above replaced BASH_REMATCH
+      pre="${BASH_REMATCH[0]}"
+      if [[ $pre =~ (pytest|py\.test)[[:space:]]*$ ]]; then   # a pytest segment: lift -m EXPR out of the text after the runner
+        post="${seg#"$pre"}"
+        if [[ $post =~ $re_marker ]]; then
+          mfull="${BASH_REMATCH[0]}"
+          if [ -n "${BASH_REMATCH[3]}" ]; then mk="${BASH_REMATCH[3]}"; else mk="${BASH_REMATCH[4]}"; fi
+          work="$pre${post%%"$mfull"*} ${post#*"$mfull"}"
+        fi
+      fi
+      case "$work" in *'"'*|*"'"*) exit 0 ;; esac   # quoted test arguments: leave the command unchanged
+      files_from_seg "$work"
+      if [ -n "$REPLY" ]; then out="$out $sl_base --fast $REPLY${mk:+ -m $mk} "; used_fast=1
+      else out="$out $sl${mk:+ -m $mk} "; fi
+      changed=1
+    else out="$out$seg"; fi
+  fi
   out="$out$sep"
   [ "$last" = 1 ] && break
 done
