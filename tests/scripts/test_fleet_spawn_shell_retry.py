@@ -44,13 +44,13 @@ def test_spawn_retries_once_after_a_pause(world, pauses):
 
 def test_second_shell_failure_blocks(world, pauses, capsys):
     fleet.main(["on"]); capsys.readouterr()
-    script(world, {1: ("agent_start_failed", MSG), 2: ("agent_start_failed", MSG)})
+    script(world, {n: ("agent_start_failed", MSG) for n in (1, 2, 3, 4)})
     with pytest.raises(SystemExit) as e:
         fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
     assert e.value.code == 3
     line = capsys.readouterr().out.splitlines()[0]
-    assert line.startswith("BLOCKED: W1 account ") and line.endswith(f"startup: {MSG}; retried once")
-    assert len(starts(world)) == 2 and len(pauses) == 1
+    assert line.startswith("BLOCKED: W2 account ") and line.endswith(f"startup: {MSG}; retried once; retried in a fresh pane after W1")
+    assert len(starts(world)) == 4 and len(pauses) == 2
     assert any(c[0] == "close_pane" for c in world.fh.calls)
 
 
@@ -74,12 +74,12 @@ def test_retry_then_trust_dialog(world, pauses):
 
 def test_for_dispatch_names_the_rerun(dwld, pauses, capsys):
     fleet.main(["on"]); capsys.readouterr()
-    script(dwld, {1: ("agent_start_failed", MSG), 2: ("agent_start_failed", MSG)})
+    script(dwld, {n: ("agent_start_failed", MSG) for n in (1, 2, 3, 4)})
     dwld.lines = [("T2", FRESH), ("T3", FRESH)]
     assert _go(dwld) == 3
     out = capsys.readouterr().out.splitlines()
-    assert out[0].startswith("BLOCKED: T2 not sent (") and out[0].endswith("is not an available shell; retried once; rerun sl fleet spawn --for-dispatch)")
-    assert out[1:] == ["W2 T3 sent"]
+    assert out[0].startswith("BLOCKED: T2 not sent (") and out[0].endswith("is not an available shell; retried once; retried in a fresh pane after W1; rerun sl fleet spawn --for-dispatch)")
+    assert out[1:] == ["W3 T3 sent"]
 
 
 def test_for_dispatch_retry_success_sends(dwld, pauses, capsys):

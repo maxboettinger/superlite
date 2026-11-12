@@ -11,13 +11,18 @@ import fleet_state as fs  # noqa: E402
 REAL = os.environ.get("SUPERLITE_REAL") == "1"
 
 class FakeHerdr:
-    def __init__(self): self.calls, self.states, self.screen = [], [{"sl-proj-w1": "working", "sl-proj-w2": "working"}], "prompt text\n> Allow once?\n"
+    def __init__(self): self.calls, self.states, self.screen, self.gone = [], [{"sl-proj-w1": "working", "sl-proj-w2": "working"}], "prompt text\n> Allow once?\n", set()
+    def agent_state(self, name):
+        self.calls.append(("agent_state", name))
+        if name in self.gone: raise self.HerdrError("agent_not_found", "agent target not found")
+        return "idle"
     def prompt(self, name, text, until, timeout_ms): self.calls.append(("prompt", name, text, until)); return "working"
     def agent_states(self): self.calls.append(("agent_states",)); return self.states.pop(0) if len(self.states) > 1 else self.states[0]
     def read_screen(self, name, lines=40, source="visible"): self.calls.append(("read_screen", name)); return self.screen
     def send_keys(self, name, keys): self.calls.append(("send_keys", name, keys))
     def call(self, args, timeout_ms=30000, env=None): self.calls.append(("call", args)); return {}  # pane rename
-    HerdrError = type("HerdrError", (Exception,), {})
+    class HerdrError(Exception):
+        def __init__(self, code="", message=""): super().__init__(message or code); self.code, self.message = code, message
 
 def transcript(path, text):
     path.write_text(json.dumps({"type": "user", "message": {"content": "task"}}) + "\n" + json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}) + "\n")

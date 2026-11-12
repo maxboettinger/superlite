@@ -16,6 +16,7 @@ class FakeHerdr:
         self.screen_after = None
         self.create_error = None
         self.split_error = None
+        self.gone, self.state_error = set(), None  # agent names that no longer exist; a scripted agent_state failure code
         self.layout, self.agent_rows, self.tab_panes = None, [], []  # scripted pane_layout and agents replies; panes of the newest tab
         self.HerdrError = type("HerdrError", (Exception,), {"__init__": lambda s, code, message="": (setattr(s, "code", code), setattr(s, "message", message), None)[-1]})
     def create_workspace(self, label, cwd, env_vars):
@@ -31,6 +32,10 @@ class FakeHerdr:
     def pane_layout(self, pane_id):
         self.calls.append(("pane_layout", pane_id))
         return self.layout if self.layout is not None else [{"pane_id": p, "rows": 64, "cols": 73} for p in self.tab_panes]
+    def agent_state(self, name):  # a read, not logged
+        if name in self.gone: raise self.HerdrError("agent_not_found", "agent target not found")
+        if self.state_error: raise self.HerdrError(self.state_error, "x")
+        return "idle"
     def agents(self): return list(self.agent_rows)  # a read, not logged: the call-order tests stay as they are
     def start_agent(self, name, pane_id, argv, timeout_ms=90000):
         self.calls.append(("start_agent", name, argv))

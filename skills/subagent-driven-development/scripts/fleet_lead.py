@@ -14,10 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import fleet  # noqa: E402 | O(1)
 
 
-class NoShell(Exception):  # O(1)
-    def __init__(self, wid, account, why):  # O(1)
-        super().__init__(why)  # O(1)
-        self.wid, self.account, self.why = wid, account, why  # O(1)
+NoShell = fleet.NoShell  # moved to fleet.py: workers retry in a fresh pane too | O(1)
 
 
 DEFAULT_WINDOW = 400000  # O(1) the window /superlite:setup offers

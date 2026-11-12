@@ -65,7 +65,7 @@ def test_wait_any_returns_first(cw, tmp_path, capsys):
     stop(cw, "W1", tr, sent + 10); cw.fh.states = [{"sl-proj-w1": "done", "sl-proj-w2": "working"}]
     out = io.wait(cw.sd, None, 60000, any_=True)
     assert len(out) == 1 and out[0]["id"] == "W1"
-    assert capsys.readouterr().out.strip().splitlines()[-1] == "BUSY W2"
+    assert capsys.readouterr().out.strip().splitlines()[-1] == f"BUSY W2 (reported: W1 {cw.sd}/fleet/reports/T3.json)"
     assert json.loads((cw.sd / "fleet.json").read_text())["workers"]["W2"]["state"] == "busy"
     assert [c for c in cw.fh.calls if c[0] == "agent_states"] == [("agent_states",)]
 
@@ -121,3 +121,11 @@ def test_baseline_k_uses_latest_stop_after_fleet_off(world, tmp_path):  # an old
     stop(world, "W1", tr_for("old.jsonl", 10000), 1000)
     stop(world, "W1", tr_for("new.jsonl", 14400), 2000)
     assert io.baseline_k(world.sd, "W1") == 14.4
+
+
+def test_send_tasks_after_brief_clears_brief(cw, tmp_path):
+    b = tmp_path / "b.md"; b.write_text("x")
+    io.send_brief(cw.sd, "W1", str(b))
+    assert "--brief" in __import__("fleet").respawn_hint(cw.sd, "W1")
+    io.send(cw.sd, cw.plan, "W1", ["T3"], "/sl/sl", "/sl")
+    assert "--brief" not in __import__("fleet").respawn_hint(cw.sd, "W1")
