@@ -178,6 +178,8 @@ def review_reasons(plan, tid):  # why TID is worth a package review; KeyError fo
     hard = sorted({c for pkg, cases in pt.review_focus_cases(pl).items() if pkg in parts for c in cases} & set(RISK))  # O(L + pkgs)
     if hard:  # O(1)
         why.append(f"Review Focus {', '.join(hard)}")  # O(1)
+    if not why and len(pl.tasks) == 1:  # fallback reason: a one-task plan has no package review of its own (#595) | O(1)
+        why.append("only task")  # O(1)
     return why  # O(1)
 
 
@@ -392,11 +394,15 @@ def own_stop(rec, worker):  # False for a stop record a child session of the wor
 
 
 def latest_stop(sd, wid, after_ms, stops=None):  # the newest own stop record of WID at or after AFTER_MS; STOPS is a pre-read _stops list | O(m + w)
-    stops = _stops(sd) if stops is None else stops  # O(m)
     try:  # O(1)
         worker = fs.load(Path(sd))["workers"].get(wid)  # read once | O(w)
     except (OSError, ValueError, KeyError):  # O(1)
         worker = None  # O(1)
+    own = (worker or {}).get("state_dir")  # the folder its stop hook writes to (#580) | O(1)
+    if own and Path(own).resolve() != Path(sd).resolve():  # O(1)
+        stops = _stops(own)  # O(m)
+    elif stops is None:  # O(1)
+        stops = _stops(sd)  # O(m)
     found = None  # O(1)
     for e in stops:  # O(m) iterations
         if e.get("agent_id") == wid and e["t"] >= after_ms and (found is None or e["t"] >= found["t"]) and own_stop(e, worker if (worker or {}).get("role") == "lead" else None):  # O(len)
@@ -450,6 +456,7 @@ def pane_label(sd, wid, text, timeout_ms=None):  # rename the worker's Herdr pan
 
 
 def stopped(sd, wid, t_ms):  # the stop hook: label the pane reported unless the worker was sent new work after the stop | O(w)
+    sd = fs.home(sd)  # a worker started before a move labels its pane in the fleet's new folder | O(w)
     w = fs.load(Path(sd))["workers"].get(wid)  # O(w)
     if w is None or int(w.get("sent") or 0) > t_ms:  # O(1)
         return False  # O(1)
