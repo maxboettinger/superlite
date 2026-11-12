@@ -182,8 +182,28 @@ def _pick(data: dict, bids: list, cap: int, live: dict) -> tuple:
     return ids, msgs  # O(ids)
 
 
+MACHINE = [("runner offline", re.compile(r"runner offline|offline runner", re.I)), ("GUI session", re.compile(r"GUI session", re.I)),  # O(1)
+           ("login session", re.compile(r"login session", re.I)), ("WindowServer", re.compile(r"WindowServer", re.I))]  # O(1)
+
+
+def machine_park_line(lines: list):  # O(lines * patterns)
+    """One `machine: ...` line naming the batches a round parked for a machine reason, else None."""
+    by, ids = {}, []  # O(1)
+    for ln in lines:  # O(lines)
+        m = re.match(r"(\S+) parked: (.*)", str(ln))  # O(len)
+        label = m and next((n for n, r in MACHINE if r.search(m.group(2))), None)  # O(patterns)
+        if label:  # O(1)
+            by.setdefault(label, []).append(m.group(1))  # O(1)
+            ids.append(m.group(1))  # O(1)
+    if not by:  # O(1)
+        return None  # O(1)
+    parts = "; ".join(f"{n} parks {', '.join(v)}" for n, v in by.items())  # O(lines)
+    return f"machine: {parts}; fix the machine first, then sl backlog start {' '.join(ids)}"  # O(lines)
+
+
 def cmd_start(a) -> int:
     import fleet
+    import machine_load
     import fleet_io
     import fleet_lead
     import fleet_state
@@ -214,7 +234,13 @@ def cmd_start(a) -> int:
         if b["state"] == "shipped" and f.is_file():  # O(1)
             summaries.append(str(f))  # O(1)
     fleet_on = False  # O(1)
+    deadline = time.monotonic() + a.machine_wait  # one budget for the whole call | O(1)
     for bid in ids:  # O(ids)
+        busy = machine_load.gate(f"backlog start {bid}", max(0.0, deadline - time.monotonic()), a.over_limit)  # O(wait)
+        if busy:  # O(1)
+            print(f"BLOCKED: {bid} not started: {busy}; rerun sl backlog start {bid}, or --over-limit")  # O(1)
+            code = 2  # O(1)
+            continue  # O(1)
         batch = bs.batch(data, bid)  # O(b)
         wt, _ = worktree.ensure(f"{bid.lower()}-{batch['topic']}", root)  # O(w) + spawns
         wt = Path(wt)  # O(1)
@@ -238,6 +264,7 @@ def cmd_start(a) -> int:
             print(f"BLOCKED: {bid} lead did not start; {bid} keeps its state, rerun sl backlog start {bid}")  # O(1)
             code = 2  # O(1)
             continue  # O(1)
+        machine_load.register(rec["name"], "lead", str(root))  # O(1)
         try:  # O(1)
             fleet_io.send_brief(sd, rec["id"], str(brief), bid)  # O(w)
         except fleet.hc.HerdrError as e:  # O(1)
@@ -482,7 +509,8 @@ def cmd_wait(a) -> int:
     while True:  # O(timeout / poll)
         lines = _round(root, sd, p, {})  # O(b * m)
         if lines:  # O(1)
-            print("\n".join(lines))  # O(lines)
+            mline = machine_park_line(lines)  # O(lines)
+            print("\n".join(([mline] if mline else []) + lines))  # O(lines)
             return 0  # O(1)
         if not any(b["state"] == "running" for b in bs.load(p)["batches"]):  # O(b)
             print("no running batch")  # O(1)
@@ -588,6 +616,8 @@ def main(argv=None) -> int:
     s.add_argument("batch", nargs="*")  # O(1)
     s.add_argument("--cap", type=int, default=2)  # O(1)
     s.add_argument("--model", default="opus")  # O(1)
+    s.add_argument("--machine-wait", type=float, default=100)  # O(1)
+    s.add_argument("--over-limit", action="store_true")  # O(1)
     w = sub.add_parser("wait")  # O(1)
     w.add_argument("--timeout", type=int, default=21600)  # O(1)
     w.add_argument("--poll", type=int, default=10)  # O(1)
