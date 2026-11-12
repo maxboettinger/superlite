@@ -12,7 +12,7 @@ By hand, one line: `fresh tier=T agent=TYPE`: `"$SL" fleet spawn --tier T --plan
 
 ## Other roles
 
-Every other role takes a brief file under `.superlite/briefs/` (never pasted into the send): `"$SL" fleet spawn --role R [--tier T] --plan $PLAN` prints `Wn account=A pane=P agent=TYPE`, then `"$SL" fleet send Wn --brief <abs file> [--label L] --plan $PLAN`. A one-turn worker answers once and `fleet wait` stops it.
+Every other role takes a brief file under `.superlite/briefs/` (never pasted into the send): `"$SL" fleet spawn --role R [--tier T] --plan $PLAN` prints `Wn account=A pane=P agent=TYPE`, then `"$SL" fleet send Wn --brief <abs file> [--label L] --plan $PLAN`. A one-turn worker answers once and `fleet wait` stops it. One call does all three: `fleet spawn --role R [--tier T] --brief <abs file> [--label L] --wait [--timeout 540000] --plan $PLAN` (a missing brief exits 2 before any pane; a failed send stops the worker, `BLOCKED: Wn L not sent (...)`, exit 3).
 
 - Package reviewer: `fleet spawn --for-review Tn [Tm ...] --plan $PLAN` (or `--package X`) writes the brief, starts the worker and sends it; `fleet spawn --for-dispatch` ends with `review: Tn (<why>)` lines for committed tasks that need a review. By hand: `--role package-reviewer`; the brief holds what the review brief in `SKILL.md` holds. A failed send is retried once (stall or slow Herdr reply).
 - Final reviewer: `--role final-reviewer`, a fresh worker per round: `fleet send Wn --brief <abs>/.superlite/review-packet.md --label FR<round>`; add `--full` to ask for a full review.
@@ -22,7 +22,7 @@ Every other role takes a brief file under `.superlite/briefs/` (never pasted int
 
 ## Waiting and acting
 
-Run `"$SL" fleet wait --any --timeout 540000 --plan $PLAN` as a background command (the harness wakes you when a worker finishes) instead of waiting for SendMessage replies. Act on its lines, not on report text. Run it again while workers are busy. `BUSY Wn Wm` lists the workers still running. A lead that must not end its turn may run it in the foreground. One-turn workers are stopped by `fleet wait`.
+Run `"$SL" fleet wait --any --timeout 540000 --plan $PLAN` as a background command (the harness wakes you when a worker finishes) instead of waiting for SendMessage replies. Act on its lines, not on report text. Run it again while workers are busy. `BUSY Wn Wm (reported: Wk <json>)` lists the workers still running and names this call's finishers; `--timeout` is in ms (a bare number under 1000 is read as seconds; `540s` and `9m` work too). Each report is returned once: `Wn <label> already collected: <json>` means another wait got it. A lead that must not end its turn may run it in the foreground. One-turn workers are stopped by `fleet wait`.
 
 - `Wn <label> <STATUS> findings=<n> [concerns=N] [partial] <sd>/fleet/reports/<id>.json`: ` concerns=N` counts a report's concerns; `<id>` is the label's first comma part; ` (screen)` marks the screen fallback.
   - Task labels (`DONE`, `DONE_WITH_CONCERNS`): `commit_task` as usual.
@@ -36,6 +36,6 @@ Run `"$SL" fleet wait --any --timeout 540000 --plan $PLAN` as a background comma
 - `Wn Tn BLOCKED-UI <screen path>`: read the screen file; answer with `"$SL" fleet keys Wn KEY...` or `fleet send Wn --text "..."`, or treat the task as BLOCKED.
 - `TIMEOUT Wn Wm`: run `fleet wait` again.
 
-`"$SL" fleet status` lists workers; `fleet stop Wn` or `--all` closes them. At freeze, `"$SL" fleet stop --all` runs before `trees clean` (no-op without fleet mode).
+`"$SL" fleet status` lists workers; `reported` means the turn ended and `fleet wait Wn` collects it (`fleet report Wn` reads it first), `dead` (also `Wn <label> DEAD` from wait) means its agent is gone: the line names the fresh `fleet spawn`. `fleet send` to a stopped or dead worker exits 2 with that spawn line. `fleet stop Wn` or `--all` closes them. At freeze, `"$SL" fleet stop --all` runs before `trees clean` (no-op without fleet mode).
 
 Batch leads and backlog mode (`/superlite:backlog`): `backlog.md`.
