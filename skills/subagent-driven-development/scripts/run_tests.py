@@ -2061,7 +2061,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                         overlay, kept = fast_overlay(".", a.task, info, a.ledger) if a.task else worker_overlay(".", key, info, a.ledger)  # O(c + f * T * o)
                         held = kept  # {path: sorted owner ids}
                     stack.enter_context(trees.busy(".", key))  # O(1)
-                    tree = trees.prepare(".", key, overlay if paths else info[a.task]["owns"])  # a --full run tests the task's own files | O(f * o) + git checkout
+                    tree = trees.prepare(".", key, overlay if paths else full_overlay(".", a.task, info, a.ledger))  # a --full run tests the task's own files and the siblings it shares a file with | O(f * o) + git checkout
                 except (RuntimeError, OSError) as err:  # O(1)
                     return usage_error(a, label, f"isolated tree for {key} not prepared: {err}")  # O(summary size)
                 _link_dir(Path.cwd() / ".superlite", Path(tree) / ".superlite")  # the tree reaches the root's .superlite/ (#511) | O(d)
@@ -2142,17 +2142,50 @@ def unfinished_owners(path, task, info, done):  # O(T * o) the other uncommitted
     return sorted(t for t in info if t != task and t not in done and nt.owns_match(path, info[t]["owns"]))  # O(T * o)
 
 
+def shared_siblings(paths, task, info, done):  # O(f * T * o) {unfinished sibling id: first shared changed path} for the siblings a changed file of task, or of an already pulled sibling, ties to; repeats until nothing changes
+    pulled, group = {}, {task}  # O(1)
+    grew = True  # O(1)
+    while grew:  # O(T) rounds
+        grew = False  # O(1)
+        for p in sorted(paths):  # O(f log f)
+            if not any(nt.owns_match(p, info[t]["owns"]) for t in group):  # O(T * o)
+                continue  # O(1)
+            for t in sorted(info):  # O(T)
+                if t not in group and t not in done and nt.owns_match(p, info[t]["owns"]):  # O(o)
+                    pulled[t] = p  # O(1)
+                    group.add(t)  # O(1)
+                    grew = True  # O(1)
+    return pulled  # O(1)
+
+
+def say_pulled(task, pulled):  # O(s) one stderr line per sibling the task's tree takes whole
+    for t, p in sorted(pulled.items()):  # O(s log s)
+        print(f"run_tests: {task}'s tree takes {t} whole: it shares {p}", file=sys.stderr)  # O(1)
+
+
 def fast_overlay(root, task, info, ledger):  # O(f * T * o) + two spawns: (paths to overlay, paths kept at base), both sorted
     copy, delete = trees.own_changes(root, trees.base_commit(root), ["**/*"])  # O(f)
     done = ct.committed_tasks(ledger)  # one ledger read per run | O(c)
+    paths = sorted(set(copy) | set(delete))  # O(f log f)
+    pulled = shared_siblings(paths, task, info, done)  # O(f * T * o)
+    say_pulled(task, pulled)  # O(s)
     overlay, held = [], {}  # O(1)
-    for p in sorted(set(copy) | set(delete)):  # O(f log f)
-        owners = unfinished_owners(p, task, info, done)  # O(T * o)
+    for p in paths:  # O(f)
+        owners = [t for t in unfinished_owners(p, task, info, done) if t not in pulled]  # O(T * o)
         if owners:  # O(1)
             held[p] = owners  # O(1)
         else:  # O(1)
             overlay.append(p)  # O(1)
     return overlay, held  # O(1)
+
+
+def full_overlay(root, task, info, ledger):  # O(f * T * o) + two spawns: task's owns plus the changed files of the siblings its tree takes whole
+    copy, delete = trees.own_changes(root, trees.base_commit(root), ["**/*"])  # O(f)
+    paths = sorted(set(copy) | set(delete))  # O(f log f)
+    pulled = shared_siblings(paths, task, info, ct.committed_tasks(ledger))  # O(f * T * o)
+    say_pulled(task, pulled)  # O(s)
+    extra = [p for p in paths if any(nt.owns_match(p, info[t]["owns"]) for t in pulled)]  # O(f * s * o)
+    return list(info[task]["owns"]) + [p for p in extra if p not in info[task]["owns"]]  # O(f)
 
 
 def worker_tree_name(env=None):  # O(1) `worker-<Wn>` for a fleet worker that tests (not a lead), else None
