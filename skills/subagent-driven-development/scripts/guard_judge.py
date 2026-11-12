@@ -78,6 +78,7 @@ TILDE_FORM = {"HOME": "~", "PWD": "~+", "OLDPWD": "~-"}  # variable -> the tilde
 KNOWN = frozenset({"PWD", "CLAUDE_PROJECT_DIR", "HOME", "IFS", "TMPDIR"})  # names whose value before the command the guard reads itself | O(1)
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")  # O(1)
 VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")  # O(1)
+EXCLUDE_SUB = re.compile(r"^(?:\$\(\s*git\s+rev-parse\s+--git-path\s+info/exclude\s*\)|`\s*git\s+rev-parse\s+--git-path\s+info/exclude\s*`|\$\(\s*git\s+rev-parse\s+--git-common-dir\s*\)/info/exclude|`\s*git\s+rev-parse\s+--git-common-dir\s*`/info/exclude)$")  # git's own answer for the local exclude file | O(1)
 STAYS = (".superlite/*",)  # folders a write may name from an unknown directory: it sits at the root or not at all | O(1)
 REFUSED = "Refused command: {} (none of this Bash call ran; run its other commands again without it)"  # O(1)
 MAX_TREE = 2000  # entries a folder may hold for rm -r to pass as housekeeping | O(1)
@@ -536,6 +537,8 @@ def _check_flagged(t, inn, st, ctx, name, flag):  # O(MAX_BRACE * d * p) | a glo
 def _check(t, inn, st, ctx, name=None, flag=""):  # O(d * (p + depth)) | verdict for one target from every possible directory
     if _tilde_user(t):  # `~name/x`: a folder the guard cannot name | O(1)
         return _unknown(ctx, t)  # O(1)
+    if EXCLUDE_SUB.match(t) and "GIT_" not in ctx.text:  # git's own answer for the local exclude file (#599), unless GIT_* may redirect it | O(p)
+        return None  # O(1)
     t = _expand(t, st, ctx)  # O(p + v)
     if not flag and ctx.vglob:  # a glob a variable's value gave | O(v)
         flag = _flag_of(t, {w: "g" for w in ctx.vglob})  # O(v * p)
