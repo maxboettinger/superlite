@@ -332,8 +332,8 @@ class Gate:  # O(1) where a full run's commands run: through the admission comma
                 print(f"run_tests: admission command {os.path.basename(self.prefix[0])} {e.reason}; running under the {self.toolchain} full-suite lock", file=sys.stderr)  # O(1)
                 self.prefix = None  # O(1)
                 self.stack.enter_context(full_suite_lock(self.a, "full", self.toolchain))  # O(wait / LOCK_POLL)
-            except subprocess.TimeoutExpired:  # O(1)
-                raise LimitHit(limit, "", cmd if isinstance(cmd, str) else shlex.join(cmd)) from None  # O(1)
+            except subprocess.TimeoutExpired as e:  # O(o)
+                raise LimitHit(limit, (e.output or b"").decode("utf-8", errors="replace"), cmd if isinstance(cmd, str) else shlex.join(cmd)) from None  # O(o)
         return run_captured(cmd, limit=limit, **({"shell": True} if shell else {}), **({"env": env} if env is not None else {}), **({"cwd": cwd} if cwd else {}))  # O(o) + the run
 
 
