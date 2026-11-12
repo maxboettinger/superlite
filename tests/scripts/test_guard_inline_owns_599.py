@@ -122,3 +122,43 @@ def test_allowed_write_skips_plan_load(tmp_path, stable):
     assert json.loads(lines[0])[1] is False, out.stderr
     if stable:
         assert json.loads(lines[1]) is True
+
+
+def make_wt(tmp_path):
+    """Main checkout as the project; the run (stable.json + one-task plan) lives in a linked worktree inside it."""
+    p = tmp_path / "main"
+    w = p / ".claude" / "worktrees" / "w1"
+    (w / "src").mkdir(parents=True)
+    (w / "docs" / "plans").mkdir(parents=True)
+    (w / ".superlite").mkdir()
+    (w / "src" / "app.py").write_text("x = 1\n")
+    (w / "src" / "other.py").write_text("x = 1\n")
+    plan = w / "docs" / "plans" / "plan.md"
+    plan.write_text("# Plan\n\n### T1 a\n**Owns:** src/app.py\n")
+    subprocess.run(["git", "init", "-q", str(p)], check=True)
+    (w / ".superlite" / "stable.json").write_text(json.dumps({"plan": str(plan)}))
+    return p, w
+
+
+def test_worktree_run_bash_write_passes(tmp_path):
+    p, w = make_wt(tmp_path)
+    sd = (str(w / ".superlite"),)
+    assert gj.judge("echo x > .claude/worktrees/w1/src/app.py", str(p), str(p), "active", sd) is None
+    assert gj.judge("echo x > .claude/worktrees/w1/src/other.py", str(p), str(p), "active", sd).kind == "code"
+    assert gj.judge("echo x > src/app.py", str(p), str(p), "active", sd).kind == "code"
+
+
+def test_worktree_run_owns_cli(tmp_path):
+    p, w = make_wt(tmp_path)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_")}
+    base = [sys.executable, "-I", str(SCRIPTS / "guard_judge.py"), "--mode", "active", "--project", str(p),
+            "--sd", str(w / ".superlite")]
+    ok = subprocess.run([*base, "--owns", str(w / "src" / "app.py")], input="{}", capture_output=True, text=True, env=env)
+    no = subprocess.run([*base, "--owns", str(w / "src" / "other.py")], input="{}", capture_output=True, text=True, env=env)
+    assert (ok.returncode, no.returncode) == (0, 1)
+
+
+def test_unknown_directory_keeps_block(tmp_path):
+    p = make(tmp_path)
+    v = j(p, 'cd "$X"; echo x > src/app.py')
+    assert v is not None and v.kind == "code"

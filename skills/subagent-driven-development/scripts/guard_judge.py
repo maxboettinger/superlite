@@ -125,16 +125,16 @@ def inline_owns(sd):  # O(plan) | (realpath of the plan's root, Owns) when the r
         return None  # O(1)
 
 
-def _inline_for(sd, projreal):  # O(plan) | the inline Owns when the plan's root is this project, else none
+def _inline_for(sd):  # O(plan) | (plan root, Owns) of the run's inline build, wherever the run lives (a linked worktree of the project too), else none
     got = inline_owns(sd) if sd else None  # O(plan)
-    return got[1] if got and got[0].lower() == projreal.lower() else []  # O(1)
+    return got or ()  # O(1)
 
 
 class _Ctx:  # O(p)
     @property
     def inline(self):  # O(plan) once | Owns of the one task of an inline build; loaded at most once, only when a verdict needs it
         if self._inline is None:  # O(1)
-            self._inline = _inline_for(self.sd, self.projreal) if self.mode == "active" else []  # O(plan)
+            self._inline = _inline_for(self.sd) if self.mode == "active" else ()  # O(plan)
         return self._inline  # O(1)
 
     def __init__(self, command, project, mode, sds=()):  # O(n + p)
@@ -300,9 +300,12 @@ def _hardlinked(real):  # O(1) | an existing regular file with more than one nam
     return stat.S_ISREG(st.st_mode) and st.st_nlink > 1  # O(1)
 
 
-def _owned(rel, ctx):  # O(owns) | does the inline task own the project-relative path?
+def _owned(real, ctx):  # O(owns) | does the inline task own the real path, taken relative to the plan's root?
+    rel = _rel(real, ctx.inline[0])  # never "" and never outside the root | O(p)
+    if not rel:  # O(1)
+        return False  # O(1)
     import next_tasks  # lazy | O(1)
-    return next_tasks.owns_match(rel, ctx.inline)  # O(owns)
+    return next_tasks.owns_match(rel, ctx.inline[1])  # O(owns)
 
 
 def _judge_path(path, base, ctx, name=None, stays=True):  # O(p + depth) | the policy's verdict for one path from directory base
@@ -373,7 +376,7 @@ def _judge_path(path, base, ctx, name=None, stays=True):  # O(p + depth) | the p
         return None  # O(1)
     if wt is not None and _allowed(wt, ctx.mode):  # judged from the worktree's root | O(patterns)
         return None  # O(1)
-    if ctx.inline and _owned(rel, ctx):  # the one task of an inline build: its Owns, loaded only now | O(owns)
+    if ctx.inline and _owned(real, ctx):  # the one task of an inline build: its Owns, loaded only now | O(owns)
         return None  # O(1)
     return Verdict(rel, absolute, ctx.kind)  # O(1)
 
@@ -1726,8 +1729,8 @@ def _owns_ok(path, project, sd):  # O(p + owns) | may the coordinator write this
         if not ctx.inline or "\0" in path:  # O(1)
             return False  # O(1)
         full = _clean(path if path.startswith("/") else ctx.projn + "/" + path)  # O(p)
-        rel = _rel(_real(full), ctx.projreal)  # O(p)
-        return bool(rel) and _owned(rel, ctx) and _judge_path(path, ctx.projn, ctx) is None  # O(p + owns)
+        real = _real(full)  # O(p)
+        return bool(_rel(real, ctx.projreal)) and _owned(real, ctx) and _judge_path(path, ctx.projn, ctx) is None  # O(p + owns)
     except Exception:  # noqa: BLE001  O(1)
         return False  # O(1)
 

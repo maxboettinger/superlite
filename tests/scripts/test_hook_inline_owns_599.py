@@ -71,3 +71,26 @@ def test_inline_line_sits_before_render_line(tmp_path):
     i = lines.index(INLINE)
     assert lines[i + 1].startswith("- A throwaway edit to check a render")
     assert "sl orchestrator end" in lines[-2]
+
+
+def test_worktree_run_edit_passes(tmp_path):
+    p = tmp_path / "main"
+    w = p / ".claude" / "worktrees" / "w1"
+    (w / "src").mkdir(parents=True)
+    (w / "docs" / "plans").mkdir(parents=True)
+    (w / ".superlite").mkdir()
+    plan = w / "docs" / "plans" / "plan.md"
+    plan.write_text(ONE)
+    subprocess.run(["git", "init", "-q", str(p)], check=True)
+    (w / ".superlite" / "stable.json").write_text(json.dumps({"plan": str(plan)}))
+    env = {k: v for k, v in os.environ.items()
+           if k != "SUPERLITE_SESSION_ID" and not k.startswith("SUPERLITE_FLEET_")}
+    env["CLAUDE_PROJECT_DIR"] = str(p)
+    env["SUPERLITE_STATE_DIR"] = str(w / ".superlite")
+
+    def go(path):
+        raw = json.dumps({"tool_name": "Edit", "tool_input": {"file_path": path}, "cwd": str(p)})
+        return subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env).returncode
+
+    assert go(str(w / "src" / "app.py")) == 0
+    assert go(str(w / "src" / "other.py")) == 2
