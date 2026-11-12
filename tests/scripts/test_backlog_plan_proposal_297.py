@@ -84,10 +84,10 @@ def test_open_batches_refuse_before_the_file_is_read(bk, capsys):
 
 def test_clashing_batches_merge_and_renumber_after_shipped_ones(bk, capsys):
     assert cli(capsys, "plan")[0] == 0
-    bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "shipped"}))
+    bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "shipped", "issues": [91]}))
     f = write(bk, {"batches": [{**BATCH, "issues": [1]}, {**BATCH, "id": "B2", "topic": "second", "issues": [2]}]})
     assert cli(capsys, "plan", "--proposal", f)[0] == 0
-    assert [(b["id"], b["state"], b["issues"]) for b in load(bk)["batches"]] == [("B1", "shipped", [1, 2]), ("B2", "planned", [1, 2])]
+    assert [(b["id"], b["state"], b["issues"]) for b in load(bk)["batches"]] == [("B1", "shipped", [91]), ("B2", "planned", [1, 2])]
 
 
 def test_deeply_nested_and_non_dict_batches_are_rejected_not_crashed(bk, capsys):

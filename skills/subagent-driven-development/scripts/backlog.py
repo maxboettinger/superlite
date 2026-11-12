@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506)."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585)."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -206,7 +206,7 @@ def remembered_source(source, root: Path) -> tuple:
     return None, None, None  # O(1)
 
 
-def jira_issues(jql, keys) -> list:
+def jira_issues(jql, keys, missing=None) -> list:
     if keys:  # O(1)
         jql = "key in (" + ", ".join(keys) + ")"  # O(keys)
     res = _acli(["jira", "workitem", "search", "--jql", jql, "--fields", "key,summary,description", "--paginate", "--json"])  # O(network)
@@ -222,10 +222,16 @@ def jira_issues(jql, keys) -> list:
     if not keys:  # O(1)
         return found  # O(1)
     by = {x["number"]: x for x in found}  # O(i)
-    for k in keys:  # O(keys)
-        if k not in by:  # O(1)
-            raise RuntimeError(f"Jira issue {k} not found")  # O(1)
-    return [by[k] for k in keys]  # O(keys)
+    lack = [k for k in keys if k not in by]  # O(keys)
+    if lack:  # O(1) the search missed these: read them by key
+        import backlog_tracker  # O(1)
+        more, lack = backlog_tracker.jira_by_key(lack)  # O(keys * network)
+        by.update({x["number"]: x for x in more})  # O(keys)
+    if lack and missing is None:  # O(1)
+        raise RuntimeError(f"Jira issue {lack[0]} not found")  # O(1)
+    if missing is not None:  # O(1)
+        missing.extend(lack)  # O(keys)
+    return [by[k] for k in keys if k in by]  # O(keys)
 
 
 def _key_proposal(prop, keys: list):
@@ -270,12 +276,41 @@ def _renumber(new: list, kept: list) -> list:
     return new
 
 
+def _tracked(root: Path) -> list[str]:
+    """The files git tracks in root; [] when git fails."""
+    try:  # O(1)
+        r = subprocess.run(["git", "-C", str(root), "ls-files"], capture_output=True, text=True, timeout=60)  # O(files)
+    except (OSError, subprocess.SubprocessError):  # O(1)
+        return []  # O(1)
+    return r.stdout.splitlines() if r.returncode == 0 else []  # O(files)
+
+
+def _subjects(root: Path, ref: str) -> list[str]:
+    """First-parent subjects of ref as 'sha<TAB>subject' lines, newest first; [] when git fails."""
+    try:  # O(1)
+        r = subprocess.run(["git", "-C", str(root), "log", "--first-parent", "-n", "2000", "--format=%h%x09%s", ref], capture_output=True, text=True, timeout=60)  # O(2000)
+    except (OSError, subprocess.SubprocessError):  # O(1)
+        return []  # O(1)
+    return r.stdout.splitlines() if r.returncode == 0 else []  # O(2000)
+
+
+def added_lines(data: dict, ids: list, pin: list) -> list[str]:
+    """What --add prints: the table header and the rows of the added batches, the pinned issues left out, the open-questions line (#583)."""
+    import backlog_state as bs  # O(1)
+    rows = bs.status_lines(data, all_=True)  # O(b)
+    keep = [x for x in rows if x.startswith("batch | issues | ") or x.split(" | ", 1)[0] in ids]  # O(b)
+    keep = keep if len(keep) > 1 else []  # O(1)
+    held = set(pin or [])  # O(pin)
+    cut = {**data, "outside": [o for o in data.get("outside", []) if isinstance(o, dict) and o.get("number") in held]}  # O(outside)
+    return keep + bs.left_out_lines(cut) + [x for x in rows if x.startswith("questions: ")]  # O(b)
+
+
 def _author(i: dict) -> str:
     a = i.get("author")
     return (a.get("login", "") if isinstance(a, dict) else str(a or ""))  # O(1)
 
 
-def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None, cap=None, open_=None):
+def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None, cap=None, open_=None, extra=None):
     """Run the triage worker; returns (proposal, None) or (None, error line list)."""
     import backlog_brief  # O(1)
     import fleet  # O(1)
@@ -283,7 +318,11 @@ def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_m
     import fleet_state  # O(1)
     brief = sd / "briefs" / "triage.md"
     brief.parent.mkdir(parents=True, exist_ok=True)
-    brief.write_text(backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": cap or MAX_BATCHES, "carry": carry or {}, "open": open_ or []}))  # O(i)
+    text = backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": cap or MAX_BATCHES, "carry": carry or {}, "open": open_ or []})  # O(i)
+    if extra:  # O(1)
+        import backlog_intake  # O(1)
+        text = backlog_intake.insert_before_rules(text, extra)  # O(size)
+    brief.write_text(text)  # O(size)
     if not fleet_state.is_on(sd):  # O(w)
         fleet.main(["on", "--plan", str(sd)])
     w = fleet.spawn(sd, sd, tier, root, role="research")
@@ -373,6 +412,7 @@ def _left_out(n, title: str, why: str, carry: dict) -> dict:
 
 def cmd_plan(a) -> int:
     import backlog_checks as bc  # O(1)
+    import backlog_intake as bi  # O(1)
     import backlog_state as bs  # O(1)
     proposal = getattr(a, "proposal", None)
     root = _root()
@@ -380,7 +420,7 @@ def cmd_plan(a) -> int:
     d = bs.load(p)
     open_ = [b for b in d["batches"] if b["state"] != "shipped"]
     busy = [b for b in open_ if b["state"] in ("running", "needs_decision")]  # O(b) --reset never drops these
-    add = bool(getattr(a, "add", False))  # O(1)
+    add = add_flag = bool(getattr(a, "add", False))  # O(1)
     if add and getattr(a, "issues", None) is None:  # O(1)
         print("BLOCKED: --add needs --issues")  # O(1)
         return 2  # O(1)
@@ -436,9 +476,18 @@ def cmd_plan(a) -> int:
         print(line)  # O(1)
     cap = cap or MAX_BATCHES  # O(1)
     jira = jql is not None or keys is not None
-    info = _gh(["repo", "view", "--json", "nameWithOwner,visibility"])
+    notes: list = []  # O(1)
+    info = _gh(["repo", "view", "--json", "nameWithOwner,visibility,defaultBranchRef"])
     if jira:
-        issues = jira_issues(jql, keys)
+        gone: list = []  # O(1)
+        issues = jira_issues(jql, keys, gone if keys else None)  # O(i)
+        if gone and len(gone) == len(keys):  # O(1)
+            print(f"BLOCKED: Jira issue {gone[0]} not found")  # O(1)
+            return 3  # O(1)
+        for k in gone:  # O(keys)
+            notes.append(f"not found: {k} (Jira search and read by key); sl backlog plan --issues {k} --add retries it")  # O(1)
+        pin = [k for k in pin if k not in gone] if gone else pin  # O(pin)
+        keys = [k for k in keys if k not in gone] if gone else keys  # O(keys)
     else:
         issues = _gh(["api", "--paginate", "repos/{owner}/{repo}/issues?state=open&per_page=100", "--jq", ISSUES_JQ])
         if pin is not None:  # O(1)
@@ -462,18 +511,43 @@ def cmd_plan(a) -> int:
             trusted.append({"number": n, "title": i.get("title", ""), "body": _body(i.get("body"))})
         else:
             outside.append({"number": n, "title": i.get("title", ""), "author": _author(i)})
-    if proposal is None:
-        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap, **({"open_": open_batches(d)} if add else {}))  # O(i)
+    br = info.get("defaultBranchRef") if isinstance(info, dict) else None  # O(1)
+    ref = br["name"] if isinstance(br, dict) and isinstance(br.get("name"), str) and br["name"] else "HEAD"  # O(1)
+    subjects = _subjects(root, ref)  # O(2000)
+    trusted, more, lines = bi.split_shipped(trusted, d["batches"], bi.merged_refs(subjects, jira), pin or [])  # O(i * b)
+    outside += [_left_out(m["number"], m["title"], m["reason"], carry) for m in more]  # O(i)
+    notes += lines  # O(i)
+    if not trusted and proposal is None and (more or lines):  # O(1)
+        print("\n".join(notes + ["nothing to plan: every issue is already shipped"]))  # O(i)
+        return 0  # O(1)
+    head = subjects[0].split("\t", 1)[0] if subjects else None  # O(1)
+    try:  # O(1)
+        import backlog_ship  # O(1)
+        version = backlog_ship._current_version(root)  # O(file)
+    except Exception:  # O(1)
+        version = None  # O(1)
+    one = trusted[0] if len(trusted) == 1 and pin is not None and len(pin) == 1 and trusted[0]["number"] == pin[0] else None  # O(1)
+    if proposal is None and one is not None:  # O(1) one pinned issue that names tracked files needs no worker (#583)
+        files = bi.named_files(one["body"], _tracked(root))  # O(body)
+        if files:  # O(1)
+            n = one["number"]
+            prop = {"status": "DONE", "summary": "fast path", "batches": [{"id": "B1", "topic": bc.topic_slug(one["title"]) or bc.topic_slug(f"issue {n}"),
+                                                                          "issues": [n], "files": files, "depends": [], "decisions": []}]}  # O(1)
+            notes.append(f"fast path: {bs.ref(n)} names {', '.join(files)}; no triage worker")  # O(files)
+    if prop is None:
+        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap, **({"open_": open_batches(d)} if add else {}), **({"extra": [bi.pinned_rule(head, version)]} if pin is not None else {}))  # O(i)
         if err:
             print("\n".join(err))
             return 3
+    topics = bc.normalise_topics(prop)  # O(b)
     cuts = bc.cut_lines(bc.fit_proposal(prop))  # O(q)
+    known_b = frozenset(b["id"] for b in d["batches"] if b["state"] == "shipped" or add)  # O(b) only batches that survive this plan
     if jira:
         cp, back = _key_proposal(prop, [t["number"] for t in trusted])
-        batches, errs = bc.check_proposal(cp, set(range(1, len(trusted) + 1)))
+        batches, errs = bc.check_proposal(cp, set(range(1, len(trusted) + 1)), known_b)
         errs = [re.sub(r"(?:(?<=unknown issue )|^)#(\d+)(?= is in |$)", lambda m: back.get(int(m.group(1)), m.group(0)), e).replace("list of numbers", "list of Jira keys") for e in errs]  # O(errs)
     else:
-        batches, errs = bc.check_proposal(prop, {t["number"] for t in trusted})
+        batches, errs = bc.check_proposal(prop, {t["number"] for t in trusted}, known_b)
     if errs:
         why = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(prop.get("summary", ""))).split())[:300]
         kept = sd / "backlog-proposal.json"
@@ -492,9 +566,13 @@ def cmd_plan(a) -> int:
                 groups.setdefault(f"not planned (triage: {reasons[t['number']]})" if t["number"] in reasons else "not planned (triage)", []).append(bs.ref(t["number"]))  # O(1)
             print("\n".join(f"{r}: {' '.join(ns)}" for r, ns in groups.items()))  # O(i)
             print("nothing to plan: sl backlog skip <issue> keeps an issue out of every later plan")  # O(1)
+        if topics:
+            print("\n".join(topics))
         if cuts:
             print("\n".join(cuts))
         return 3
+    if pin:  # O(1)
+        notes += bi.blocked_lines(prop, pin, version)  # O(pin)
     batches = bc.separate(batches)
     if jira:
         for b in batches:
@@ -521,7 +599,7 @@ def cmd_plan(a) -> int:
             new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
             data["batches"] += new  # O(b)
             data["round"] = (data["round"] if isinstance(data.get("round"), list) else [b["id"] for b in was]) + [x["id"] for x in new]  # O(b)
-            shown["lines"] = bs.status_lines(data) + overlap_lines(new, was)  # O(b)
+            shown["lines"] = added_lines(data, [x["id"] for x in new], pin) + overlap_lines(new, was)  # O(b)
             return
         live = [b for b in data["batches"] if b["state"] != "shipped" and (not a.reset or b["state"] in ("running", "needs_decision"))]
         if live:  # a batch changed while the triage worker ran: never overwrite it
@@ -534,7 +612,8 @@ def cmd_plan(a) -> int:
                                      and o["number"] not in pin and isinstance(o["number"], str) == pin_jira] if pin else [])  # O(outside * pin)
         done = {n for b in data["batches"] if b["state"] == "shipped" for n in b.get("issues", [])}  # O(b * issues)
         data["outside"] = [o for o in data["outside"] if not isinstance(o, dict) or o.get("number") not in done]  # O(outside)
-        data["approved_ship"] = None
+        if not add_flag:  # O(1) --add keeps the ship approval (#584)
+            data["approved_ship"] = None
         prev = data.get("source")  # O(1)
         if jql is not None:  # O(1)
             data["source"] = {"tracker": "jira", "jql": jql}  # O(1)
@@ -547,7 +626,7 @@ def cmd_plan(a) -> int:
         new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
         data["batches"] += new  # O(b)
         data["round"] = [x["id"] for x in new]  # O(b)
-        shown["lines"] = bs.status_lines(data)
+        shown["lines"] = added_lines(data, [x["id"] for x in new], pin) if add_flag else bs.status_lines(data)  # O(b)
     bs.update(p, apply)
     drops = []  # O(1)
     if shown.get("dropped"):  # O(1)
@@ -555,7 +634,7 @@ def cmd_plan(a) -> int:
         for b in shown["dropped"]:  # O(b)
             if b.get("worktree"):  # O(1)
                 drops += backlog_run.drop_worktree(root, b)  # O(git)
-    print("\n".join(shown["lines"] + cuts + drops))
+    print("\n".join(shown["lines"] + notes + topics + cuts + drops))
     return 0
 
 
@@ -735,8 +814,10 @@ def refresh_open(root: Path) -> dict:
     marked = {b["id"]: list(b["open_issues"]) for b in data["batches"] if b.get("open_issues")}  # O(b)
     if not marked:  # O(1)
         return {}  # O(1)
-    import backlog_ship  # O(1)
-    fresh = {bid: backlog_ship.open_issues(data.get("repo") or "", old, root, retry=False) for bid, old in marked.items()}  # O(b * network)
+    import backlog_tracker  # O(1)
+    union = list(dict.fromkeys(i for old in marked.values() for i in old))  # O(issues)
+    still = set(backlog_tracker.open_now(data.get("repo") or "", union, root))  # O(network)
+    fresh = {bid: [i for i in old if i in still] for bid, old in marked.items()}  # O(b * issues)
     changed = {}  # O(1)
 
     def apply(d):

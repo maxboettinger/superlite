@@ -96,7 +96,7 @@ def test_plan_refuses_while_batches_are_open(bk, capsys):
     cli(capsys, "plan")
     assert cli(capsys, "plan") == (2, "BLOCKED: backlog has open batches (B1 planned); sl backlog plan --reset drops them and plans every open issue again (shipped batches stay)\n")
     assert cli(capsys, "plan", "--reset")[0] == 0
-    bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "shipped"})); bk.batches = [{**BATCH, "issues": [2]}]
+    bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "shipped", "issues": [91]})); bk.batches = [{**BATCH, "issues": [2]}]
     assert cli(capsys, "plan")[0] == 0 and [(x["id"], x["state"]) for x in load(bk)["batches"]] == [("B1", "shipped"), ("B2", "planned")]
 
 def test_decide_print_and_file(bk, capsys, tmp_path):

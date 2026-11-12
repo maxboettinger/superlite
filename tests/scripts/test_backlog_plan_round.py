@@ -29,7 +29,7 @@ def test_reset_plan_clears_ship_approval(bk, capsys):
 def test_next_round_plan_clears_ship_approval(bk, capsys):
     cli(capsys, "plan")
     approve(bk)
-    bs.update(bs.path(bk.root), lambda d: d["batches"][0].__setitem__("state", "shipped"))
+    bs.update(bs.path(bk.root), lambda d: d["batches"][0].update(state="shipped", issues=[91]))
     bk.batches = [{**BATCH, "issues": [2]}]
     assert cli(capsys, "plan")[0] == 0
     assert load(bk)["approved_ship"] is None

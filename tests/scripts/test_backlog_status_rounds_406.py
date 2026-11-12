@@ -73,7 +73,7 @@ def test_in_round_reads_jira_keys_and_round_ids():
 
 
 def ship_b1(bk):
-    bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "shipped", "pr": 201, "version": "1.5.8"}))
+    bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"state": "shipped", "pr": 201, "version": "1.5.8", "issues": [91, 92]}))
 
 
 def test_plan_records_its_round_and_counts_earlier_shipped(bk, capsys):
@@ -85,7 +85,7 @@ def test_plan_records_its_round_and_counts_earlier_shipped(bk, capsys):
     assert cli(capsys, "status")[1].splitlines()[1:4] == [COUNT.format(1), HEADER, "B2 | #1 #2 | planned | - | - | start"]
     rc, out = cli(capsys, "status", "--all")
     assert rc == 0 and "earlier rounds" not in out
-    assert out.splitlines()[1:4] == [HEADER, "B1 | #1 #2 | shipped | - | #201 | 1.5.8", "B2 | #1 #2 | planned | - | - | start"]
+    assert out.splitlines()[1:4] == [HEADER, "B1 | #91 #92 | shipped | - | #201 | 1.5.8", "B2 | #1 #2 | planned | - | - | start"]
 
 
 def test_reset_starts_a_new_round(bk, capsys):
@@ -102,7 +102,7 @@ def test_a_finished_round_stays_listed_until_the_next_plan(bk, capsys):
     ship_b1(bk)
     rc, out = cli(capsys, "status")
     assert rc == 0 and "earlier rounds" not in out and out.endswith("next: sl backlog plan\n")
-    assert out.splitlines()[1:3] == [HEADER, "B1 | #1 #2 | shipped | - | #201 | 1.5.8"]
+    assert out.splitlines()[1:3] == [HEADER, "B1 | #91 #92 | shipped | - | #201 | 1.5.8"]
 
 
 def test_status_help_names_all(capsys):
