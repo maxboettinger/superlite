@@ -158,6 +158,10 @@ def lead_brief(batch, ctx):  # O(i + f + a)
                "worktree, never -derivedDataPath outside the worktree (your session scratchpad included; backlog cleanup removes "
                "scratchpad build folders when the worktree goes); a product, simulator or device build stays on this machine and runs "
                "only when an issue's acceptance asks for a running-app check; copy this sentence into every worker brief.")  # O(1)
+    sim = f"{ctx['worktree']}/.superlite/simulators.txt" if ctx.get("worktree") else ".superlite/simulators.txt of your worktree"  # O(1)
+    out.append("Simulators: append the UDID of each simulator you or a worker creates (`xcrun simctl create` or `clone`; a checker's "
+               f"`Simulators:` line marks its created ones) as one line to {sim}; never list one you did not create; ship cleanup "
+               "shuts down and deletes each listed one; copy this sentence into every worker brief.")  # O(1)
     out.append(f"Never end your turn while your workers run: wait with `{sl} fleet wait --timeout 540000 --plan .superlite` "
                "in the foreground, never as a background command: under memory pressure Claude Code stops an idle session's "
                "background commands, and a restarted wait still reports every worker that finished meanwhile.")  # O(1)
