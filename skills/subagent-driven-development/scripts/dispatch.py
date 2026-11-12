@@ -10,6 +10,9 @@ stdout, one line per batch of ready tasks (one agent, one message), longest pred
     Tn fresh             no eligible idle agent: start a primed implementer
     T0 wave0             synthesized Wave 0 skeleton still pending (`sl wave0`): its own agent, first line;
                          a ledger line `- Ruling: skip T0` silences it
+    Tn wave0             the same line for a plan task that is the Wave 0 (wave0.json names it); `- Ruling: skip Tn` silences it
+Tasks that busy fleet workers hold (fleet.json on, role implementer, state busy or blocked) count as running (#595),
+so a task a worker is on is never offered again; an explicit `--running` replaces that.
 In fleet mode a worker fleet.json marks busy is not idle: no agent= line offers it, and pool.json is not written (#553).
 Disk (#574): below SUPERLITE_DISK_FLOOR_GB (20) free, exit 3 with stderr `dispatch: BLOCKED: disk: ...` and no stdout;
 below SUPERLITE_DISK_WARN_GB (50), stderr `dispatch: disk: WARNING: ...` and dispatch goes on. Each round first sweeps orphaned
@@ -43,6 +46,7 @@ records). The plan is parsed once, in this process. Stdlib only.
 # a = agents in the pool, F = files known per agent, o = Owns paths of one task, c = ledger lines
 import argparse  # O(1)
 import json  # O(1)
+import re  # O(1)
 import sys  # O(1)
 from pathlib import Path  # O(1)
 
@@ -68,7 +72,7 @@ def prime_k(sl_dir, tier):  # O(1)
     return asg.prime_k(sl_dir, tier)  # O(1)
 
 
-def skip_t0(ledger, plan=None):  # O(c)
+def skip_t0(ledger, plan=None, tid="T0"):  # O(c)
     if plan is not None:  # O(1)
         import plan_tools  # noqa: E402 | O(1) lazy
         if plan_tools.wave0_off(plan):  # `**Wave0:** none` header | O(C)
@@ -76,7 +80,28 @@ def skip_t0(ledger, plan=None):  # O(c)
     p = Path(ledger)  # O(1)
     if not p.is_file():  # O(1)
         return False  # O(1)
-    return any(ln.startswith(("- Ruling: skip T0", "Ruling: skip T0")) for ln in p.read_text(encoding="utf-8", errors="replace").splitlines())  # O(c)
+    pat = re.compile(rf"^(?:- )?Ruling: skip {re.escape(tid)}\b(?!\w)")  # whole id: T1 never matches T10 | O(1)
+    return any(pat.match(ln) for ln in p.read_text(encoding="utf-8", errors="replace").splitlines())  # O(c)
+
+
+def fleet_running(sl_dir, committed=()):  # O(w)
+    """Tasks of the busy or blocked implementer workers fleet.json lists (fleet on), minus the committed ones (#595)."""
+    if fleet_state is None:  # O(1)
+        return []  # O(1)
+    data = fleet_state.load(sl_dir)  # O(w)
+    if not data.get("on"):  # O(1)
+        return []  # O(1)
+    done, out, here = set(committed), [], str(Path(sl_dir).resolve())  # O(c)
+    for w in (data.get("workers") or {}).values():  # O(w) iterations
+        if w.get("state_dir") and str(Path(w["state_dir"]).resolve()) != here:  # moved in from another run: its ids are not ours | O(1)
+            continue  # O(1)
+        if w.get("role", "implementer") != "implementer" or w.get("state") not in ("busy", "blocked"):  # O(1)
+            continue  # O(1)
+        for t in str(w.get("task") or "").split(","):  # O(tasks)
+            t = t.strip()  # O(1)
+            if t and t not in done and t not in out:  # O(out)
+                out.append(t)  # O(1)
+    return out  # O(w)
 
 
 def running_from_pool(pool, committed=()):  # O(a)
@@ -319,15 +344,20 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=Non
             nt.warn_unknown(flag, nt.task_ids(value), graph)  # O(ids)
     done = nt.task_ids(committed) if committed is not None else sorted(ct.committed_tasks(ledger))  # O(c)
     busy = nt.task_ids(running) if running is not None else running_from_pool(pool, done)  # O(a)
+    if running is None:  # the fleet's busy workers run tasks too (#595) | O(w)
+        busy = busy + [t for t in fleet_running(Path(pool_path).parent, done) if t not in busy]  # O(w * busy)
     import wave0  # noqa: E402 | O(1) lazy
     held = {t: r for t, r in nt.held_tasks(ledger).items() if t not in done}  # a committed task is no longer held | O(c)
-    w0 = wave0.synth_info(plan) and "T0" not in done and "T0" not in busy and "T0" not in held and not skip_t0(ledger, plan)  # synthesized Wave 0 still pending | O(1)
-    lines, evict = plan_dispatch(plan, pool, done, busy, cap, lane_virtual=1 if w0 else 0, sl_dir=Path(pool_path).parent, batch=batch, held=held)  # see plan_dispatch
+    info = wave0.pending_info(plan) or {}  # O(1) file read
+    wid = info["id"] if isinstance(info.get("id"), str) else None  # O(1)
+    w0 = bool(wid) and wid not in done and wid not in busy and wid not in held and not skip_t0(ledger, plan, wid)  # Wave 0 still pending | O(c)
+    busy_p = busy + [wid] if w0 and not info.get("synthetic") else busy  # a plan task that is the Wave 0 is not offered twice | O(busy)
+    lines, evict = plan_dispatch(plan, pool, done, busy_p, cap, lane_virtual=1 if w0 else 0, sl_dir=Path(pool_path).parent, batch=batch, held=held)  # see plan_dispatch
     for t, r in held.items():  # O(h)
         print(f"held={t} {r}", file=sys.stderr)  # O(1)
     for hint in external_hints(lines, nt.parse_plan(plan)):  # O(R)
         print(hint, file=sys.stderr)  # O(1)
-    nt.print_unstable(nt.stable_blocked(plan, graph, done, busy, nt.taskgraph_full(plan).get("status", {}), held))  # O(n + e + S)
+    nt.print_unstable(nt.stable_blocked(plan, graph, done, busy_p, nt.taskgraph_full(plan).get("status", {}), held))  # O(n + e + S)
     gone = drop_evicted(pool_path, evict)  # an evicted agent is never offered by a later round | O(pool bytes)
     sd = Path(pool_path).parent  # O(1)
     for aid in gone:  # an evicted worker's tree is not needed any more | O(len gone)
@@ -337,7 +367,7 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=Non
     if w0:  # first line, a haiku lane agent | O(R)
         cfg = routing.load_cfg()  # O(file)
         lt = (cfg.get("lane") or {}).get("tier", "haiku")  # O(1)
-        lines = [("T0", f"wave0 tier={lt} agent={routing.tier_agent(cfg, lt)}")] + lines  # O(R)
+        lines = [(wid, f"wave0 tier={lt} agent={routing.tier_agent(cfg, lt)}")] + lines  # O(R)
     return lines, evict  # O(R)
 
 

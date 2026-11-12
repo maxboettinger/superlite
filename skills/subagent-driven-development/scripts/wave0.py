@@ -284,6 +284,16 @@ def synth_info(plan_path: str):  # O(1) + file read
     return d if d.get("synthetic") else None  # O(1)
 
 
+def pending_info(plan_path: str):  # O(1) + file read
+    """The `wave0.json` record `wave0` wrote (a synthesized T0 or the plan's own Wave 0 task, with `id`), else None."""
+    f = sl_dir(plan_path) / "briefs" / "wave0.json"  # O(1)
+    try:  # O(1)
+        d = json.loads(f.read_text(encoding="utf-8"))  # O(size)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+    return d if isinstance(d, dict) and isinstance(d.get("id"), str) else None  # O(1)
+
+
 def agent_line(brief: Path, tid: str) -> str:  # O(1)
     sl = (SUPERLITE / "skills" / "subagent-driven-development" / "scripts" / "sl").as_posix()  # O(1)
     prompt = (f"Your sl command is `{sl}`; type that absolute path in every command (on Permission denied, prefix bash to it). This message is your whole task, not the shared plan: do not reply READY. "
