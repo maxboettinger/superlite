@@ -250,3 +250,26 @@ def test_end_line_count_ignores_form_feed(proj):
     t = packet(proj)
     n = int(t.rsplit("End of packet (", 1)[1].split(" lines", 1)[0])
     assert "\f" in t and n == t.count("\n")
+
+
+def test_incident_on_file_this_run_deleted_stays_open(proj):
+    base = git(proj, "rev-parse", "HEAD")
+    git(proj, "rm", "-q", "a.py")
+    git(proj, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "rm")
+    log(proj, exc("a.py", 1))
+    t = packet_args(proj, "--base", base)
+    assert "a.py:1" in sec(t, 1) and "FAST PATH" not in t
+
+
+def test_n_token_in_spec_and_previous_is_not_replaced(proj):
+    spec = proj / "spec.md"
+    spec.write_text("# s\n\nKeep @@N@@ literal in spec.\n\n## Review Focus\n- none\n", encoding="utf-8")
+    prev = proj / "prev.md"
+    prev.write_text("round one said @@N@@ here\n", encoding="utf-8")
+    cmd = [sys.executable, str(SCRIPT), "packet", "--inline", "--spec", str(spec), "--previous", str(prev),
+           "--root", str(proj), "--out", str(proj / "packet.md"), "--wait-timeout", "1"]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    t = (proj / "packet.md").read_text(encoding="utf-8")
+    assert "Keep @@N@@ literal in spec." in t and "round one said @@N@@ here" in t
+    assert "This packet has " in t and "@@N@@ lines" not in t

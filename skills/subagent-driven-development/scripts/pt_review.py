@@ -1627,7 +1627,7 @@ def split_gone(root: Path, entries: list[dict], changed: set[str] | None) -> tup
     gone: list[dict] = []  # O(1)
     for e in entries:  # O(K) iterations
         f = str(e["file"])  # O(1)
-        if e.get("kind") == "verified" or on_disk(root, f):  # O(1)
+        if e.get("kind") == "verified" or on_disk(root, f) or f in (changed or ()):  # a file this run's diff deleted is still an open finding | O(1)
             kept.append(e)  # O(1)
             continue  # O(1)
         hits = [c for c in (changed or ()) if c.endswith("/" + f.lstrip("/"))]  # O(F)
@@ -2993,7 +2993,8 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     parts = [(f"Cut to fit the size cap: {'; '.join(cuts)}" if cuts else None) if x == CUT_TOKEN else x for x in parts]  # O(parts)
     body = "\n".join(x for x in parts if x is not None).rstrip("\n")  # O(output size)
     n_lines = body.count("\n") + 1 + 2  # the blank line and the End line; the N digits add no line | O(output size)
-    parts = [x.replace(N_TOKEN, str(n_lines)) if i < len(head) and x is not None else x for i, x in enumerate(parts)]  # head only: an excerpt holding the token stays as is | O(parts)
+    n_at = next(i for i, x in enumerate(head) if N_TOKEN in x)  # the packet-size line, ahead of the spec, rounds and coverage in `front` | O(head)
+    parts = [x.replace(N_TOKEN, str(n_lines)) if i == n_at else x for i, x in enumerate(parts)]  # that line only: a spec, round or excerpt holding the token stays as is | O(parts)
     body = "\n".join(x for x in parts if x is not None).rstrip("\n")  # O(output size)
     text = body + f"\n\nEnd of packet ({n_lines} lines)\n"  # O(output size)
     out.parent.mkdir(parents=True, exist_ok=True)  # O(1)
