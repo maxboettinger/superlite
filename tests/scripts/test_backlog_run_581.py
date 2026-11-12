@@ -62,3 +62,49 @@ def test_status_shows_a_long_reason_below_the_table(bk):
     assert len(row.split(" | ")[-1]) <= 40
     assert any(x.startswith("reason B1: Status: BLOCKED merge denied.") and x.endswith(TAIL) for x in lines)
     assert next(x for x in lines if x.startswith("B2 |")).endswith("| no-change")
+
+
+def test_status_reason_bare_status_falls_back_to_last():
+    assert br.status_reason("Outcome: merge denied\nStatus: BLOCKED", "B1 stop last") == "B1 stop last"
+    assert br.status_reason("Status: **BLOCKED** -", "the last") == "the last"
+    assert br.status_reason("Status: BLOCKED - tui red", "the last") == "Status: BLOCKED - tui red"
+
+
+def test_no_change_batch_with_an_unmerged_branch_owes_cleanup(bk, capsys, monkeypatch):
+    wt = running(bk, issues=[7], branch="superlite/b1-t")
+    bk.stops["W1"] = {"t": 2000, "last": "Status: DONE no-change: dup of #3"}
+    monkeypatch.setattr(br, "_run", lambda cmd, cwd: (1, "not fully merged") if cmd[:3] == ["git", "branch", "-d"] else (0, ""))
+    run(capsys, "wait", "--timeout", "0")
+    b = get(bk, "B1")
+    assert b["state"] == "shipped" and "kept (not merged)" in b["cleanup_owed"]
+    assert any("cleanup owed" in x for x in bs.status_lines(bs.load(bs.path(bk.root))))
+
+
+def test_lagging_transcript_does_not_park_a_no_change_lead(bk, capsys, monkeypatch):
+    running(bk, issues=[7])
+    monkeypatch.setattr(br, "_now_ms", lambda: 50000)
+    br.sys.modules["fleet_io"].report_text = lambda tr: ""
+    br.sys.modules["fleet_io"].READ_MS = 10000
+    bk.stops["W1"] = {"t": 2000, "last": "Status: DONE no-change: dup of #3", "transcript": "/t.jsonl"}
+    run(capsys, "wait", "--timeout", "0")
+    b = get(bk, "B1")
+    assert (b["state"], b["no_change"]) == ("shipped", "dup of #3")
+
+
+def test_quoted_no_change_line_before_a_final_blocked_parks(bk, capsys):
+    running(bk, issues=[7])
+    bk.stops["W1"] = {"t": 2000, "last": "x", "transcript": "/t.jsonl"}
+    br.sys.modules["fleet_io"].report_text = lambda tr: "I quoted: Status: DONE no-change: dup\nStatus: BLOCKED merge denied\n"
+    run(capsys, "wait", "--timeout", "0")
+    b = get(bk, "B1")
+    assert b["state"] == "parked" and not b.get("no_change")
+
+
+def test_status_lines_strip_control_characters_from_a_park_reason(bk):
+    reason = "Status: BLOCKED \x1b[2Jevil\x07 " + "detail " * 20
+    bs.update(bs.path(bk.root), lambda d: d.update({"batches": [{"id": "B1", "issues": [1], "files": [], "state": "parked", "reason": reason}]}))
+    lines = bs.status_lines(bs.load(bs.path(bk.root)))
+    assert not any(ch in x for x in lines for ch in "\x1b\x07")
+    short = "\x1b[2Jab"
+    bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update({"reason": short}))
+    assert not any("\x1b" in x for x in bs.status_lines(bs.load(bs.path(bk.root))))

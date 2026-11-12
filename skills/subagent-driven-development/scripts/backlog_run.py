@@ -308,11 +308,11 @@ def _flat(t: str) -> str:  # O(len)
 
 
 def status_reason(text: str, last: str) -> str:  # O(len)
-    """The last Status line of text from `Status:` on, else last; whole up to 2000 characters, one line."""
+    """The last Status line of text that has text after the status word, from `Status:` on, else last; whole up to 2000 characters, one line."""
     hit = None  # O(1)
     for ln in str(text).splitlines():  # O(lines)
         m = STATUS.search(ln)  # O(len)
-        if m:  # O(1)
+        if m and ln[m.end():].strip("* \t-:\u2013\u2014"):  # O(len)
             hit = ln[ln.lower().rfind("status:", 0, m.end()):]  # O(len)
     return _flat(hit if hit is not None else last) or "lead stopped"  # O(len)
 
@@ -480,7 +480,7 @@ def _shipped(p, sd, root, b, wt, push: bool = True, head: str | None = None) -> 
     else:  # O(1)
         lines = remove_worktree(root, Path(wt), b.get("branch") or "", bid, head)  # O(cmd)
         out.extend(lines)  # O(1)
-        owed = lines[0] if " kept: " in lines[0] else None  # O(1)
+        owed = lines[0] if " kept: " in lines[0] or (b.get("no_change") and "kept (not merged)" in lines[0]) else None  # O(1)
 
     def mark(d):  # O(b)
         x = bs.batch(d, bid)
@@ -564,11 +564,11 @@ def _round(root, sd, p, states) -> list:
             if _lags(text, str(rec.get("last") or "")):  # O(len)
                 if _now_ms() - rec.get("t", 0) < fleet_io.READ_MS:  # O(1)
                     continue  # O(1)
-                if STATUS.search(str(rec.get("last") or "")):  # O(len)
+                if STATUS.search(str(rec.get("last") or "")) and not no_change_reason(str(rec.get("last") or "")):  # O(len)
                     _park(p, sd, data.get("repo", ""), b, f"{lastc} (transcript unread)", out)  # O(size)
                     continue  # O(1)
         stop = _stop_text(rec)  # O(size)
-        nc = no_change_reason(stop)  # O(len)
+        nc = no_change_reason(status_reason(stop, str(rec.get("last") or "lead stopped")))  # O(len)
         if nc:  # O(1)
             import backlog_ship
             try:  # O(1)

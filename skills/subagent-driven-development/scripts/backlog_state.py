@@ -289,7 +289,7 @@ def in_round(data: dict, b: dict) -> bool:
 
 
 def _word40(text):  # O(len)
-    t = " ".join(str(text).split())  # O(len)
+    t = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(text)).split())  # O(len)
     if len(t) <= 40:  # O(1)
         return t  # O(1)
     cut = t[:41].rsplit(" ", 1)[0] if " " in t[:41] else t[:40]  # O(1)
@@ -335,7 +335,7 @@ def status_lines(data: dict, all_: bool = False) -> list:
             lines.append(f"cleanup owed: {b['id']} {b['worktree']}: {b['cleanup_owed']}; fix it, then maxapp ship -C {b['worktree']}")  # O(1)
     for b in rows:  # O(batches)
         if b["state"] == "parked" and len(str(b.get("reason") or "")) > 40:  # O(1)
-            lines.append(f"reason {b['id']}: {backlog_brief.cut_note(' '.join(str(b['reason']).split()), b['id'])}")  # O(len)
+            lines.append(f"reason {b['id']}: {backlog_brief.cut_note(' '.join(re.sub(r'[\x00-\x1f\x7f]', ' ', str(b['reason'])).split()), b['id'])}")  # O(len)
     lines.extend(left_out_lines(data))
     if nl:
         lines.append(nl)
