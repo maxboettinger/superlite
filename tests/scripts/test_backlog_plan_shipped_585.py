@@ -5,6 +5,7 @@ from test_backlog_cli import bk, cli, load, BATCH, bs, bl  # noqa: F401
 import backlog_tracker
 
 TWO = {**BATCH, "issues": [2]}
+REAL_SUBJECTS = bl._subjects  # saved before the autouse fake patches it; no importlib.reload mid-suite
 
 
 @pytest.fixture(autouse=True)
@@ -74,9 +75,9 @@ def test_blocked_pin_gets_check_line(bk, capsys):
 
 
 def test_subjects_failure_gives_empty(tmp_path):
-    import importlib
-    real = importlib.reload(bl)
-    assert real._subjects(tmp_path / "nope", "main") == []
+    main = bl.main
+    assert REAL_SUBJECTS(tmp_path / "nope", "main") == []
+    assert bl.main is main  # no reload: test_backlog_cli and the others keep the module's own objects
 
 
 class Jira:

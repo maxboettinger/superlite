@@ -70,16 +70,21 @@ def parked(bid, wt=None):
         b["worktree"] = wt
     return b
 
-def test_reset_removes_dropped_worktrees(bk, capsys, monkeypatch):
-    seed(bk, [parked("B2", "/w/b2")])
+def test_reset_removes_dropped_worktrees(bk, capsys, monkeypatch, tmp_path):
+    wt = tmp_path / "b2"
+    wt.mkdir()
+    seed(bk, [parked("B2", str(wt))])
     seen = []
-    def drop(root, b):
+    real = getattr(backlog_run, "drop_worktree", None)
+    def drop(root, b):  # REAL: wraps the real drop_worktree, only its git and cleanup calls are faked
         seen.append(b["id"])
-        return ["B2 worktree W removed"]
-    if not REAL:
-        monkeypatch.setattr(backlog_run, "drop_worktree", drop, raising=False)
+        return real(root, b) if REAL else [f"B2 worktree {wt} removed"]
+    if REAL:
+        monkeypatch.setattr(backlog_run, "_run", lambda cmd, cwd: (0, ""))
+        monkeypatch.setattr(backlog_run, "project_cleanup", lambda root, wt, br, bid: None)
+    monkeypatch.setattr(backlog_run, "drop_worktree", drop, raising=False)
     rc, out = cli(capsys, "plan", "--reset")
-    assert rc == 0 and seen == ["B2"] and out.rstrip().splitlines()[-1] == "B2 worktree W removed"
+    assert rc == 0 and seen == ["B2"] and out.rstrip().splitlines()[-1] == f"B2 worktree {wt} removed"
 
 def test_reset_skips_batches_without_worktree(bk, capsys, monkeypatch):
     seed(bk, [parked("B2")])
