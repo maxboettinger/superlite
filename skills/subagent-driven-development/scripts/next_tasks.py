@@ -80,7 +80,7 @@ def taskgraph_full(plan):  # O(L + n + e) once per plan per process; O(1) after
         except pt.PlanError as e:  # O(1)
             die(f"taskgraph failed: error: {e}", e.code)  # O(1)
         plan_obj = pt.Plan.load(str(plan))  # O(L) second parse, for the task statuses
-        data = {"graph": graph, "seams": pt.seams_of(graph),  # O(e)
+        data = {"graph": graph, "seams": pt.seams_of(graph, plan_obj),  # O(e)
                 "status": {t: plan_obj.by_id[t].status for t in graph if t in plan_obj.by_id}}  # O(n*k*s)
     else:  # O(1)
         r = run_tool("plan_tools", "taskgraph", "--plan", plan, "--format", "full")  # O(output) + process spawn

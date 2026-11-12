@@ -1,0 +1,117 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-12T15:25:00",
+ "headline": {
+  "wall_min": {
+   "projected": 8.895,
+   "actual": 18.268
+  },
+  "cost_usd_agents": {
+   "projected": 0.444802,
+   "actual": 1.198159
+  },
+  "task_min": {
+   "projected": 16.905,
+   "actual": 5.71
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 6
+  }
+ },
+ "cost_split": {
+  "agents_usd": 1.068184,
+  "rework_usd": 0.129975,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 1.198159
+ },
+ "concurrency": {
+  "peak": 2,
+  "projected_peak": 2
+ },
+ "critical_path": {
+  "actual": [
+   "T2",
+   "T4"
+  ],
+  "projected": [
+   "T1",
+   "T3"
+  ],
+  "projected_min": 8.895
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 4,
+   "cost_usd": 1.198159
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 7443,
+   "failed": 0,
+   "skipped": 9,
+   "seconds": 275.7,
+   "recorded": false
+  },
+  "tests_newer": null,
+  "tests_from": "progress.md",
+  "first_time_pass": 3,
+  "first_time_n": 4,
+  "rework_dispatches": 1,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 3.9,
+   "actual_min": 0.783,
+   "delta": {
+    "abs": -3.1167,
+    "pct": -79.9
+   },
+   "cost_usd": 0.273522,
+   "first_time_pass": false
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 4.811,
+   "actual_min": 1.855,
+   "delta": {
+    "abs": -2.956,
+    "pct": -61.4
+   },
+   "cost_usd": 0.329435,
+   "first_time_pass": true
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 4.11,
+   "actual_min": 1.29,
+   "delta": {
+    "abs": -2.82,
+    "pct": -68.6
+   },
+   "cost_usd": 0.26296,
+   "first_time_pass": true
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 4.084,
+   "actual_min": 1.782,
+   "delta": {
+    "abs": -2.3023,
+    "pct": -56.4
+   },
+   "cost_usd": 0.332242,
+   "first_time_pass": true
+  }
+ ]
+}

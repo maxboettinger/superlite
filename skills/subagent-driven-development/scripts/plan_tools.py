@@ -564,11 +564,16 @@ def ancestors(graph: dict[str, list[str]]) -> dict[str, set[str]]:  # O(e*n) tim
     return memo  # O(1)
 
 
-def seams_of(graph: dict[str, list[str]]) -> list[str]:  # O(n+e)
+def seams_of(graph: dict[str, list[str]], plan: Plan | None = None) -> list[str]:  # O(n+e) | with a plan, an edge whose task owns no file is no seam (#594)
+    def files(tid: str) -> bool:  # O(k*s*A) | an id outside the plan keeps the edge
+        t = plan.by_id.get(tid) if plan is not None else None  # O(1)
+        return t is None or any(o.lower() != "none" for o in t.written_owns)  # O(k*s*A)
+
     out = []  # O(1)
     for t in graph:  # O(n) iterations
         for d in graph[t]:  # O(deg) iterations
-            out.append(f"{d}↔{t}")  # O(1) per edge
+            if plan is None or (files(d) and files(t)):  # O(k*s*A)
+                out.append(f"{d}↔{t}")  # O(1) per edge
     return out  # O(n+e)
 
 
@@ -1013,7 +1018,7 @@ def mergeable_tasks(plan: Plan, graph, times, args) -> list[dict]:  # O(n*p + e*
 def cmd_taskgraph(args) -> int:  # O(C+L + parse + n*p + merge) total
     plan = Plan.load(args.plan)  # O(C+L)
     graph = parse_taskgraph(plan)  # O(L*s + R*M + e log n)
-    seams = seams_of(graph)  # O(n+e)
+    seams = seams_of(graph, plan)  # O(n+e)
     times, _ = effective_times(plan, graph, args)  # O(n*p)
     merges = mergeable_tasks(plan, graph, times, args)  # O(n^2*k*s)
     status = {tid: (plan.by_id[tid].status if tid in plan.by_id else "approved") for tid in graph}  # O(n*k*s)
@@ -1227,6 +1232,40 @@ def stack_languages(plan: Plan) -> set[str]:  # O(C)
     return {lang for lang, words in STACK_WORDS.items() if any(re.search(r"(?<![\w.#])" + re.escape(w) + r"(?![\w#])", m.group(1), re.I) for w in words)}  # O(w*s)
 
 
+TEXT_TYPES = {"str", "optional[str]", "str|none", "none|str", "union[str,none]", "union[none,str]", "any", "object", "anystr", "text", "literalstring"}  # O(1)
+
+
+def text_param_issue(args: str, method: bool = False) -> str | None:  # O(s) | the one required parameter as written when its annotation is not a text type (#594)
+    for i, p in enumerate(split_top_level(args)):  # O(params)
+        p = p.strip()  # O(s)
+        if p in ("/", "*") or p.startswith("*") or "=" in p:  # O(1)
+            continue  # O(1)
+        if method and i == 0 and re.split(r"[:\s]", p, maxsplit=1)[0] in ("self", "cls"):  # O(s)
+            continue  # O(1)
+        if ":" not in p:  # O(1)
+            return None  # O(1)
+        ann = re.sub(r"['\"\s]|\b(?:typing|t)\.", "", p.split(":", 1)[1])  # O(s)
+        return None if ann.lower() in TEXT_TYPES else p  # O(1)
+    return None  # O(1)
+
+
+def forecast_inputs_note(coef: dict) -> str:  # O(1) | which forecast inputs are missing or defaulted (B145)
+    live = coef.get("live")  # O(1)
+    if not live:  # O(1)
+        return "inputs: live inputs off (test minutes and contention not read)"  # O(1)
+    parts: list[str] = []  # O(1)
+    tests, cont = live.get("tests") or {}, live.get("contention") or {}  # O(1)
+    for mode in ("fast", "full"):  # O(1)
+        if tests.get(f"{mode}_min") is None:  # O(1)
+            parts.append(f"{mode} test minutes missing (no test-cmd.json run_min, under 3 ledger runs)")  # O(1)
+    if tests.get("slots") is None:  # O(1)
+        parts.append(f"contention x{cont.get('factor', 1.0)} (default {cont.get('slots')} build slots)")  # O(1)
+    if not coef.get("prose"):  # O(1)
+        d = _predict().PROSE_DEFAULTS  # O(1)
+        parts.append(f"prose x{float(d['time_factor']):.1f} time, x{float(d['calls_factor']):.1f} calls (built-in default)")  # O(1)
+    return "inputs: " + "; ".join(parts) if parts else ""  # O(1)
+
+
 def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
     """PROBE: a `call=` Probe entry must name a Produces of this plan that takes exactly one required parameter (probes pass
     one text argument). The entry's task is a fix task; an entry outside every task block (plan header, a section) is plan-scoped."""
@@ -1263,6 +1302,13 @@ def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
             cands = [c for _, c in cands]  # O(q)
             counts = [required_params(c["args"], bool(c["cls"]) and c["member"] != "__init__") for c in cands]  # O(n*q*s)
             if cands and 1 in counts:  # O(q)
+                bad = text_param_issue(cands[counts.index(1)]["args"], bool(cands[counts.index(1)]["cls"]) and cands[counts.index(1)]["member"] != "__init__")  # O(s)
+                if not bad:  # O(1)
+                    continue  # O(1)
+                msg = f"PROBE: call={target} takes {bad}; probes pass one text argument (str)"  # O(1)
+                if (holder, msg) not in seen:  # O(1)
+                    seen.add((holder, msg))  # O(1)
+                    issues.append(Issue(msg, [holder] if holder else (), scope="task" if holder else "plan"))  # O(1)
                 continue  # O(1)
             msg = (f"PROBE: call={target} takes {counts[0]} required parameters; probes pass one text argument" if cands  # O(1)
                    else f"PROBE: call={target} is not a Produces of this plan")
@@ -1395,6 +1441,34 @@ def swift_targets(root: Path) -> dict[str, dict]:  # O(F + M*s) F = folders walk
     return found  # O(1)
 
 
+SWIFT_GENERIC_DECL = re.compile(r"(?:\b(?:struct|class|enum|actor|protocol|typealias|func)\s+\w+|\binit\s*[?!]?)\s*$")  # O(1) | text before a generic clause of a declaration
+SWIFT_MEMBER_GENERIC = re.compile(r"\binit\s*[?!]?\s*<|\bfunc\s+\w+\s*<")  # O(1) | a member declaration with its own generic clause
+
+
+def swift_generic_params(text: str) -> set[str]:  # O(s) the generic parameter names a declaration's `<...>` clause introduces (#594)
+    out: set[str] = set()  # O(1)
+    pos = text.find("<")  # O(s)
+    while pos != -1:  # O(s) iterations
+        depth, end = 0, -1  # O(1)
+        for i in range(pos, len(text)):  # O(s)
+            if text[i] == "<":  # O(1)
+                depth += 1  # O(1)
+            elif text[i] == ">" and text[i - 1] != "-":  # O(1)
+                depth -= 1  # O(1)
+                if depth == 0:  # O(1)
+                    end = i  # O(1)
+                    break  # O(1)
+        if end == -1:  # O(1)
+            break  # O(1)
+        if SWIFT_GENERIC_DECL.search(text[:pos]) or text[end + 1:end + 2] == ".":  # O(s)
+            for part in split_top_level(text[pos + 1:end]):  # O(s)
+                m = re.match(r"\s*(?:each\s+)?([A-Za-z_]\w*)", part)  # O(s)
+                if m:  # O(1)
+                    out.add(m.group(1))  # O(1)
+        pos = text.find("<", pos + 1)  # O(s)
+    return out  # O(1)
+
+
 def signature_types(sig: dict) -> list[str]:  # O(s) the capitalised type names in a signature's arguments and return, in order
     seen: list[str] = []  # O(1)
     parts = [a.split(":", 1)[1] for a in split_top_level(sig["args"]) if ":" in a]  # O(s)
@@ -1450,6 +1524,7 @@ def swift_import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s
     if not targets:  # O(1)
         return []  # O(1)
     mods: dict[str, set[str]] = {}  # O(1)
+    gen: dict[str, set[str]] = {}  # O(1) | declared type name -> its generic clause's names
     for name, t in targets.items():  # O(T) iterations
         if not t["dir"].is_dir():  # O(1)
             continue  # O(1)
@@ -1458,6 +1533,7 @@ def swift_import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s
                 m = SWIFT_DECL.match(ln)  # O(s)
                 if m and not ln.lstrip().startswith("//"):  # O(1)
                     mods.setdefault(m.group(1), set()).add(name)  # O(1)
+                    gen.setdefault(m.group(1), set()).update(swift_generic_params(ln))  # O(s)
     for t in plan.tasks:  # O(n) iterations
         owned = [_target_of(f, targets) for f in _swift_owned(plan, t, root)]  # O(o*T*d)
         for item in t.produces:  # O(q) iterations
@@ -1469,9 +1545,20 @@ def swift_import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s
     seen: set[tuple[str, str, str]] = set()  # O(1)
     for t, sig, pid, psig in _seam_pairs(plan):  # O(pairs) iterations
         files = [(f, _target_of(f, targets)) for f in _swift_owned(plan, t, root)]  # O(o*T*d)
+        skip = swift_generic_params(sig["item"]) | swift_generic_params(psig["item"]) | gen.get(psig["cls"] or "", set())  # O(s)
+        for pt_ in plan.tasks:  # O(n)
+            if pt_.id == pid:  # O(1)
+                for pf in _swift_owned(plan, pt_, root):  # O(o)
+                    try:  # O(1)
+                        lines = pf.read_text(encoding="utf-8", errors="replace").splitlines()  # O(size)
+                    except OSError:  # O(1)
+                        continue  # O(1)
+                    for ln in lines:  # O(lines)
+                        if SWIFT_MEMBER_GENERIC.search(ln):  # O(s)
+                            skip |= swift_generic_params(ln)  # O(s)
         for ty in signature_types(psig):  # O(types) iterations
             declared = mods.get(ty)  # O(1)
-            if not declared:  # O(1)
+            if not declared or ty in skip:  # O(1)
                 continue  # O(1)
             for _f, tg in files:  # O(o) iterations
                 if not tg or tg not in targets or (t.id, tg, ty) in seen:  # O(1)
@@ -2087,12 +2174,59 @@ def _platform_conds(lines) -> list[str]:  # O(L*s) os/canImport/targetEnvironmen
     return out  # O(1)
 
 
+DEST_PLATFORM_RE = re.compile(r"platform=(macOS|iOS|tvOS|watchOS|visionOS)( Simulator)?")  # O(1)
+DEST_FLAG_RE = re.compile(r"-destination\s+(?:'([^']*)'|\"([^\"]*)\"|(\S+))")  # O(1)
+DEST_OS = {"macOS": ("os(macOS)", "canImport(AppKit)"), "iOS": ("os(iOS)", "canImport(UIKit)"),  # O(1)
+           "tvOS": ("os(tvOS)", "canImport(UIKit)"), "watchOS": ("os(watchOS)", "canImport(WatchKit)"),  # O(1)
+           "visionOS": ("os(visionOS)", "os(xrOS)", "canImport(UIKit)")}  # O(1)
+
+
+def destination_conds(destination: str) -> set[str]:  # O(s) the #if conditions an xcodebuild destination compiles (#594)
+    m = DEST_PLATFORM_RE.search(destination)  # O(s)
+    if not m:  # O(1)
+        return set()  # O(1)
+    if m.group(1) == "macOS" and "Mac Catalyst" in destination:  # O(s)
+        return {"os(iOS)", "targetEnvironment(macCatalyst)", "canImport(UIKit)"}  # O(1)
+    out = set(DEST_OS[m.group(1)])  # O(1)
+    if m.group(2):  # O(1)
+        out.add("targetEnvironment(simulator)")  # O(1)
+    return out  # O(1)
+
+
+def _covered_conds(root: Path | None) -> set[str]:  # O(m + f) the conditions the project's test command builds
+    if root is None:  # O(1)
+        return set()  # O(1)
+    try:  # O(1)
+        if str(SCRIPT_DIR) not in sys.path:  # O(1)
+            sys.path.insert(0, str(SCRIPT_DIR))  # O(1)
+        import testcmd  # lazy | O(1)
+        spec = testcmd.resolve(root, ())  # O(m + f)
+        dests = list(spec.get("destinations") or []) if spec else []  # O(d)
+        for m in DEST_FLAG_RE.finditer((spec.get("command") or "") if spec else ""):  # O(s)
+            dests.append(m.group(1) or m.group(2) or m.group(3))  # O(1)
+        out: set[str] = set()  # O(1)
+        for d in dests:  # O(d)
+            out |= destination_conds(str(d))  # O(s)
+        return out  # O(d)
+    except Exception:  # noqa: BLE001 | O(1)
+        return set()  # O(1)
+
+
+NEGATED_COND_RE = re.compile(r"!\s*(os|canImport|targetEnvironment)\(([^()]*)\)")  # O(1)
+
+
 def platform_notes(plan: Plan, root: Path | None) -> list[str]:  # O(n*(text + files*size)) #516: code behind #if os(...) needs the other platform's build
     out: list[str] = []  # O(1)
+    covered = _covered_conds(root)  # O(m + f)
+
+    def open_conds(lines: list[str]) -> list[str]:  # O(L*s) conditions the test command does not build; a negated one is never covered
+        neg = {f"{k}({a.replace(' ', '')})" for ln in lines if PLATFORM_IF_RE.match(ln) for k, a in NEGATED_COND_RE.findall(ln)}  # O(L*s)
+        return [c for c in _platform_conds(lines) if c not in covered or c in neg]  # O(L*s)
+
     for t in plan.tasks:  # O(n)
         if t.status == "draft":  # O(k*s)
             continue  # O(1)
-        conds = _platform_conds(t.text.splitlines())  # O(text)
+        conds = open_conds(t.text.splitlines())  # O(text)
         srcs: list[str] = []  # O(1)
         if root is not None and not t.repo:  # O(k*s)
             for ent in t.written_owns:  # O(o)
@@ -2102,7 +2236,7 @@ def platform_notes(plan: Plan, root: Path | None) -> list[str]:  # O(n*(text + f
                     body = (root / ent).read_text(encoding="utf-8", errors="replace")  # O(size)
                 except (OSError, ValueError):  # missing file, folder, bad path
                     continue  # O(1)
-                found = _platform_conds(body.splitlines())  # O(size)
+                found = open_conds(body.splitlines())  # O(size)
                 if found:  # O(1)
                     srcs.append(ent)  # O(1)
                     conds.extend(c for c in found if c not in conds)  # O(c^2)
@@ -2110,7 +2244,7 @@ def platform_notes(plan: Plan, root: Path | None) -> list[str]:  # O(n*(text + f
             continue  # O(1)
         if t.features.get("tests") == "slow" and PLATFORM_BUILD_RE.search(t.text):  # O(text)
             continue  # O(1)
-        if _platform_conds(t.text.splitlines()):  # O(text)
+        if open_conds(t.text.splitlines()):  # O(text)
             srcs.append("task text")  # O(1)
         shown = ", ".join(conds[:3]) + (f" +{len(conds) - 3} more" if len(conds) > 3 else "")  # O(c)
         out.append(f"WARNING: PLATFORM: {t.id} has code behind #if {shown} ({', '.join(srcs)}); a build for the host platform skips it: "  # O(s)
@@ -2886,13 +3020,17 @@ def cmd_lint_stable(args) -> int:  # O(lint + n*k*s)
                 notes[t.id] = f" (planned {planned}: {note})"  # O(1)
         stats_line = f"stats: n={stats.get('rows', 0)}" + (f" (history gate kept {' '.join(sorted(set(gated)))} off haiku)" if gated else "")  # O(n)
         pred = f"predicted: {rep['total_min']:.1f} min"  # O(1)
+        inputs_note = ""  # O(1)
         try:  # cost from the predictor (history-refit coefficients when enough rows) | O(n)
             import predict  # O(1)
-            cost = predict.predict_plan(plan, predict.load_models(), predict.load_coef())["totals"]["cost_usd"]["total"]  # O(n*M)
+            coef = predict.load_coef()  # O(S)
+            cost = predict.predict_plan(plan, predict.load_models(), coef)["totals"]["cost_usd"]["total"]  # O(n*M)
             pred += f", ${cost:.2f}"  # O(1)
+            inputs_note = forecast_inputs_note(coef)  # O(1)
         except Exception:  # noqa: BLE001 | O(1)
             pass  # O(1)
         pred += " (history-backed)" if stats.get("rows", 0) >= 30 else " (shipped coefficients)"  # O(1)
+        pred += " · " + inputs_note if inputs_note else ""  # O(1)
     except Exception as e:  # tiers never block a lint | O(1)
         print(f"routing: tiers not computed ({e})", file=sys.stderr)  # O(1)
     plan_issues = list(plan_issues) + frozen  # O(1)

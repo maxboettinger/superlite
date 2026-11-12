@@ -371,6 +371,11 @@ def symbol_names(item: str) -> list[str]:  # O(m) total
     `urls(for:in:)`) declares only in the item's leading list of spans; after prose it is a use (#102)."""
     text = item.strip()  # O(m)
     cands = _span_names(text, False)  # O(m)
+    outside = re.sub(r"`[^`]*`", " ", text)  # O(m)
+    lead = NAME_RE.match(text)  # O(m)
+    glued = bool(lead) and text[lead.end():lead.end() + 1] == ":" and text[lead.end() + 1:lead.end() + 2].strip() != ""  # O(m)
+    if glued or "==" in outside or "!=" in outside:  # a statement line (fixture value, comparison), not a signature | O(m)
+        cands = []  # O(1)
     for sp in re.finditer(r"`([^`]*)`", text):  # O(s) iterations
         if not _is_use(sp.group(1), text[:sp.start()]):  # O(m)
             cands += _span_names(sp.group(1), True)  # O(m)
@@ -472,6 +477,86 @@ def _base_names(args_src: str) -> list[str] | None:  # bare names only, read as 
     return [x["name"] for x in params]  # O(p)
 
 
+def _is_type_expr(n: ast.expr) -> bool:  # a Name, Attribute, Subscript or `|` of those; None allowed inside | O(m) total
+    if isinstance(n, (ast.Name, ast.Attribute)):  # O(1)
+        return True  # O(1)
+    if isinstance(n, ast.Constant):  # O(1)
+        return n.value is None  # O(1)
+    if isinstance(n, ast.Subscript):  # O(m)
+        sl = n.slice  # O(1)
+        items = sl.elts if isinstance(sl, ast.Tuple) else [sl]  # O(m)
+        return _is_type_expr(n.value) and all(_is_type_expr(i) or (isinstance(i, ast.Constant) and i.value is Ellipsis)  # O(m)
+                                              or (isinstance(i, ast.List) and all(_is_type_expr(e) for e in i.elts))  # O(m)
+                                              for i in items)  # O(m)
+    if isinstance(n, ast.BinOp) and isinstance(n.op, ast.BitOr):  # O(1)
+        return _is_type_expr(n.left) and _is_type_expr(n.right)  # O(m)
+    return False  # O(1)
+
+
+def _own_aliases(tree: ast.Module) -> dict[str, str]:  # O(B) total
+    out: dict[str, str] = {}  # O(1)
+    for n in tree.body:  # O(top-level stmts) iterations
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):  # O(1)
+            name, value = n.targets[0].id, n.value  # O(1)
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None \
+                and ast.unparse(n.annotation).rsplit(".", 1)[-1] == "TypeAlias":  # O(m)
+            name, value = n.target.id, n.value  # O(1)
+        else:  # O(1)
+            continue  # O(1)
+        if not (isinstance(value, ast.Constant) and value.value is None) and _is_type_expr(value):  # O(m)
+            out[name] = ast.unparse(value)  # O(m)
+    return out  # O(1)
+
+
+def _import_target(path: Path, node: ast.ImportFrom) -> Path | None:  # O(d) stat calls total
+    mod = (node.module or "").replace(".", "/")  # O(m)
+    if node.level:  # relative: from the file's folder | O(1)
+        base = path.parent  # O(1)
+        for _ in range(node.level - 1):  # O(level) iterations
+            base = base.parent  # O(1)
+        bases = [base]  # O(1)
+    else:  # absolute: any ancestor folder or its src/ may be the import root | O(d)
+        bases = [x for a in path.parents for x in (a, a / "src")]  # O(d)
+    for b in bases:  # O(d) iterations
+        for cand in (b / f"{mod}.py", b / mod / "__init__.py"):  # O(2) iterations
+            if mod and cand.is_file():  # O(1)
+                return cand  # O(1)
+    return None  # O(1)
+
+
+def module_aliases(path: Path) -> dict[str, str]:  # module-level type aliases, one import level | O(B) total
+    try:  # O(1)
+        tree = ast.parse(Path(path).read_text(encoding="utf-8"))  # O(B)
+    except (SyntaxError, OSError, ValueError):  # O(1)
+        return {}  # O(1)
+    out = _own_aliases(tree)  # O(B)
+    for n in tree.body:  # O(top-level stmts) iterations
+        if isinstance(n, ast.ImportFrom):  # O(1)
+            target = _import_target(Path(path), n)  # O(d)
+            if target is None or target.resolve() == Path(path).resolve():  # O(d)
+                continue  # O(1)
+            try:  # O(1)
+                theirs = _own_aliases(ast.parse(target.read_text(encoding="utf-8")))  # O(B)
+            except (SyntaxError, OSError, ValueError):  # O(1)
+                continue  # O(1)
+            for a in n.names:  # O(names) iterations
+                if a.name in theirs:  # O(1)
+                    out[a.asname or a.name] = theirs[a.name]  # O(1)
+    return out  # O(1)
+
+
+def _expand_aliases(ann: str | None, aliases: dict[str, str]) -> str | None:  # O(5*m*a) total
+    if not ann or not aliases:  # O(1)
+        return ann  # O(1)
+    pat = re.compile(r"(?<![\w.])(" + "|".join(re.escape(k) for k in aliases) + r")(?!\w)")  # O(a)
+    for _ in range(5):  # at most 5 rounds | O(1)
+        new = pat.sub(lambda m: aliases[m.group(1)], ann)  # O(m)
+        if new == ann:  # O(m)
+            break  # O(1)
+        ann = new  # O(1)
+    return ann  # O(1)
+
+
 def compare_sig(p: Planned, real: dict) -> list[str]:  # O(p^2 + p*m) total
     """Differences between a planned signature and the real one (empty = match)."""  # O(m)
     if not real.get("ok"):  # O(m)
@@ -488,6 +573,7 @@ def compare_sig(p: Planned, real: dict) -> list[str]:  # O(p^2 + p*m) total
     if real.get("params") is None:  # existence only | O(1)
         return []  # O(1)
     msgs: list[str] = []  # O(m)
+    aliases = real.get("aliases") or {}  # O(1)
     if p.args_src is not None:  # O(m)
         want = _params_from_src(p.args_src)  # O(m)
         have = real["params"]  # O(m)
@@ -510,12 +596,12 @@ def compare_sig(p: Planned, real: dict) -> list[str]:  # O(p^2 + p*m) total
                     elif not _same_default(w["default"], h["default"], h.get("default_src")):  # O(m)
                         shown = (h.get("default_src") or h["default"]) if _dotted(w["default"]) else h["default"]  # O(m)
                         msgs.append(f"{p.qual}: parameter '{w['name']}' default is {shown}, planned {w['default']}")  # O(m)
-                wa, ha = norm_ann(w["ann"]), norm_ann(h["ann"])  # O(m)
+                wa, ha = norm_ann(_expand_aliases(w["ann"], aliases)), norm_ann(_expand_aliases(h["ann"], aliases))  # O(m)
                 if wa and ha and wa != ha:  # O(m)
-                    msgs.append(f"{p.qual}: parameter '{w['name']}' annotated {ha}, planned {wa}")  # O(m)
-    wr, hr = norm_ann(p.ret), norm_ann(real.get("returns"))  # O(m)
+                    msgs.append(f"{p.qual}: parameter '{w['name']}' annotated {ha}, planned {wa}" + (f" ({w['ann'].strip()})" if w["ann"].strip() != wa else ""))  # O(m)
+    wr, hr = norm_ann(_expand_aliases(p.ret, aliases)), norm_ann(_expand_aliases(real.get("returns"), aliases))  # O(m)
     if wr and hr and wr != hr:  # O(m)
-        msgs.append(f"{p.qual}: returns {hr}, planned {wr}")  # O(m)
+        msgs.append(f"{p.qual}: returns {hr}, planned {wr}" + (f" ({p.ret.strip()})" if p.ret and p.ret.strip() != wr else ""))  # O(m)
     return msgs  # O(m)
 
 
@@ -789,6 +875,9 @@ def read_real(root: Path, located: list[tuple[str, list[str]]]) -> list[dict]:  
                 [{"ok": False, "error": f"introspection failed: {proc.stderr.strip()[-200:]}"}] * len(todo)  # O(1)
         except subprocess.TimeoutExpired:  # O(1)
             results = [{"ok": False, "error": "introspection timed out"}] * len(todo)  # O(1)
+    for r in results:  # O(P) iterations
+        if r.get("ok") and r.get("file"):  # O(1)
+            r["aliases"] = module_aliases(Path(r["file"]))  # O(B)
     it = iter(results)  # O(1)
     return [next(it) if m else {"ok": False, "error": "no module found (file missing)"}  # O(1)
             for m, _c in located]  # O(1)
@@ -2528,6 +2617,27 @@ def outdated_failure(root: Path, test_file: str, when: float, changed: set[str] 
     return changed_after(root, test_inputs(root, test_file, changed), when)  # O(B + F*d)
 
 
+WARNING_CAP = 2000  # characters of one warning line  # O(1)
+
+
+def warning_rows(value: object) -> list[str]:  # O(w) total
+    """The `- WARNING:` lines for a summary's warning: a str is one line, a list one per item, any other value as JSON."""
+    if isinstance(value, str):  # O(1)
+        text = value.strip()  # O(w)
+        if not text:  # O(1)
+            return []  # O(1)
+        return [f"- WARNING: {text[:WARNING_CAP]}{' (truncated)' if len(text) > WARNING_CAP else ''}"]  # O(w)
+    if isinstance(value, (list, tuple)):  # O(1)
+        return [r for item in value for r in warning_rows(item if isinstance(item, str) else str(item))]  # O(w)
+    if not value:  # None, False, 0, empty containers | O(1)
+        return []  # O(1)
+    try:  # O(1)
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)  # O(w)
+    except (TypeError, ValueError):  # O(1)
+        text = str(value)  # O(w)
+    return warning_rows(text)  # O(w)
+
+
 def _summary_rows(d: dict, root: Path | None, changed: set[str] | None) -> tuple[list[str], int]:  # O(F*(B + d)) total
     failed = d.get("failures") or d.get("failed_tests") or []  # O(1)
     skipped = d.get("skipped_tests") or []  # O(1)
@@ -2554,6 +2664,7 @@ def _summary_rows(d: dict, root: Path | None, changed: set[str] | None) -> tuple
     rows += [f"- OUTDATED: {t} ({f} changed after this run; the full suite decides)" for t, f in old[:OUTDATED_LINES]]  # O(min(30, old))
     rows += [f"- FAILING: {t}" for t in cur[:30]]  # O(min(30, cur))
     rows += [f"- SKIPPED: {t}" for t in skipped[:30]]  # O(min(30, skipped))
+    rows += warning_rows(d.get("warning"))  # O(w)
     return rows, nfail  # O(1)
 
 
@@ -2626,6 +2737,7 @@ def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | 
         rows, nfail = [f"- killed run, no result: {err}"], 0  # O(1)
     else:  # O(1)
         rows, nfail = [f"- run without a result: {err}", f"- FAILING: {err}"], 1  # O(1)
+    rows += warning_rows(d.get("warning"))  # the behind-main hint rides on the errored run too | O(w)
     best = full if full is not None else next((r for r in (runs or []) if isinstance(r, dict) and _has_result(r)), None)  # O(S)
     if best is not None:  # O(1)
         more, n2 = _summary_rows(norm_summary(best, root) if root is not None and best is full else best, root, changed)  # O(F*(B + d))
@@ -2856,6 +2968,14 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     inline, plan, previous = packet_inputs(a)  # O(W + L*m + H^2)
     root = Path(a.root).resolve()  # O(1)
     sl = root / ".superlite"  # O(1)
+    try:  # O(1)
+        import render_edit  # lazy | O(1)
+        left = render_edit.applied(sl)  # O(a log a)
+    except Exception:  # noqa: BLE001 | any failure reads as none applied | O(1)
+        left = []  # O(1)
+    if left:  # O(1)
+        print(f"BLOCKED: render edits still applied: {', '.join(left)}; run sl render_edit restore first")  # O(a)
+        return 2  # O(1)
     log = Path(a.log) if a.log else sl / "incidents.jsonl"  # O(1)
     probes = Path(a.probes) if a.probes else sl / "probes"  # O(1)
     out = Path(a.out) if a.out else sl / "review-packet.md"  # O(1)
