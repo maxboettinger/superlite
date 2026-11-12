@@ -188,7 +188,8 @@ def test_unknown_targets(P):
     assert blocked("rm \"$X\"; cat .superlite/orchestrator.json", P, "idle").rel == "?"
     passes(f"X={P}/docs/plans/a.md; rm \"$X\"", P)
     passes("rm ~/x", P)
-    blocked('rm "$HOME/x y"', P)  # parity (test_guard_targets): $HOME is not resolved
+    passes('rm "$HOME/x y"', P)  # parity (test_guard_targets): $HOME reads like ~
+    blocked(f'HOME={P}; rm "$HOME/src/a"', P)
     passes("rm $CLAUDE_PROJECT_DIR/.superlite/x ${CLAUDE_PROJECT_DIR}/docs/plans/y".replace("$CLAUDE_PROJECT_DIR", P).replace("${CLAUDE_PROJECT_DIR}", P), P)
     assert blocked("rm $CLAUDE_PROJECT_DIR/src/a ${X}", P).rel in ("?", "src/a")
 

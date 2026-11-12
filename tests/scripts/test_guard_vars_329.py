@@ -80,12 +80,14 @@ def test_tmpdir_unset_or_relative_stays_unknown(P, monkeypatch, value):
     assert v is not None and v.word == "$TMPDIR/y.py"
 
 
-def test_home_stays_unresolved(P, tmp_path, monkeypatch):
+def test_home_resolves_from_the_hook_env(P, tmp_path, monkeypatch):
     h = tmp_path / "home"
     h.mkdir()
     monkeypatch.setenv("HOME", str(h.resolve()))
-    v = run("echo hi > $HOME/x.txt", P)
-    assert v is not None and v.word == "$HOME/x.txt"
+    assert run("echo hi > $HOME/x.txt", P) is None
+    monkeypatch.setenv("HOME", P)
+    v = run("echo hi > $HOME/src/x.py", P)
+    assert v is not None and v.rel == "src/x.py"
 
 
 @pytest.mark.parametrize("sep", ["; ", "\n"])

@@ -7,6 +7,7 @@ module reads (a path and ".exe" are stripped from the command word first).
 """
 
 import ast
+import functools
 import io
 import os
 import re
@@ -130,6 +131,41 @@ def _git_out(sub: str, args: list[str], base: str) -> list[str]:  # O(len(args))
 
 _GIT_CONFIG_WRITTEN = re.compile(r"(?:^|[^\w./-])git(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+config(?:\s|$)")  # O(1)
 _UNKNOWN_TREE = "$GIT_WORK_TREE"  # a work tree the guard cannot name
+_READ_ONLY = frozenset({"grep", "egrep", "fgrep", "rg", "echo", "printf", "test", "[", "true", "false", ":", "cat", "head",
+                        "tail", "wc", "ls", "pwd", "date"})  # commands whose words never run | O(1)
+
+
+_LIVE_DEPTH = 8  # nesting levels re-lexed by _live_text; deeper bodies count as raw text (the judge's MAX_DEPTH) | O(1)
+
+
+def _live_text(text: str) -> str:  # O(_LIVE_DEPTH * len(text)) | the text of `text` that can run; unreadable: the raw text
+    try:  # O(1)
+        return _live(text, 0, False)  # O(_LIVE_DEPTH * len(text))
+    except (RecursionError, Exception):  # a lexer error or a nest too deep to walk: the conservative reading, all of it  # O(1)
+        return text  # O(1)
+
+
+@functools.lru_cache(maxsize=64)  # O(1)
+def _live(text: str, depth: int, consumed: bool) -> str:  # O(len(text)) per level | `text` without a read-only command's words, unless its output is consumed
+    if depth >= _LIVE_DEPTH:  # too deep to read: the raw text, the conservative reading  # O(1)
+        return text  # O(1)
+    out: list[str] = []  # O(1)
+    for sg in guard_lex.split(text):  # O(segments)
+        k = 0  # O(1)
+        while k < len(sg.words) and (sg.words[k] in guard_lex._CONTROL or guard_lex._ASSIGN.match(sg.words[k])):  # O(words)
+            k += 1  # O(1)
+        runs = _cmd(sg.words[k]) == "rg" and any(w.startswith(("--pre", "--hostname-bin")) for w in sg.words[k:]) if k < len(sg.words) else False  # rg runs the command these options name | O(words)
+        piped = consumed or sg.sep in ("|", "|&")  # the output feeds a substitution or the next stage, which can run it | O(1)
+        if k >= len(sg.words) or runs or piped or _cmd(sg.words[k]) not in _READ_ONLY:  # O(1)
+            out.extend(sg.words)  # O(words)
+        else:  # the assignments before it still run  # O(1)
+            out.extend(sg.words[:k])  # O(words)
+        out.extend(sg.heredocs)  # O(1)
+        out.extend(r.target for r in sg.redirects)  # O(redirects)
+        out.extend(_live(b, depth + 1, True) for b in sg.bodies)  # O(bodies)
+        if sg.subshell:  # O(1)
+            out.append(_live(sg.subshell, depth + 1, consumed))  # O(1)
+    return "\n".join(out)  # O(len(text))
 
 
 def _is_abs(p: str) -> bool:  # O(1)
@@ -150,7 +186,8 @@ def _inside(cwd: str | None, top: str) -> bool:  # O(len(cwd) + len(top)) | does
     return a == b or a.startswith(b.rstrip("/") + "/")  # O(1)
 
 
-def _alias(words: list[str], i: int, al: str, cfg: dict[str, str], cwd: str | None, env, top, text, cflag: bool) -> list[str]:  # O(len(words))
+def _alias(words: list[str], i: int, al: str, cfg: dict[str, str], cwd: str | None, env, top, text, cflag: bool,
+           why: list[str] | None = None) -> list[str]:  # O(len(words))
     """A -c alias of a subcommand that is no git command, judged as what it runs (one level deep)."""
     rest = words[i:]  # O(len(words))
     if al.startswith("!"):  # git runs a shell alias at the work tree's top  # O(len(al))
@@ -161,15 +198,20 @@ def _alias(words: list[str], i: int, al: str, cfg: dict[str, str], cwd: str | No
     try:  # O(1)
         aw = shlex.split(al)  # O(len(al))
     except ValueError:  # O(1)
+        if why is not None:  # O(1)
+            why.append(f"{words[i - 1]}: an alias the guard cannot split")  # O(len(words))
         return ["?"]  # O(1)
     if not aw or aw[0].lower() in {k[6:] for k in cfg if k.startswith("alias.")}:  # an alias of another alias: not followed  # O(len(cfg))
+        if why is not None:  # O(1)
+            why.append(f"{words[i - 1]}: an alias of another alias")  # O(len(words))
         return ["?"]  # O(len(cfg))
-    return _git(words[:i - 1] + aw + rest, cwd, env, top, text)  # O(len(words))
+    return _git(words[:i - 1] + aw + rest, cwd, env, top, text, why)  # O(len(words))
 
 
 def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = None,
-         text: str | None = None) -> list[str]:  # O(len(words))
+         text: str | None = None, why: list[str] | None = None) -> list[str]:  # O(len(words))
     base, sub, i, cflag, wt, cfg = "", "", 1, False, None, {}  # O(1)
+    toks: list[str] = []  # what makes the config unreadable, in the order why() names it | O(1)
     unk = False  # a config the guard cannot read (include, --config-env, GIT_CONFIG*, a git dir, git config in the command)  # O(1)
     n = len(words)  # O(1)
     while i < n:  # O(len(words))
@@ -185,9 +227,10 @@ def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = N
             elif a == "-c":  # O(1)
                 k, _, val = v.partition("=")  # O(len(v))
                 cfg[k.lower()] = val  # O(1)
-                unk = unk or k.lower().startswith(("include.", "includeif."))  # O(1)
+                if k.lower().startswith(("include.", "includeif.")):  # O(1)
+                    toks.append("-c include.")  # O(1)
             elif a == "--config-env":  # O(1)
-                unk = True  # O(1)
+                toks.append("--config-env")  # O(1)
             elif a == "--git-dir":  # O(1)
                 cflag = True  # O(1)
             i += 2  # O(1)
@@ -196,7 +239,7 @@ def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = N
             wt = a.split("=", 1)[1]  # O(len(a))
             cflag = True  # O(1)
         elif a.startswith("--config-env="):  # O(1)
-            unk = True  # O(1)
+            toks.append("--config-env")  # O(1)
         elif a.startswith("--git-dir="):  # O(1)
             cflag = True  # O(1)
         elif a.startswith("-C") and len(a) > 2:  # O(1)
@@ -211,9 +254,15 @@ def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = N
         i += 1  # O(1)
     if not sub:  # O(1)
         return []  # O(1)
-    blob = text if text is not None else " ".join(words)  # O(len(blob))
+    blob = _live_text(text) if text is not None else " ".join(words)  # O(len(blob))
     low = blob.lower()  # O(len(blob))
-    unk = unk or "GIT_CONFIG" in blob or "GIT_DIR" in blob or "--git-dir" in low or _GIT_CONFIG_WRITTEN.search(low) is not None  # O(len(blob))
+    for tok, hit in (("GIT_CONFIG", "GIT_CONFIG" in blob), ("GIT_DIR", "GIT_DIR" in blob), ("--git-dir", "--git-dir" in low),
+                     ("git config", _GIT_CONFIG_WRITTEN.search(low) is not None)):  # O(1)
+        if hit:  # O(1)
+            toks.append(tok)  # O(1)
+    rank = ["-c include.", "--config-env", "GIT_CONFIG", "GIT_DIR", "--git-dir", "git config"]  # O(1)
+    toks.sort(key=rank.index)  # O(1)
+    unk = bool(toks)  # O(1)
     env = env or {}  # O(1)
     if wt is None:  # not given on the command line: GIT_WORK_TREE (precise from env, else named elsewhere), core.worktree  # O(1)
         if "GIT_WORK_TREE" in env:  # O(1)
@@ -232,7 +281,9 @@ def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = N
     if sub not in _GIT_CMDS:  # O(1)
         al = [v for k, v in cfg.items() if k.startswith("alias.") and k[6:] == sub.lower()]  # O(len(cfg))
         if al:  # O(1)
-            return _alias(words, i, al[-1], cfg, cwd, env, top, text, cflag)  # O(len(words))
+            return _alias(words, i, al[-1], cfg, cwd, env, top, text, cflag, why)  # O(len(words))
+        if unk and why is not None:  # O(1)
+            why.append(f"{sub}: no git command, read as an alias while the command names {toks[0]}")  # O(1)
         return ["?"] if unk else []  # an alias from a config this cannot read  # O(1)
     args = words[i:]  # O(len(words))
     paths: list[str] = []  # O(1)
@@ -254,6 +305,8 @@ def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = N
         if a == "--":  # O(1)
             break  # O(1)
         if a.startswith("--") and len(a) > 2 and "pathspec-from-file".startswith(a[2:].split("=", 1)[0]):  # O(len(a))
+            if why is not None:  # O(1)
+                why.append("--pathspec-from-file")  # O(1)
             return ["?"]  # O(1)
     root = base or "."  # O(1)
 
@@ -1604,6 +1657,16 @@ def _ps(cmd: str, args: list[str]) -> list[str]:  # O(len(args))
 
 
 # ---------------------------------------------------------------- entry point
+
+
+def why(words: list[str], cwd: str | None = None, env=None, top: str | None = None,
+        text: str | None = None) -> str:  # O(len(words))
+    """The reason targets() names "?" for these words when it is git's, else "" (same arguments as targets)."""
+    if not words or _cmd(words[0]) != "git":  # O(1)
+        return ""  # O(1)
+    reasons: list[str] = []  # O(1)
+    found = _git(words, cwd, env, top, text, reasons)  # O(len(words))
+    return reasons[-1] if "?" in found and reasons else ""  # O(1)
 
 
 def targets(words: list[str], cwd: str | None = None, env=None, top: str | None = None,

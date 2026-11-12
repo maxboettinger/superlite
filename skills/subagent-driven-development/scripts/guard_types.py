@@ -7,6 +7,7 @@ class Redirect:  # O(1)
     op: str  # O(1)
     target: str  # O(1)
     glob: str = field(default="", compare=False)  # the target's glob/brace flag, as Segment.globs | O(1)
+    bare: bool = field(default=True, compare=False)  # an expansion of the target sits outside double quotes | O(1)
 
 
 @dataclass
@@ -23,3 +24,5 @@ class Segment:  # O(1)
     # no quoted part, "u" a brace group in a word with a quoted part (its expansion is not read) | O(1)
     globs: list[str] = field(default_factory=list, compare=False)
     arith: str | None = field(default=None, compare=False)  # the text inside a `(( ))` command or `for (( ))` header | O(1)
+    # per word: a `$` expansion ($x, ${x}, $(..), $((..))) or a backtick sits outside double quotes; a missing entry counts as True | O(1)
+    bare: list[bool] = field(default_factory=list, compare=False)

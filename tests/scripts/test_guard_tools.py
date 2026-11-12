@@ -623,3 +623,61 @@ def test_a_large_program_with_many_helpers_and_calls_stays_fast():
     out = targets(["python3", "-c", code])
     assert time.monotonic() - t < 2.0
     assert "docs/f0.md" in out and "docs/f19.md" in out
+
+
+# --- #665: git config named only in a read-only command's words; why a git target is unknown ------------------
+import guard_tools as _gt665  # noqa: E402
+
+
+def test_git_config_in_a_grep_argument_is_data():
+    for t in ("git lfs env 2>&1 | grep -i -e A -e B -e 'git config filter'", 'git lfs env | grep -e "git config filter"',
+              "echo 'git config x y'; git lfs env", "printf '%s' GIT_DIR=/x; git lfs env"):
+        assert _gt665.targets(["git", "lfs", "env"], text=t) == [], t
+
+
+def test_git_config_that_runs_keeps_alias_unknown():
+    for t in ("git config alias.lfs '!rm -rf src'; git lfs env", "bash -c 'git config alias.lfs x'; git lfs env",
+              "echo $(git config --get alias.lfs); git lfs env", "git -c x=y config filter.a b && git lfs env",
+              "GIT_DIR=/x git lfs env", "cat <<EOF | sh\ngit config alias.lfs x\nEOF\ngit lfs env"):
+        assert _gt665.targets(["git", "lfs", "env"], text=t) == ["?"], t
+
+
+def test_why_names_the_token():
+    w = ["git", "lfs", "env"]
+    assert _gt665.why(w, text="git config alias.lfs x; git lfs env") == \
+        "lfs: no git command, read as an alias while the command names git config"
+    assert _gt665.why(w, text="GIT_DIR=/x git lfs env") == "lfs: no git command, read as an alias while the command names GIT_DIR"
+    assert _gt665.why(["git", "-c", "include.path=x", "lfs"]) == \
+        "lfs: no git command, read as an alias while the command names -c include."
+    assert _gt665.why(w, text="git lfs env | grep -e 'git config filter'") == ""
+    assert _gt665.why(["git", "add", "--pathspec-from-file=f"]) == "--pathspec-from-file"
+    assert _gt665.why(["python3", "-c", "open(input(), 'w')"]) == ""
+
+
+def test_rg_pre_runs_its_command_so_git_config_stays_live():
+    for t in ("rg --pre 'git config alias.lfs x' foo; git lfs env", "rg --pre='git config alias.lfs x' foo; git lfs env",
+              "rg --hostname-bin 'git config alias.lfs x' foo; git lfs env"):
+        assert _gt665.targets(["git", "lfs", "env"], text=t) == ["?"], t
+    assert _gt665.targets(["git", "lfs", "env"], text="rg -e 'git config x' foo; git lfs env") == []
+
+
+def test_deeply_nested_substitutions_are_capped_and_stay_fast():
+    import time
+
+    deep = "git lfs env; " + "$(" * 400 + "git config alias.lfs x" + ")" * 400
+    t0 = time.monotonic()
+    assert targets(["git", "lfs", "env"], text=deep) == ["?"]  # the raw body past the cap still names git config
+    assert time.monotonic() - t0 < 1.5
+    calm = "git lfs env; " + "$(" * 400 + "echo " + ")" * 400
+    t0 = time.monotonic()
+    assert isinstance(targets(["git", "lfs", "env"], text=calm), list)  # no RecursionError
+    assert time.monotonic() - t0 < 1.5
+
+
+def test_read_only_command_words_stay_live_where_their_output_is_consumed():
+    f = ["git", "f"]
+    for t in ("eval \"$(echo git config alias.f '!rm -rf src')\"; git f",
+              "eval \"`echo git config alias.f '!rm -rf src'`\"; git f",
+              "echo git config alias.f x | sh; git f"):
+        assert targets(f, text=t) != [], t
+    assert targets(["git", "lfs", "env"], text='git lfs env | grep "git config filter"') == []
