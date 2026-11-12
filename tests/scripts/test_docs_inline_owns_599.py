@@ -21,3 +21,10 @@ def test_hooks_doc_names_owns_exclude_moved():
     assert "guard_judge.py --owns PATH" in line
     assert "--git-path info/exclude" in line
     assert "moved_to" in line
+
+
+def test_hooks_doc_exclude_matches_code():
+    line = next(x for x in HOOKS.splitlines() if x.startswith("- `block-coordinator-edits`"))
+    assert "passes as git's own exclude file" in line
+    assert "defines a `git` function or alias" in line
+    assert "one known shell directory" not in line
