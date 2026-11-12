@@ -108,3 +108,36 @@ def test_failed_restore_keeps_progress_and_restart_resets_started(tmp_path, monk
     f.write_text(json.dumps({"files": {}, "started": 1}), encoding="utf-8")
     assert render_edit.main(["start", "Demo/Seed.swift"]) == 0
     assert json.loads(f.read_text(encoding="utf-8"))["started"] > 1
+
+
+def test_folder_and_glob_owns_refuse_inner_file_f_t7_1(tmp_path, monkeypatch, capsys):
+    r = repo(tmp_path, monkeypatch)
+    (r / "plan2.md").write_text("# Plan\n\n### T3 seed\n**Owns:** Demo/\n**Tests:** fast\n", encoding="utf-8")
+    assert render_edit.main(["start", "Demo/Seed.swift", "--plan", str(r / "plan2.md")]) == 2
+    assert "owned by T3" in capsys.readouterr().err
+    (r / "plan3.md").write_text("# Plan\n\n### T4 seed\n**Owns:** Demo/*.swift\n**Tests:** fast\n", encoding="utf-8")
+    assert render_edit.main(["start", "Demo/Seed.swift", "--plan", str(r / "plan3.md")]) == 2
+    assert "owned by T4" in capsys.readouterr().err
+
+
+def test_record_goes_to_bound_run_folder_f_t7_2(tmp_path, monkeypatch, capsys):
+    r = repo(tmp_path, monkeypatch)
+    run = tmp_path / "bound"
+    run.mkdir()
+    monkeypatch.setenv("SUPERLITE_STATE_DIR", str(run))
+    assert render_edit.main(["start", "Demo/Seed.swift"]) == 0
+    assert (run / "render-edits.json").exists()
+    assert not (r / ".superlite" / "render-edits.json").exists()
+    assert render_edit.main(["restore"]) == 0
+    assert render_edit.applied(run) == []
+
+
+def test_refuses_symlink_and_hard_link(tmp_path, monkeypatch, capsys):
+    import os
+    r = repo(tmp_path, monkeypatch)
+    os.symlink(r / "Demo" / "Seed.swift", r / "Demo" / "Sym.swift")
+    assert render_edit.main(["start", "Demo/Sym.swift"]) == 2
+    assert "is a link" in capsys.readouterr().err
+    os.link(r / "Demo" / "Seed.swift", r / "Demo" / "Hard.swift")
+    assert render_edit.main(["start", "Demo/Seed.swift"]) == 2
+    assert "is a link" in capsys.readouterr().err
