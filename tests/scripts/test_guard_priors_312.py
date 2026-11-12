@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "scripts"))
 
 from guard_judge import Verdict, judge  # noqa: E402
+import guard_judge  # noqa: E402
 
 UNK = Verdict("?", "?", "code")
 
@@ -83,8 +85,13 @@ def test_force_cond_registers_nothing(P):
 
 
 @pytest.mark.parametrize("ns", [(10, 10), (5, 5, 5), (3, 3, 3, 3)])
-def test_nested_literal_for_loops_are_not_walked_again(P, ns):
+def test_nested_literal_for_loops_are_not_walked_again(P, ns, monkeypatch):
+    # A re-walk spends MAX_STEPS, which no machine load changes. The 1.5 s wall-clock budget is raised to 10 s here:
+    # the server's 4-worker full run starved it (B130 follow-up); 10 s of CPU time still fails a walk that went slow.
+    monkeypatch.setattr(guard_judge, "MAX_SECONDS", 10)
     names = "abcd"
     head = "".join(f"for {names[k]} in {' '.join(str(i) for i in range(n))}; do " for k, n in enumerate(ns))
     body = "echo hi > docs/" + "".join("$" + names[k] for k in range(len(ns))) + ".md; " + "done; " * len(ns)
+    t = time.process_time()
     assert run(head + body, P) is None
+    assert time.process_time() - t < 10

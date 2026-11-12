@@ -28,6 +28,9 @@ A report with concerns adds ` concerns=N` to the wait line. `send WID --brief FI
 `send`, `send --brief` and `send --text` resend once after a stall, and after a slow Herdr reply ("timed out waiting for app response") unless the worker already shows `working`.
 A lead's stop records written by its own child sessions (a transcript outside the lead's worktree project folder) never count as the lead's stop.
 `send --text` to a lead whose newest own stop said only READY resends the brief file instead of the text.
+A review brief has a `Red runs (task reports):` section for each task whose newest implementer report (`fleet/reports/*.json`) shows no red run (`red_gap`), so its reviewer proves each new test can fail (#606).
+A review brief has a `Plan contract outside Tn's Produces` section: the other plan lines (table rows, later tasks' lines) that name the task's types (`contract_mentions`), for the reviewer to hold the build against (#606).
+`review_hints` adds the hint `no red run` to a committed task whose report has a red-run gap.
 """
 # Complexity notation:
 # n = tasks in the plan, k = tasks in a message, w = workers, m = lines of metrics.jsonl, T = transcript lines, s = screen bytes
@@ -243,6 +246,87 @@ def worktree_sl(root, superlite_root, files):  # (Root's sl, [tool names]) when 
     return (str(sl), names) if names else None  # O(1)
 
 
+RED_PROOF = ("Prove each new test of these tasks can fail: take out or break the code it tests, run the test red through run_tests, "  # O(1)
+             "put the code back, and list each red run's summary line under tests; a test that stays green is a finding.")  # O(1)
+CONTRACT_LIMIT = 12  # plan lines a review brief lists per task; the rest are counted | O(1)
+FAIL_COUNT = re.compile(r"\b(\d+)\s+(?:failed|failing)\b", re.I)  # a red-run line's failure count | O(1)
+FAIL_WORD = re.compile(r"fail", re.I)  # O(1)
+NAME_SKIP = frozenset({"None", "True", "False", "Self", "Any"})  # O(1)
+
+
+def _red_names_failure(red):  # a red-run line counts a failure (N failed with some N >= 1), else holds a fail word; errors alone are not red | O(len)
+    counts = FAIL_COUNT.findall(red)  # O(len)
+    if counts:  # O(1)
+        return any(int(n) >= 1 for n in counts)  # O(len)
+    return bool(FAIL_WORD.search(red))  # O(len)
+
+
+def red_gap(sd, tid, owns):  # why TID's newest implementer report proves no red run, else None (no report: None) | O(r*B + o)
+    best = None  # (mtime, file name, report) | O(1)
+    for p in (Path(sd) / "fleet" / "reports").glob("*.json"):  # O(r) iterations
+        try:  # O(1)
+            rep = json.loads(p.read_text(encoding="utf-8"))  # O(B)
+            when = p.stat().st_mtime  # O(1)
+        except (OSError, ValueError):  # O(1)
+            continue  # O(1)
+        if not isinstance(rep, dict) or rep.get("role") != "implementer":  # O(1)
+            continue  # O(1)
+        if tid not in [x.strip() for x in str(rep.get("label") or "").split(",")]:  # O(k)
+            continue  # O(1)
+        if best is None or (when, p.name) >= best[:2]:  # O(1)
+            best = (when, p.name, rep)  # O(1)
+    if best is None:  # O(1)
+        return None  # O(1)
+    red = str(best[2].get("red") or "").strip()  # O(len)
+    if not red:  # O(1)
+        return "its report names no red run"  # O(1)
+    if red.lower().startswith("none"):  # O(1)
+        tests = [o for o in owns if testcmd.is_test_path(str(o))]  # O(o)
+        return f"its report says `{red}`, but it owns test files ({', '.join(tests[:3])})" if tests else None  # O(o)
+    return None if _red_names_failure(red) else f"its red run `{red[:120]}` names no failing test"  # O(len)
+
+
+def _type_names(task):  # the type names TASK defines: the classes of its Produces and the stems of its non-test owned files | O(k*s)
+    names = []  # O(1)
+    for item in task.produces:  # O(k) iterations
+        sig = pt.parse_signature(item)  # O(s)
+        if sig and sig.get("cls"):  # O(1)
+            names.append(sig["cls"])  # O(1)
+        elif not sig:  # O(1)
+            head = re.match(r"\s*`?([A-Za-z_][\w.]*)", item)  # O(s)
+            names += [seg for seg in head.group(1).split(".") if seg[:1].isupper()] if head else []  # O(s)
+    for o in task.owns:  # O(o) iterations
+        stem = Path(str(o)).stem  # O(1)
+        if re.fullmatch(r"[A-Z][A-Za-z0-9]+", stem) and not testcmd.is_test_path(str(o)):  # O(s)
+            names.append(stem)  # O(1)
+    return [n for n in dict.fromkeys(names) if len(n) >= 3 and n not in NAME_SKIP]  # O(k)
+
+
+def contract_mentions(pl, tid, limit=12):  # (type names of TID, [(plan line, "table" | task id, text)] up to LIMIT, all mentions) outside TID's own block | O(L*k)
+    task = pl.by_id[tid]  # O(1)
+    names = _type_names(task)  # O(k*s)
+    if not names:  # O(1)
+        return [], [], 0  # O(1)
+    pat = re.compile(r"(?<![\w])(?:" + "|".join(re.escape(n) for n in names) + r")(?![\w])")  # O(k)
+    own = range(task.line, task.line + task.text.count("\n") + 1)  # O(len)
+    skip = set()  # lines of mermaid blocks | O(1)
+    for blk in pl.mermaid_blocks():  # O(b) iterations
+        skip.update(range(blk.start, blk.end + 1))  # O(len)
+    owner = {}  # line index -> task id | O(1)
+    for t in pl.tasks:  # O(n) iterations
+        for i in range(t.line, t.line + t.text.count("\n") + 1):  # O(len)
+            owner[i] = t.id  # O(1)
+    found = []  # O(1)
+    for i, ln in enumerate(pl.lines):  # O(L) iterations
+        if i in skip or i in own or re.match(r"#{1,4}\s", ln) or not pat.search(ln):  # O(s)
+            continue  # O(s)
+        s = ln.strip()  # O(s)
+        who = owner.get(i) or ("table" if s.startswith("|") else None)  # O(1)
+        if who:  # O(1)
+            found.append((i + 1, who, s[:240]))  # O(s)
+    return names, found[:limit], len(found)  # O(limit)
+
+
 def review_brief(sd, plan, tasks, sl_path, superlite_root, package=None):  # the package-reviewer's brief | O(L + e + k*s + B)
     sd = Path(sd)  # O(1)
     plan_p = Path(plan).resolve()  # O(1)
@@ -270,6 +354,19 @@ def review_brief(sd, plan, tasks, sl_path, superlite_root, package=None):  # the
     lines += [f"Spec slice: `{sl_path} task {t} --plan {plan_p}`" for t in tasks]  # O(k)
     lines += [f"Files in scope: {', '.join(files)}", "",  # O(o)
               f"Incident hotspots (`{sl_path} incident hotspots --files {','.join(files)}`):", _hotspots(sd, files), ""]  # O(B + i log i)
+    for t in tasks:  # O(k) iterations
+        names, rows, total = contract_mentions(pl, t, CONTRACT_LIMIT)  # O(L*k)
+        if total:  # O(1)
+            lines.append(f"Plan contract outside {t}'s Produces (other plan lines that name {', '.join(names)}; "  # O(k)
+                         "the build must fit each line, a mismatch is a finding):")  # O(1)
+            lines += [f"- plan:{n} ({who}): {text}" for n, who, text in rows]  # O(limit)
+            if total > len(rows):  # O(1)
+                lines.append(f"- ({total - len(rows)} more: grep the plan for {', '.join(names)})")  # O(1)
+            lines.append("")  # O(1)
+    gaps = [(t, red_gap(sd, t, pl.by_id[t].owns)) for t in tasks]  # O(k*r)
+    gaps = [(t, g) for t, g in gaps if g]  # O(k)
+    if gaps:  # O(1)
+        lines += ["Red runs (task reports):"] + [f"- {t}: {g}" for t, g in gaps] + [RED_PROOF, ""]  # O(k)
     adapter = sd / "probes" / "adapter.py"  # O(1)
     lines.append(f"Probe adapter: {adapter if adapter.is_file() else 'none'}")  # O(1)
     return "\n".join(lines) + "\n"  # O(out)
@@ -284,6 +381,8 @@ def review_hints(sd, plan):  # [(task, reasons)] for committed tasks that match 
         if tid not in pl.by_id or tid in covered:  # O(1)
             continue  # O(1)
         why = review_reasons(plan, tid)  # O(L + e + k*s)
+        if red_gap(sd, tid, pl.by_id[tid].owns):  # O(r*B)
+            why.append("no red run")  # O(1)
         if why:  # O(1)
             out.append((tid, why))  # O(1)
     return sorted(out, key=lambda x: pt.nkey(x[0]))  # O(n log n)
