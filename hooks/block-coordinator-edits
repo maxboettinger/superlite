@@ -342,6 +342,16 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
   fi
   jstr subagent_type
   fstale=0
+  # a fleet that moved ("moved_to": absolute folder, fleet off here) is read at its target, up to 5 moves (#580)
+  FSD0="$FSD"; re_mv='"moved_to"[[:space:]]*:[[:space:]]*"([^"]*)"'; re_fon0='"on"[[:space:]]*:[[:space:]]*true'
+  for _mv in 1 2 3 4 5; do
+    [ -f "$FSD/fleet.json" ] || break
+    IFS= read -r -d '' fj < "$FSD/fleet.json"
+    [[ $fj =~ $re_fon0 ]] && break
+    [[ $fj =~ $re_mv ]] || break
+    mvt="${BASH_REMATCH[1]//\\\\//}"
+    case "$mvt" in /*|[A-Za-z]:/*) FSD="${mvt%/}" ;; *) break ;; esac
+  done
   if [ -f "$FSD/fleet.json" ]; then   # rule 4: fleet on, so a superlite role is a worker, never an in-process Agent
     IFS= read -r -d '' fj < "$FSD/fleet.json"
     re_fon='"on"[[:space:]]*:[[:space:]]*true'
@@ -377,10 +387,12 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)","rule":"fleet","cwd":"%s"}\n' "$tool" "$REPLY" "$cwdv" \
           >> "$FSD/incidents.jsonl" 2>/dev/null
         again="It is blocked on every call while fleet is on: do not retry it."
+        fread=" Fleet state read: $FSD0/fleet.json."
+        [ "$FSD" = "$FSD0" ] || fread=" Fleet state read: $FSD0/fleet.json, moved to $FSD/fleet.json."
         if [ "$frole" = research ]; then
-          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $FSD/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $FSD/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $FSD/fleet/reports/<name>.md. PLAN is the plan file, or $FSD before a plan exists. sl fleet off goes back to in-process agents." >&2
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $FSD/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $FSD/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $FSD/fleet/reports/<name>.md. PLAN is the plan file, or $FSD before a plan exists. sl fleet off goes back to in-process agents.$fread" >&2
         else
-          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents." >&2
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents.$fread" >&2
         fi
         exit 2
       fi
