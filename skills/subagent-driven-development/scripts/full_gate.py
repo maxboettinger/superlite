@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The machine's admission command for full test runs (#655).
+"""The machine's admission for full test runs (#655, per toolchain #659).
 
 `<home>/machine.json` `{"admission": ["<gate>", "run", "--"]}` names an argv prefix that decides when a full run
 starts. `admission_command` reads it; `run_admitted` runs a command through it and tells, with a start marker the
@@ -16,6 +16,7 @@ import sys  # O(1)
 import tempfile  # O(1)
 import time  # O(1)
 from pathlib import Path  # O(1)
+from typing import NamedTuple  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 
@@ -35,23 +36,71 @@ class AdmissionBusy(Exception):  # wait_limit passed before the marker showed; t
         self.seconds, self.name = seconds, name  # O(1)
 
 
-def admission_command(home: Path | None = None) -> tuple:  # O(file)
-    """(argv prefix, None) when machine.json names a usable admission command; (None, warning) when it is
-    set but unusable; (None, None) when unset."""
+class Admission(NamedTuple):  # how one toolchain's full run is admitted
+    mode: str | None  # "command", "self", "lock"; None: no key | O(1)
+    argv: list | None  # O(1)
+    note: str | None  # O(1)
+    warning: str | None  # O(1)
+
+
+NONE = Admission(None, None, None, None)  # O(1)
+LOCK_TAIL = "; running under the full-suite lock"  # O(1)
+
+
+def _usable(entry, where: str):  # (argv, None) or (None, warning) for a list entry | O(len entry)
+    if not isinstance(entry, list) or not entry or not all(isinstance(x, str) and x for x in entry):  # O(len entry)
+        return None, f'{where} must be a non-empty list of strings, "self" or "lock"{LOCK_TAIL}'  # O(1)
+    if not shutil.which(entry[0]):  # O(PATH)
+        return None, f'admission command {entry[0]} not found ({where}){LOCK_TAIL}'  # O(1)
+    return entry, None  # O(1)
+
+
+def admission_for(toolchain: str, home: Path | None = None) -> Admission:  # O(file)
+    """How a full run of one toolchain is admitted, from `<home>/machine.json` "admission" (#655, #659).
+    A list is the admission command for every toolchain. An object is keyed by toolchain with an optional
+    "default" key; each value is a list (admission command), "self" (the machine admits the run itself) or
+    "lock" (superlite's full-suite lock). Unset: Admission(None, None, None, None)."""
     import history  # O(1)
     f = Path(home or history.home()) / "machine.json"  # O(1)
     try:  # O(1)
         data = json.loads(f.read_text(encoding="utf-8"))  # O(file)
     except (OSError, ValueError):  # O(1)
-        return None, None  # O(1)
+        return NONE  # O(1)
     if not isinstance(data, dict) or "admission" not in data:  # O(1)
-        return None, None  # O(1)
-    argv = data["admission"]  # O(1)
-    if not isinstance(argv, list) or not argv or not all(isinstance(x, str) and x for x in argv):  # O(len argv)
-        return None, 'machine.json "admission" must be a non-empty list of strings; running under the full-suite lock'  # O(1)
-    if not shutil.which(argv[0]):  # O(PATH)
-        return None, f'admission command {argv[0]} not found (machine.json "admission"); running under the full-suite lock'  # O(1)
-    return argv, None  # O(1)
+        return NONE  # O(1)
+    adm = data["admission"]  # O(1)
+    if isinstance(adm, list):  # O(1)
+        argv, warn = _usable(adm, 'machine.json "admission"')  # O(len adm)
+        if warn:  # O(1)
+            warn = warn.replace(', "self" or "lock"', "")  # the list form has no other values | O(len warn)
+            return Admission("lock", None, None, warn)  # O(1)
+        return Admission("command", argv, f'full run through the admission command {os.path.basename(argv[0])} (machine.json "admission"); no full-suite lock', None)  # O(1)
+    if not isinstance(adm, dict):  # O(1)
+        return Admission("lock", None, None, 'machine.json "admission" must be a non-empty list of strings or an object keyed by toolchain' + LOCK_TAIL)  # O(1)
+    if toolchain and toolchain in adm:  # O(1)
+        key, where = toolchain, f'machine.json "admission" for {toolchain}'  # O(1)
+    elif "default" in adm:  # O(1)
+        key, where = "default", f'machine.json "admission" "default" for {toolchain}'  # O(1)
+    else:  # O(1)
+        return Admission("lock", None, f'full run under the {toolchain} full-suite lock (machine.json "admission" has no "{toolchain}" or "default" entry)', None)  # O(1)
+    entry = adm[key]  # O(1)
+    if entry == "self":  # O(1)
+        return Admission("self", None, f'full run admitted by the machine itself ({where}: "self"); no full-suite lock, no admission command', None)  # O(1)
+    if entry == "lock":  # O(1)
+        return Admission("lock", None, f'full run under the {toolchain} full-suite lock ({where}: "lock")', None)  # O(1)
+    argv, warn = _usable(entry, where)  # O(len entry)
+    if warn:  # O(1)
+        return Admission("lock", None, None, warn)  # O(1)
+    return Admission("command", argv, f'full run through the admission command {os.path.basename(argv[0])} ({where}); no full-suite lock', None)  # O(1)
+
+
+def admission_command(home: Path | None = None, toolchain: str = "python") -> tuple:  # O(file)
+    """The command view of admission_for: (argv, None) for mode command, (None, warning) when the key is set
+    but unusable, (None, None) otherwise."""
+    a = admission_for(toolchain, home)  # O(file)
+    if a.mode == "command":  # O(1)
+        return a.argv, None  # O(1)
+    return None, a.warning  # O(1)
 
 
 def _text(f) -> str:  # O(o)

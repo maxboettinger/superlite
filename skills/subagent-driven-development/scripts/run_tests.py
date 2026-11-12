@@ -58,7 +58,7 @@ A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is
 SIGTERM and SIGHUP on a run kill its test processes and leave a red summary (`run_tests stopped by SIGTERM; ...`, exit 2).
 With `--task Tn` every summary carries `"task"` and `--background` also writes `test-summary-<Tn>.latest`; `--wait <earlier run of Tn>` then waits on Tn's newest run and says so on stderr.
 `-m EXPR` selects a pytest marker (`-m EXPR` goes onto the pytest argv, or onto a test-cmd.json pytest command; a runner that is not pytest is a usage error, exit 2) and makes the run a fast (narrowed) run. A pytest exit 5 stops with `pytest collected nothing (exit 5): <cause>`: all tests deselected (by `-m`, or by a deselecting `-m` in the project's addopts), or the paths hold no tests.
-A `--full` run holds a machine-wide lock per toolchain (`<superlite home>/locks/full-suite-<toolchain>.lock`, flock; the OS frees it when the process ends; toolchain = python, xcode, or the test-cmd.json language, shell by default) around its test command, so full suites of one toolchain on one machine run one at a time while other toolchains run alongside (#550). A waiting run prints `run_tests: waiting for the python full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS, N min ago; its last full run took M min); python full runs on one machine run one at a time, in arrival order: queue place N of M` (a free lock with another waiter first: `(next in line: pid Q in ROOT)`; waiters queue first come first served in `<lock>.queue`, #655), then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for; every waiting run writes `<summary>.lockwait` (lock, holder, pid, since, place, queued). `~/.superlite/machine.json` `{"admission": ["<gate>", "run", "--"]}` replaces the lock for a full run: its commands run behind that argv prefix with no lock (`run_tests: full run through the admission command <gate> ...`), the wait for the gate's start shows once as `waiting for the admission command <gate> to start the full run` (and `--wait` names it), the wait is left out of the run's seconds, and `--lock-wait S` bounds it (exit 2, red summary `admission: <gate> did not start the full run after S s`). A key that is not a list, a missing command, or a gate that exits before the tests start prints one warning and the run takes the lock (#655). A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
+A `--full` run holds a machine-wide lock per toolchain (`<superlite home>/locks/full-suite-<toolchain>.lock`, flock; the OS frees it when the process ends; toolchain = python, xcode, or the test-cmd.json language, shell by default) around its test command, so full suites of one toolchain on one machine run one at a time while other toolchains run alongside (#550). A waiting run prints `run_tests: waiting for the python full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS, N min ago; its last full run took M min); python full runs on one machine run one at a time, in arrival order: queue place N of M` (a free lock with another waiter first: `(next in line: pid Q in ROOT)`; waiters queue first come first served in `<lock>.queue`, #655), then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for; every waiting run writes `<summary>.lockwait` (lock, holder, pid, since, place, queued). `~/.superlite/machine.json` `"admission"` says per toolchain how a full run is admitted (#659): a list `["<gate>", "run", "--"]` is the admission command for every toolchain; an object keyed by toolchain (python, xcode, shell, ... and an optional `"default"`) holds per key a list (admission command), `"self"` (the machine admits the run itself: no lock, no wrap, `SUPERLITE_FULL_SUITE_LOCK` set for nested runs; right only when the machine's gate really admits that toolchain's test command) or `"lock"` (the full-suite lock); no entry means the lock. The run names which applied, once, as `run_tests: full run through the admission command <gate> (...); no full-suite lock`, `run_tests: full run admitted by the machine itself (...)` or `run_tests: full run under the <toolchain> full-suite lock (...)`. With a command the commands run behind that argv prefix with no lock, the wait for the gate's start shows once as `waiting for the admission command <gate> to start the full run` (and `--wait` names it), the wait is left out of the run's seconds, and `--lock-wait S` bounds it (exit 2, red summary `admission: <gate> did not start the full run after S s`). An unusable entry, a missing command, or a gate that exits before the tests start prints one warning and the run takes the lock (#655). A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
 A run in an isolated tree builds there: an `xcodebuild` word in the command (not `-list`, not one that already has `-derivedDataPath`) gets `-derivedDataPath <tree>/.build/DerivedData`, so the build output (module cache included) goes with the tree (#574); the tree is marked busy while the run lasts.
 Before each run (the run process, not the `--background` parent) the disk is checked (`trees.disk_gate`): below the floor the run stops (exit 2, red summary `disk: ...`, no tree made), below the warn level it prints a `disk: WARNING` line. Each run also removes the trees nothing needs (committed tasks, stopped workers' trees; never its own or a busy one) and orphaned DerivedData of removed trees. An `ENOSPC` anywhere ends the run with one `run_tests: disk full (ENOSPC): ...` line, exit 2, no traceback.
 A tree run exports `SUPERLITE_DERIVED_DATA_PATH=<tree>/.build/DerivedData` to the test command and its setup (a test-cmd.json `env` entry of that name wins), so a project script can pass it to xcodebuild (#614).
@@ -338,20 +338,33 @@ class Gate:  # O(1) where a full run's commands run: through the admission comma
 
 
 @contextlib.contextmanager
-def full_run_gate(a, label, toolchain="python", enabled=True):  # O(wait / LOCK_POLL); the admission command when machine.json names one, else the full-suite lock
-    prefix = None  # O(1)
+def full_run_gate(a, label, toolchain="python", enabled=True):  # O(wait / LOCK_POLL); per machine.json "admission": the admission command, the machine itself ("self") or the full-suite lock (#659)
+    adm = full_gate.Admission(None, None, None, None)  # O(1)
     if label == "full" and enabled:  # O(1)
-        prefix, warning = full_gate.admission_command()  # O(file)
-        if warning:  # O(1)
-            print(f"run_tests: {warning}", file=sys.stderr)  # O(1)
+        adm = full_gate.admission_for(toolchain)  # O(file)
+        if adm.warning:  # O(1)
+            print(f"run_tests: {adm.warning}", file=sys.stderr)  # O(1)
         outer = os.environ.get(LOCK_ENV, "")  # O(1)
-        if prefix and outer.isdigit() and is_ancestor(int(outer)):  # an outer run covers this one | O(64)
+        nested = adm.mode is not None and outer.isdigit() and is_ancestor(int(outer))  # an outer run covers this one | O(64)
+        if nested and adm.mode in ("command", "self"):  # O(1)
             yield Gate(a, toolchain)  # O(1)
             return  # O(1)
-    if prefix:  # O(1)
-        print(f'run_tests: full run through the admission command {os.path.basename(prefix[0])} (machine.json "admission"); no full-suite lock', file=sys.stderr)  # O(1)
+        if not nested and adm.note:  # O(1)
+            print(f"run_tests: {adm.note}", file=sys.stderr)  # O(1)
+    if adm.mode == "command":  # O(1)
         with contextlib.ExitStack() as stack:  # O(1)
-            yield Gate(a, toolchain, prefix, stack)  # O(1)
+            yield Gate(a, toolchain, adm.argv, stack)  # O(1)
+        return  # O(1)
+    if adm.mode == "self":  # O(1)
+        before = os.environ.get(LOCK_ENV)  # O(1)
+        os.environ[LOCK_ENV] = str(os.getpid())  # O(1)
+        try:  # O(1)
+            yield Gate(a, toolchain)  # O(1)
+        finally:  # O(1)
+            if before is None:  # O(1)
+                os.environ.pop(LOCK_ENV, None)  # O(1)
+            else:  # O(1)
+                os.environ[LOCK_ENV] = before  # O(1)
         return  # O(1)
     with contextlib.ExitStack() as stack:  # O(1)
         stack.enter_context(full_suite_lock(a, label, toolchain, enabled))  # O(wait / LOCK_POLL)

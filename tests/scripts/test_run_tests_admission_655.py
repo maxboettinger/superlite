@@ -70,12 +70,12 @@ def test_shell_full_run_through_admission(tmp_path, monkeypatch, gate, capsys):
     machine(gate)
     shell_project(tmp_path)
     monkeypatch.chdir(tmp_path)
-    proc = hold("shell", 60)
+    proc = hold("bash", 60)
     try:
         assert run_tests.main(["--full", "--lock-wait", "5"]) == 0
     finally:
         stop(proc)
-    assert "waiting for the shell full-suite lock" not in capsys.readouterr().err
+    assert "waiting for the bash full-suite lock" not in capsys.readouterr().err
 
 
 def test_missing_admission_falls_back_to_lock(tmp_path, capsys):

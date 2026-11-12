@@ -49,7 +49,7 @@ def test_admission_valid(tmp_path):
 
 def test_admission_not_a_list(tmp_path):
     machine(tmp_path, {"admission": "gate"})
-    assert full_gate.admission_command(tmp_path) == (None, WARN)
+    assert full_gate.admission_command(tmp_path) == (None, 'machine.json "admission" must be a non-empty list of strings or an object keyed by toolchain; running under the full-suite lock')
 
 
 def test_admission_empty_list(tmp_path):
