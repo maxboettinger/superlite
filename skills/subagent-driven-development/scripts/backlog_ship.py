@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """sl backlog ship <B> lock|bump|merge|release (phase 3): a batch lead ships its own batch under the ship lock.
 
-`done --pr N [--version X]` runs in the main session: it records a batch main shipped by hand (PR merged).
+`done --pr N [--version X]` runs in the main session: it records a batch main shipped by hand (PR merged); the batch may be planned, with no lead or worktree (#585, #586).
 `merge --from-main` runs in the main session: it ships a parked batch (lock as main, rebase, second bump, maxapp ship, then done's bookkeeping).
 A lead resumed after a crash has no fleet env: its ship call parks the batch and names the start command as the fix.
 
@@ -458,19 +458,20 @@ def _done(a, root, data, b):  # O(issues)
         return _out(2, f"refused: sl backlog ship {bid} done runs only in the main session")  # O(1)
     if not n or n < 1:  # O(1)
         return _out(2, "refused: done needs --pr N")  # O(1)
-    if b.get("state") not in ("running", "needs_decision", "parked"):  # O(1)
-        return _out(2, f"refused: {bid} is {b.get('state')}, not running or parked")  # O(1)
-    repo, wt = data.get("repo"), b.get("worktree")  # O(1)
-    if not repo or not wt:  # O(1)
-        return _out(2, f"refused: {bid} has no repo or worktree recorded")  # O(1)
+    if b.get("state") not in ("planned", "running", "needs_decision", "parked"):  # O(1)
+        return _out(2, f"refused: {bid} is {b.get('state')}, not planned, running or parked")  # O(1)
+    repo = data.get("repo")  # O(1)
+    wt = b.get("worktree") if b.get("worktree") and Path(b["worktree"]).is_dir() else None  # O(1)
+    if not repo:  # O(1)
+        return _out(2, f"refused: {bid} has no repo recorded")  # O(1)
     rc, out = _run(["gh", "pr", "view", str(n), "-R", repo, "--json", "state", "-q", ".state"], root)  # O(output)
     if rc != 0:  # O(1)
         return _out(3, f"BLOCKED: cannot read PR #{n} ({_tail(out)})")  # O(1)
     if out.strip() != "MERGED":  # O(1)
         return _out(2, f"refused: PR #{n} is {out.strip() or 'unknown'}, not merged")  # O(1)
-    v = a.version or b.get("version") or _current_version(wt)  # O(file)
+    v = a.version or b.get("version") or _current_version(wt or root)  # O(file)
     try:  # O(1)
-        notes = (Path(wt) / ".superlite" / "notes.md").read_text(encoding="utf-8")  # O(file)
+        notes = (Path(wt) / ".superlite" / "notes.md").read_text(encoding="utf-8") if wt else ""  # O(file)
     except (OSError, ValueError):  # O(1)
         notes = ""  # O(1)
     s = root / ".superlite" / "backlog" / f"{bid}.md"  # O(1)

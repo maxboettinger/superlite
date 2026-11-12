@@ -15,6 +15,7 @@ without the status its `last` holds) is re-read for fleet_io.READ_MS, then parke
 A lead whose brief Herdr refuses (after send_brief's one resend on a stall) is stopped and its batch keeps its state (BLOCKED line, exit 2).
 A resumed batch's lead brief ends with the worktree state (commits, uncommitted files, answers already given).
 `wait` tells a live lead once when the Herdr panes of its fleet workers stay gone for GONE_MS (a crash), and flags it.
+`answer` takes one answer rule (backlog_answer, #586): a label, a label plus a note, or free text up to 2000 characters. `_shipped` also runs for a batch without lead or worktree (`ship B done` on a planned batch, #585).
 Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
 """
 # Complexity notation: b = batches, w = workers, m = lines of metrics.jsonl
@@ -29,6 +30,7 @@ from pathlib import Path  # O(1)
 
 HERE = Path(__file__).resolve().parent  # O(1)
 sys.path.insert(0, str(HERE))  # O(1)
+import backlog_answer as ba  # noqa: E402 | O(1)
 import backlog_checks as bc  # noqa: E402 | O(1)
 import backlog_state as bs  # noqa: E402 | O(1)
 
@@ -350,7 +352,8 @@ def drop_worktree(root: Path, b: dict) -> list:  # O(cmd)
 def _shipped(p, sd, root, b, wt) -> list:  # O(size)
     bid = b["id"]
     bs.update(p, lambda d: bs.batch(d, bid).__setitem__("state", "shipped"))  # O(size)
-    _stop(sd, b["lead"])  # O(w)
+    if b.get("lead"):  # O(1)
+        _stop(sd, b["lead"])  # O(w)
     pr = f" PR #{b['pr']}" if b.get("pr") else ""
     ver = f" {b['version']}" if b.get("version") else ""
     fu, un = list(b.get("followups") or []), list(b.get("undone") or [])  # O(k)
@@ -364,6 +367,8 @@ def _shipped(p, sd, root, b, wt) -> list:  # O(size)
         fail = project_cleanup(root, Path(b["worktree"]), b.get("branch") or "", bid)  # O(cmd)
         if fail:  # O(1)
             out.append(fail)  # O(1)
+    if not b.get("worktree") or wt is None:  # O(1)
+        return out  # O(1)
     rc, msg = _run(["maxapp", "ship", "-C", str(wt)], root)  # O(cmd)
     if rc:  # O(1)
         out.append(f"{bid} cleanup: {(msg.splitlines() or ['failed'])[-1][:120]}")  # O(len)
@@ -481,7 +486,7 @@ def cmd_wait(a) -> int:
         time.sleep(a.poll)  # O(poll)
 
 
-def _answers(f) -> tuple:  # -> (answers, by map, error)
+def _answers(f, questions=()) -> tuple:  # -> (answers, by map, error)
     try:  # O(1)
         obj = json.loads(Path(f).read_text(encoding="utf-8"))  # O(size)
     except (OSError, ValueError) as e:  # O(1)
@@ -489,11 +494,17 @@ def _answers(f) -> tuple:  # -> (answers, by map, error)
     ans = obj.get("answers") if isinstance(obj, dict) else None  # O(1)
     if not isinstance(ans, dict) or not 1 <= len(ans) <= 4:  # O(1)
         return None, {}, "answers: 1 to 4 entries"  # O(1)
+    out = {}  # O(1)
     for k, v in ans.items():  # O(4 * len)
-        if not isinstance(k, str) or not isinstance(v, str) or not 1 <= len(v) <= 300 or _ctrl(v) or _ctrl(k):
-            return None, {}, f"bad answer for {str(k)[:60]}"  # O(1)
-    by, err = bc.answer_by(obj, ans)  # O(4)
-    return (ans, by, "") if not err else (None, {}, err)  # O(1)
+        if not isinstance(k, str) or _ctrl(k):  # O(len)
+            return None, {}, f"bad answer for {_clean(str(k))[:60]}"  # O(len)
+        q = next((x for x in questions if isinstance(x, dict) and x.get("question") == k), {})  # O(q)
+        text, why = ba.answer_text(v, ba.labels_of(q), False)  # O(len)
+        if text is None:  # O(1)
+            return None, {}, f"bad answer for {_clean(k)[:60]}: {why}"  # O(len)
+        out[k] = text  # O(1)
+    by, err = bc.answer_by(obj, out)  # O(4)
+    return (out, by, "") if not err else (None, {}, err)  # O(1)
 
 
 def cmd_answer(a) -> int:
@@ -508,12 +519,16 @@ def cmd_answer(a) -> int:
         return _refuse(f"unknown batch {a.batch}")  # O(1)
     if b["state"] != "needs_decision":  # O(1)
         return _refuse(f"{a.batch} is {b['state']}, not waiting for an answer")  # O(1)
-    ans, by, err = _answers(a.file)  # O(size)
+    ed = Path(b["worktree"]) / ".superlite"  # O(1)
+    q = ed / "question.json"  # O(1)
+    try:  # O(1)
+        qs = json.loads(q.read_text(encoding="utf-8")).get("questions") or []  # O(size)
+    except (OSError, ValueError, AttributeError):  # O(1)
+        qs = []  # O(1)
+    ans, by, err = _answers(a.file, qs)  # O(size)
     if ans is None:  # O(1)
         return _refuse(err)  # O(1)
     n = int(b.get("questions", 0)) + 1  # O(1)
-    ed = Path(b["worktree"]) / ".superlite"  # O(1)
-    q = ed / "question.json"  # O(1)
     if q.is_file():  # O(1)
         q.replace(ed / f"question-{n}.json")  # O(1)
     af = ed / f"answer-{n}.json"  # O(1)
