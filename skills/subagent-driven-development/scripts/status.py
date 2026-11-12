@@ -110,6 +110,8 @@ def budget_line(sd: Path, plan) -> str:  # O(budget)
 
 
 def pid_alive(pid: int) -> bool:  # O(1)
+    if pid <= 0:  # a group or broadcast target, not a process | O(1)
+        return False  # O(1)
     try:  # O(1)
         os.kill(pid, 0)  # O(1) signal syscall
     except PermissionError:  # alive, not ours | O(1)

@@ -56,3 +56,7 @@ def test_overview_adds_line(tmp_path, monkeypatch):
     lines = status.overview(tmp_path, None)
     i = next(n for n, ln in enumerate(lines) if ln.startswith("last test run:"))
     assert lines[i + 1].startswith("full run waiting: ")
+
+
+def test_nonpositive_pid_not_alive():
+    assert status.pid_alive(-1) is False and status.pid_alive(0) is False
