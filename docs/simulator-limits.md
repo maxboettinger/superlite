@@ -26,3 +26,17 @@ Seen: once, 2026-11-11, superlite 1.5.109, in a lead's pre-plan screenshot step 
 - **Sessions.** An Xcode MCP DeviceInteraction session is lost after each app relaunch. Start a new session after every relaunch, before the next tap or text.
 - **Simulators.** `xcrun simctl clone` refuses a watch simulator. Create a per-worktree watch simulator with `xcrun simctl create <name> <watch device type> <watchOS runtime>` instead.
 - **Xcode MCP.** The Xcode MCP server disconnected mid-session. Untried: reconnect the server, then start a new DeviceInteraction session.
+
+## SwiftUI previews: no command-line renderer
+
+Seen: superlite 1.5.123, in fleet package reviews ([#600](https://github.com/maxboettinger/superlite/issues/600)).
+
+Xcode renders `#Preview` blocks only inside Xcode: the Xcode MCP `RenderPreview` tool needs a running Xcode, and fleet workers start without MCP servers. Two reviewers rendered PNGs with throwaway hosted tests instead and left them in the tree.
+
+What to do: a checker renders a view no running state reaches with a throwaway `ImageRenderer` snapshot test, recorded with `sl render_edit start <file>` and undone with `sl render_edit restore` (`agents/checker.md`).
+
+## macOS: no simulator for a render check
+
+Seen: superlite 1.5.109 ([#600](https://github.com/maxboettinger/superlite/issues/600)). With no macOS render check, every macOS UI batch ended with a live check left for the user; 36 piled up after about 60 batches.
+
+What to do: a checker launches the built `.app` and captures it with `screencapture -x` (`agents/checker.md`). Untried: whether a fleet pane's terminal has the Screen Recording permission `screencapture` needs; a refused or blank capture is NOT REACHABLE.
