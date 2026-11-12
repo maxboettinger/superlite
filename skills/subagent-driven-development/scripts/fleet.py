@@ -16,6 +16,8 @@ Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-d
 (the other lines still go out; exit 3); the Wave 0 line starts a haiku worker and sends it `briefs/wave0.md`.
 `--plan P` (or `--plan=P`) is checked first, for every subcommand: a path that is neither file nor folder, or whose state folder cannot be
 created, prints `error: --plan P: <reason>; ...` on stderr and exits 2, creating nothing (#372).
+`status` probes each ready or busy worker's agent: a gone one is marked dead (`W1 dead`, hidden after) with its fresh-spawn line, a busy one whose turn ended shows `reported` (#579).
+`report W` reads a busy worker's ended but uncollected turn from its transcript, read-only (#579).
 A start that fails with `not an available shell` (a freed pane) is retried once after SHELL_PAUSE_S (`start_on_shell`).
 `spawn --for-dispatch` also stops the ready implementers an earlier dispatch dropped from pool.json (#424).
 `spawn --for-dispatch` sends no task to a worker fleet.json marks busy, such as one still answering a `send --text` (dispatch leaves it out of the idle agents) (#553).
@@ -611,6 +613,48 @@ def _plan_problem(plan):  # why a --plan value cannot hold a run, or "" | O(d)
     return "" if d.is_dir() and os.access(d, os.W_OK) else f"cannot create {sd}"  # O(1)
 
 
+def agent_gone(name, client=None):  # True only when herdr says the agent does not exist; any other failure is unknown, so False | O(1)
+    c = client or hc  # O(1)
+    try:  # O(1)
+        c.agent_state(name)  # O(1)
+    except Exception as e:  # noqa: BLE001 | O(1)
+        return getattr(e, "code", None) == "agent_not_found"  # O(1)
+    return False  # O(1)
+
+
+def mark_dead(sd, wid):  # stopped, dead, off the pool; no pane is closed | O(w)
+    sd = Path(sd)  # O(1)
+    with fs.locked(sd):  # O(1) plus wait
+        data = fs.load(sd)  # O(w)
+        w = data["workers"].get(wid)  # O(1)
+        if w is None:  # O(1)
+            return  # O(1)
+        w.update({"state": "stopped", "dead": True, "last_task": w.get("task") or w.get("last_task"), "task": None})  # O(1)
+        fs.save(sd, data)  # O(w)
+        _pool_drop(sd, wid)  # O(w)
+
+
+def respawn_hint(sd, wid, plan=None):  # the `sl fleet spawn` line that starts a fresh worker like WID; KeyError for an unknown worker | O(w)
+    w = fs.load(Path(sd))["workers"][wid]  # O(w)
+    role = w.get("role") or "implementer"  # O(1)
+    parts = ["sl fleet spawn"]  # O(1)
+    if role != "implementer":  # O(1)
+        parts.append(f"--role {role}")  # O(1)
+    if w.get("tier") and role in ("implementer", "fixer"):  # other roles take no --tier | O(1)
+        parts.append(f"--tier {w['tier']}")  # O(1)
+    if w.get("brief"):  # O(1)
+        parts.append(f"--brief {w['brief']}")  # O(1)
+    parts.append(f"--plan {plan or sd}")  # O(1)
+    return " ".join(parts)  # O(1)
+
+
+def _ended_stop(sd, wid, w):  # the stop record of a busy worker's turn that ended since its send, else None | O(m + w)
+    if w.get("state") != "busy" or w.get("role") == "layer":  # O(1)
+        return None  # O(1)
+    import fleet_io as fio  # noqa: E402 | O(1) lazy
+    return fio.latest_stop(sd, wid, int(w.get("sent") or 0))  # O(m + w)
+
+
 def _report(sd, ids):  # print each worker's last report or a report by label; read-only | O(ids * file)
     rd = sd / "fleet" / "reports"  # O(1)
     ws = fs.workers(sd)  # O(w)
@@ -619,6 +663,16 @@ def _report(sd, ids):  # print each worker's last report or a report by label; r
         label = x  # O(1)
         if x in ws:  # O(1)
             w = ws[x]  # O(1)
+            rec = _ended_stop(sd, x, w)  # O(m + w)
+            if rec is not None:  # a turn that ended and nobody collected: read it, change nothing | O(1)
+                import fleet_io as fio  # noqa: E402 | O(1) lazy
+                tr = rec.get("transcript")  # O(1)
+                t = (fio.report_text(tr) if tr else "") or ("" if tr else rec.get("last", ""))  # O(T)
+                print(f"{x} {w.get('task') or x}: turn ended, not collected yet; read-only, collect with sl fleet wait {x}", file=sys.stderr)  # O(1)
+                if len(ids) > 1:  # O(1)
+                    print(f"== {x} {tr or 'stop record'}")  # O(1)
+                print(t, end="" if t.endswith("\n") else "\n")  # O(len)
+                continue  # O(1)
             if w.get("state") == "busy":  # O(1)
                 print(f"error: {x} is busy on {w.get('task')}; run sl fleet wait {x} first", file=sys.stderr)  # O(1)
                 bad = True  # O(1)
@@ -718,15 +772,28 @@ def main(argv=None):  # O(w) plus command cost
         print("fleet: on")  # O(1)
         import fleet_io as fio  # noqa: E402 | O(1) lazy
         pooled = {x["id"]: x for x in pool.load(sd / "pool.json").get("agents") or []}  # O(w)
+        newly, ended = [], []  # O(1)
+        for wid, w in fs.workers(sd).items():  # probe: a gone agent is dead, an unreachable herdr changes nothing | O(w)
+            if w.get("state") in ("ready", "busy") and w.get("role") != "layer" and agent_gone(fs.name_of(sd, wid, w)):  # O(1)
+                mark_dead(sd, wid)  # O(w)
+                newly.append(wid)  # O(1)
         for wid, w in fs.workers(sd).items():  # O(w)
-            if not a.all and w.get("state") in ("stopped", "blocked"):  # O(1)
+            if not a.all and wid not in newly and w.get("state") in ("stopped", "blocked"):  # O(1)
                 continue  # O(1)
             role = w.get("role")  # O(1)
             tail = ""  # O(1)
             if wid in pooled:  # O(1)
                 bk = fio.baseline_k(sd, wid)  # O(file)
                 tail = f" context_k={pooled[wid].get('context_k', '-')} baseline_k={'-' if bk is None else bk}"  # O(1)
-            print(f"{wid} {w.get('state')} account={w.get('account')} pane={w.get('pane_id')} task={w.get('task') or '-'}" + (f" role={role}" if role and role != "implementer" else "") + tail)  # O(1)
+            shown = "dead" if w.get("dead") and w.get("state") == "stopped" else w.get("state")  # O(1)
+            if shown == "busy" and _ended_stop(sd, wid, w) is not None:  # O(m + w)
+                shown = "reported"  # O(1)
+                ended.append(wid)  # O(1)
+            print(f"{wid} {shown} account={w.get('account')} pane={w.get('pane_id')} task={w.get('task') or '-'}" + (f" role={role}" if role and role != "implementer" else "") + tail)  # O(1)
+        for wid in newly:  # O(w)
+            print(f"dead: {wid} (its agent is gone); start a fresh one: {respawn_hint(sd, wid, str(sd))}")  # O(w)
+        for wid in ended:  # O(w)
+            print(f"reported: {wid}; collect: sl fleet wait {wid} --plan {sd}")  # O(1)
         if hint:  # O(1)
             print(hint)  # O(1)
     elif a.cmd == "spawn":  # O(1)
