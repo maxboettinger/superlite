@@ -97,7 +97,7 @@ def _gh_chunk(owner: str, name: str, nums: list, public: bool) -> dict:
     aliases = "".join(f"i{n}:issue(number:{n}){{stateReason comments(last:10){{nodes{{authorAssociation author{{login}} body}}}}}}" for n in nums)  # O(chunk)
     q = f'query{{repository(owner:"{owner}",name:"{name}"){{{aliases}}}}}'  # O(chunk)
     res = backlog._gh(["api", "graphql", "-f", "query=" + q])
-    repo = ((res or {}).get("data") or {}).get("repository") or {}  # O(1)
+    repo = ((res if isinstance(res, dict) else {}).get("data") or {}).get("repository") or {}  # O(1)
     out = {}
     for n in nums:  # O(chunk * comments)
         node = repo.get(f"i{n}") or {}  # O(1)
@@ -121,7 +121,7 @@ def with_comments(trusted: list[dict], repo: str, public: bool, jira: bool = Fal
             try:
                 res = backlog._acli(["jira", "workitem", "comment", "list", "--key", str(key), "--json", "--limit", str(COMMENTS_MAX), "--order", "-created"])
                 cs = []
-                for c in reversed((res or {}).get("comments") or []):  # O(comments)
+                for c in reversed((res if isinstance(res, dict) else {}).get("comments") or []):  # O(comments)
                     body = c.get("body")
                     body = backlog.adf_text(body) if isinstance(body, dict) else body  # O(len)
                     a = c.get("author")
