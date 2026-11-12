@@ -26,3 +26,9 @@ def test_docs_b131_names():
 def test_docs_b131_testcmd_row():
     text = row("testcmd")
     assert "`lock`" in text and "`destinations`" in text
+
+
+def test_docs_b131_exit_127_stop_text():
+    text = row("run_tests")
+    assert "test command could not run" in text
+    assert "or exits 127" not in text
