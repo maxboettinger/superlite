@@ -25,5 +25,6 @@ def _isolated_superlite_home(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERLITE_FORECAST_LIVE", "0")  # the forecast's live inputs (ledgers, sessions, locks) stay out; #605 tests turn them on
     monkeypatch.setenv("SUPERLITE_DERIVED_DATA_HOME", str(tmp_path / "_derived_data"))  # the real DerivedData stays out
     monkeypatch.setenv("SUPERLITE_SCRATCH_HOME", str(tmp_path / "_scratch"))  # the real /tmp/claude-<uid> stays out
+    monkeypatch.setenv("SUPERLITE_MACHINE_LIMIT", "0")  # 0 = no limit: no fleet or backlog test reaches the real ps and Herdr gate (#560)
     for var in HOST_VARS:
         monkeypatch.delenv(var, raising=False)
