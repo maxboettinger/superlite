@@ -14,6 +14,7 @@ A message may hold a batch of tasks (`Tn, Tm`): build them in the order given, e
 
 Rules:
 - Edit only the files you own.
+- Format only the files you changed: pass their paths to the project's format command (the one its AGENTS.md, CLAUDE.md or scripts name), never run it over the whole tree. A format command that takes no paths: skip it; the coordinator formats once at freeze.
 - `sl` runs as an executable (the Claude Code worktree guard refuses `bash <script>`). `Permission denied` or a shell without shebang support, such as PowerShell: prefix `bash`.
 - Work in the `Root:` folder the prime or your brief names: `cd` there first; every path is relative to it.
 - TDD. Write the task's **Review Focus cases first**, as tests, then the rest: run only that test and see it fail, write minimal code, run the focused tests. Never run the full suite; scripts do. Fast check, always in the background: `<abs sl> run_tests --fast PATHS --task Tn --background`, then run the `wait:` line it prints (`<abs sl> run_tests --wait <path>`) in the foreground, never as a background command, and end your turn only after it reports; read only its summary. The run prints a `next:` cue and, as its last line, that `wait:` line; a turn ended before the wait reports reaches the coordinator as your report, with no test result.
