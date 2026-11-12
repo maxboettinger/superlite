@@ -647,6 +647,7 @@ def for_review(sd, plan, project, tasks, package=None, over=False, machine_wait=
     f = sd / "briefs" / (label.replace(",", "-") + ".md")  # O(1)
     f.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     body = fio.review_brief(sd, plan, tasks, str(fio.HERE / "sl"), str(fio.HERE.parents[2]), package)  # O(L + e + B)
+    body = with_constraints(body, plan_file(sd, str(plan)))  # before the notes | O(L + B)
     if note and note.strip():  # O(len)
         body = body.rstrip("\n") + "\n\n## Coordinator notes\n\nThese notes add to the review above; review every task and file it lists all the same.\n\n" + note.strip() + "\n"  # O(B)
     f.write_text(body, encoding="utf-8")  # O(B)
@@ -709,6 +710,57 @@ def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr cal
 
 def _sd(a):  # O(d)
     return Path(state.resolve(getattr(a, "plan", None))).resolve()  # O(d)
+
+
+def _brief_arg(argv):  # the value of the last --brief X or --brief=X, else None | O(n)
+    found = None  # O(1)
+    for i, x in enumerate(argv):  # O(n)
+        if x == "--brief" and i + 1 < len(argv):  # O(1)
+            found = argv[i + 1]  # O(1)
+        elif x.startswith("--brief="):  # O(1)
+            found = x[len("--brief="):]  # O(1)
+    return found  # O(1)
+
+
+def plan_file(sd, plan):  # the plan file of the run in sd: an existing --plan file, else stable.json, else pool.json; None when none names one (#635) | O(file)
+    sd = Path(sd)  # O(1)
+    if plan and Path(plan).is_file():  # O(1)
+        return Path(plan)  # O(1)
+    for name in ("stable.json", "pool.json"):  # O(1) iterations
+        try:  # O(1)
+            p = json.loads((sd / name).read_text(encoding="utf-8")).get("plan")  # O(file)
+        except (OSError, ValueError, AttributeError):  # O(1)
+            continue  # O(1)
+        if not isinstance(p, str) or not p:  # O(1)
+            continue  # O(1)
+        for c in ([Path(p)] if Path(p).is_absolute() else [Path(p), sd.parent / p]):  # O(1) iterations
+            if c.is_file():  # O(1)
+                return c  # O(1)
+    return None  # O(1)
+
+
+def with_constraints(text, plan):  # TEXT with the plan's Global constraints appended as one section; unchanged when it has them, no plan, or none stated (#635) | O(L + len)
+    if plan is None or re.search(r"^#{1,4}\s+Global constraints", text, re.I | re.M):  # O(len)
+        return text  # O(1)
+    import plan_tools  # noqa: E402 | O(1) lazy
+    import wave0  # noqa: E402 | O(1) lazy
+    lines = wave0.constraint_lines(plan_tools.Plan.load(str(plan)))  # O(L)
+    if not lines:  # O(1)
+        return text  # O(1)
+    return text.rstrip("\n") + "\n\n## Global constraints\n\n" + "\n".join(lines) + "\n"  # O(len)
+
+
+def add_constraints(brief, plan):  # rewrite the brief file with the constraints section; whether it changed. Any error leaves it as it was (#635) | O(L + len)
+    try:  # O(1)
+        p = Path(brief)  # O(1)
+        old = p.read_text(encoding="utf-8")  # O(file)
+        new = with_constraints(old, plan)  # O(L + len)
+        if new == old:  # O(1)
+            return False  # O(1)
+        p.write_text(new, encoding="utf-8")  # O(file)
+    except (Exception, SystemExit):  # noqa: BLE001 | O(1) a send never fails on it
+        return False  # O(1)
+    return True  # O(1)
 
 
 def _plan_arg(argv):  # the value of the last --plan P or --plan=P (argparse's pick), else None | O(n)
@@ -844,6 +896,11 @@ def main(argv=None):  # O(w) plus command cost
         return 2  # O(1)
     if argv and argv[0] != "name" and not argv[0].startswith("-"):  # Every subcommand but name first moves this session's fleet into its folder (#580) | O(1)
         _follow(plan)  # O(w)
+    if argv and argv[0] == "send" and _brief_arg(argv):  # the brief gains the plan's Global constraints once (#635) | O(L + len)
+        try:  # O(1)
+            add_constraints(_brief_arg(argv), plan_file(_sd(argparse.Namespace(plan=plan)), plan))  # O(L + len)
+        except Exception:  # noqa: BLE001 | a send never fails on the constraints | O(1)
+            pass  # O(1)
     if argv and argv[0] in ("send", "keys", "wait"):  # O(1)
         return importlib.import_module("fleet_io").main(argv)  # O(1) delegated
     if argv and argv[0] == "run":  # a layer run: a shell pane per layer | O(1)
@@ -1022,6 +1079,7 @@ def main(argv=None):  # O(w) plus command cost
         if a.brief:  # O(1)
             import fleet_io as fio  # noqa: E402 | O(1) lazy
             label = a.label or Path(a.brief).stem  # O(1)
+            add_constraints(a.brief, plan_file(sd, a.plan))  # O(L + len)
             try:  # O(1)
                 fio.send_brief(sd, w["id"], a.brief, a.label)  # O(w)
             except (hc.HerdrError, OSError, KeyError) as e:  # a worker that got no brief is stopped, not left ready | O(w)
