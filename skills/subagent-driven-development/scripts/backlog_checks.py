@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks for backlog questions and batch proposals; one cut rule for plan and lead questions; merging of clashing batches."""
+"""Checks for backlog questions and batch proposals; one cut rule for plan and lead questions; merging of clashing batches; a file two batches only append to does not clash (append_only, #602)."""
 import copy
 import json
 import re
@@ -298,6 +298,18 @@ def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> t
                 clean.add(p)
         if files is not None and not files:
             errs.append(f"{bid}: files must list at least one repo-relative file")
+        app = b.get("append_only", [])
+        aclean: set = set()
+        if not isinstance(app, list):
+            errs.append(f"{bid}: append_only must be a list")
+            app = []
+        for f in app:
+            p = _plain(f)
+            if p is None:
+                errs.append(f"{bid}: append_only file {f!r} is not a plain relative path")
+            else:
+                aclean.add(p)
+        clean |= aclean  # an append-only file is also a batch file
         deps = b.get("depends", [])
         if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
             errs.append(f"{bid}: depends must be a list of batch ids")
@@ -312,8 +324,8 @@ def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> t
             errs.extend(f"{bid} decision {k}: {e}" for e in bad)
             if not bad:
                 cleaned.append(clean_question(d))
-        out.append({"id": bid, "topic": topic, "issues": sorted(set(issues)), "files": sorted(clean), "depends": list(dict.fromkeys(deps)),
-                    "decisions": cleaned, **copy.deepcopy(DEFAULTS)})
+        out.append({"id": bid, "topic": topic, "issues": sorted(set(issues)), "files": sorted(clean), **({"append_only": sorted(aclean)} if aclean else {}),
+                    "depends": list(dict.fromkeys(deps)), "decisions": cleaned, **copy.deepcopy(DEFAULTS)})
     for b in out:  # O(batches * deps)
         for d in b["depends"]:
             if (d not in ids and d not in batches) or d == b["id"]:  # local ids win over backlog ids
@@ -330,6 +342,16 @@ def _num(b: dict) -> int:
     return int(b["id"][1:])
 
 
+def serial_files(a: dict, b: dict) -> list[str]:
+    """Files both batches list, minus those both only append to."""
+    return sorted((set(a.get("files") or []) & set(b.get("files") or [])) - (set(a.get("append_only") or []) & set(b.get("append_only") or [])))  # O(files)
+
+
+def appended_files(a: dict, b: dict) -> list[str]:
+    """Files both batches list and both only append to."""
+    return sorted(set(a.get("files") or []) & set(b.get("files") or []) & set(a.get("append_only") or []) & set(b.get("append_only") or []))  # O(files)
+
+
 def separate(batches: list[dict]) -> list[dict]:
     bs = sorted(copy.deepcopy(batches), key=_num)  # O(n log n)
     while True:  # O(n^3) worst case, n <= 20
@@ -338,7 +360,7 @@ def separate(batches: list[dict]) -> list[dict]:
         for i, a in enumerate(bs):
             for b in bs[i + 1:]:
                 cyc = b["id"] in r[a["id"]] and a["id"] in r[b["id"]]
-                clash = set(a["files"]) & set(b["files"]) and b["id"] not in r[a["id"]] and a["id"] not in r[b["id"]]
+                clash = serial_files(a, b) and b["id"] not in r[a["id"]] and a["id"] not in r[b["id"]]
                 if cyc or clash:
                     pair = (a, b)
                     break
@@ -348,7 +370,13 @@ def separate(batches: list[dict]) -> list[dict]:
             return bs
         a, b = pair
         a["issues"] = sorted(set(a["issues"]) | set(b["issues"]))
-        a["files"] = sorted(set(a["files"]) | set(b["files"]))
+        fa, fb, oa, ob = set(a["files"]), set(b["files"]), set(a.get("append_only") or []), set(b.get("append_only") or [])
+        app = (oa - (fb - ob)) | (ob - (fa - oa))  # a file the other side rewrites stops being append-only
+        a["files"] = sorted(fa | fb)
+        if app:
+            a["append_only"] = sorted(app)
+        else:
+            a.pop("append_only", None)
         a["decisions"] = a["decisions"] + b["decisions"]
         a["depends"] = [d for d in dict.fromkeys(a["depends"] + b["depends"]) if d not in (a["id"], b["id"])]
         bs.remove(b)
