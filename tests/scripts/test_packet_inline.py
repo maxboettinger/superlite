@@ -117,7 +117,7 @@ def test_previous_rounds_get_their_own_section(repo):
 def test_previous_rounds_are_capped(repo):
     (repo / "prev.md").write_text("finding line\n" * 1000, encoding="utf-8")
     prev = section(inline(repo, "--previous", str(repo / "prev.md")), "## 0b. Earlier review rounds")
-    assert len(prev) < 4200 and "(truncated)" in prev
+    assert len(prev) < 4200 and "(truncated: earlier rounds cut at 4000 of" in prev
 
 
 def test_inline_needs_a_spec(repo):
