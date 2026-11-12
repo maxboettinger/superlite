@@ -1,7 +1,8 @@
 # tests/scripts/test_fleet_status_579.py: fleet status shows reported and dead workers; report reads an uncollected turn (#579)
 import json, sys
 from pathlib import Path
-from test_fleet import world, fleet  # noqa: F401
+import pytest
+from test_fleet import world, fleet, REAL  # noqa: F401
 from test_plan_tools import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 
@@ -24,6 +25,7 @@ def fj(sd):
     return json.loads((sd / "fleet.json").read_text())["workers"]
 
 
+@pytest.mark.skipif(REAL, reason="scripted agent state needs the in-process fake")
 def test_agent_gone_true_on_agent_not_found(world):
     world.fh.gone = {"sl-a"}
     assert fleet.agent_gone("sl-a") is True
@@ -44,7 +46,6 @@ def test_mark_dead_stops_and_drops_from_pool(world):
 
 
 def test_respawn_hint_shapes(world):
-    import pytest
     sd = Path("/r/.superlite")
     ws = {"W5": {"role": "fixer", "tier": "2", "brief": "/r/.superlite/briefs/fix-1.md"}, "W1": {"role": "implementer", "tier": "sonnet"},
           "W7": {"role": "final-reviewer", "tier": "opus", "brief": "/r/.superlite/review-packet.md"}}
@@ -57,6 +58,7 @@ def test_respawn_hint_shapes(world):
         fleet.respawn_hint(sd, "W9")
 
 
+@pytest.mark.skipif(REAL, reason="scripted agent state needs the in-process fake")
 def test_status_shows_dead_and_persists(world, capsys):
     put(world.sd, {"W1": wk("sl-a")}, ["W1"]); world.fh.gone = {"sl-a"}
     assert fleet.main(["status"]) == 0
