@@ -154,3 +154,33 @@ def test_name_kills_still_blocked_without_ps(fake_ps, tmp_path):
 def test_powershell_kill_alias(fake_ps):
     fake_ps["set"](XCODE)
     assert run("kill 4242", fake_ps, tool="PowerShell").returncode == 2
+
+
+def test_text_after_kill_word_is_no_pid_666(fake_ps):
+    fake_ps["set"]("/sbin/launchd")
+    for cmd in ('echo "--- kill job 1 wrapper"', "echo '--- kill job 1 wrapper'", "echo kill 1",
+                'sl feedback add "refused as kill 1,1,1,1,1"', "git log --grep 'kill 1'",
+                "cat <<EOF\nkill 1\nEOF", "python3 -c 'print(\"kill 1\")'", 'grep -c "kill -9 1" log.txt',
+                "kill -l 1"):
+        r = run(cmd, fake_ps)
+        assert r.returncode == 0, cmd
+        assert r.stdout == "" and r.stderr == "", cmd
+    assert calls(fake_ps) == []
+
+
+def test_kill_pid_1_still_blocked_666(fake_ps):
+    fake_ps["set"]("/sbin/launchd")
+    cmds = ("kill 1", "kill -9 1", "echo x; kill 1", "sudo kill -9 1", "bash -c 'kill 1'", "x && kill -TERM 1",
+            "echo $(kill 1)", "xargs kill 1", "kill 1 2>/dev/null")
+    for cmd in cmds:
+        r = run(cmd, fake_ps)
+        assert r.returncode == 2, cmd
+        assert "launchd" in r.stderr, cmd
+    assert calls(fake_ps) == ["-o comm= -p 1"] * len(cmds)
+
+
+def test_powershell_stop_process_id_checked_666(fake_ps):
+    fake_ps["set"](XCODE)
+    for cmd in ("Stop-Process -Id 4242", "Stop-Process -Id 4242 -Force", "kill -Id 4242"):
+        assert run(cmd, fake_ps, tool="PowerShell").returncode == 2, cmd
+    assert calls(fake_ps) == ["-o comm= -p 4242"] * 3
