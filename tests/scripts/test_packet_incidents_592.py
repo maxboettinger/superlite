@@ -183,3 +183,33 @@ def test_error_summary_shows_newest_result_run(proj):
     assert "- newest run with a result:" in s4
     assert "- FAILING: tests/test_m.py::test_y: boom" in s4
     assert "failing tests 2" in t
+
+
+def packet_args(proj: Path, *extra: str) -> str:
+    cmd = [sys.executable, str(SCRIPT), "packet", "--plan", str(proj / "plan.md"), "--root", str(proj),
+           "--out", str(proj / "packet.md"), "--wait-timeout", "1", *extra]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    return (proj / "packet.md").read_text(encoding="utf-8")
+
+
+def test_open_incident_survives_oversized_diff_stat(proj):
+    base = git(proj, "rev-parse", "HEAD")
+    for i in range(300):
+        (proj / f"gen_module_with_a_long_name_{i}.py").write_text("X = 1\n", encoding="utf-8")
+    git(proj, "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A", ":!.superlite")
+    git(proj, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "many")
+    log(proj, exc("a.py", 1))
+    t = packet_args(proj, "--base", base, "--max-tokens", "500")
+    assert "a.py:1" in sec(t, 1)
+    assert "omitted to stay within the size cap" not in sec(t, 1)
+
+
+def test_n_token_in_diff_is_not_replaced(proj):
+    base = git(proj, "rev-parse", "HEAD")
+    (proj / "a.py").write_text("X = 1\nMARK = '@@N@@'\n", encoding="utf-8")
+    log(proj, exc("a.py", 2))
+    t = packet_args(proj, "--base", base)
+    assert "MARK = '@@N@@'" in t
+    assert t.count("@@N@@") >= 1
+    assert "This packet has " in t and "@@N@@ lines" not in t
