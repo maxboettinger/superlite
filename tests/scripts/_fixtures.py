@@ -53,8 +53,9 @@ def _git_identity(base):
                if not subprocess.run(["git", "config", f"user.{k}"], cwd=base, capture_output=True, text=True).stdout.strip()}
     if not missing:
         return
-    host = [os.environ.get("GIT_CONFIG_GLOBAL") or str(Path.home() / ".gitconfig"),
-            str(Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "git" / "config")]
+    own = os.environ.get("GIT_CONFIG_GLOBAL")  # git reads it alone; else XDG git/config, then ~/.gitconfig (the later wins)
+    host = [own] if own else [str(Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "git" / "config"),
+                              str(Path.home() / ".gitconfig")]
     cfg = base / "gitconfig"  # git skips an include whose file is missing
     cfg.write_text("".join(f"[include]\n\tpath = {p}\n" for p in host)
                    + "[user]\n" + "".join(f"\t{k} = {v}\n" for k, v in missing.items()), encoding="utf-8")
