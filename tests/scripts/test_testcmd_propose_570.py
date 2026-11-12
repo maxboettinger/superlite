@@ -110,7 +110,7 @@ def test_write_creates_file_and_refuses_second(tmp_path):
     target = (root / ".superlite" / "test-cmd.json").resolve()
     cp = run(TESTCMD, "--root", root, "--write")
     assert cp.returncode == 0, cp.both
-    assert cp.out.strip() == f"wrote {target.as_posix()}: Scripts/test.sh"
+    assert cp.out.splitlines()[0] == f"wrote {target.as_posix()}: Scripts/test.sh"
     assert saved(root) == SWIFT_CFG
     assert testcmd.resolve(root)["command"] == "Scripts/test.sh"
     again = run(TESTCMD, "--root", root, "--write")
@@ -137,22 +137,68 @@ def test_write_test_override_drops_proposed_test_file(tmp_path):
     assert saved(root) == {"language": "swift", "test": "lockf /tmp/x Scripts/test.sh"}
 
 
-def test_write_in_linked_worktree_targets_main_checkout(tmp_path):
+def linked(tmp_path):
     main = swift_app(tmp_path)
     git(main, "init", "-q", "-b", "main")
     git(main, "add", ".")
     git(main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
     wt = tmp_path / "wt"
     git(main, "worktree", "add", "-q", "-b", "topic", str(wt))
-    target = (main / ".superlite" / "test-cmd.json").resolve()
-    assert testcmd.config_target(wt) == target
+    return main, wt
+
+
+def test_write_in_linked_worktree_leaves_main_untouched(tmp_path):
+    main, wt = linked(tmp_path)
+    mine = (wt / ".superlite" / "test-cmd.json").resolve()
+    assert testcmd.config_target(wt) == mine
+    cp = run(TESTCMD, "--root", wt, "--write")
+    assert cp.returncode == 0, cp.both
+    assert mine.is_file() and not (main / ".superlite" / "test-cmd.json").exists()
+    assert testcmd.resolve(wt)["command"] == "Scripts/test.sh"
+
+
+def test_propose_target_is_the_file_config_source_reads(tmp_path):
+    main, wt = linked(tmp_path)
     cp = run(TESTCMD, "--root", wt, "--propose")
     assert cp.returncode == 0, cp.both
-    assert json.loads(cp.out) == {"proposal": SWIFT_CFG, "from": "project test script Scripts/test.sh",
-                                  "target": target.as_posix(), "exists": False}
+    d = json.loads(cp.out)
+    assert d["proposal"] == SWIFT_CFG and d["exists"] is False
     assert run(TESTCMD, "--root", wt, "--write").returncode == 0
+    assert d["target"] == (wt / testcmd.config_source(wt)[2]).resolve().as_posix()
+
+
+def test_shared_writes_main_checkout(tmp_path):
+    main, wt = linked(tmp_path)
+    target = (main / ".superlite" / "test-cmd.json").resolve()
+    assert testcmd.config_target(wt, shared=True) == target
+    cp = run(TESTCMD, "--root", wt, "--write", "--shared")
+    assert cp.returncode == 0, cp.both
     assert target.is_file() and not (wt / ".superlite" / "test-cmd.json").exists()
-    assert testcmd.resolve(wt)["command"] == "Scripts/test.sh"
+    assert f"reads {target.as_posix()}" in cp.out
+
+
+def test_plan_flag_writes_run_folder(tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cp = run(TESTCMD, "--plan", proj / ".superlite", "--write", "--test", "make test")
+    assert cp.returncode == 0, cp.both
+    assert saved(proj) == {"test": "make test"}
+    assert testcmd.config_target(tmp_path, plan=str(proj / ".superlite")) == (proj / ".superlite" / "test-cmd.json").resolve()
+    repo = tmp_path / "repo"
+    (repo / "docs" / "plans").mkdir(parents=True)
+    (repo / "docs" / "plans" / "p.md").write_text("# p\n", encoding="utf-8")
+    git(repo, "init", "-q", "-b", "main")
+    cp = run(TESTCMD, "--plan", repo / "docs" / "plans" / "p.md", "--write", "--test", "make test")
+    assert cp.returncode == 0, cp.both
+    assert saved(repo) == {"test": "make test"}
+
+
+def test_write_prints_reads_line(tmp_path):
+    root = tmp_path / "e"
+    root.mkdir()
+    cp = run(TESTCMD, "--root", root, "--write", "--test", "make test")
+    assert cp.returncode == 0, cp.both
+    assert f"testcmd: run_tests in {root.resolve().as_posix()} reads {(root.resolve() / '.superlite' / 'test-cmd.json').as_posix()}" in cp.out.splitlines()
 
 
 def test_missing_reason_names_setup_and_proposal(tmp_path):

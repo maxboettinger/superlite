@@ -2,8 +2,9 @@
 """Resolve the project's test command, language-neutrally.
 
     testcmd.py [--fast PATHS...] [--root .]      print the resolved command as JSON
-    testcmd.py --propose [--root .]              print the proposed project test command, its target file and whether it exists
-    testcmd.py --write [--test CMD] [--test-file T] [--language L] [--root .]   write the proposal to .superlite/test-cmd.json
+    testcmd.py --propose [--root .] [--shared] [--plan P]   print the proposed project test command, its target file and whether it exists
+    testcmd.py --write [--test CMD] [--test-file T] [--language L] [--root .] [--shared] [--plan P]   write the proposal to .superlite/test-cmd.json
+The write target is the root's own .superlite/test-cmd.json; --shared writes the main checkout's instead, --plan P writes the run folder of plan P (and, without --root, takes its project as root).
 
 Order: (a0) a `.maxapp` file (`package` and `package_scheme` keys, `maxapp` on PATH) resolves to `maxapp test` below (a) and (a2), above (a3); (a) `.superlite/test-cmd.json` {"language","test","test_file","junit","setup","related"} (JSON; `test_file` is a template
 with {files}; `{junit}` in a command is replaced by the path run_tests wants the JUnit XML at; a literal `junit` path is read
@@ -838,13 +839,18 @@ def propose(root: Path):  # {"config", "from"} for the project's own test comman
     return None  # O(1)
 
 
-def config_target(root: Path) -> Path:  # where .superlite/test-cmd.json belongs: the main checkout's when root is a linked worktree | O(1)
-    main = _main_checkout_root(Path(root))  # O(1)
-    return (main if main else Path(root)).resolve() / CONFIG  # O(1)
+def config_target(root: Path, shared: bool = False, plan: str | None = None) -> Path:  # where --write puts test-cmd.json: the plan's run folder, the main checkout's (shared) or root's own | O(d)
+    if plan:  # O(1)
+        import state  # O(1)
+        return state.plan_dir(plan).resolve() / "test-cmd.json"  # O(d)
+    if shared:  # O(1)
+        main = _main_checkout_root(Path(root))  # O(1)
+        return (main if main else Path(root)).resolve() / CONFIG  # O(1)
+    return Path(root).resolve() / CONFIG  # O(1)
 
 
-def write_config(root: Path, config: dict) -> Path:  # O(file)
-    target = config_target(root)  # O(1)
+def write_config(root: Path, config: dict, target: Path | None = None) -> Path:  # O(file)
+    target = target or config_target(root)  # O(1)
     if target.exists():  # O(1)
         raise FileExistsError(str(target))  # O(1)
     target.parent.mkdir(parents=True, exist_ok=True)  # O(1)
@@ -1513,22 +1519,30 @@ def parse_output(text: str, rc: int) -> dict:  # O(o)
 def main(argv=None):  # O(m + f)
     ap = argparse.ArgumentParser(description=__doc__.split(chr(10))[0])  # O(1)
     ap.add_argument("--fast", nargs="*", default=[])  # O(1)
-    ap.add_argument("--root", default=".")  # O(1)
+    ap.add_argument("--root", default=None)  # O(1)
+    ap.add_argument("--shared", action="store_true")  # O(1)
+    ap.add_argument("--plan")  # O(1)
     ap.add_argument("--propose", action="store_true")  # O(1)
     ap.add_argument("--write", action="store_true")  # O(1)
     ap.add_argument("--test")  # O(1)
     ap.add_argument("--test-file")  # O(1)
     ap.add_argument("--language")  # O(1)
     a = ap.parse_args(argv)  # O(1)
-    root = Path(a.root)  # O(1)
+    if a.root is not None:  # O(1)
+        root = Path(a.root)  # O(1)
+    elif a.plan:  # O(1)
+        import state  # O(1)
+        root = state.plan_dir(a.plan).parent  # O(d)
+    else:  # O(1)
+        root = Path(".")  # O(1)
     if a.propose:  # O(1)
-        prop, target = propose(root), config_target(root)  # O(m + f)
+        prop, target = propose(root), config_target(root, a.shared, a.plan)  # O(m + f)
         print(json.dumps({"proposal": prop["config"] if prop else None, "from": prop["from"] if prop else None,
                           "target": target.as_posix(), "exists": target.exists()}))  # O(1)
         return 0  # O(1)
     if a.write:  # O(1)
         _, source, origin = config_source(root)  # O(m + f)
-        target = config_target(root)  # O(1)
+        target = config_target(root, a.shared, a.plan)  # O(d)
         if source == "test-cmd.json":  # O(1)
             print(f"testcmd: {origin} already sets the test command; nothing written", file=sys.stderr)  # O(1)
             return 2  # O(1)
@@ -1553,8 +1567,14 @@ def main(argv=None):  # O(m + f)
             return 1  # O(1)
         order = {k: cfg[k] for k in ("language", "test", "test_file") if k in cfg}  # O(1)
         order.update({k: v for k, v in cfg.items() if k not in order})  # O(1)
-        path = write_config(root, order)  # O(file)
+        path = write_config(root, order, target)  # O(file)
         print(f"wrote {path.as_posix()}: {order['test']}")  # O(1)
+        _, src, origin = config_source(root)  # O(m + f)
+        if src == "test-cmd.json":  # O(1)
+            reads = origin if os.path.isabs(origin) else (Path(root) / origin).resolve().as_posix()  # O(1)
+        else:  # O(1)
+            reads = f"no test-cmd.json ({origin})"  # O(1)
+        print(f"testcmd: run_tests in {Path(root).resolve().as_posix()} reads {reads}")  # O(1)
         return 0  # O(1)
     try:  # O(1)
         print(json.dumps(resolve(a.root, a.fast)))  # O(1)
