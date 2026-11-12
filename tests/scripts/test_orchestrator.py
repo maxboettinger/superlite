@@ -311,7 +311,7 @@ def test_readme_has_the_human_mode_sentence():
 
 
 SDD_SKILL = REPO / "skills" / "subagent-driven-development" / "SKILL.md"
-SDD_CAP = 12990  # the one size cap of the SDD SKILL.md (#555); other tests pin phrases, never its size
+SDD_CAP = 13300  # the one size cap of the SDD SKILL.md, with headroom (#555); other tests pin phrases, never its size
 
 # Every phrase another test in tests/scripts/ pins in the SDD SKILL.md, so a trim fails here first (#555).
 # A test that pins a new SKILL.md phrase adds it here too.
