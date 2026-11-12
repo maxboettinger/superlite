@@ -31,7 +31,7 @@ def old_summary(tmp_path, **kw):
 
 def test_unknown_task_writes_a_summary(tmp_path):
     plan = setup(tmp_path)
-    cp = run(RUN_TESTS, "--fast", "src/a.txt", "--task", "T9", "--plan", plan, cwd=tmp_path)
+    cp = run(RUN_TESTS, "--fast", "src/a.c", "--task", "T9", "--plan", plan, cwd=tmp_path)
     assert cp.returncode == 2, cp.both
     assert cp.out.splitlines()[-1] == ZERO
     assert summary(tmp_path)["error"] == f"unknown task T9 in {plan}"
@@ -63,7 +63,7 @@ def test_tree_prepare_failure_is_named(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("git worktree add failed: boom")
     monkeypatch.setattr(run_tests.trees, "prepare", boom)
-    assert run_tests.main(["--fast", "src/a.txt", "--task", "T1", "--plan", str(plan)]) == 2
+    assert run_tests.main(["--fast", "src/a.c", "--task", "T1", "--plan", str(plan)]) == 2
     assert summary(tmp_path)["error"] == "isolated tree for T1 not prepared: git worktree add failed: boom"
 
 

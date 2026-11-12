@@ -34,7 +34,7 @@ def fixture(tmp_path, env=None):
 def test_fast_tree_carries_an_unowned_change(tmp_path):
     plan = fixture(tmp_path)
     (tmp_path / "src" / "b.txt").write_text("BROKEN", encoding="utf-8")
-    cp = run(RUN_TESTS, "--fast", "src/a.txt", "--task", "T1", "--plan", plan, cwd=tmp_path)
+    cp = run(RUN_TESTS, "--fast", "src/a.c", "--task", "T1", "--plan", plan, cwd=tmp_path)
     assert cp.returncode == 1, cp.both
     assert summary(tmp_path)["failed"] >= 1
     assert "run_tests: tree .superlite/trees/T1 = base + all working-tree changes (--fast): 1 file" in cp.err
@@ -44,7 +44,7 @@ def test_fast_tree_carries_new_and_deleted_files(tmp_path):
     plan = fixture(tmp_path, env={"CHECK_NEW": "1"})
     (tmp_path / "src" / "c.txt").write_text("c", encoding="utf-8")
     (tmp_path / "src" / "d.txt").unlink()
-    cp = run(RUN_TESTS, "--fast", "src/a.txt", "--task", "T1", "--plan", plan, cwd=tmp_path)
+    cp = run(RUN_TESTS, "--fast", "src/a.c", "--task", "T1", "--plan", plan, cwd=tmp_path)
     assert cp.returncode == 0, cp.both
     assert summary(tmp_path)["passed"] == 2
     assert "(--fast): 2 files" in cp.err
@@ -54,10 +54,10 @@ def test_fast_tree_drops_a_reverted_change(tmp_path):
     plan = fixture(tmp_path)
     b = tmp_path / "src" / "b.txt"
     b.write_text("BROKEN", encoding="utf-8")
-    cp = run(RUN_TESTS, "--fast", "src/a.txt", "--task", "T1", "--plan", plan, cwd=tmp_path)
+    cp = run(RUN_TESTS, "--fast", "src/a.c", "--task", "T1", "--plan", plan, cwd=tmp_path)
     assert cp.returncode == 1, cp.both
     b.write_text("ok", encoding="utf-8")
-    cp = run(RUN_TESTS, "--fast", "src/a.txt", "--task", "T1", "--plan", plan, cwd=tmp_path)
+    cp = run(RUN_TESTS, "--fast", "src/a.c", "--task", "T1", "--plan", plan, cwd=tmp_path)
     assert cp.returncode == 0, cp.both
     assert "(--fast): 0 files" in cp.err
 
@@ -72,5 +72,5 @@ def test_full_task_tree_keeps_own_files_only(tmp_path):
 
 def test_untask_fast_run_prints_no_tree_line(tmp_path):
     fixture(tmp_path)
-    cp = run(RUN_TESTS, "--fast", "src/a.txt", cwd=tmp_path)
+    cp = run(RUN_TESTS, "--fast", "src/a.c", cwd=tmp_path)
     assert "run_tests: tree " not in cp.err

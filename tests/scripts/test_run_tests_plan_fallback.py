@@ -17,12 +17,12 @@ def git(tmp_path, *args):
 
 
 def setup(tmp_path):
-    """Git repo, .superlite ignored, swift test command, plan in docs/plans/p.md owning src/a.txt."""
+    """Git repo, .superlite ignored, swift test command, plan in docs/plans/p.md owning src/a.c."""
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "a.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "src" / "a.c").write_text("a", encoding="utf-8")
     (tmp_path / ".gitignore").write_text(".superlite/\n", encoding="utf-8")
     (tmp_path / "docs" / "plans").mkdir(parents=True)
-    plan = make_plan(tmp_path / "docs" / "plans", [{"id": "T1", "owns": "src/a.txt"}], name="p.md")
+    plan = make_plan(tmp_path / "docs" / "plans", [{"id": "T1", "owns": "src/a.c"}], name="p.md")
     sl = tmp_path / ".superlite"
     sl.mkdir()
     cmd = f'{sys.executable} -c "print(\'{OUT}\')"'
@@ -40,14 +40,14 @@ def summary(tmp_path):
 def test_task_without_plan_uses_stable_json_plan(tmp_path):
     plan = setup(tmp_path)
     (tmp_path / ".superlite" / "stable.json").write_text(json.dumps({"plan": str(plan.resolve())}), encoding="utf-8")
-    cp = run(RUN_TESTS, "--fast", "src/a.txt", "--task", "T1", cwd=tmp_path)
+    cp = run(RUN_TESTS, "--fast", "src/a.c", "--task", "T1", cwd=tmp_path)
     assert cp.returncode == 0, cp.both
     assert summary(tmp_path)["passed"] == 2
 
 
 def test_task_without_any_plan_exits_2_naming_plan_flag(tmp_path):
     setup(tmp_path)
-    cp = run(RUN_TESTS, "--fast", "src/a.txt", "--task", "T1", cwd=tmp_path)
+    cp = run(RUN_TESTS, "--fast", "src/a.c", "--task", "T1", cwd=tmp_path)
     assert cp.returncode == 2, cp.both
     assert "--plan" in cp.err
     assert "--plan" in summary(tmp_path)["failures"][0]
@@ -64,7 +64,7 @@ def test_lint_stable_records_absolute_plan(tmp_path):
 def test_missing_stable_plan_falls_back_to_default_plan(tmp_path):
     setup(tmp_path)
     (tmp_path / ".superlite" / "stable.json").write_text(json.dumps({"plan": str(tmp_path / "gone.md")}), encoding="utf-8")
-    make_plan(tmp_path / ".superlite", [{"id": "T1", "owns": "src/a.txt"}], name="plan.md")
-    cp = run(RUN_TESTS, "--fast", "src/a.txt", "--task", "T1", cwd=tmp_path)
+    make_plan(tmp_path / ".superlite", [{"id": "T1", "owns": "src/a.c"}], name="plan.md")
+    cp = run(RUN_TESTS, "--fast", "src/a.c", "--task", "T1", cwd=tmp_path)
     assert cp.returncode == 0, cp.both
     assert summary(tmp_path)["passed"] == 2
