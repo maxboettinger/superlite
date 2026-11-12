@@ -6,7 +6,7 @@
     backlog_run.py answer B --file F        (F = {"answers": {question: answer}, "by": "user"|"main"|{question: ...}})
     backlog_run.py tell B --text T          (send main's text to the running lead of B)
 
-`start` takes several ids: each refusal prints BLOCKED, the others start. Each lead worktree gets a copy of the main
+`start` takes several ids: each refusal prints BLOCKED, the others start. A lead that does not start prints `BLOCKED: B lead did not start; ...` after its spawn's own line, sets exit 2 and the batches after it still start (#551). Each lead worktree gets a copy of the main
 checkout's `.superlite/test-cmd.json` before its brief, unless it already has one (#334). A lead whose stop text holds no
 Status line is re-prompted once (`reprompted`), then parked. A question.json is cut to the limits (header, label,
 description; each cut is reported as `shortened:`); one still invalid is sent back to the lead once
@@ -232,8 +232,10 @@ def cmd_start(a) -> int:
         fleet_on = True  # O(1)
         try:  # O(1)
             rec = fleet_lead.spawn_lead(sd, wt, a.model)  # O(1) + spawns
-        except SystemExit as e:  # O(1)
-            return e.code if isinstance(e.code, int) else 3  # O(1)
+        except SystemExit:  # O(1)
+            print(f"BLOCKED: {bid} lead did not start; {bid} keeps its state, rerun sl backlog start {bid}")  # O(1)
+            code = 2  # O(1)
+            continue  # O(1)
         try:  # O(1)
             fleet_io.send_brief(sd, rec["id"], str(brief), bid)  # O(w)
         except fleet.hc.HerdrError as e:  # O(1)

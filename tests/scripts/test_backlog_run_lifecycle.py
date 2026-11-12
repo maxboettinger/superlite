@@ -45,7 +45,7 @@ def test_start_keeps_a_started_batch_when_a_later_spawn_blocks(bk, capsys, monke
         print("BLOCKED: no account with headroom")
         raise SystemExit(3)
     monkeypatch.setattr(sys.modules["fleet_lead"], "spawn_lead", spawn)
-    assert run(capsys, "start", "B1", "B2")[0] == 3
+    assert run(capsys, "start", "B1", "B2")[0] == 2
     assert get(bk, "B1")["state"] == "running" and get(bk, "B2")["state"] == "planned"
 
 

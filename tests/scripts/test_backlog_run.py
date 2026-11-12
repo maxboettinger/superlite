@@ -81,7 +81,7 @@ def test_start_resumes_a_parked_batch_and_survives_a_blocked_spawn(bk, capsys, m
     def boom(*a, **k):
         print("BLOCKED: no account with headroom"); raise SystemExit(3)
     monkeypatch.setattr(sys.modules["fleet_lead"], "spawn_lead", boom)
-    assert run(capsys, "start", "B2")[0] == 3 and get(bk, "B2")["state"] == "planned"
+    assert run(capsys, "start", "B2")[0] == 2 and get(bk, "B2")["state"] == "planned"
 
 def test_wait_needs_decision_or_invalid_question(bk, capsys):
     wt = running(bk); q = wt / ".superlite" / "question.json"; q.write_text(json.dumps(Q)); bk.stops["W1"] = {"t": 2000, "last": "Status: NEEDS_DECISION"}
