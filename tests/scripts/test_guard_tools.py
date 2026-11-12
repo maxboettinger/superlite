@@ -672,3 +672,12 @@ def test_deeply_nested_substitutions_are_capped_and_stay_fast():
     t0 = time.monotonic()
     assert isinstance(targets(["git", "lfs", "env"], text=calm), list)  # no RecursionError
     assert time.monotonic() - t0 < 1.5
+
+
+def test_read_only_command_words_stay_live_where_their_output_is_consumed():
+    f = ["git", "f"]
+    for t in ("eval \"$(echo git config alias.f '!rm -rf src')\"; git f",
+              "eval \"`echo git config alias.f '!rm -rf src'`\"; git f",
+              "echo git config alias.f x | sh; git f"):
+        assert targets(f, text=t) != [], t
+    assert targets(["git", "lfs", "env"], text='git lfs env | grep "git config filter"') == []
