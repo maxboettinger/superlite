@@ -1,0 +1,122 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-13T00:13:37",
+ "headline": {
+  "wall_min": {
+   "projected": 3.272,
+   "actual": 2.092
+  },
+  "cost_usd_agents": {
+   "projected": 0.425687,
+   "actual": 0.917113
+  },
+  "task_min": {
+   "projected": 12.706,
+   "actual": 4.408
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 6
+  }
+ },
+ "cost_split": {
+  "agents_usd": 0.917113,
+  "rework_usd": 0,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 0.917113
+ },
+ "concurrency": {
+  "peak": 3,
+  "projected_peak": 4
+ },
+ "critical_path": {
+  "actual": [
+   "T1"
+  ],
+  "projected": [
+   "T2"
+  ],
+  "projected_min": 3.272
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 4,
+   "cost_usd": 0.9171130000000001
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 8225,
+   "failed": 0,
+   "skipped": 11,
+   "seconds": 201.1,
+   "recorded": false
+  },
+  "tests_newer": {
+   "mode": "fast",
+   "passed": 4,
+   "failed": 0,
+   "skipped": 0,
+   "seconds": 24.2,
+   "recorded": false
+  },
+  "tests_from": "progress.md",
+  "first_time_pass": 4,
+  "first_time_n": 4,
+  "rework_dispatches": 0,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 3.247,
+   "actual_min": 1.037,
+   "delta": {
+    "abs": -2.2103,
+    "pct": -68.1
+   },
+   "cost_usd": 0.271622,
+   "first_time_pass": true
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 3.119,
+   "actual_min": 1.045,
+   "delta": {
+    "abs": -2.074,
+    "pct": -66.5
+   },
+   "cost_usd": 0.209586,
+   "first_time_pass": true
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 3.068,
+   "actual_min": 1.045,
+   "delta": {
+    "abs": -2.023,
+    "pct": -65.9
+   },
+   "cost_usd": 0.209582,
+   "first_time_pass": true
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 3.272,
+   "actual_min": 1.282,
+   "delta": {
+    "abs": -1.9903,
+    "pct": -60.8
+   },
+   "cost_usd": 0.226323,
+   "first_time_pass": true
+  }
+ ]
+}
