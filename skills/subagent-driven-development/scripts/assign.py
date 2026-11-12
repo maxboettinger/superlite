@@ -13,8 +13,9 @@ pool.json: {"plan": "path (optional)", "agents": [{"id": "a1",
 
 Scoring (D11): +5 if the agent built a task this one depends on, +3 per owned
 or read file this task touches, +1 for the same package (directory). A winner
-needs a margin of at least 3. Eligible: context_k + Est. context <= 80, fewer
-than 3 tasks done, idle <= 50 min. Busy agents are never candidates.
+needs a margin of at least 3. Eligible: context_k minus baseline_k (the READY
+context; else the prime's size) + Est. context <= 80, fewer than 3 tasks done,
+idle <= 50 min. Busy agents are never candidates.
 """
 
 # Complexity notation:

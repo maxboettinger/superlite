@@ -38,7 +38,7 @@ lines; running tasks are the pool agents' `current` tasks (`Tn` or a batch `Tn,T
 a FAILED or BLOCKED task keeps its `current` until commit_task commits it). An agent with
 a `current` gets no new task, and no agent appears on two lines of one call (`agent=` or
 `poll`). The pool is synced first (`pool.sync`: real context_k, idle_min, busy from the stop
-records). The plan is parsed once, in this process. Stdlib only.
+records, baseline_k from the READY reply). The plan is parsed once, in this process. Stdlib only.
 """
 
 # Complexity notation:

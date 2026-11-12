@@ -9,6 +9,7 @@ Each subcommand writes atomically and prints one line; an unknown agent exits 2 
 `sync` fills per agent `context_k` (the transcript's last assistant message: input + cache read +
 cache write tokens, in thousands), `idle_min` (from its latest stop in metrics.jsonl) and clears `busy`
 when that stop is newer than `busy_since`. A missing or unreadable transcript keeps the old context_k.
+For an in-process agent (not Herdr) `sync` also sets `baseline_k` once: the context of its first assistant text when it starts with READY.
 `add` records `session` (the session id), so a later session can tell an in-process agent that is gone.
 `prune` drops agents that no longer exist and prints one `removed ID (reason)` line per agent, a `kept ID (reason)`
 line for one it cannot judge, then a summary: a fleet worker is gone when fleet.json says stopped or Herdr no longer
@@ -202,12 +203,49 @@ def context_k(transcript):  # O(T)
         msg = e.get("message") if isinstance(e, dict) and e.get("type") == "assistant" else None  # O(1)
         if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):  # O(1)
             usage = msg["usage"]  # O(1)
-    if usage is None:  # O(1)
-        return None  # O(1)
+    return None if usage is None else _usage_k(usage)  # O(1)
+
+
+def _usage_k(usage):  # O(1)
+    """input + cache read + cache write (5m + 1h) tokens of one usage dict, in thousands, rounded to 0.1."""
     cc = usage.get("cache_creation")  # O(1)
     write = (cc.get("ephemeral_5m_input_tokens", 0) + cc.get("ephemeral_1h_input_tokens", 0)) if isinstance(cc, dict) \
         else usage.get("cache_creation_input_tokens", 0)  # O(1)
     return round((usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0) + write) / 1000, 1)  # O(1)
+
+
+def _text_of(content):  # O(len content)
+    """The text of an assistant message's content (a string, or its text blocks joined with newlines); None without text."""
+    if isinstance(content, str):  # O(1)
+        return content  # O(1)
+    parts = [b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)] if isinstance(content, list) else []  # O(len)
+    return "\n".join(parts) if parts else None  # O(len)
+
+
+def ready_k(transcript):  # O(T)
+    """Context in thousands of the agent's first assistant text when it starts with READY, else None (also for a missing file)."""
+    try:  # O(1)
+        lines = Path(transcript).read_text(encoding="utf-8", errors="replace").splitlines()  # O(T)
+    except OSError:  # O(1)
+        return None  # O(1)
+    seen = None  # last usage seen | O(1)
+    for ln in lines:  # O(lines)
+        try:  # O(1)
+            e = json.loads(ln)  # O(line)
+        except ValueError:  # O(1)
+            continue  # O(1)
+        msg = e.get("message") if isinstance(e, dict) and e.get("type") == "assistant" else None  # O(1)
+        if not isinstance(msg, dict):  # O(1)
+            continue  # O(1)
+        usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else seen  # O(1)
+        text = _text_of(msg.get("content"))  # O(len)
+        if text is None or not text.strip():  # tool_use only or blank text: skipped | O(1)
+            seen = usage  # O(1)
+            continue  # O(1)
+        if not text.strip().startswith("READY") or usage is None:  # O(1)
+            return None  # O(1)
+        return _usage_k(usage)  # O(1)
+    return None  # O(1)
 
 
 def latest_stops(sl_dir):  # O(m)
@@ -242,6 +280,10 @@ def sync(data, sl_dir, now_ms=None):  # O(a*m + a*T)
         if st is None:  # O(1)
             continue  # O(1)
         t, tr = st  # O(1)
+        if ag.get("backend") != "herdr" and ag.get("baseline_k") is None and tr:  # an in-process agent's READY baseline, kept once set | O(1)
+            base = ready_k(tr)  # O(T)
+            if base is not None:  # O(1)
+                ag["baseline_k"] = base  # O(1)
         k = context_k(tr) if tr else None  # O(T)
         if k is not None:  # an unreadable transcript keeps the old value | O(1)
             ag["context_k"] = k  # O(1)
