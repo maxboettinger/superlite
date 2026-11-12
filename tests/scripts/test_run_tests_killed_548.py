@@ -133,3 +133,13 @@ def test_go_pattern_not_checked(tmp_path):
     assert run_tests.missing_fast_paths(["./pkg/..."], python=True) == []
     assert run_tests.missing_fast_paths(["pkg/x_test.go"], python=False) == []
     assert run_tests.missing_line(["./pkg/..."], tmp_path, tmp_path, python=False) is None
+
+
+def test_root_only_path_without_cwd_prefix_is_usage_error(tmp_path, monkeypatch, capsys):
+    node_project(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "a.test.ts").write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path / "sub")
+    assert run_tests.main(["--fast", "tests/a.test.ts"]) == 2
+    assert "test path not found" in capsys.readouterr().err
