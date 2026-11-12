@@ -17,7 +17,7 @@ def fail_for(bk, monkeypatch, *wids):
 def test_start_stops_a_lead_whose_brief_stalls_and_starts_the_rest(bk, capsys, monkeypatch):
     put(bk, b("B1", ["a.py"]), b("B3", ["c.py"]))
     fail_for(bk, monkeypatch, "W1")
-    w3 = bk.root / "wts" / "superlite-b3-t"
+    w3 = bk.root / ".claude" / "worktrees" / "superlite-b3-t"
     assert run(capsys, "start") == (2, f"BLOCKED: B1 lead W1 got no brief ({STALL}); lead stopped, rerun sl backlog start B1\nB3 running lead=W2 worktree={w3}\n")
     assert ("stop", ["W1"]) in bk.calls
     x = get(bk, "B1")
@@ -26,7 +26,7 @@ def test_start_stops_a_lead_whose_brief_stalls_and_starts_the_rest(bk, capsys, m
     assert y["state"] == "running" and y["lead"] == "W2"
 
 def test_start_keeps_a_parked_batch_parked_when_its_brief_fails(bk, capsys, monkeypatch):
-    put(bk, b("B1", ["a.py"], "parked", reason="tui red", worktree=str(bk.root / "wts" / "superlite-b1-t")))
+    put(bk, b("B1", ["a.py"], "parked", reason="tui red", worktree=str(bk.root / ".claude" / "worktrees" / "superlite-b1-t")))
     fail_for(bk, monkeypatch, "W1")
     assert run(capsys, "start", "B1")[0] == 2
     x = get(bk, "B1")

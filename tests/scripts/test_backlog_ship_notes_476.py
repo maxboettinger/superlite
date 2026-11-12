@@ -36,6 +36,7 @@ def test_done_records_items(dn, capsys, monkeypatch):
     sh, seen = dn, []
     (sh.wt / ".superlite").mkdir(exist_ok=True); (sh.wt / ".superlite" / "notes.md").write_text("Follow-up: q")
     sh.replies = {"gh pr view": (0, "MERGED\n")}
-    monkeypatch.setattr(backlog_run, "_shipped", lambda p, sd, root, b, wt: seen.append(b) or ["x"])
+    monkeypatch.setattr(backlog_run, "_shipped", lambda p, sd, root, b, wt, **kw: seen.append((b, kw)) or ["x"])
     assert ship(capsys, "B1", "done", "--pr", "262")[0] == 0
-    assert b1(sh)["followups"] == ["q"] and seen[0]["followups"] == ["q"] and seen[0]["undone"] == []
+    assert b1(sh)["followups"] == ["q"] and seen[0][0]["followups"] == ["q"] and seen[0][0]["undone"] == []
+    assert seen[0][1].get("push") is False

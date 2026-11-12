@@ -20,7 +20,7 @@ def test_a_failed_lead_does_not_stop_the_batches_after_it(bk, capsys, monkeypatc
     put(bk, b("B92", ["a.py"]), b("B93", ["b.py"]), b("B94", ["c.py"]))
     flaky(monkeypatch, {2})
     rc, out = run(capsys, "start", "B92", "B93", "B94", "--cap", "8")
-    w92, w94 = bk.root / "wts" / "superlite-b92-t", bk.root / "wts" / "superlite-b94-t"
+    w92, w94 = bk.root / ".claude" / "worktrees" / "superlite-b92-t", bk.root / ".claude" / "worktrees" / "superlite-b94-t"
     assert rc == 2
     assert out.splitlines() == [f"B92 running lead=W1 worktree={w92}", LINE.format(n=2),
                                 "BLOCKED: B93 lead did not start; B93 keeps its state, rerun sl backlog start B93",
@@ -31,7 +31,7 @@ def test_a_failed_lead_does_not_stop_the_batches_after_it(bk, capsys, monkeypatc
 
 
 def test_every_lead_failing_keeps_each_batch_and_exits_2(bk, capsys, monkeypatch):
-    put(bk, b("B1", ["a.py"], "parked", reason="tui red", worktree=str(bk.root / "wts" / "superlite-b1-t")), b("B2", ["b.py"]))
+    put(bk, b("B1", ["a.py"], "parked", reason="tui red", worktree=str(bk.root / ".claude" / "worktrees" / "superlite-b1-t")), b("B2", ["b.py"]))
     flaky(monkeypatch, {1, 2})
     rc, out = run(capsys, "start", "B1", "B2")
     assert rc == 2

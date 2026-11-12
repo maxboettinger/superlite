@@ -24,14 +24,14 @@ def bk(tmp_path, monkeypatch):
         ns.n[0] += 1; wid = f"W{ns.n[0]}"; ns.states[f"sl-m-{wid}"] = "working"; log("spawn", wt.name)
         return {"id": wid, "name": f"sl-m-{wid}", "account": "c3", "pane_id": "p", "agent": "lead", "model": model, "role": "lead", "lead_sd": str(wt / ".superlite")}
     def ensure(topic, start):
-        wt = root / "wts" / f"superlite-{topic}"; (wt / ".superlite").mkdir(parents=True, exist_ok=True); return wt, "created"
+        wt = root / ".claude" / "worktrees" / f"superlite-{topic}"; (wt / ".superlite").mkdir(parents=True, exist_ok=True); return wt, "created"
     fakes = {"fleet": types.SimpleNamespace(hc=types.SimpleNamespace(agent_states=states, HerdrError=Herdr), main=lambda argv: log("fleet", argv) or 0,
                                             stop=lambda sd, ids=None, all_=False: log("stop", ids)),
              "fleet_state": types.SimpleNamespace(is_on=lambda sd: False, load=lambda sd: ns.fleets.get(str(sd), {"workers": {}}), name_of=lambda sd, wid, w: w.get("name") or wid),
              "fleet_io": types.SimpleNamespace(send_brief=lambda sd, wid, brief, label="": log("send", wid, Path(brief).name, label) or label,
                                                latest_stop=lambda sd, wid, after: ns.stops.get(wid) if ns.stops.get(wid, {}).get("t", -1) >= after else None,
                                                main=lambda argv: log("text", argv) or 0),
-             "worktree": types.SimpleNamespace(ensure=ensure), "fleet_lead": types.SimpleNamespace(spawn_lead=spawn_lead),
+             "worktree": types.SimpleNamespace(ensure=ensure, PARENT=".claude/worktrees", bare_flag=lambda start: "", BareCheckout=type("BareCheckout", (Exception,), {}), Taken=type("Taken", (Exception,), {}), BadBranch=type("BadBranch", (Exception,), {})), "fleet_lead": types.SimpleNamespace(spawn_lead=spawn_lead),
              "ship_lock": types.SimpleNamespace(lock_path=lambda repo, home=None: tmp_path / "x.lock", release=lambda p, batch: log("release", batch) or True)}
     if os.environ.get("SUPERLITE_REAL") != "1":
         fakes["backlog_brief"] = types.SimpleNamespace(lead_brief=lambda batch, ctx: f"brief {batch['id']} resume={ctx['resume']}")
@@ -51,13 +51,13 @@ def run(capsys, *argv):
     rc = br.main(list(argv)); return rc, capsys.readouterr().out
 
 def running(bk, **kw):
-    wt = bk.root / "wts" / "superlite-b1-t"; (wt / ".superlite").mkdir(parents=True, exist_ok=True)
+    wt = bk.root / ".claude" / "worktrees" / "superlite-b1-t"; (wt / ".superlite").mkdir(parents=True, exist_ok=True)
     put(bk, b("B1", ["a.py"], "running", lead="W1", agent="sl-m-W1", worktree=str(wt), since=1000, **kw)); bk.states["sl-m-W1"] = "done"
     return wt
 
 def test_start_picks_disjoint_batches_up_to_the_cap(bk, capsys):
     put(bk, b("B1", ["a.py"]), b("B2", ["a.py"]), b("B3", ["c.py"]))
-    w1, w3 = bk.root / "wts" / "superlite-b1-t", bk.root / "wts" / "superlite-b3-t"
+    w1, w3 = bk.root / ".claude" / "worktrees" / "superlite-b1-t", bk.root / ".claude" / "worktrees" / "superlite-b3-t"
     assert run(capsys, "start") == (0, f"B1 running lead=W1 worktree={w1}\nB3 running lead=W2 worktree={w3}\n")
     x = get(bk, "B1")
     assert (x["state"], x["agent"], x["branch"], x["since"]) == ("running", "sl-m-W1", "superlite/b1-t", 5000) and get(bk, "B2")["state"] == "planned"
@@ -74,9 +74,9 @@ def test_start_refusals(bk, capsys):
     assert run(capsys, "start")[0] == 3 and not any(c[0] == "spawn" for c in bk.calls)
 
 def test_start_resumes_a_parked_batch_and_survives_a_blocked_spawn(bk, capsys, monkeypatch):
-    put(bk, b("B1", ["a.py"], "parked", reason="tui red", worktree=str(bk.root / "wts" / "superlite-b1-t")), b("B2", ["b.py"]))
+    put(bk, b("B1", ["a.py"], "parked", reason="tui red", worktree=str(bk.root / ".claude" / "worktrees" / "superlite-b1-t")), b("B2", ["b.py"]))
     assert run(capsys, "start", "B1")[0] == 0 and get(bk, "B1")["state"] == "running"
-    brief = (bk.root / "wts" / "superlite-b1-t" / ".superlite" / "briefs" / "lead.md").read_text()
+    brief = (bk.root / ".claude" / "worktrees" / "superlite-b1-t" / ".superlite" / "briefs" / "lead.md").read_text()
     assert "resume=True" in brief or "Resume: this batch was parked (tui red)" in brief
     def boom(*a, **k):
         print("BLOCKED: no account with headroom"); raise SystemExit(3)
@@ -155,7 +155,7 @@ def test_a_batch_main_parked_starts_only_by_name_and_fresh(bk, capsys):
     put(bk, b("B1", ["a.py"], "parked", reason="hold", parked_by="main"))
     assert run(capsys, "start") == (0, "no startable batch\n")
     assert run(capsys, "start", "B1")[0] == 0 and get(bk, "B1")["state"] == "running"
-    brief = (bk.root / "wts" / "superlite-b1-t" / ".superlite" / "briefs" / "lead.md").read_text()
+    brief = (bk.root / ".claude" / "worktrees" / "superlite-b1-t" / ".superlite" / "briefs" / "lead.md").read_text()
     assert ("resume=False" in brief) if brief.startswith("brief ") else ("Resume" not in brief)
 
 def test_wait_names_issues_the_merge_left_open(bk, capsys):
@@ -168,7 +168,7 @@ def git(replies):
 GIT = {"git symbolic-ref": (0, "origin/main"), "git log": (0, "abc1234 T1 ship guard\ndef5678 T0 stubs"), "git status": (0, "M skills/x.py\n?? tests/y.py")}
 
 def parked(bk, **kw):
-    wt = bk.root / "wts" / "superlite-b1-t"; (wt / ".superlite").mkdir(parents=True, exist_ok=True)
+    wt = bk.root / ".claude" / "worktrees" / "superlite-b1-t"; (wt / ".superlite").mkdir(parents=True, exist_ok=True)
     put(bk, b("B1", ["a.py"], "parked", reason="lead pane gone", lead="W7", agent="sl-m-W7", worktree=str(wt), **kw))
     return wt
 
@@ -213,7 +213,7 @@ def test_start_after_a_crash_strips_control_characters(bk, capsys, monkeypatch):
 def test_a_fresh_start_gets_no_worktree_state(bk, capsys, monkeypatch):
     put(bk, b("B1", ["a.py"])); monkeypatch.setattr(br, "_run", git(GIT))
     assert run(capsys, "start", "B1")[0] == 0
-    assert "Previous lead" not in brief_of(bk.root / "wts" / "superlite-b1-t")
+    assert "Previous lead" not in brief_of(bk.root / ".claude" / "worktrees" / "superlite-b1-t")
 
 def fleet_of(bk, wt, **workers):
     bk.fleets[str(wt / ".superlite")] = {"workers": workers}

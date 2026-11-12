@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """sl backlog ship <B> lock|bump|merge|release (phase 3): a batch lead ships its own batch under the ship lock.
 
-`done --pr N [--version X]` runs in the main session: it records a batch main shipped by hand (PR merged); the batch may be planned, with no lead or worktree (#585, #586).
+`done --pr N [--version X]` runs in the main session: it records a batch main shipped by hand (PR merged); the batch may be planned, with no lead or worktree (#585, #586). It only cleans up (never runs `maxapp ship`; the worktree goes by `git worktree remove`, the branch by `-d`, or `-D` when it is the PR head, #587).
+`lock` and `merge --from-main` merge a branch already on origin (`origin/<branch>`, then `origin/<default>`) and rebase an unpushed one (#587); a merge conflict keeps the lock (lock) or runs `git merge --abort` (--from-main).
+`--wait` alone waits until the lock is free; the lock is served first come first served and the WAIT line names the queue place (#588). A `maxapp ship` timeout with a healthy PR (open, not DIRTY, no red check) is a RERUN that does not count as a run, up to 30 times (#588).
 `merge --from-main` runs in the main session: it ships a parked batch (lock as main, rebase, second bump, maxapp ship, then done's bookkeeping).
 A lead resumed after a crash has no fleet env: its ship call parks the batch and names the start command as the fix.
 
@@ -18,6 +20,8 @@ from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 MAX_RUNS = 5  # O(1)
+MAX_WAITS = 30  # healthy maxapp timeouts that are not counted as runs | O(1)
+BAD_CONCLUSIONS = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}  # O(1)
 
 
 def _root():  # O(1)
@@ -147,14 +151,35 @@ def _acquire(a, ctx, owner, again):  # O(wait)
         r = ship_lock.acquire(ctx["lock"], owner, _live(), _now_ms())  # O(1)
         if r["acquired"]:  # O(1)
             break  # O(1)
-        h = r["holder"]  # O(1)
-        if waited >= a.wait:  # O(1)
-            return _out(4, f"WAIT: ship lock held by {h['batch']} ({h['lead']}); run sl backlog ship {bid} {again} again")  # O(1)
+        h, f = r["holder"], r["first"]  # O(1)
+        if a.wait >= 0 and waited >= a.wait:  # O(1) a bare --wait (-1) waits until the lock is free
+            place = f"queue place {r['place']} of {r['queued']}"  # O(1)
+            who = f"held by {h['batch']} ({h['lead']}), {place}" if h else f"free, {f['batch']} ({f['lead']}) is first in the queue, {place}"  # O(1)
+            return _out(4, f"WAIT: ship lock {who}; run sl backlog ship {bid} {again} again")  # O(1)
         _sleep(15); waited += 15  # O(1)
     if r["took_over"]:  # O(1)
         h = r["holder"]  # O(1)
         ctx["pre"].append(f"took over the stale ship lock of {h['batch']} ({h['lead']})")  # O(1)
         _incident(ctx["sd"], owner["lead"], f"{bid} took over the stale ship lock of {h['batch']} ({h['lead']})")  # O(1)
+    return None  # O(1)
+
+
+def _sync(ctx, default, abort):  # O(output)
+    """Bring the worktree up to origin/<default>: a branch already on origin is merged (#587), an unpushed one rebased. -> None, or the CONFLICT text."""
+    wt, bid = ctx["wt"], ctx["batch"]["id"]  # O(1)
+    branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], wt)[1].strip()  # O(1)
+    pushed = branch not in ("", "HEAD") and bool(_run(["git", "branch", "-r", "--list", f"origin/{branch}"], wt)[1].strip())  # O(1)
+    cmds = [["git", "merge", "--no-edit", f"origin/{branch}"], ["git", "merge", "--no-edit", f"origin/{default}"]] if pushed else [["git", "rebase", f"origin/{default}"]]  # O(1)
+    for cmd in cmds:  # O(1)
+        if _run(cmd, wt)[0] != 0:  # O(output)
+            _, names = _run(["git", "diff", "--name-only", "--diff-filter=U"], wt)  # O(files)
+            what, cont = (cmd[1], "git commit") if pushed else ("rebase", "git rebase --continue")  # O(1)
+            if abort:  # O(1)
+                _run(["git", what, "--abort"], wt)  # O(1)
+                return f"CONFLICT: {' '.join(names.split())}; {what} aborted"  # O(files)
+            return f"CONFLICT: {' '.join(names.split())}; lock held: resolve with fixers, {cont}, then run lock again"  # O(files)
+    if pushed:  # O(1)
+        ctx["pre"].append(f"{bid} merged origin/{default} into {branch} (on origin: no rebase)")  # O(1)
     return None  # O(1)
 
 
@@ -170,10 +195,9 @@ def _lock(a, ctx):  # O(wait)
         return _out(3, "\n".join(lines + [f"BLOCKED: git fetch origin failed: {_tail(out)}; lock held"]))  # O(1)
     _, ref = _run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], wt)  # O(1)
     default = (ref.strip().split("/", 1)[-1] if ref.strip() else "") or "main"  # O(1)
-    rc, out = _run(["git", "rebase", f"origin/{default}"], wt)  # O(output)
-    if rc != 0:  # O(1)
-        _, names = _run(["git", "diff", "--name-only", "--diff-filter=U"], wt)  # O(files)
-        return _out(5, "\n".join(lines + [f"CONFLICT: {' '.join(names.split())}; lock held: resolve with fixers, git rebase --continue, then run lock again"]))  # O(files)
+    conflict = _sync(ctx, default, False)  # O(output)
+    if conflict:  # O(1)
+        return _out(5, "\n".join(lines + [conflict]))  # O(1)
     stale = _layers(wt)  # O(output)
     if stale:  # O(1)
         lines.append("LAYERS: " + " ".join(stale))  # O(1)
@@ -355,15 +379,31 @@ def _from_main(a, root, data, b):  # O(wait)
         return _give_up(ctx, 3, f"BLOCKED: git fetch origin failed: {_tail(out)}")  # O(1)
     _, ref = _run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], wt)  # O(1)
     default = (ref.strip().split("/", 1)[-1] if ref.strip() else "") or "main"  # O(1)
-    rc, out = _run(["git", "rebase", f"origin/{default}"], wt)  # O(output)
-    if rc != 0:  # O(1)
-        _, names = _run(["git", "diff", "--name-only", "--diff-filter=U"], wt)  # O(files)
-        _run(["git", "rebase", "--abort"], wt)  # O(1)
-        return _give_up(ctx, 5, f"CONFLICT: {' '.join(names.split())}; rebase aborted")  # O(files)
+    conflict = _sync(ctx, default, True)  # O(output)
+    if conflict:  # O(1)
+        return _give_up(ctx, 5, conflict)  # O(1)
     bumped = _second_bump(ctx, default)  # O(file)
     if bumped is not None:  # O(1)
         return bumped  # O(1)
     return _merge(a, ctx)  # O(1)
+
+
+def _pr_wait(ctx):  # O(output)
+    """-> 'PR #12 BEHIND, 2 checks pending' when the PR of the batch branch is open, not DIRTY and has no red check, else ''."""
+    b, wt = ctx["batch"], ctx["wt"]  # O(1)
+    cmd = ["gh", "pr", "view"] + ([b["branch"]] if b.get("branch") else []) + ["-R", ctx["repo"], "--json", "number,state,mergeStateStatus,statusCheckRollup"]  # O(1)
+    rc, out = _run(cmd, wt, timeout=60)  # O(output)
+    try:  # O(1)
+        d = json.loads(out)  # O(output)
+        items = [i for i in d.get("statusCheckRollup") or [] if isinstance(i, dict)]  # O(checks)
+        merge, n = str(d.get("mergeStateStatus") or ""), d["number"]  # O(1)
+        vals = [str(i.get("conclusion") or i.get("state") or "").upper() for i in items]  # O(checks)
+        healthy = rc == 0 and d.get("state") == "OPEN" and merge != "DIRTY" and not any(v in BAD_CONCLUSIONS for v in vals)  # O(checks)
+    except (ValueError, KeyError, AttributeError, TypeError):  # O(1) unreadable counts as a run
+        return ""  # O(1)
+    if not healthy:  # O(1)
+        return ""  # O(1)
+    return f"PR #{n} {merge}, {sum(1 for v in vals if v in ('', 'PENDING', 'EXPECTED'))} checks pending"  # O(checks)
 
 
 def _merge(a, ctx):  # O(1)
@@ -426,6 +466,10 @@ def _merge(a, ctx):  # O(1)
     if rc == 4:  # O(1)
         runs = (b.get("ship_runs") or 0) + 1  # O(1)
         again = "merge --from-main" if ctx.get("main") else "merge"  # O(1)
+        waits, text = (b.get("ship_waits") or 0), _pr_wait(ctx)  # O(1)
+        if text and waits < MAX_WAITS:  # O(1) a healthy slow PR is not a failed run
+            _set(root, bid, ship_waits=waits + 1)  # O(batches)
+            return _out(4, "\n".join(ctx.get("pre", []) + [f"RERUN: sl backlog ship {bid} {again} ({text}; healthy wait {waits + 1} of {MAX_WAITS}, not counted)"]))  # O(1)
         if runs < MAX_RUNS:  # O(1)
             _set(root, bid, ship_runs=runs)  # O(batches)
             return _out(4, "\n".join(ctx.get("pre", []) + [f"RERUN: sl backlog ship {bid} {again} (run {runs} of {MAX_RUNS})"]))  # O(1)
@@ -469,6 +513,8 @@ def _done(a, root, data, b):  # O(issues)
         return _out(3, f"BLOCKED: cannot read PR #{n} ({_tail(out)})")  # O(1)
     if out.strip() != "MERGED":  # O(1)
         return _out(2, f"refused: PR #{n} is {out.strip() or 'unknown'}, not merged")  # O(1)
+    rc, oid = _run(["gh", "pr", "view", str(n), "-R", repo, "--json", "headRefOid", "-q", ".headRefOid"], root)  # O(output)
+    head = oid.strip() if rc == 0 else ""  # O(1) empty: cleanup keeps the branch unless git calls it merged
     v = a.version or b.get("version") or _current_version(wt or root)  # O(file)
     try:  # O(1)
         notes = (Path(wt) / ".superlite" / "notes.md").read_text(encoding="utf-8") if wt else ""  # O(file)
@@ -485,7 +531,7 @@ def _done(a, root, data, b):  # O(issues)
         ship_lock.release(ship_lock.lock_path(repo), bid)  # O(1)
     except (OSError, ValueError):  # O(1)
         pass  # O(1)
-    lines = backlog_run._shipped(bs.path(root), root / ".superlite", root, {**b, "pr": n, "version": v, "open_issues": left, **items}, wt)  # O(size)
+    lines = backlog_run._shipped(bs.path(root), root / ".superlite", root, {**b, "pr": n, "version": v, "open_issues": left, **items}, wt, push=False, head=head or None)  # O(size)
     return _out(0, "\n".join(lines + jira))  # O(lines)
 
 
@@ -503,7 +549,7 @@ def main(argv=None):  # O(1)
     import ship_lock  # O(1)
     p = argparse.ArgumentParser(prog="sl backlog ship")  # O(1)
     p.add_argument("batch"); p.add_argument("action", choices=["lock", "bump", "merge", "release", "done"])  # O(1)
-    p.add_argument("--wait", type=int, default=500); p.add_argument("--version"); p.add_argument("--title")  # O(1)
+    p.add_argument("--wait", type=int, nargs="?", const=-1, default=500); p.add_argument("--version"); p.add_argument("--title")  # O(1)
     p.add_argument("--body-file"); p.add_argument("--park"); p.add_argument("--plan"); p.add_argument("--pr", type=int)  # O(1)
     p.add_argument("--from-main", action="store_true")  # O(1)
     a = p.parse_args(argv)  # O(1)

@@ -6,7 +6,7 @@ from test_backlog_run import bk, put, get, run, running  # noqa: F401
 
 def test_start_takes_several_ids_and_reports_each_refusal(bk, capsys):
     put(bk, b("B1", ["a.py"]), b("B2", ["a.py"]), b("B3", ["c.py"]), b("B4", ["d.py"], depends=["B1"]))
-    r = bk.root / "wts"
+    r = bk.root / ".claude" / "worktrees"
     assert run(capsys, "start", "B1", "B2", "B4", "B3", "--cap", "3") == (2, "BLOCKED: B2 shares files with running B1\nBLOCKED: B4 waits for B1\n"
         f"B1 running lead=W1 worktree={r}/superlite-b1-t\nB3 running lead=W2 worktree={r}/superlite-b3-t\n")
     assert get(bk, "B1")["state"] == get(bk, "B3")["state"] == "running"

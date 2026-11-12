@@ -52,7 +52,7 @@ def test_lock_rebases_and_names_stale_layers(sh, capsys):
 
 def test_lock_waits_for_a_live_holder_and_takes_over_a_dead_one(sh, capsys):
     ship_lock.acquire(sh.lock, B2, None, 9_000); sh.live = {AG, "sl-x-w5"}
-    assert ship(capsys, "B1", "lock", "--wait", "0") == (4, "WAIT: ship lock held by B2 (W5); run sl backlog ship B1 lock again\n") and sh.calls == []
+    assert ship(capsys, "B1", "lock", "--wait", "0") == (4, "WAIT: ship lock held by B2 (W5), queue place 1 of 1; run sl backlog ship B1 lock again\n") and sh.calls == []
     sh.live = {AG}
     rc, out = ship(capsys, "B1", "lock")
     assert rc == 0 and out.startswith("took over the stale ship lock of B2 (W5)\n")
