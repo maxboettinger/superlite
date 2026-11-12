@@ -302,7 +302,8 @@ ALSO_RULING = "declared before the test run (run_tests --also)"  # the ledger te
 def root_relative(x, cwd, root):  # O(len x) x against cwd, unless only the root holds it: then x is already root-relative (#548)
     mine = os.path.relpath(os.path.join(cwd, x), root)  # O(len)
     bare = x.split("::", 1)[0]  # O(len)
-    if "..." in x or os.path.exists(os.path.join(root, mine.split("::", 1)[0])) or not os.path.exists(os.path.join(root, bare)):  # O(1) stats
+    prefix = os.path.relpath(cwd, root).replace(os.sep, "/") + "/"  # O(len) the cwd's own root-relative prefix; only a doubled prefix is read from the root
+    if "..." in x or not x.replace(os.sep, "/").startswith(prefix) or os.path.exists(os.path.join(root, mine.split("::", 1)[0])) or not os.path.exists(os.path.join(root, bare)):  # O(1) stats
         return mine  # O(len)
     print(f"run_tests: --fast {x} read from the root", file=sys.stderr)  # O(1)
     return x  # O(1)
