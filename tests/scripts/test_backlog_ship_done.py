@@ -29,12 +29,14 @@ def test_done_records_a_hand_shipped_batch(dn, capsys):
     setb(sh, state="parked", reason="merge denied", version="1.5.20")
     ship_lock.acquire(sh.lock, {"batch": "B1", "lead": "W1", "agent": AG, "repo": "o/r"}, None, 9_000)
     sh.replies = {"gh pr view": (0, "MERGED\n")}
-    assert ship(capsys, "B1", "done", "--pr", "262") == (0, f"B1 shipped PR #262 1.5.20 summary={sh.sd / 'backlog' / 'B1.md'}\n")
+    rc, out = ship(capsys, "B1", "done", "--pr", "262")
+    assert rc == 0 and out.splitlines()[0] == f"B1 shipped PR #262 1.5.20 summary={sh.sd / 'backlog' / 'B1.md'}"
+    assert out.splitlines()[1].startswith(f"B1 worktree {sh.wt} removed")
     r = b1(sh)
     assert (r["state"], r["pr"], r["merged"], r["version"], r["open_issues"]) == ("shipped", 262, True, "1.5.20", [])
     assert ship_lock.holder(sh.lock) is None
     assert ("stop", ["W1"]) in sh.stops
-    assert any(c[:3] == ["maxapp", "ship", "-C"] for c in sh.calls)
+    assert not any(c[:1] == ["maxapp"] for c in sh.calls)
     assert (sh.sd / "backlog" / "B1.md").is_file()
 
 

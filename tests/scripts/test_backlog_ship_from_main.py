@@ -97,7 +97,7 @@ def test_from_main_refusals(fm, capsys, monkeypatch):
 def test_from_main_waits_for_another_batch(fm, capsys):
     sh = fm
     ship_lock.acquire(sh.lock, B2, None, 9_000); sh.live = {AG, "sl-x-w5"}
-    assert go(capsys, "--wait", "0") == (4, "WAIT: ship lock held by B2 (W5); run sl backlog ship B1 merge --from-main again\n")
+    assert go(capsys, "--wait", "0") == (4, "WAIT: ship lock held by B2 (W5), queue place 1 of 1; run sl backlog ship B1 merge --from-main again\n")
     assert ship_lock.holder(sh.lock)["batch"] == "B2"
     assert ["git", "fetch", "origin"] not in sh.calls
 
