@@ -16,7 +16,7 @@ Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-d
 (the other lines still go out; exit 3); the Wave 0 line starts a haiku worker and sends it `briefs/wave0.md`.
 `--plan P` (or `--plan=P`) is checked first, for every subcommand: a path that is neither file nor folder, or whose state folder cannot be
 created, prints `error: --plan P: <reason>; ...` on stderr and exits 2, creating nothing (#372).
-A start that fails with `not an available shell` (a freed pane) is retried once after SHELL_PAUSE_S.
+A start that fails with `not an available shell` (a freed pane) is retried once after SHELL_PAUSE_S (`start_on_shell`).
 `spawn --for-dispatch` also stops the ready implementers an earlier dispatch dropped from pool.json (#424).
 `spawn --for-dispatch` sends no task to a worker fleet.json marks busy, such as one still answering a `send --text` (dispatch leaves it out of the idle agents) (#553).
 A stalled prime waits up to STALL_WAIT_MS for a late start, then is resent once; a start that stays slow is retried once on another account (#428).
@@ -60,6 +60,22 @@ SCREEN_ROWS = 1000  # O(1) spawn reads the whole pane: the fullscreen TUI pins t
 
 def _pause(s):  # tests swap it | O(s)
     time.sleep(s)  # O(s)
+
+
+def start_on_shell(name, pane, argv):  # one start; a freed pane is not a shell yet: one pause, one more start | O(1)
+    try:  # O(1)
+        hc.start_agent(name, pane, argv)  # O(1)
+        return ""  # O(1)
+    except hc.HerdrError as e:  # O(1)
+        if SHELL_MSG not in (getattr(e, "message", "") or ""):  # O(len)
+            raise  # O(1)
+    _pause(SHELL_PAUSE_S)  # O(1)
+    try:  # O(1)
+        hc.start_agent(name, pane, argv)  # O(1)
+    except hc.HerdrError as e:  # O(1)
+        e.retried = "; retried once"  # O(1)
+        raise  # O(1)
+    return "; retried once"  # O(1)
 
 
 def worker_env(sd, wid, agent, config_dir, base_env):  # O(1)
@@ -327,14 +343,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus
     st, screen, retried = "idle", "", ""  # O(1)
     try:  # O(1)
         try:  # O(1)
-            try:  # O(1)
-                hc.start_agent(name, pane, argv)  # O(1)
-            except hc.HerdrError as e:  # a freed pane is not a shell yet: one pause, one more start | O(1)
-                if SHELL_MSG not in (getattr(e, "message", "") or ""):  # O(len)
-                    raise  # O(1)
-                _pause(SHELL_PAUSE_S)  # O(1)
-                retried = "; retried once"  # O(1)
-                hc.start_agent(name, pane, argv)  # O(1)
+            retried = start_on_shell(name, pane, argv)  # O(1)
         except hc.HerdrError as e:  # O(1)
             screen = ""  # O(1)
             try:  # O(1)
@@ -343,6 +352,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus
                 pass  # O(1)
             if e.code != "agent_not_ready" or TRUST not in screen:  # O(s)
                 shell = SHELL_MSG in (getattr(e, "message", "") or "")  # O(len)
+                retried = getattr(e, "retried", "")  # O(1)
                 fail(f"startup: {e.message if shell else first_line(screen, e)}{retried}", screen, slow=_slow(e))  # O(s)
             _accept_trust(name)  # O(1)
         if not launch["prime"]:  # a one-turn worker may stand on the trust dialog too (#514) | O(1)
