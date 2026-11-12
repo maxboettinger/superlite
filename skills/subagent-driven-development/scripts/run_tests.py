@@ -411,14 +411,19 @@ def read_pointer(summary):  # O(1)
 WAIT_CUE = "next: tests still running; run the wait line below now, in the foreground (never as a background command), and do not end your turn until it reports."  # O(1)
 
 
+def narrowed(a):  # a run limited by paths, a marker or pass-through args is fast, not full | O(1)
+    return bool(a.fast or a.marker or getattr(a, "passthrough", None))  # O(1)
+
+
 def start_background(a, argv):  # O(len argv) + one detached spawn
     run_id = f"{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}-{os.urandom(3).hex()}"  # O(1) unique id
     mine = run_summary_path(a.summary, run_id).resolve()  # O(1) absolute: --wait may run from another cwd
     child = [sys.executable, str(Path(__file__).resolve()),  # O(len argv)
              *[x for x in argv if x != "--background"],  # O(len argv)
-             "--summary", str(mine), "--publish", str(Path(a.summary).resolve()), "--run-id", run_id]  # O(1) last flag wins
+             "--summary", str(mine), "--publish", str(Path(a.summary).resolve()), "--run-id", run_id,  # O(1) last flag wins
+             *(["--", *a.passthrough] if a.passthrough else [])]  # the pass-through stays last, after the child's own flags | O(t)
     ptr = {"id": run_id, "summary": str(mine), "started": time.time(),  # O(1)
-           "mode": "fast" if a.fast or a.marker else "full"}  # O(1)
+           "mode": "fast" if narrowed(a) else "full"}  # O(1)
     atomic_write(pointer_path(a.summary), json.dumps(ptr) + "\n")  # O(1)
     if a.task:  # a wait on an earlier run of this task finds its newest run (#507) | O(1)
         atomic_write(task_pointer_path(a.summary, a.task), json.dumps({**ptr, "task": a.task}) + "\n")  # O(1)
@@ -1054,6 +1059,25 @@ SEGMENT_END = re.compile(r"[|;&\n]")  # O(1) a command segment ends at a pipe, s
 BUILDS = ("-scheme", "-xctestrun", "-testProductsPath")  # O(1) xcodebuild exits 65 on -derivedDataPath without one of these
 
 
+def with_args(command, args):  # O(len command) the pass-through args joined onto the test command: end of each xcodebuild segment, else before the first single pipe, else the end
+    if not args:  # O(1)
+        return command  # O(1)
+    text = shlex.join(args)  # O(len)
+    if XCODEBUILD.search(command):  # O(len)
+        for m in reversed(list(XCODEBUILD.finditer(command))):  # last to first keeps earlier offsets valid | O(len)
+            rest = command[m.end():]  # O(len)
+            end = SEGMENT_END.search(rest)  # O(len)
+            at = m.end() + (end.start() if end else len(rest))  # O(1)
+            gap = len(command[:at]) - len(command[:at].rstrip())  # blanks before the operator stay after the args | O(len)
+            command = command[:at - gap] + " " + text + command[at - gap:]  # O(len)
+        return command  # O(1)
+    pipe = re.search(r"(?<![|])\|(?![|])", command)  # a single |, not || | O(len)
+    if pipe:  # O(1)
+        head = command[:pipe.start()].rstrip()  # O(len)
+        return head + " " + text + " " + command[pipe.start():]  # O(len)
+    return command + " " + text  # O(len)
+
+
 def with_derived_data(command, tree):  # O(len command) build in the tree: -derivedDataPath after each xcodebuild whose segment names a scheme or test run
     flag = f"-derivedDataPath {shlex.quote(str(trees.derived_data_path(tree)))}"  # O(1)
     for m in reversed(list(XCODEBUILD.finditer(command))):  # last to first keeps earlier offsets valid | O(len)
@@ -1225,8 +1249,22 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--scope", default=None, help="--record: one word naming what ran (default external; never full or fast)")  # O(1)
     ap.add_argument("--run-id", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
+    ap.add_argument("--env", action="append", default=[], metavar="K=V", help="set K=V in the test command's environment (repeatable; beats test-cmd.json env)")  # O(1)
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
+    tail = argv[argv.index("--") + 1:] if "--" in argv else []  # args after the first bare -- go to the test command | O(len argv)
+    argv = argv[:argv.index("--")] if "--" in argv else argv  # O(len argv)
     a = ap.parse_args(argv)  # O(1)
+    a.passthrough = tail  # O(1)
+    a.cli_env = {}  # O(1)
+    for item in a.env:  # O(e)
+        key, eq, val = item.partition("=")  # O(len)
+        if not eq or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):  # O(len)
+            print(f"run_tests: --env needs K=V, got {item}", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        a.cli_env[key] = val  # O(1)
+    if tail and (a.record or a.wait_path is not None):  # O(1)
+        print("run_tests: pass-through args (after --) need a test run", file=sys.stderr)  # O(1)
+        return 2  # O(1)
     WRITTEN.clear()  # O(1)
     global CURRENT_TASK, OUTPUT  # O(1)
     OUTPUT = ""  # O(1)
@@ -1293,7 +1331,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         reason = f"wall-clock limit: test run killed after {secs:g} s (run_tests --limit S; 0 = none)"  # O(1)
         print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
         save_output(a, e.command, -9, e.text)  # O(len text)
-        write_summary(a.summary, "fast" if a.fast or a.marker else "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], secs, error=reason)  # O(1)
+        write_summary(a.summary, "fast" if narrowed(a) else "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], secs, error=reason)  # O(1)
         publish_summary(a)  # O(summary size)
         record_no_result(a, reason, e.command, -9, e.text.splitlines(), None)  # O(L + c)
         print(f"0 0 0 {secs:.1f}")  # O(1)
@@ -1312,7 +1350,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         full_reason = f"disk full (ENOSPC): {e.strerror}" + (f": {e.filename}" if e.filename else "") + "; run sl trees clean and free space, then rerun" if full else ""  # O(1)
         try:  # the summary may not fit either | O(1)
             if Path(a.summary).resolve() not in WRITTEN:  # a result already written stays | O(1)
-                write_summary(a.summary, "fast" if a.fast or a.marker else "full", {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
+                write_summary(a.summary, "fast" if narrowed(a) else "full", {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
                                                                         "skipped_tests": []}, [], 0.0,  # O(1)
                               error=full_reason or (f"run_tests stopped by {e}; its test processes were killed" if isinstance(e, Stopped) else f"run_tests crashed: {e!r}"[:200]))  # O(1)
                 publish_summary(a)  # O(summary size)
@@ -1375,13 +1413,15 @@ def root_superlite(s, root, raw=False):  # O(len s) a tree has no .superlite/ (g
 
 def run_other(a, spec, paths, label, cwd=None):  # one runner command (any language) | O(X + o) + the run
     """Run the resolved non-Python command: JUnit when the runner wrote one, else exit code plus output parsing."""
+    if getattr(a, "passthrough", None):  # O(1)
+        spec = {**spec, "command": with_args(spec["command"], a.passthrough)}  # O(len)
     with tempfile.TemporaryDirectory() as tmp:  # O(1)
         xml_path = Path(tmp) / "junit.xml"  # O(1)
         root = Path.cwd().resolve()  # main chdir'd to the project root | O(1)
         sub = lambda s: root_superlite(s, root) if cwd else s  # noqa: E731 | O(len)
         sub = (lambda f: lambda s: f(s).replace("{junit}", str(xml_path)))(sub)  # noqa: E731 | O(len)
         subenv = lambda s: (root_superlite(s, root, raw=True) if cwd else s).replace("{junit}", str(xml_path))  # noqa: E731 | env is never shell-parsed | O(len)
-        env = child_env({k: subenv(str(v)) for k, v in (spec.get("env") or {}).items()})  # setup and command, no SUPERLITE_FLEET_* (#219) | O(env)
+        env = child_env({**{k: subenv(str(v)) for k, v in (spec.get("env") or {}).items()}, **(getattr(a, "cli_env", None) or {})})  # --env wins over the config | setup and command, no SUPERLITE_FLEET_* (#219) | O(env)
         literal = Path(spec["junit"]) if spec["junit"] and "{junit}" not in spec["junit"] else None  # a path the runner always writes | O(1)
         alt = None  # the tree copy of a .superlite/ report, used when the root has none | O(1)
         if literal and cwd and not literal.is_absolute():  # the runner writes it inside its tree, .superlite/ at the root | O(1)
@@ -1639,7 +1679,7 @@ def task_cmd_spec(a):  # O(L + m + f) the spec of the `cmd=` in --task's plan **
 
 def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     paths = [p for chunk in (a.fast or []) for p in nt.csv(chunk)]  # O(p)
-    label = "fast" if paths or a.marker else "full"  # O(1)
+    label = "fast" if paths or a.marker or getattr(a, "passthrough", None) else "full"  # O(1)
     if a.also and not a.task:  # O(1)
         return usage_error(a, label, "--also needs --task Tn")  # O(summary size)
     if a.also:  # the claim is recorded before any runner or tree, so the tree below holds the file | O(c + k)
@@ -1783,10 +1823,10 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                 marker = honoured[0]  # O(1)
                 print(honoured[1], file=sys.stderr)  # O(1)
         cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), *(["-m", marker] if marker else []), "-q", "-rP", "-p", "no:cacheprovider",  # O(p) -rP: a passing test's prints reach the output log (#501)
-               "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
+               "-o", "junit_family=xunit1", f"--junitxml={xml_path}", *(getattr(a, "passthrough", None) or [])]  # O(1)
         with full_suite_lock(a, label, enabled=spec.get("lock", True) if spec else True):  # O(wait / LOCK_POLL)
             t0 = time.monotonic()  # O(1)
-            r = run_captured(cmd, limit=a.limit, env=child_env())  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
+            r = run_captured(cmd, limit=a.limit, env=child_env(getattr(a, "cli_env", None)))  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
             seconds = time.monotonic() - t0  # O(1)
         save_output(a, shlex.join(cmd), r.returncode, r.stdout + r.stderr)  # O(o)
         has_xml = xml_path.exists() and xml_path.stat().st_size > 0  # O(1)
