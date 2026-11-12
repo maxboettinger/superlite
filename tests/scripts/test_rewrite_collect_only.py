@@ -68,13 +68,14 @@ def test_coordinator_collect_only_not_rewritten(proj):
 
 
 def test_deny_rows_carry_rule_and_cwd(proj):
-    run(proj, "pytest", agent_id="a1", cwd="/w/x")
+    inner = proj.as_posix() + "/sub"
+    run(proj, "pytest", agent_id="a1", cwd=inner)
     row = rows(proj)[-1]
-    assert row["rule"] == "subagent-full-suite" and row["cwd"] == "/w/x"
-    run(proj, "until pytest; do sleep 1; done", cwd="/w/x")
+    assert row["rule"] == "subagent-full-suite" and row["cwd"] == inner
+    run(proj, "until pytest; do sleep 1; done", cwd=inner)
     row = rows(proj)[-1]
-    assert row["rule"] == "hidden-test-wait" and row["cwd"] == "/w/x"
-    run(proj, "pytest " + "x" * 500, agent_id="a1", cwd="/w/x")
+    assert row["rule"] == "hidden-test-wait" and row["cwd"] == inner
+    run(proj, "pytest " + "x" * 500, agent_id="a1", cwd=inner)
     # a path-less long command is still a full-suite run only when no path-like arg; 'xxx' has none
     row = rows(proj)[-1]
     assert row["rule"] == "subagent-full-suite"
