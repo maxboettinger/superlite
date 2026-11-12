@@ -109,3 +109,14 @@ def test_snapshot_text(monkeypatch):
     monkeypatch.setenv("SUPERLITE_MACHINE_LIMIT", "6")
     monkeypatch.setattr(ml, "count", lambda *a, **k: {"leads": 1, "fixers": 0, "xcodebuild": 2, "total": 3, "herdr": True})
     assert ml.snapshot_text() == "machine: 1 lead, 0 fixers, 2 xcodebuild = 3 of limit 6"
+
+
+def test_count_survives_malformed_registry_entries():
+    d = ml._dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "list.json").write_text("[1, 2]")
+    (d / "bad-since.json").write_text(json.dumps({"role": "lead", "since": "oops"}))
+    (d / "null-since.json").write_text(json.dumps({"role": "lead", "since": None}))
+    (d / "live-list.json").write_text("[]")
+    c = ml.count(live={"live-list"}, procs=[])
+    assert c["total"] == 0
