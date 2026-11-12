@@ -19,3 +19,9 @@ def test_state_and_workflow_rows():
     assert "render" in rows("commit_task") and "--claim" in rows("commit_task")
     assert "--also" in rows("findings")
     assert "excluded" in rows("graphify_gate") and "graphify-out" in rows("graphify_gate")
+
+
+def test_state_row_does_not_say_readers_pass_a_foreign_binding():
+    r = rows("state")
+    assert "while readers," not in r
+    assert "a writer or reader" in r
