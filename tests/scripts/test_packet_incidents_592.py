@@ -213,3 +213,40 @@ def test_n_token_in_diff_is_not_replaced(proj):
     assert "MARK = '@@N@@'" in t
     assert t.count("@@N@@") >= 1
     assert "This packet has " in t and "@@N@@ lines" not in t
+
+
+def test_incident_on_directory_stays_listed(proj):
+    log(proj, exc("pkg", 1))
+    t = packet(proj)
+    assert "no longer on disk" not in sec(t, 1) and "pkg:1" in sec(t, 1) and "FAST PATH" not in t
+
+
+def test_incident_on_subpackage_relative_path_is_rewritten(proj):
+    base = git(proj, "rev-parse", "HEAD")
+    (proj / "packages" / "app" / "src").mkdir(parents=True)
+    (proj / "packages" / "app" / "src" / "x.py").write_text("X = 1\n", encoding="utf-8")
+    log(proj, exc("src/x.py", 1))
+    s1 = sec(packet_args(proj, "--base", base), 1)
+    assert "packages/app/src/x.py:1" in s1 and "no longer on disk" not in s1
+
+
+def test_verified_entry_on_gone_file_still_covers_category(proj):
+    (proj / "plan.md").write_text(PLAN.replace("- none", "- pkg: security"), encoding="utf-8")
+    log(proj, {"file": "pkg/gone.py", "line": 1, "kind": "verified", "agent": "package-reviewer", "resolution": "fixed",
+               "category": "security", "context": "security checked", "epoch": NOW - 100})
+    t = packet(proj)
+    assert "no longer on disk" not in sec(t, 1) and "FAST PATH" in t
+
+
+def test_ledger_ruling_line_names_left_out_incidents(proj):
+    log(proj, exc("a.py", 3), exc("b.py", 4))
+    (proj / ".superlite" / "progress.md").write_text(
+        "- Ruling: a.py:3 still open\n- Ruling: b.py:4 out of plan\n", encoding="utf-8")
+    assert "left out 2 incident(s) a ledger Ruling: names: a.py:3, b.py:4" in sec(packet(proj), 1)
+
+
+def test_end_line_count_ignores_form_feed(proj):
+    log(proj, exc("a.py", 1, context="boom\fhere"))
+    t = packet(proj)
+    n = int(t.rsplit("End of packet (", 1)[1].split(" lines", 1)[0])
+    assert "\f" in t and n == t.count("\n")
