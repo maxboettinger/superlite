@@ -45,7 +45,7 @@ prints it, and exits 0 green, 1 red, 2 on timeout or when no background run was 
 `wait: <abs>/sl run_tests --wait <path>` with the absolute path of the sl launcher, copy it verbatim); bare --wait uses the shared pointer.
 Put --wait last or before another flag: argparse takes a following word as its PATH.
 A green --full run (not --task, not --fast, not --record) in a git toplevel holding `scripts/test_layers.py` also stamps the
-unit layer green (`run_tests: unit layer stamped`), from digests taken before the run, so a file changed during it stays stale; a stamp
+unit layer green (a configured test command too) (`run_tests: unit layer stamped`), from digests taken before the run, so a file changed during it stays stale; a stamp
 error prints `run_tests: unit layer not stamped: <err>` and never changes the exit code. `--record` never stamps.
 A Swift `--fast` run whose template holds `{only_testing}` maps each test file to `-only-testing:<Target>/<Suite>` (target from the project's target membership: Sources phase files, synchronized folders, Package.swift paths; then folder names); a path outside every test target runs the unfiltered `test` command instead (#398).
 Every test subprocess (pytest, a test-cmd.json command and its setup) gets the environment without `SUPERLITE_FLEET_*` variables (a fleet pane's worker, role and parent dir); a test-cmd.json `env` entry still applies on top.
@@ -1434,6 +1434,22 @@ def platform_warning(declared, built):  # O(d + b) the warning text for declared
             'add "destinations" to .superlite/test-cmd.json, e.g. ["platform=macOS", "platform=iOS Simulator,name=iPhone 16"]')  # O(1)
 
 
+def behind_main():  # O(1) spawns: (commits, branch) when this linked worktree lacks commits of the main checkout's HEAD, else None
+    try:  # O(1)
+        main = testcmd._main_checkout_root(Path("."))  # O(1)
+        if main is None:  # O(1)
+            return None  # O(1)
+        sha = subprocess.run(["git", "-C", str(main), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10)  # O(1)
+        branch = subprocess.run(["git", "-C", str(main), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, timeout=10)  # O(1)
+        count = subprocess.run(["git", "rev-list", "--count", f"HEAD..{sha.stdout.strip()}"], capture_output=True, text=True, timeout=10)  # O(commits)
+        if sha.returncode or branch.returncode or count.returncode or not sha.stdout.strip():  # a git error | O(1)
+            return None  # O(1)
+        n = int(count.stdout.strip())  # O(1)
+    except (OSError, ValueError, subprocess.SubprocessError):  # O(1)
+        return None  # O(1)
+    return (n, branch.stdout.strip()) if n > 0 else None  # O(1)
+
+
 def run_other(a, spec, paths, label, cwd=None):  # one runner command (any language) | O(X + o) + the run
     """Run the resolved non-Python command: JUnit when the runner wrote one, else exit code plus output parsing."""
     if getattr(a, "passthrough", None):  # O(1)
@@ -1547,6 +1563,12 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
                 record_no_result(a, reason, sub(spec["command"]), r.returncode, [*kept, *p["tail"]], cwd)  # O(40 + c)
                 print(f"0 0 0 {seconds:.1f}")  # O(1)
                 return 1  # O(1)
+    if label == "full" and spec.get("lock") is False and r.returncode:  # a red remote run in a worktree behind the main checkout may only lack its fix (#638) | O(1)
+        behind = behind_main()  # O(1)
+        if behind:  # O(1)
+            hint = f"this worktree lacks {behind[0]} commit{'s' if behind[0] != 1 else ''} of {behind[1]}; run `git merge {behind[1]}` before trusting this red run"  # O(1)
+            WARNING = f"{WARNING}; {hint}" if WARNING else hint  # O(1)
+            print(f"run_tests: WARNING: {hint}", file=sys.stderr)  # O(1)
     return finish_run(a, label, counts, failures, files, seconds, r.returncode, covered=covered if report is None else None)  # O(k + F)
 
 
@@ -1567,6 +1589,21 @@ def fast_spec(paths: list[str], quiet: bool = False):  # testcmd.resolve plus it
         for n in notes:  # O(notes)
             print(f"run_tests: {n}", file=sys.stderr)  # O(1)
     return spec  # O(1)
+
+
+def marker_spec(spec, paths, marker):  # O(m + f) (spec, note) running `-m MARKER` for a test command that is not pytest: the config's test_file, else the local pytest runner; None for neither
+    cfg = testcmd.config_source(Path("."))[0]  # O(m + f)
+    template = cfg.get("test_file") if cfg else None  # O(1)
+    if isinstance(template, str) and template:  # O(1)
+        files = " ".join(shlex.quote(x) for x in (paths or testcmd.python_full_args(Path("."))))  # O(p)
+        marked = with_marker(template.replace("{files}", files), marker)  # O(len)
+        if marked is not None:  # O(1)
+            return {**spec, "command": marked}, f"run_tests: -m runs the test_file command `{marked}`, not the remote test command"  # O(1)
+    language = (cfg or {}).get("language") or (testcmd.detect(Path(".")) or {}).get("language")  # O(m + f)
+    if language != "python":  # O(1)
+        return None  # O(1)
+    local = {"language": "python", "python": True, "command": None, "junit": "", "env": spec.get("env") or {}, "setup": "", "source": spec.get("source"), "origin": spec.get("origin"), "isolate": False, "lock": True, "destinations": []}  # O(1)
+    return local, "run_tests: -m runs the local pytest runner, not the remote test command"  # O(1)
 
 
 def with_marker(command, marker):  # O(len command) the pytest command plus `-m MARKER` (shell-quoted), None when the command is not pytest
@@ -1771,16 +1808,19 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     gate = placeholder_line(Path("."), spec)  # O(m + f)
     if gate:  # a Swift placeholder in a project without Swift files: exit 2, no incident | O(1)
         return usage_error(a, label, gate)  # O(summary size)
-    if not spec["python"]:  # a configured `test` command may narrow the suite: it never stamps the unit layer | O(1)
-        a.unit_snap = None  # O(1)
     node_gone = node_install_line(Path.cwd(), spec)  # O(m + f)
     if node_gone:  # no install yet: a usage error, not a test failure (#269) | O(1)
         return usage_error(a, label, node_gone)  # O(summary size)
     if a.marker and not spec["python"]:  # a test-cmd.json command takes the marker only when it is pytest | O(len)
         marked = with_marker(spec["command"], a.marker)  # O(len)
-        if marked is None:  # O(1)
-            return usage_error(a, label, f"-m EXPR selects pytest markers; the {spec['language']} test command `{spec['command']}` is not pytest")  # O(summary size)
-        spec = {**spec, "command": marked}  # O(1)
+        if marked is not None:  # O(1)
+            spec = {**spec, "command": marked}  # O(1)
+        else:  # a remote or wrapped `test`: the marker runs through test_file or the local pytest runner (#638) | O(m + f)
+            fallback = marker_spec(spec, paths, a.marker) if spec.get("source") != "plan" else None  # O(m + f)
+            if fallback is None:  # O(1)
+                return usage_error(a, label, f"-m EXPR selects pytest markers; the {spec['language']} test command `{spec['command']}` is not pytest")  # O(summary size)
+            spec = fallback[0]  # O(1)
+            print(fallback[1], file=sys.stderr)  # O(1)
     elif not a.marker and not spec["python"] and paths and spec.get("source") != "plan":  # a --fast test file with a deselected marker, in a pytest test-cmd.json command (#593) | O(p + files)
         honoured = honoured_marker(paths, ".")  # O(p + files)
         marked = with_marker(spec["command"], honoured[0]) if honoured else None  # O(len)
