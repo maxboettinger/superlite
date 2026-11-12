@@ -482,7 +482,8 @@ def _glob_check(t, inn, st, ctx, name=None, protect_only=False):  # O(d * p) | a
             return Verdict(t, full, "protected")  # O(1)
         if protect_only:  # O(1)
             continue  # O(1)
-        q = "/".join(parts[:k] + ["?"] + parts[k + 1:]) if k is not None else p  # O(p)
+        ext = GLOB_EXT.fullmatch(parts[k]) if k is not None and k == len(parts) - 1 and name and name != "?" else None  # a cp/mv glob `*.md` keeps its extension | O(p)
+        q = "/".join(parts[:k] + ["?" + (ext.group(1) if ext else "")] + parts[k + 1:]) if k is not None else p  # O(p)
         v = _judge_path(q, base, ctx, name, stays=False)  # O(p + depth)
         if v is not None and (found is None or v.kind == "protected"):  # O(1)
             found = v  # O(1)
@@ -862,12 +863,21 @@ def _mkdir(words, c, st, ctx):  # O(t) | `mkdir -p X && cd X`: the folder exists
         c.fail = ()  # O(1)
 
 
+GLOB_EXT = re.compile(r"[*?]+(\.[A-Za-z0-9]+)")  # O(1) | `*.md`: any stem, one literal extension
+
+
 def _source_name(w, t):  # O(w) | the file name a cp/mv/ln/install of the first source would give inside folder t
+    own = GLOB_EXT.fullmatch(t.rstrip("/").rsplit("/", 1)[-1])  # O(p)
+    if own and w[0] == "mv" and t in w[1:]:  # mv removes a glob source: the files it names share the extension | O(w)
+        return "x" + own.group(1)  # O(1)
     for x in w[1:]:  # O(w)
         if not x.startswith("-") and x.rstrip("/") != t.rstrip("/"):  # O(1)
             if x.endswith("/") and w[0] in ("rsync", "cp") and len(x) > 1:  # `src/` copies its contents (rsync, BSD cp): any name | O(1)
                 return "?"  # O(1)
             nm = x.rstrip("/").rsplit("/", 1)[-1]  # O(p)
+            if nm and any(ch in nm for ch in "*?[") and "$" not in nm and "`" not in nm:  # a glob: the files share its literal extension when every source says so | O(w)
+                exts = {GLOB_EXT.fullmatch(y.rstrip("/").rsplit("/", 1)[-1]) and GLOB_EXT.fullmatch(y.rstrip("/").rsplit("/", 1)[-1]).group(1) for y in w[1:] if not y.startswith("-") and y.rstrip("/") != t.rstrip("/")}  # O(w * p)
+                return "x" + exts.pop() if len(exts) == 1 and None not in exts and w[0] in ("cp", "mv") else "?"  # O(1)
             return nm if nm and not any(ch in nm for ch in "$`*?[") else "?"  # O(p)
     return "?"  # O(1)
 
