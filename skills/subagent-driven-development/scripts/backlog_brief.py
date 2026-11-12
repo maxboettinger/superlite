@@ -21,6 +21,13 @@ NOTE_HEAD = ("Standing note from main (sl backlog start --note): follow it, and 
 OPEN_HEAD = "Open batches (planned, parked or running; their issues are not yours): "  # O(1)
 OPEN_TAIL = ("Keep your batches off these files where the issues allow; plan names each file a new batch shares with one, "
              "and start holds a batch that shares a file with a running one until that one ships.")  # O(1)
+OPEN_APPEND = "A file both batches list in append_only is shared without a hold."  # O(1)
+APPEND_LINE = ("Append-only files (add lines; never reorder, rewrite or delete existing ones; another batch may append to them too: "
+               "keep both sides when the ship rebase conflicts on one): ")  # O(1)
+APPEND_TRIAGE = ("append_only lists the files of a batch's files it only adds lines to, such as a strings catalog every user-visible "
+                 "string goes into, a changelog, or a module doc or agent instructions file each change adds a line to; plan and start do "
+                 "not serialise two batches on a file both list there, and conflicts resolve at the ship rebase; a file a batch rewrites, "
+                 "reorders or deletes lines in is never append_only for it")  # O(1)
 ROOT_DOC_TRIAGE = ("List a shared root doc (CLAUDE.md, AGENTS.md, README.md) in the files of every batch whose fix makes it wrong; "
                    "the rule that no two batches share a file holds for it too; ")  # O(1)
 TRIAGE_RUN = ("offer no decision option a batch lead cannot carry out: a lead has no deploy, production, migration-run or other "
@@ -82,7 +89,8 @@ def _jira(items):  # O(i)
 
 
 def _files(o):  # O(f)
-    return ", ".join(clean(f) for f in o.get("files") or [])  # O(f)
+    app = o.get("append_only") or []  # O(1)
+    return ", ".join(clean(f) + (" (append-only)" if f in app else "") for f in o.get("files") or [])  # O(f * a)
 
 
 def lead_brief(batch, ctx):  # O(i + f + a)
@@ -105,6 +113,9 @@ def lead_brief(batch, ctx):  # O(i + f + a)
     out += [f"- {ref(n)} {_title(ctx, n)}".rstrip() for n in batch.get("issues", [])] or ["none"]  # O(i)
     files = ", ".join(batch.get("files") or []) or "none"  # O(f)
     out.append(f"Files this batch may touch: {files}. Another lead may own any other file.")  # O(1)
+    app = [clean(f) for f in batch.get("append_only") or []]  # O(f)
+    if app:  # O(1)
+        out.append(APPEND_LINE + ", ".join(app) + ".")  # O(f)
     if "owned" in ctx:  # O(1)
         rest = [o for o in ctx["owned"] or [] if o.get("id") != bid]  # O(b)
         out.append("Files other open batches own: " + ("; ".join(f"{clean(o.get('id', ''))} ({clean(o.get('state', ''))}) {_files(o)}"
@@ -221,11 +232,11 @@ def triage_brief(issues, ctx):  # O(i)
     out.append(REOPEN_RULE)  # O(1)
     if ctx.get("open"):  # O(1)
         out.append(OPEN_HEAD + "; ".join(f"{clean(o.get('id', ''))} {clean(o.get('state', ''))}: {_files(o)}" for o in ctx["open"])
-                   + ". " + OPEN_TAIL)  # O(b * f)
+                   + ". " + OPEN_TAIL + (" " + OPEN_APPEND if any(o.get("append_only") for o in ctx["open"]) else ""))  # O(b * f)
     pin = ctx.get("pinned")  # O(1) {"head", "version"} only when main pinned the issues (#622)
     if pin is not None:  # O(1)
         out.append(pinned_line(pin.get("head"), pin.get("version")))  # O(1)
-    out.append("Rules: " + ROOT_DOC_TRIAGE + TRIAGE_RUN + "no two batches share a file unless one depends on the other; list every repo-relative file a batch "
+    out.append("Rules: " + ROOT_DOC_TRIAGE + TRIAGE_RUN + "no two batches share a file unless one depends on the other or both list it in append_only (" + APPEND_TRIAGE + "); list every repo-relative file a batch "
                "touches (at least one file per batch); depends names batches that must ship first; decisions lists each batch's major decisions, one "
                "AskUserQuestion call object {\"questions\": [...]} per decision (1 to 4 distinct questions per decision, question at most 300 characters, "
                "header at most 12 characters, 2 to 4 options with distinct labels, option label at most 60 characters "
@@ -239,7 +250,7 @@ def triage_brief(issues, ctx):  # O(i)
                "except issues left out only because of the batch cap of " + str(ctx["max_batches"]) + ": those get no left_out entry (plan names them itself).")  # O(1)
     out.append('End with Status: DONE, then one fenced json block: {"status": "DONE", "files": [], "tests": "", "findings": [], '
                '"summary": "<n> batches", "batches": [{"id": "B1", "topic": "<kebab words>", "issues": ' + ('["<KEY>"]' if jira else '[<n>]') + ', '
-                              '"files": ["<path>"], "depends": [], "decisions": [{"questions": [{"question": "<1-300 chars>", '
+                              '"files": ["<path>"], "append_only": [], "depends": [], "decisions": [{"questions": [{"question": "<1-300 chars>", '
                '"header": "<1-12 chars>", "options": [{"label": "<recommended first> (Recommended)", "description": "<trade-off>"}, '
                '{"label": "...", "description": "..."}]}]}]}], "left_out": [{"issues": ' + ('["<KEY>"]' if jira else '[<n>]') + ', "reason": "<why>"}]}')  # O(1)
     return "\n".join(out) + "\n"  # O(n)
