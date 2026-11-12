@@ -74,3 +74,11 @@ def test_notes_ignores_cwd_when_batch_has_no_worktree(sh, capsys, monkeypatch, t
     monkeypatch.chdir(tmp_path)
     bs.update(bs.path(sh.root), lambda d: bs.batch(d, "B1").update({"worktree": None}))
     assert ship(capsys, "B1", "notes") == (0, "no notes\n")
+
+
+def test_notes_strips_control_characters(sh, capsys, monkeypatch):
+    monkeypatch.delenv("SUPERLITE_FLEET_ROLE")
+    bs.update(bs.path(sh.root), lambda d: bs.batch(d, "B1").update({"state": "parked", "reason": "r\x1b[31mx", "no_change": "n\x1b]0;t\x07y"}))
+    (sh.sd / "backlog").mkdir(exist_ok=True); (sh.sd / "backlog" / "B1.notes.md").write_text("Ruling: k\x1b[2Jz\n")
+    rc, out = ship(capsys, "B1", "notes")
+    assert rc == 0 and "\x1b" not in out and "\x07" not in out and "Ruling: k[2Jz" in out

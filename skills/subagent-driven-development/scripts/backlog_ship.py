@@ -566,9 +566,9 @@ def _done(a, root, data, b):  # O(issues)
 
 def _notes(root, b):  # O(file)
     """Print the full reason, no-change text and notes of a batch (read-only, any session)."""
-    lines = [f"reason: {b['reason']}"] if b.get("reason") else []  # O(1)
+    lines = [f"reason: {CTRL_KEEP.sub('', str(b['reason']))}"] if b.get("reason") else []  # O(1)
     if b.get("no_change"):  # O(1)
-        lines.append(f"no-change: {b['no_change']}")  # O(1)
+        lines.append(f"no-change: {CTRL_KEEP.sub('', str(b['no_change']))}")  # O(1)
     text = ""  # O(1)
     for f in (root / ".superlite" / "backlog" / f"{b['id']}.notes.md", *([Path(b["worktree"]) / ".superlite" / "notes.md"] if b.get("worktree") else [])):  # O(1)
         try:  # O(1)
@@ -576,7 +576,7 @@ def _notes(root, b):  # O(file)
                 text = f.read_text(encoding="utf-8"); break  # O(file)
         except (OSError, ValueError):  # O(1)
             continue  # O(1)
-    return _out(0, "\n".join(lines + [text.rstrip("\n") or "no notes"]))  # O(file)
+    return _out(0, "\n".join(lines + [CTRL_KEEP.sub("", text).rstrip("\n") or "no notes"]))  # O(file)
 
 
 def _env_lost(b):  # O(1)
