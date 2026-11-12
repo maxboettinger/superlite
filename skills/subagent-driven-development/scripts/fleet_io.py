@@ -10,6 +10,10 @@
 
 A batch's task message has one Verify Tn line per member, each with its own --task, and a Batch line: one run per task (#556).
 
+`wait` honours `--timeout` as ms, a bare number under 1000 read as seconds (`540s`, `9m`, `1500ms` work); it returns each
+report once (`claim`): a worker another wait collected prints `Wn T3 already collected: <json>`; `BUSY`/`TIMEOUT` end with
+`(reported: Wk <json>)` naming this call's finishers.
+
 `wait` prints one line per finished worker (`W1 T3 DONE findings=0 <report json>`; a layer worker: `W3 layer-headless
 GREEN exit=0 <log>` plus its last log line), `BLOCKED-UI` plus the screen for a blocked one, and `TIMEOUT W2 ...` for the
 rest. A stop record ends the wait in any Herdr state when it holds a status; one without a status on a done or idle
@@ -58,6 +62,32 @@ ASK = ("Your last turn ended without your report. If your work is not done, fini
 HERE = Path(__file__).resolve().parent  # O(1)
 TOOL_DIRS = ("skills/subagent-driven-development/scripts/", "skills/subagent-driven-development/probes/")  # where sl finds its tools | O(1)
 WORKTREE_REST = "Every other command (task, incident, run_tests, commit_task) stays on the sl above: it holds the run's state."  # O(1)
+
+
+TIMEOUT_RE = re.compile(r"^(\d+)(ms|s|m)?$")  # a --timeout value: digits and an optional unit | O(1)
+
+
+def parse_timeout(v):  # ms of a --timeout value: "540000", "1500ms", "580s", "9m"; a bare 1..999 is seconds; ValueError otherwise | O(len)
+    m = TIMEOUT_RE.match(str(v).strip())  # O(len)
+    if not m:  # O(1)
+        raise ValueError(f"--timeout {v} is no time (use ms, or 580s, 9m)")  # O(1)
+    n, unit = int(m.group(1)), m.group(2)  # O(1)
+    if unit == "m":  # O(1)
+        return n * 60000  # O(1)
+    if unit == "s" or (unit is None and 0 < n < 1000):  # O(1)
+        return n * 1000  # O(1)
+    return n  # O(1)
+
+
+def claim(sd, wid, sent):  # True once per send: a busy worker whose SENT matches and is not yet collected is marked collected | O(w)
+    with fs.locked(sd):  # O(1) plus wait
+        data = fs.load(sd)  # O(w)
+        w = data["workers"].get(wid)  # O(1)
+        if not w or w.get("state") != "busy" or int(w.get("sent") or 0) != int(sent) or int(w.get("collected") or 0) == int(sent):  # O(1)
+            return False  # O(1)
+        w["collected"] = int(sent)  # O(1)
+        fs.save(sd, data)  # O(w)
+        return True  # O(1)
 
 
 def now_ms():  # O(1)
@@ -625,6 +655,24 @@ def _blocked(sd, wid, w):  # O(s + w)
     return {"id": wid, "task": task, "status": "BLOCKED-UI", "report": str(sp), "source": "screen"}  # O(1)
 
 
+def _collected(sd, wid, w):  # True (and a line) when another wait already took WID's report | O(1)
+    sent = int(w.get("sent") or 0)  # O(1)
+    gone = (w.get("state") == "ready" and w.get("last_task")) or (w.get("state") == "busy" and sent and int(w.get("collected") or 0) == sent)  # O(1)
+    if not gone:  # O(1)
+        return False  # O(1)
+    label = (w.get("task") or w.get("last_task") or wid).split(",")[0]  # O(1)
+    print(f"{wid} {w.get('task') or w.get('last_task')} already collected: {Path(sd) / 'fleet' / 'reports' / (label + '.json')}")  # O(1)
+    return True  # O(1)
+
+
+def _take(sd, wid, w):  # claim WID's current send before its report is written; False (and a line) when another wait did | O(w)
+    return claim(sd, wid, int(w.get("sent") or 0)) or not _collected(sd, wid, {**w, "state": "busy", "collected": int(w.get("sent") or 0)})  # O(w)
+
+
+def _reported(results):  # the suffix naming the finishers of this call | O(r)
+    return " (reported: " + ", ".join(f"{r['id']} {r['report']}" for r in results) + ")" if results else ""  # O(r)
+
+
 def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/poll * (w + m))
     sd = Path(sd)  # O(1)
     clock = clock or now_ms  # O(1)
@@ -643,9 +691,15 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
         stops = _stops(sd)  # one metrics read per poll | O(m)
         for wid in list(pending):  # O(w) iterations
             w = fs.load(sd)["workers"].get(wid, {})  # O(w)
+            if _collected(sd, wid, w):  # another wait took the report: nothing new to return | O(1)
+                pending.remove(wid)  # O(w)
+                continue  # O(1)
             if w.get("role") == "layer":  # a shell pane: its exit file tells, herdr has no agent state for it | O(1)
                 r = importlib.import_module("fleet_layer").result(sd, wid, w)  # O(l)
                 if r is not None:  # O(1)
+                    if not _take(sd, wid, w):  # O(w)
+                        pending.remove(wid)  # O(w)
+                        continue  # O(1)
                     results.append(_finish_layer(sd, wid, w, r))  # O(w)
                     pending.remove(wid)  # O(w)
                 continue  # O(1)
@@ -661,6 +715,9 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
                     text = (report_text(tr) if tr else "") or ("" if tr else rec.get("last", ""))  # O(T)
                     sn["text"], sn["lag"] = text, bool(tr) and _lags(text, rec.get("last", ""), label)  # O(len)
                     if sn["lag"] and now - sn["first"] >= READ_MS:  # the window is over: the cut line is no report | O(1)
+                        if not _take(sd, wid, w):  # O(w)
+                            pending.remove(wid)  # O(w)
+                            continue  # O(1)
                         results.append(_finish(sd, wid, w, text, "transcript", tail=_pane_tail(sd, wid, w), cut=(tr, rec.get("last", ""))))  # O(len)
                         pending.remove(wid)  # O(w)
                         continue  # O(1)
@@ -673,6 +730,9 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
                 if ended and _ask(sd, wid, w, rec["t"]):  # asked once: the worker is busy again | O(w + len)
                     seen.pop(wid, None)  # O(1)
                     changed.pop(wid, None)  # O(1)
+                    continue  # O(1)
+                if not _take(sd, wid, w):  # O(w)
+                    pending.remove(wid)  # O(w)
                     continue  # O(1)
                 results.append(_finish(sd, wid, w, text, "transcript", None if reported else _pane_tail(sd, wid, w)))  # O(len + s)
                 pending.remove(wid)  # O(w)
@@ -691,6 +751,9 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
                         seen.pop(wid, None)  # O(1)
                         changed.pop(wid, None)  # O(1)
                         continue  # O(1)
+                    if not _take(sd, wid, w):  # O(w)
+                        pending.remove(wid)  # O(w)
+                        continue  # O(1)
                     results.append(_finish(sd, wid, w, "", "screen", tail=text) if asked is False else _finish(sd, wid, w, text, "screen"))  # O(s)
                     pending.remove(wid)  # O(w)
             else:  # O(1)
@@ -698,10 +761,10 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
         if not pending:  # O(1)
             break  # O(1)
         if any_ and results:  # the first finished worker ends the round; the rest stay busy | O(1)
-            print("BUSY " + " ".join(pending))  # O(w)
+            print("BUSY " + " ".join(pending) + _reported(results))  # O(w)
             break  # O(1)
         if clock() - start >= timeout_ms:  # O(1)
-            print("TIMEOUT " + " ".join(pending))  # O(w)
+            print("TIMEOUT " + " ".join(pending) + _reported(results))  # O(w)
             break  # O(1)
         sleep(poll_s)  # O(poll_s)
     return results  # O(1)
@@ -729,7 +792,7 @@ def main(argv=None):  # O(wait)
     stp.add_argument("--sd", required=True)  # O(1)
     stp.add_argument("--t", type=int)  # O(1)
     wp = sub.add_parser("wait")  # O(1)
-    wp.add_argument("--timeout", type=int, default=540000)  # O(1)
+    wp.add_argument("--timeout", default="540000")  # O(1)
     wp.add_argument("--poll", type=float, default=2.0)  # O(1)
     wp.add_argument("--plan")  # O(1)
     wp.add_argument("--any", action="store_true")  # O(1)
@@ -741,6 +804,14 @@ def main(argv=None):  # O(wait)
         except Exception:  # O(1)
             pass  # O(1)
         return 0  # O(1)
+    if a.cmd == "wait":  # before any state or herdr call | O(len)
+        try:  # O(1)
+            t_ms = parse_timeout(a.timeout)  # O(len)
+        except ValueError:  # O(1)
+            print(f"error: --timeout {a.timeout} is no time (use ms, or 580s, 9m)", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        if str(a.timeout).strip().isdigit() and 0 < int(a.timeout) < 1000:  # O(1)
+            print(f"note: --timeout {a.timeout} read as {a.timeout} s (--timeout is in ms)", file=sys.stderr)  # O(1)
     sd = state.resolve(a.plan) if getattr(a, "plan", None) else state.resolve()  # O(d)
     try:  # O(1)
         if a.cmd == "send" and sum([bool(a.tasks), a.text is not None, a.brief is not None]) > 1:  # before any herdr call or file check | O(1)
@@ -753,7 +824,7 @@ def main(argv=None):  # O(wait)
             hc.send_keys(fs.worker_name(sd, a.wid), a.keys)  # O(w + len keys)
             print(f"{a.wid} keys sent")  # O(1)
         elif a.cmd == "wait":  # O(1)
-            wait(sd, a.ids or None, a.timeout, a.poll, any_=a.any)  # O(wait)
+            wait(sd, a.ids or None, t_ms, a.poll, any_=a.any)  # O(wait)
         elif a.text is not None:  # O(1)
             send_text(sd, a.wid, a.text)  # O(w + len text)
         elif a.brief:  # O(1)

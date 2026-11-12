@@ -65,7 +65,7 @@ def test_wait_any_returns_first(cw, tmp_path, capsys):
     stop(cw, "W1", tr, sent + 10); cw.fh.states = [{"sl-proj-w1": "done", "sl-proj-w2": "working"}]
     out = io.wait(cw.sd, None, 60000, any_=True)
     assert len(out) == 1 and out[0]["id"] == "W1"
-    assert capsys.readouterr().out.strip().splitlines()[-1] == "BUSY W2"
+    assert capsys.readouterr().out.strip().splitlines()[-1] == f"BUSY W2 (reported: W1 {cw.sd}/fleet/reports/T3.json)"
     assert json.loads((cw.sd / "fleet.json").read_text())["workers"]["W2"]["state"] == "busy"
     assert [c for c in cw.fh.calls if c[0] == "agent_states"] == [("agent_states",)]
 
