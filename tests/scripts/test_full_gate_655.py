@@ -158,4 +158,4 @@ def test_limit_counts_from_admission(gate):
     t0 = time.time()
     with pytest.raises(subprocess.TimeoutExpired):
         full_gate.run_admitted([gate, "run", "--"], "sleep 10", limit=1, env={**os.environ, "GATE_SLEEP": "2"})
-    assert 2.5 <= time.time() - t0 <= 8
+    assert 2.9 <= time.time() - t0 <= 8
