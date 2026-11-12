@@ -70,7 +70,8 @@ def test_record_seed(tmp_path, capsys):
     put(wt, "test-cmd.json", '{"test": "a"}\n')
     assert testcmd.record_seed(wt) is True
     assert (wt / testcmd.SEEDED).read_bytes() == b'{"test": "a"}\n'
-    assert capsys.readouterr() == ("", "") or True
+    out = capsys.readouterr()
+    assert (out.out, out.err) == ("", "")
 
 
 def test_testcmd_cli_prints_note(tmp_path):
@@ -83,4 +84,5 @@ def test_testcmd_cli_prints_note(tmp_path):
     put(main, "test-cmd.json", '{"test": "echo main"}'); put(wt, "test-cmd.json", '{"test": "echo mine"}')
     r = subprocess.run([sys.executable, str(SCRIPTS / "testcmd.py"), "--root", str(wt)], capture_output=True, text=True, env=env)
     assert r.stderr.strip().startswith("testcmd: this worktree's .superlite/test-cmd.json differs")
-    assert json.loads(r.stdout)["command"] if "command" in json.loads(r.stdout) else json.loads(r.stdout)
+    out = json.loads(r.stdout)
+    assert out["command"] == "echo mine" and out["source"] == "test-cmd.json" and out["origin"] == testcmd.CONFIG
