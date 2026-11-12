@@ -59,7 +59,6 @@ def test_pinned_brief_has_the_rule(bk, capsys):
     bk.batches = [TWO]
     assert cli(capsys, "plan", "--issues", "2")[0] == 0
     assert "Pinned: main chose these issues" in brief(bk)
-    bk.issues.clear()
     cli(capsys, "plan", "--reset")
     assert "Pinned:" not in brief(bk)
 

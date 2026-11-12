@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pure intake helpers for the backlog plan step: shipped issues, files an issue names, the pinned brief rule, blocked-reason check."""
+"""Pure intake helpers for the backlog plan step: shipped issues, files an issue names, blocked-reason check (the `Pinned:` brief line is backlog_brief.pinned_line, #622)."""
 import re
 from collections import defaultdict
 
@@ -196,21 +196,3 @@ def blocked_lines(prop: dict, pin: list, version: str | None) -> list[str]:
         elif version and any(_vt(v) <= _vt(version) for v in vers):  # O(vers)
             out.append(f'check: {ref} left out as "{r}" but the repository is at {version}; {tail}')  # O(1)
     return out
-
-
-def pinned_rule(head: str | None, version: str | None) -> str:
-    head, version = (_clean(head) if head else None), (_clean(version) if version else None)  # O(len)
-    at = ", ".join(x for x in (f"at {head}" if head else "", f"version {version}" if version else "") if x)  # O(1)
-    where = f" ({at})" if at else ""  # O(1)
-    return ("Pinned: main chose these issues with --issues; plan each one. Leave a pinned issue out only as an umbrella or tracking issue, "
-            "or as blocked with the missing commit, version or issue named in its left_out reason (e.g. \"needs 1.6.0 first\"); "
-            f"work already on the default branch{where} is not missing.")  # O(1)
-
-
-def insert_before_rules(brief: str, lines: list[str]) -> str:
-    """Put lines before the first `Rules: ` line, else at the end before the final newline."""
-    nl = brief.endswith("\n")
-    parts = brief.split("\n")[:-1] if nl else brief.split("\n")  # O(len)
-    i = next((k for k, x in enumerate(parts) if x.startswith("Rules: ")), len(parts))  # O(len)
-    parts[i:i] = list(lines)
-    return "\n".join(parts) + ("\n" if nl else "")  # O(len)

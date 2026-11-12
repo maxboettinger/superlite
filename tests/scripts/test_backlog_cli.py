@@ -1,11 +1,10 @@
-import json, os, sys, types
+import json, re, sys, types
 import pytest
 from backlog_fixtures import Q
 from test_plan_tools import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 import backlog as bl  # noqa: E402
 import backlog_state as bs  # noqa: E402
-import backlog_brief as real_brief  # noqa: E402
 
 ISSUES = [{"number": n, "title": t, "author": {"login": a}, "authorAssociation": r, "body": f"body {n}"}
           for n, t, a, r in ((1, "One", "max", "OWNER"), (2, "Two", "co", "COLLABORATOR"), (3, "Three", "eve", "NONE"))]
@@ -15,7 +14,7 @@ BATCH = {"id": "B1", "topic": "first", "issues": [1, 2], "files": ["a.py"], "dep
 def bk(tmp_path, monkeypatch):
     root = tmp_path / "main"; (root / ".superlite").mkdir(parents=True)
     ns = types.SimpleNamespace(root=root, sd=root / ".superlite", calls=[], vis="PUBLIC", batches=[BATCH],
-                               status="DONE", summary="x", gh=[], issues=[])
+                               status="DONE", summary="x", gh=[])
     monkeypatch.setattr(bl, "_root", lambda: root)
     def gh(args):
         ns.gh.append(args)
@@ -31,14 +30,6 @@ def bk(tmp_path, monkeypatch):
                                             spawn=lambda sd, plan, tier, project, role="implementer": log("spawn", tier, role) or {"id": "W1"}),
              "fleet_state": types.SimpleNamespace(is_on=lambda sd: False),
              "fleet_io": types.SimpleNamespace(send_brief=lambda sd, wid, brief, label="": log("send", wid, brief, label) or label, wait=wait)}
-    if os.environ.get("SUPERLITE_REAL") != "1":
-        def triage_brief(issues, ctx):
-            ns.issues.extend(issues)
-            ns.ctx = ctx
-            lines = [f"- #{i['number']} {i['title']}" for i in issues]
-            line = real_brief.carry_line(issues, ctx.get("carry") or {})
-            return "\n".join(lines + ([line] if line is not None else []))
-        fakes["backlog_brief"] = types.SimpleNamespace(triage_brief=triage_brief)
     for k, v in fakes.items():
         monkeypatch.setitem(sys.modules, k, v)
     return ns
@@ -49,12 +40,28 @@ def cli(capsys, *argv):
 def load(bk):
     return bs.load(bs.path(bk.root))
 
+HEADING = re.compile(r"^## (?:#(\d+)|(\S+)) ?(.*?)(?: \(reopened\))?$")
+
+def briefed(ns):
+    """The issues the written triage brief quotes, in brief order: [{"number", "title", "body"}] (#622: read the real brief)."""
+    out, body = [], None
+    for ln in (ns.sd / "briefs" / "triage.md").read_text().splitlines():
+        m = HEADING.match(ln)
+        if m:
+            body = []
+            out.append({"number": int(m.group(1)) if m.group(1) else m.group(2), "title": m.group(3), "body": body})
+        elif body is not None and ln.startswith("    "):
+            body.append(ln[4:])
+        else:
+            body = None
+    return [{**c, "body": "\n".join(c["body"])} for c in out]
+
 def test_plan_records_trusted_batches_and_lists_outside_issues(bk, capsys):
     rc, out = cli(capsys, "plan")
     d, brief = load(bk), (bk.sd / "briefs" / "triage.md").read_text()
     assert rc == 0 and "B1 | #1 #2 | planned" in out and "questions: 2 open (sl backlog decide --print)" in out
     assert (d["repo"], d["titles"], d["outside"]) == ("o/r", {"1": "One", "2": "Two"}, [{"number": 3, "title": "Three", "author": "eve"}])
-    assert "- #1 One" in brief and "#3" not in brief
+    assert "## #1 One" in brief and "#3" not in brief
     assert all(c in bk.calls for c in (("fleet", ["on", "--plan", str(bk.sd)]), ("spawn", "sonnet", "research"),
                                        ("send", "W1", str(bk.sd / "briefs" / "triage.md"), "triage")))
 
@@ -64,7 +71,7 @@ def test_plan_fetches_bodies_and_caps_them(bk, capsys, monkeypatch):
     assert cli(capsys, "plan")[0] == 0
     api = next(a for a in bk.gh if a[0] == "api")
     assert "body" in api[-1]
-    one, two = bk.issues
+    one, two = briefed(bk)
     assert two["body"] == "body 2" and one["body"].endswith("\n[truncated]") and len(one["body"]) < 4100 and one["body"].startswith("x" * 4000)
 
 def test_rejected_proposal_prints_the_worker_summary(bk, capsys):
@@ -90,7 +97,7 @@ def test_outside_issues_cannot_be_smuggled_and_private_repos_trust_all(bk, capsy
     rc, out = cli(capsys, "plan")
     assert rc == 3 and "BLOCKED: proposal rejected" in out and "B1: unknown issue #3" in out and load(bk)["batches"] == []
     bk.vis = "PRIVATE"
-    assert cli(capsys, "plan")[0] == 0 and not [o for o in load(bk)["outside"] if "author" in o] and "- #3 Three" in (bk.sd / "briefs" / "triage.md").read_text()
+    assert cli(capsys, "plan")[0] == 0 and not [o for o in load(bk)["outside"] if "author" in o] and "## #3 Three" in (bk.sd / "briefs" / "triage.md").read_text()
 
 def test_plan_refuses_while_batches_are_open(bk, capsys):
     cli(capsys, "plan")
@@ -132,7 +139,7 @@ def test_skip_and_park_from_main(bk, capsys, monkeypatch):
     assert cli(capsys, "park", "B1", "--reason", "x") == (2, "refused: sl backlog park runs only in the main session\n")
 
 def test_a_skipped_issue_stays_out_of_the_next_plan(bk, capsys):
-    cli(capsys, "plan"); cli(capsys, "skip", "1"); bk.issues.clear(); bk.batches = [{**BATCH, "issues": [2]}]
+    cli(capsys, "plan"); cli(capsys, "skip", "1"); bk.batches = [{**BATCH, "issues": [2]}]
     assert cli(capsys, "plan", "--reset")[0] == 0
     brief = (bk.sd / "briefs" / "triage.md").read_text()
     assert "#1 One" not in brief and "#2 Two" in brief and load(bk)["batches"][0]["issues"] == [2]

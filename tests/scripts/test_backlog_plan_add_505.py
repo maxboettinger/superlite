@@ -1,4 +1,3 @@
-import os
 import sys
 import pytest
 from test_backlog_cli import bk, cli, load, BATCH, bs, bl  # noqa: F401
@@ -17,11 +16,8 @@ OPEN = "Open batches (planned, parked or running; their issues are not yours): B
 
 
 def check_open(bk, open_batches):
-    if os.environ.get("SUPERLITE_REAL") == "1":
-        brief = (bk.sd / "briefs" / "triage.md").read_text()
-        assert (OPEN in brief) if open_batches else ("Open batches (" not in brief)
-    else:
-        assert bk.ctx["open"] == ([{"id": "B1", "state": "running", "files": ["a.py"]}] if open_batches else [])
+    brief = (bk.sd / "briefs" / "triage.md").read_text()
+    assert (OPEN in brief) if open_batches else ("Open batches (" not in brief)
 
 
 def setup(bk, capsys):

@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from test_backlog_cli import bk, cli, load, BATCH, bl  # noqa: F401  bk is the CLI fixture
+from test_backlog_cli import bk, briefed, cli, load, BATCH, bl  # noqa: F401  bk is the CLI fixture
 
 ACLI = [{"key": "PIX-1", "fields": {"summary": "One", "description": {"type": "doc", "version": 1, "content": [
     {"type": "paragraph", "content": [{"type": "text", "text": "body one"}]}]}}},
@@ -41,7 +41,7 @@ def test_jql_plans_batches_with_keys(jk, capsys):
     assert rc == 0 and "B1 | PIX-1 PIX-2 | planned" in out
     assert d["batches"][0]["issues"] == ["PIX-1", "PIX-2"] and d["titles"] == {"PIX-1": "One", "PIX-2": "Two"} and d["outside"] == []
     assert jk.acli == [["jira", "workitem", "search", "--jql", "project = PIX", "--fields", "key,summary,description", "--paginate", "--json"]]
-    assert jk.issues == [{"number": "PIX-1", "title": "One", "body": "body one"}, {"number": "PIX-2", "title": "Two", "body": ""}]
+    assert briefed(jk) == [{"number": "PIX-1", "title": "One", "body": "body one"}, {"number": "PIX-2", "title": "Two", "body": ""}]
     assert no_api(jk)
 
 
@@ -99,10 +99,9 @@ def test_skip_takes_a_key(jk, capsys, monkeypatch):
     assert cli(capsys, "plan", "--jql", "x")[0] == 0
     assert cli(capsys, "skip", "pix-2") == (0, "skipped PIX-2 (B1 keeps PIX-1)\n")
     assert "PIX-2" in load(jk)["skipped"]
-    jk.issues.clear()
     jk.batches = [{**JB, "issues": ["PIX-1"]}]
     assert cli(capsys, "plan", "--reset", "--jql", "x")[0] == 0
-    assert [i["number"] for i in jk.issues] == ["PIX-1"]
+    assert [i["number"] for i in briefed(jk)] == ["PIX-1"]
     with pytest.raises(SystemExit) as e:
         cli(capsys, "skip", "PIX")
     assert e.value.code == 2
