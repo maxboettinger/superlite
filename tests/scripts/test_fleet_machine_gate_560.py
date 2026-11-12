@@ -55,7 +55,7 @@ def test_retry_is_not_gated_again(world, monkeypatch):
     calls = _gate(monkeypatch, None)
     seen = []
 
-    def fake(sd, plan, tier, project, cfg, env, role, after):
+    def fake(sd, plan, tier, project, cfg, env, role, after, output=None):
         seen.append(after)
         if after is None:
             raise fleet._Slow("W1", "claude1", "slow")

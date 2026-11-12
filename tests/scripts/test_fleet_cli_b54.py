@@ -6,7 +6,7 @@ from test_plan_tools import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 import fleet  # noqa: E402
 
-SUBS = ("on", "off", "status", "spawn", "stop", "name", "report", "send", "keys", "wait", "run")
+SUBS = ("on", "off", "status", "spawn", "stop", "name", "report", "send", "keys", "wait", "run", "restore")
 HINT = "; pass the plan file or the run's .superlite folder, or leave --plan out to use the current directory's run"
 
 
