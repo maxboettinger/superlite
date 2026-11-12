@@ -8,8 +8,8 @@
 From a linked worktree the tool returns that worktree. Otherwise it returns (or creates)
 `<main root>/.claude/worktrees/superlite-<slug>` on branch `superlite/<slug>`. With `--branch NAME` the branch is NAME as given and the folder `superlite-<slug of NAME>` (reused when it exists). With `--dir NAME` the folder is `<main root>/.claude/worktrees/NAME`, NAME as given, case kept (`[A-Za-z0-9][A-Za-z0-9._-]{0,79}`, else exit 2); the branch rule is unchanged; from a linked worktree `--dir` changes nothing.
 The main checkout's
-branch and files are never changed. No repository, a bare one, or no commit yet: the start folder.
-Exit 2 when a plain folder sits at the target path. A new worktree gets a stderr line naming the ignored
+branch and files are never changed. No repository, a real bare one, or no commit yet: the start folder.
+Exit 2 when a plain folder sits at the target path, or when the main checkout carries `core.bare=true` (git treats it as bare; `bare_flag(start)` names the cause, #589). A new worktree gets a stderr line naming the ignored
 top-level entries of the main checkout it lacks (`.env`, `.venv/`; names only, nothing is copied).
 `inplace` sets `inplace` to the reason in the marker `<state folder>/inline-flow.json` that hooks/mark-inline-flow wrote
 (hooks/inline-worktree-guard then lets edits in the main checkout pass) and appends `Ruling: in place - TEXT` to the
@@ -38,6 +38,10 @@ class Taken(Exception):  # O(1)
     """A plain folder (not a worktree) sits at the target path."""
 
 
+class BareCheckout(Exception):  # O(1)
+    """The main checkout carries core.bare=true, so git treats it as bare (#589)."""
+
+
 class BadBranch(Exception):  # O(1)
     """The --branch name is not a valid branch name."""
 
@@ -49,6 +53,21 @@ class BadFolder(Exception):  # O(1)
 def git(root, *args):  # O(output) + process spawn
     r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, encoding="utf-8", errors="replace")  # O(output)
     return r.returncode, r.stdout.strip(), r.stderr.strip()  # O(1)
+
+
+def _bare_common(start):  # O(1) + spawns
+    """-> the common git dir (Path) when `start` is a bare-flagged normal checkout, else None."""
+    if git(start, "rev-parse", "--is-bare-repository")[1] != "true":  # O(1) + spawn
+        return None  # O(1)
+    rc, out, _ = git(start, "rev-parse", "--path-format=absolute", "--git-common-dir")  # O(1) + spawn
+    common = Path(out) if not rc and out else None  # O(1)
+    return common if common is not None and common.name == ".git" else None  # O(1) a real bare repo is not named .git
+
+
+def bare_flag(start):  # O(1) + spawns
+    """-> 'core.bare=true in <config>' when `start` sits in a normal checkout flagged bare, else ''."""
+    common = _bare_common(start)  # O(1) + spawns
+    return "" if common is None else f"core.bare=true in {common / 'config'}"  # O(1)
 
 
 def slug(topic):  # O(n)
@@ -132,6 +151,9 @@ def ensure(topic, start, branch=None, folder=None):  # O(w) + spawns
     if folder is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", folder):  # O(len folder)
         raise BadFolder(f"invalid folder name: {folder}")  # O(1)
     start = Path(start).resolve()  # O(1)
+    common = _bare_common(start)  # O(1) + spawns
+    if common is not None:  # O(1)
+        raise BareCheckout(f"core.bare=true in {common / 'config'}: git treats the checkout {common.parent} as bare; run git -C {common.parent} config core.bare false")  # O(1)
     if no_repo_reason(start):  # O(1) + spawns
         return start, "no-repo"  # O(1)
     top = Path(git(start, "rev-parse", "--show-toplevel")[1])  # O(1) + spawn
@@ -321,7 +343,7 @@ def main(argv=None):  # O(w) + spawns
         return 0  # O(1)
     try:  # O(1)
         path, state = ensure(a.topic, Path(a.repo), a.branch, a.folder)  # O(w) + spawns
-    except (Taken, BadBranch, BadFolder) as ex:  # O(1)
+    except (Taken, BadBranch, BadFolder, BareCheckout) as ex:  # O(1)
         print(f"worktree: {ex}", file=sys.stderr)  # O(1)
         return 2  # O(1)
     except RuntimeError as ex:  # O(1)
