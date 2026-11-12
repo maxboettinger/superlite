@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Turn kinds and wake-ups of a backlog batch's lead (and main) transcript (#680).
+
+    lead_kind(blocks)  -> wait|ship|dispatch|test|sl|edit|read|skill|other|text
+    main_kind(blocks)  -> the `backlog <word>` verb, else other|text
+    waits(path)        -> {"wakeups": {report, busy, timeout, test_wait, lock, prompt}, "blocked_wait_s": float}
+
+Offline, stdlib only; one pass over the transcript.
+"""
+# Complexity notation:
+#   n = transcript lines, b = content blocks in one message
+import json  # O(1)
+import re  # O(1)
+from datetime import datetime  # O(1)
+from pathlib import Path  # O(1)
+
+LEAD_ORDER = ("wait", "ship", "dispatch", "test", "sl", "edit", "read", "skill", "other")  # O(1)
+MAIN_VERBS = ("plan", "decide", "start", "wait", "answer", "tell", "status", "ship", "skip", "unskip", "park", "reset", "notes")  # O(1)
+FLEET_WAIT = re.compile(r"fleet\s+wait\b|fleet_io\.py\s+wait\b|fleet\s+spawn\b.*--wait\b")  # O(1)
+TEST_WAIT = re.compile(r"run_tests\b.*--wait\b")  # O(1)
+LOCK_WAIT = re.compile(r"backlog\s+ship\s+\S+\s+lock\b.*--wait\b")  # O(1)
+SHIP = re.compile(r"backlog\s+ship\b|maxapp\s+ship\b")  # O(1)
+DISPATCH = re.compile(r"fleet\s+(spawn|send|run)\b")  # O(1)
+TEST = re.compile(r"run_tests\b")  # O(1)
+SL = re.compile(r"(^|[\s/])sl\s|\$SL\s|\$\{SL\}\s|\"\$SL\"\s")  # O(1)
+READ_CMD = re.compile(r"^\s*(cat|sed|head|tail|grep|rg|ls|find|wc|git|gh|jq|diff)\b")  # O(1)
+SEGMENT = re.compile(r"&&|\|\||;|\||\n")  # O(1)
+ASSIGN = re.compile(r"^\s*[A-Za-z_]\w*=\S*\s*")  # O(1)
+SKIP_SEG = re.compile(r"^\s*(cd\b|export\s+[A-Za-z_]\w*=)")  # O(1)
+MAIN_CMD = re.compile(r"\bbacklog\s+(" + "|".join(MAIN_VERBS) + r")\b")  # O(1)
+EMPTY = {"report": 0, "busy": 0, "timeout": 0, "test_wait": 0, "lock": 0, "prompt": 0}  # O(1)
+
+
+def _uses(blocks) -> list:  # O(b)
+    return [b for b in blocks or [] if isinstance(b, dict) and b.get("type") == "tool_use"]  # O(b)
+
+
+def _cmd(b) -> str:  # O(1)
+    inp = b.get("input")  # O(1)
+    c = inp.get("command") if isinstance(inp, dict) else None  # O(1)
+    return c if isinstance(c, str) else ""  # O(1)
+
+
+def _wait_kind(cmd: str) -> str | None:  # O(len cmd)
+    if LOCK_WAIT.search(cmd):  # O(len cmd)
+        return "lock"  # O(1)
+    if TEST_WAIT.search(cmd):  # O(len cmd)
+        return "test_wait"  # O(1)
+    if FLEET_WAIT.search(cmd):  # O(len cmd)
+        return "fleet"  # O(1)
+    return None  # O(1)
+
+
+def _is_read(cmd: str) -> bool:  # O(len cmd)
+    for seg in SEGMENT.split(cmd):  # O(len cmd)
+        if SKIP_SEG.match(seg):  # O(len seg)
+            continue  # O(1)
+        while ASSIGN.match(seg):  # O(len seg)
+            seg = ASSIGN.sub("", seg, count=1)  # O(len seg)
+        if not seg.strip():  # O(1)
+            continue  # O(1)
+        return bool(READ_CMD.match(seg))  # O(1)
+    return False  # O(1)
+
+
+def _one_kind(b) -> str:  # O(len cmd)
+    name = b.get("name")  # O(1)
+    if name in ("Agent", "Task"):  # O(1)
+        return "dispatch"  # O(1)
+    if name in ("Write", "Edit", "NotebookEdit"):  # O(1)
+        return "edit"  # O(1)
+    if name in ("Read", "Grep", "Glob"):  # O(1)
+        return "read"  # O(1)
+    if name == "Skill":  # O(1)
+        return "skill"  # O(1)
+    if name != "Bash":  # O(1)
+        return "other"  # O(1)
+    cmd = _cmd(b)  # O(1)
+    if _wait_kind(cmd):  # O(len cmd)
+        return "wait"  # O(1)
+    for kind, rx in (("ship", SHIP), ("dispatch", DISPATCH), ("test", TEST)):  # O(1)
+        if rx.search(cmd):  # O(len cmd)
+            return kind  # O(1)
+    if SL.search(cmd):  # O(len cmd)
+        return "sl"  # O(1)
+    return "read" if _is_read(cmd) else "other"  # O(len cmd)
+
+
+def lead_kind(blocks: list) -> str:  # O(b)
+    uses = _uses(blocks)  # O(b)
+    if not uses:  # O(1)
+        return "text"  # O(1)
+    kinds = {_one_kind(b) for b in uses}  # O(b)
+    return next(k for k in LEAD_ORDER if k in kinds)  # O(1)
+
+
+def main_kind(blocks: list) -> str:  # O(b)
+    uses = _uses(blocks)  # O(b)
+    if not uses:  # O(1)
+        return "text"  # O(1)
+    for b in uses:  # O(b)
+        m = MAIN_CMD.search(_cmd(b)) if b.get("name") == "Bash" else None  # O(len cmd)
+        if m:  # O(1)
+            return m.group(1)  # O(1)
+    return "other"  # O(1)
+
+
+def _ts(e) -> float | None:  # O(1)
+    s = e.get("timestamp")  # O(1)
+    try:  # O(1)
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() if isinstance(s, str) else None  # O(1)
+    except ValueError:  # O(1)
+        return None  # O(1)
+
+
+def _content(e) -> list:  # O(b)
+    m = e.get("message")  # O(1)
+    c = m.get("content") if isinstance(m, dict) else None  # O(1)
+    if isinstance(c, str):  # O(1)
+        return [{"type": "text", "text": c}]  # O(1)
+    return [b for b in c if isinstance(b, dict)] if isinstance(c, list) else []  # O(b)
+
+
+def _result_text(b) -> str:  # O(len)
+    c = b.get("content")  # O(1)
+    if isinstance(c, str):  # O(1)
+        return c  # O(1)
+    if isinstance(c, list):  # O(1)
+        return "\n".join(x.get("text", "") for x in c if isinstance(x, dict) and isinstance(x.get("text"), str))  # O(len)
+    return ""  # O(1)
+
+
+def _fleet_result(text: str) -> str:  # O(len text)
+    lines = [ln.lstrip() for ln in text.splitlines()]  # O(len text)
+    if any(ln.startswith("TIMEOUT") for ln in lines):  # O(len text)
+        return "timeout"  # O(1)
+    if any(ln.startswith("BUSY") for ln in lines):  # O(len text)
+        return "busy"  # O(1)
+    return "report"  # O(1)
+
+
+def waits(path) -> dict:  # O(n)
+    out = {"wakeups": dict(EMPTY), "blocked_wait_s": 0.0}  # O(1)
+    uses: dict = {}  # O(1)
+    seen_results: set = set()  # O(1)
+    first_prompt = True  # O(1)
+    try:  # O(1)
+        lines = Path(path).read_text(encoding="utf-8").splitlines()  # O(n)
+    except Exception:  # O(1)
+        return out  # O(1)
+    wk = out["wakeups"]  # O(1)
+    blocked = 0.0  # O(1)
+    for ln in lines:  # O(n)
+        try:  # O(1)
+            e = json.loads(ln)  # O(len ln)
+        except ValueError:  # O(1)
+            continue  # O(1)
+        if not isinstance(e, dict):  # O(1)
+            continue  # O(1)
+        t = _ts(e)  # O(1)
+        blocks = _content(e)  # O(b)
+        if e.get("type") == "assistant":  # O(1)
+            for b in _uses(blocks):  # O(b)
+                wk_kind = _wait_kind(_cmd(b)) if b.get("name") == "Bash" else None  # O(len cmd)
+                if wk_kind and b.get("id") not in uses:  # O(1)
+                    uses[b.get("id")] = (wk_kind, t)  # O(1)
+        elif e.get("type") == "user":  # O(1)
+            texts = [b.get("text", "") for b in blocks if b.get("type") == "text" and isinstance(b.get("text"), str)]  # O(b)
+            for b in blocks:  # O(b)
+                uid = b.get("tool_use_id")  # O(1)
+                if b.get("type") != "tool_result" or uid not in uses or uid in seen_results:  # O(1)
+                    continue  # O(1)
+                seen_results.add(uid)  # O(1)
+                kind, t0 = uses[uid]  # O(1)
+                if kind == "fleet":  # O(1)
+                    kind = _fleet_result(_result_text(b))  # O(len)
+                wk[kind] += 1  # O(1)
+                if t is not None and t0 is not None:  # O(1)
+                    blocked += max(0.0, t - t0)  # O(1)
+            if e.get("isMeta") or not any(x.strip() and not x.lstrip().startswith("<") for x in texts):  # O(b)
+                continue  # O(1)
+            if first_prompt:  # O(1)
+                first_prompt = False  # O(1)
+            else:  # O(1)
+                wk["prompt"] += 1  # O(1)
+    out["blocked_wait_s"] = round(blocked, 1)  # O(1)
+    return out  # O(1)

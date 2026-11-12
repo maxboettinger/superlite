@@ -412,6 +412,88 @@ def coordinator_record(sl_dir, prices=None, agents=None) -> dict | None:  # O(ma
     return out  # O(1)
 
 
+def _thinking_chars(msg) -> int:  # O(content)
+    return sum(len(b.get("thinking") or "") for b in msg.get("content") or [] if isinstance(b, dict))  # O(content)
+
+
+def session_usage(path, since=None, until=None, kind=None, prices=None, sidechain=False) -> dict:  # O(entries + turns)
+    """One session transcript as tokens {input, cache_read, cache_write (5 m + 1 h), output, thinking}, cost, turns,
+    model (the family with most turns), first/last timestamp and wall_s. A message id counts once (the largest of each
+    counter over its streamed snapshots; output tops up from content length); thinking is
+    `output_tokens_details.thinking_tokens` when the transcript has it, else thinking characters / 3.5 (part of output).
+    since/until (epoch seconds, inclusive) keep a message whose first timestamp is inside. Entries with `isSidechain` are
+    skipped unless sidechain. kind(blocks) -> label groups turns into kinds {label: {turns, cost_usd}} from the
+    message's merged content blocks. A missing or unreadable file gives the empty result."""
+    prices = prices or load_prices()  # O(file)
+    seen: dict[str, dict] = {}  # O(1)
+    for e in read_jsonl(path):  # O(entries)
+        if e.get("type") != "assistant" or (e.get("isSidechain") and not sidechain):  # O(1)
+            continue  # O(1)
+        msg = e.get("message") or {}  # O(1)
+        u = msg.get("usage") or {}  # O(1)
+        t = _ts(e)  # O(1)
+        mid = msg.get("id") or f"anon{len(seen)}"  # O(1)
+        cc = u.get("cache_creation") or {}  # O(1)
+        w1, w5 = cc.get("ephemeral_1h_input_tokens"), cc.get("ephemeral_5m_input_tokens")  # O(1)
+        if w1 is None and w5 is None:  # O(1)
+            w5, w1 = u.get("cache_creation_input_tokens") or 0, 0  # O(1)
+        det = (u.get("output_tokens_details") or {}).get("thinking_tokens")  # O(1)
+        rec = {"input": u.get("input_tokens") or 0, "output": u.get("output_tokens") or 0,  # O(1)
+               "cache_read": u.get("cache_read_input_tokens") or 0, "cache_write": (w5 or 0) + (w1 or 0),
+               "w1h": w1 or 0, "thinking": det if isinstance(det, int) else 0, "has_det": isinstance(det, int),
+               "model": msg.get("model") or "", "first": t, "last": t, "chars": msg_chars(msg),
+               "tchars": _thinking_chars(msg), "blocks": list(msg.get("content") or [])}
+        old = seen.get(mid)  # O(1)
+        if old is None:  # O(1)
+            seen[mid] = rec  # O(1)
+            continue  # O(1)
+        old["chars"] += rec["chars"]  # a repeated snapshot: keep the largest of each counter | O(1)
+        old["tchars"] += rec["tchars"]  # O(1)
+        old["blocks"] += rec["blocks"]  # O(content)
+        for k in ("input", "output", "cache_read", "cache_write", "w1h", "thinking"):  # O(6)
+            old[k] = max(old[k], rec[k])  # O(1)
+        old["has_det"] = old["has_det"] or rec["has_det"]  # O(1)
+        old["model"] = rec["model"] or old["model"]  # O(1)
+        if t is not None:  # O(1)
+            old["first"] = t if old["first"] is None else min(old["first"], t)  # O(1)
+            old["last"] = t if old["last"] is None else max(old["last"], t)  # O(1)
+    tok = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0, "thinking": 0}  # O(1)
+    cost, turns, firsts, lasts = 0.0, 0, [], []  # O(1)
+    fams: dict[str, int] = {}  # O(1)
+    kinds: dict[str, dict] = {}  # O(1)
+    for r in seen.values():  # O(turns)
+        f = r["first"]  # O(1)
+        if f is None and (since is not None or until is not None):  # no timestamp: only an unwindowed read counts it, so windows never double count | O(1)
+            continue  # O(1)
+        if f is not None and ((since is not None and f < since) or (until is not None and f > until)):  # O(1)
+            continue  # O(1)
+        out = max(r["output"], int(r["chars"] / CHARS_PER_TOKEN))  # O(1)
+        think = r["thinking"] if r["has_det"] else int(r["tchars"] / CHARS_PER_TOKEN)  # O(1)
+        fam = fam_key(r["model"])  # O(1)
+        c = cost_of({"input": r["input"], "output": out, "cache_write_5m": r["cache_write"] - r["w1h"], "cache_write_1h": r["w1h"],  # O(1)
+                     "cache_read": r["cache_read"]}, price_for(prices, fam))
+        for k, v in (("input", r["input"]), ("cache_read", r["cache_read"]), ("cache_write", r["cache_write"]),  # O(5)
+                     ("output", out), ("thinking", think)):
+            tok[k] += v  # O(1)
+        cost += c  # O(1)
+        turns += 1  # O(1)
+        fams[fam] = fams.get(fam, 0) + 1  # O(1)
+        if r["first"] is not None:  # O(1)
+            firsts.append(r["first"])  # O(1)
+        if r["last"] is not None:  # O(1)
+            lasts.append(r["last"])  # O(1)
+        if kind is not None:  # O(1)
+            k = kind(r["blocks"])  # O(content)
+            slot = kinds.setdefault(k, {"turns": 0, "cost_usd": 0.0})  # O(1)
+            slot["turns"] += 1  # O(1)
+            slot["cost_usd"] += c  # O(1)
+    first, last = (min(firsts) if firsts else None), (max(lasts) if lasts else None)  # O(turns)
+    return {"turns": turns, "tokens": tok, "cost_usd": round(cost, 6),  # O(kinds log kinds)
+            "model": min(fams, key=lambda f: (-fams[f], f)) if fams else None, "first": first, "last": last,
+            "wall_s": round(last - first, 1) if first is not None and last is not None else None,
+            "kinds": {k: {"turns": v["turns"], "cost_usd": round(v["cost_usd"], 6)} for k, v in sorted(kinds.items())}}
+
+
 def agents_cost(sl_dir, prices=None) -> float:  # O(M + B)
     """Cost of every agent segment in metrics.jsonl, including ones not mapped to a plan task."""
     prices = prices or load_prices()  # O(file)

@@ -222,6 +222,11 @@ def cmd_start(a) -> int:
     if os.environ.get("SUPERLITE_FLEET_WORKER"):  # only Max's session runs this; never a lead or worker
         return _refuse("sl backlog_run start runs only in the main session")  # O(1)
     root = _root()  # O(1)
+    try:  # O(1)
+        import main_cost  # O(1)
+        main_cost.note_session(root)  # O(size)
+    except Exception:  # O(1)
+        pass  # O(1)
     sd, p = root / ".superlite", bs.path(root)  # O(1)
     data = bs.load(p)  # O(size)
     if not data.get("approved_ship"):  # O(1)
@@ -353,6 +358,15 @@ def _stop_text(rec) -> str:
     return text or str(rec.get("last") or "")  # O(len)
 
 
+def _cost(fn, *args):  # O(1)
+    """Cost recording never changes a ship or park outcome."""
+    try:  # O(1)
+        import batch_cost  # O(1)
+        getattr(batch_cost, fn)(*args)  # O(size)
+    except Exception:  # O(1)
+        pass  # O(1)
+
+
 def _park(p, sd, repo, b, reason, out):  # O(size)
     import fleet  # noqa: F401
     import ship_lock
@@ -362,6 +376,7 @@ def _park(p, sd, repo, b, reason, out):  # O(size)
         x = bs.batch(d, bid)
         x["state"], x["reason"] = "parked", reason
     bs.update(p, mark)  # O(size)
+    _cost("record", Path(p).parent.parent, {**b, "state": "parked", "reason": reason}, "parked")  # O(size)
     try:  # O(1)
         ship_lock.release(ship_lock.lock_path(repo), bid)  # O(1)
     except (OSError, ValueError):  # O(1)
@@ -499,6 +514,7 @@ def remove_worktree(root: Path, wt: Path, branch: str, bid: str, head: str | Non
 def _shipped(p, sd, root, b, wt, push: bool = True, head: str | None = None) -> list:  # O(size)
     bid = b["id"]
     bs.update(p, lambda d: bs.batch(d, bid).__setitem__("state", "shipped"))  # O(size)
+    _cost("record", root, b, "no-change" if b.get("no_change") else "shipped")  # O(size)
     if b.get("lead"):  # O(1)
         _stop(sd, b["lead"])  # O(w)
     pr = f" PR #{b['pr']}" if b.get("pr") else ""
@@ -565,6 +581,7 @@ def _round(root, sd, p, states) -> list:
             except fleet.hc.HerdrError:  # O(1)
                 states["v"] = False  # O(1)
         if states["v"] is not False and b["agent"] in states["v"]:  # the lead parked the batch itself and still lives
+            _cost("record", root, b, "parked")  # O(size)
             try:  # O(1)
                 ship_lock.release(ship_lock.lock_path(data.get("repo", "")), b["id"])  # O(1)
             except (OSError, ValueError):  # O(1)
@@ -726,6 +743,11 @@ def run_end(root: Path, sd: Path, p: Path) -> list:
     import fleet_state
     if not fleet_state.is_on(sd):  # O(1)
         return []  # O(1)
+    try:  # O(1)
+        import main_cost  # O(1)
+        main_cost.record_main(root)  # O(size)
+    except Exception:  # O(1)
+        pass  # O(1)
     head = "run end: every batch shipped or parked; "  # O(1)
     workers = fleet_state.load(sd).get("workers", {})  # O(w)
     num = lambda w: int(re.sub(r"\D", "", w) or 0)  # O(len)
@@ -744,6 +766,11 @@ def run_end(root: Path, sd: Path, p: Path) -> list:
 
 def cmd_wait(a) -> int:
     root = _root()  # O(1)
+    try:  # O(1)
+        import main_cost  # O(1)
+        main_cost.note_session(root)  # O(size)
+    except Exception:  # O(1)
+        pass  # O(1)
     sd, p = root / ".superlite", bs.path(root)  # O(1)
     if not any(b["state"] == "running" or (b["state"] == "parked" and b.get("lead")) for b in bs.load(p)["batches"]):  # O(b)
         print("\n".join(["no running batch", *run_end(root, sd, p)]))  # O(w)
