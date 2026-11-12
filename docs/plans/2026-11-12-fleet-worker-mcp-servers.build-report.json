@@ -1,0 +1,115 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-12T22:48:08 (plan edited since)",
+ "headline": {
+  "wall_min": {
+   "projected": 3.399,
+   "actual": 11.475
+  },
+  "cost_usd_agents": {
+   "projected": 0.49156,
+   "actual": 0.95889
+  },
+  "task_min": {
+   "projected": 13.007,
+   "actual": 2.873
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 10
+  }
+ },
+ "cost_split": {
+  "agents_usd": 0.65886,
+  "rework_usd": 0.30003,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 0.95889
+ },
+ "concurrency": {
+  "peak": 4,
+  "projected_peak": 4
+ },
+ "critical_path": {
+  "actual": [
+   "T2"
+  ],
+  "projected": [
+   "T2"
+  ],
+  "projected_min": 3.399
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 4,
+   "cost_usd": 0.95889
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 8031,
+   "failed": 0,
+   "skipped": 11,
+   "seconds": 184.9,
+   "recorded": false
+  },
+  "tests_newer": null,
+  "tests_from": "progress.md",
+  "first_time_pass": 1,
+  "first_time_n": 4,
+  "rework_dispatches": 3,
+  "open_incidents": 6
+ },
+ "tasks": [
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 3.348,
+   "actual_min": 0.557,
+   "delta": {
+    "abs": -2.7913,
+    "pct": -83.4
+   },
+   "cost_usd": 0.224284,
+   "first_time_pass": false
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 3.399,
+   "actual_min": 0.767,
+   "delta": {
+    "abs": -2.6323,
+    "pct": -77.4
+   },
+   "cost_usd": 0.293319,
+   "first_time_pass": false
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 3.015,
+   "actual_min": 0.557,
+   "delta": {
+    "abs": -2.4583,
+    "pct": -81.5
+   },
+   "cost_usd": 0.202791,
+   "first_time_pass": false
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 3.245,
+   "actual_min": 0.993,
+   "delta": {
+    "abs": -2.2517,
+    "pct": -69.4
+   },
+   "cost_usd": 0.238496,
+   "first_time_pass": true
+  }
+ ]
+}
