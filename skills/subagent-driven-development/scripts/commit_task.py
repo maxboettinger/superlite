@@ -17,6 +17,7 @@ agents) for the updated ledger, with the run's batch setting (`--batch`, else th
 `dispatch` does); a dispatch failure only warns, the commits stand. (5) A `--plan` naming a run folder resolves to its plan file (`orchestrator.plan_file`; none: exit 2).
 (6) With `--dispatch` and fleet on, one `review: Tn (why); run sl fleet spawn --for-review Tn --plan P` line per task this call committed that `fleet_io.review_hints` lists.
 (7) Refuses while .superlite/render-edits.json lists applied render edits (B118 follow-up).
+(8) A new checkpoint of a task whose fleet report shows no red run (`fleet_io.red_gap`) prints `Tn: no red run (why); its review must prove each new test can fail` on stderr (#606).
 
 `--also FILE` (several tasks: the first gets the files; needs `--ruling TEXT`) commits FILE with that task though
 another task owns it or nobody does, and writes `- Ruling: Tn also commits FILE - TEXT` to
@@ -632,6 +633,17 @@ def brief_names(text, f):  # O(len text)
     return re.search(r"(?<![\w./-])" + re.escape(f) + r"(?![\w/-])", text) is not None  # O(len text)
 
 
+def red_note(sd, tid, owns):  # the stderr line for a task whose fleet report shows no red run, else None (#606) | O(r*B)
+    if not (Path(sd) / "fleet" / "reports").is_dir():  # O(1) stat
+        return None  # O(1)
+    try:  # O(1) the note runs after the commit: a failed lookup must not crash the call
+        import fleet_io  # O(1) lazy: only a fleet run has reports
+        gap = fleet_io.red_gap(sd, tid, owns)  # O(r*B)
+    except Exception:  # O(1)
+        return None  # O(1)
+    return f"{tid}: no red run ({gap}); its review must prove each new test can fail" if gap else None  # O(len)
+
+
 def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (status, add, commit, rev-parse)
     """Commit one task; (exit code, sha or None). Files other tasks own are left alone. A task not committed leaves its
     reason in a.failed[tid] for the `Tn FAILED: <reason>` line."""
@@ -955,6 +967,9 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
                 print(f"{tid}: no change since its last checkpoint {sha}")  # O(1)
             else:  # O(1)
                 print(sha if len(a.task) == 1 else f"{tid} {sha}")  # O(1)
+                note = red_note(sd, tid, info[tid]["owns"])  # O(r*B)
+                if note:  # O(1)
+                    print(note, file=sys.stderr)  # O(1)
                 if tid in a.probe_files:  # O(1)
                     pf = a.probe_files[tid]  # O(1)
                     tests = [Path(f).stem for f in pf if Path(f).name != "_probe_adapter.py"]  # O(m)
