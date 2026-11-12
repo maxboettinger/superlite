@@ -40,11 +40,13 @@ def _finish(monkeypatch, tmp_path, capsys, text):
 
 def test_wait_line_appends_partial(monkeypatch, tmp_path, capsys):
     assert "APPROVED findings=0 partial " in _finish(monkeypatch, tmp_path, capsys, PART + JSON)
+    assert json.loads((tmp_path / "fleet" / "reports" / "final.json").read_text(encoding="utf-8"))["partial"] is True
 
 
 def test_plain_approval_has_no_partial(monkeypatch, tmp_path, capsys):
     out = _finish(monkeypatch, tmp_path, capsys, "Verdict: APPROVED\nChecked: head: read\n" + JSON)
     assert "APPROVED findings=0 " in out and " partial" not in out
+    assert "partial" not in json.loads((tmp_path / "fleet" / "reports" / "final.json").read_text(encoding="utf-8"))
 
 
 def test_reviewer_texts_exact():
