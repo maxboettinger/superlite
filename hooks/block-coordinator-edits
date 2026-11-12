@@ -551,6 +551,7 @@ project_code() {
     return 1
   fi
   case "/$rel/" in */../*|*/./*) return 0 ;; esac   # docs/../src/a.py is not under docs/
+  render_listed "$rel" && return 1   # a throwaway render edit recorded by `sl render_edit start`
   if allowed_rel "$rel"; then link_deny "$rel"; return; fi   # allowed by its text: still through a link?
   if wt_rel "$rel"; then   # a linked worktree inside the project: judged from its root
     lower "$WREL"
@@ -558,6 +559,14 @@ project_code() {
     if allowed_rel "$WREL"; then link_deny "$rel"; return; fi
   fi
   return 0
+}
+
+# render_listed REL: succeeds when an active run's .superlite/render-edits.json holds the quoted key "REL": {.
+render_listed() {
+  local rj=""
+  [ "$active" = 1 ] && [ "$human" != 1 ] && [ -f "$sd/render-edits.json" ] || return 1
+  IFS= read -r -d '' rj < "$sd/render-edits.json"
+  [[ $rj == *"\"$1\": {"* ]]
 }
 
 # allowed_rel REL: succeeds when the coordinator may write the project-relative REL in the guard's state.
@@ -722,6 +731,7 @@ else
     '- Fix: give a fixer a finding id F-<Tn>-<n> and the note path .superlite/fixes/<id>.md, tiered per skills/subagent-driven-development/fixing.md: known cause, one module -> fixer-sonnet; cross-module -> fixer-sonnet-high; unknown cause -> fixer-opus.' \
     '- Wave 0 skeleton/stub/config files belong to an implementer-haiku task.' \
     '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file or folder git does not track and no task Owns.' \
+    '- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; `sl render_edit restore` undoes it.' \
     '- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete .superlite by hand.' >&2
 fi
 if [ "$prot" != 1 ]; then   # (prot 2, the cache, names its target too)   name what was judged: a path as "target", a command as "command"

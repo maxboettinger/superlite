@@ -138,7 +138,17 @@ class _Ctx:  # O(p)
         self.cache_dirs = {x.lower() for d in dirs for x in (d, os.path.realpath(d))}  # as written and resolved | O(p)
         self.caches = {d.rstrip("/") + "/python" for d in self.cache_dirs}  # protected in every mode | O(1)
         folders = [_clean(_winpath(d)) for d in sds if isinstance(d, str) and d and "\0" not in d]  # O(s * p)
+        self.render = _render_files(self.sd) if mode == "active" else frozenset()  # files `sl render_edit start` recorded | O(f)
         self.prot_abs = {x.lower() for d in folders for n in NAMES for x in (d.rstrip("/") + "/" + n, os.path.realpath(d).rstrip("/") + "/" + n)}  # run files of state folders, by absolute path | O(s * p)
+
+
+def _render_files(sd):  # O(f) | the root-relative files of <sd>/render-edits.json; any doubt is none
+    try:  # O(1)
+        with open(os.path.join(sd, "render-edits.json"), encoding="utf-8") as f:  # O(f)
+            files = json.load(f).get("files")  # O(f)
+        return frozenset(k for k in files if isinstance(k, str)) if isinstance(files, dict) else frozenset()  # O(f)
+    except (OSError, ValueError, AttributeError, TypeError):  # O(1)
+        return frozenset()  # O(1)
 
 
 class _Unknown(Exception):  # O(1)
@@ -319,6 +329,8 @@ def _judge_path(path, base, ctx, name=None, stays=True):  # O(p + depth) | the p
         return Verdict(".", absolute, ctx.kind) if ctx.enforce else None  # O(1)
     if rel.lower() in PROTECTED:  # O(p)
         return Verdict(rel, absolute, "protected")  # O(1)
+    if rel in ctx.render:  # a throwaway render edit recorded by `sl render_edit start` | O(1)
+        return None  # O(1)
     if ctx.enforce and _hardlinked(real):  # a second name for a file that may be code: a write here writes there | O(1)
         return Verdict(rel, absolute, ctx.kind)  # O(1)
     wt = _wt_rel(rel, ctx.projreal) if (ctx.enforce or rel.lower().endswith(NAMES)) else None  # O(depth)
@@ -1605,6 +1617,8 @@ MESSAGES = {  # O(1)
              "- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
              "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file or folder git "
              "does not track and no task Owns.",
+             "- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; "
+             "`sl render_edit restore` undoes it.",
              "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
              ".superlite by hand."],
 }  # O(1)
