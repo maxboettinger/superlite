@@ -10,6 +10,7 @@ The README covers what superlite is, the results, and how to install and use it.
 | [Tools](tools.md) | Every `sl` tool, one honest line each |
 | [Config](config.md) | `models.json`, `predictor.json`, `routing.json` |
 | [Language](language.md) | Any project language; what is Python-only |
+| [Simulator limits](simulator-limits.md) | Apple simulator limits that runs have met, and what to do instead |
 | [How the rules are enforced](gates.md) | The gates that hold the rules in place with code |
 | [Example review plan](example-review-plan.md) | What a human orchestrator is shown before approving a build |
 | [MVP flow](mvp-flow.md) | Design of MVP mode: feature plan, clickable prototype, then the normal build |
