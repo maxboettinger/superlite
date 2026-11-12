@@ -14,6 +14,11 @@ VER_RE = re.compile(r"(?<![\w.])(\d+\.\d+(?:\.\d+)?)(?![\w])")
 COMMIT_RE = re.compile(r"\b[0-9a-fA-F]{7,40}\b")
 REF_RE = re.compile(r"#\d+|\b[A-Z][A-Z0-9_]*-[1-9][0-9]*\b|\bB\d+\b")
 CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
+COMMENTS_MAX = 3
+COMMENT_LIMIT = 2000
+CHUNK = 50
+TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 def _clean(s: object) -> str:
@@ -57,7 +62,17 @@ def split_shipped(trusted: list[dict], batches: list[dict], merged: dict, pin: l
     for it in trusted:  # O(trusted)
         n = it["number"]
         r, p = _ref(n), _plain(n)  # O(1)
-        if n in shipped:  # O(1)
+        if it.get("reopened") and (n in shipped or n in merged):  # O(1)
+            kept.append(it)
+            if n in shipped:  # O(1)
+                b = shipped[n]
+                pr = f" (PR #{_clean(b['pr'])})" if b.get("pr") else ""  # O(1)
+                lines.append(f"reopened: {r} was shipped in {_clean(b.get('id'))}{pr}: planned again")  # O(1)
+            else:
+                lines.append(f"reopened: {r} named by merged {merged[n]}: planned again")  # O(1)
+        elif it.get("reopened"):  # O(1)
+            kept.append(it)
+        elif n in shipped:  # O(1)
             b = shipped[n]
             pr = f" (PR #{_clean(b['pr'])})" if b.get("pr") else ""  # O(1)
             lines.append(f"already shipped: {r} in {_clean(b.get('id'))}{pr}: not planned again")  # O(1)
@@ -70,6 +85,68 @@ def split_shipped(trusted: list[dict], batches: list[dict], merged: dict, pin: l
         else:
             kept.append(it)
     return kept, dropped, lines
+
+
+def _cut(body: object) -> str:
+    b = str(body or "")  # O(len)
+    return b[:COMMENT_LIMIT] + "\n[truncated]" if len(b) > COMMENT_LIMIT else b  # O(len)
+
+
+def _gh_chunk(owner: str, name: str, nums: list, public: bool) -> dict:
+    import backlog
+    aliases = "".join(f"i{n}:issue(number:{n}){{stateReason comments(last:10){{nodes{{authorAssociation author{{login}} body}}}}}}" for n in nums)  # O(chunk)
+    q = f'query{{repository(owner:"{owner}",name:"{name}"){{{aliases}}}}}'  # O(chunk)
+    res = backlog._gh(["api", "graphql", "-f", "query=" + q])
+    repo = ((res or {}).get("data") or {}).get("repository") or {}  # O(1)
+    out = {}
+    for n in nums:  # O(chunk * comments)
+        node = repo.get(f"i{n}") or {}  # O(1)
+        nodes = ((node.get("comments") or {}).get("nodes")) or []  # O(1)
+        keep = [c for c in nodes if c and (not public or c.get("authorAssociation") in TRUSTED)]  # O(nodes)
+        cs = [{"author": (c.get("author") or {}).get("login") or "ghost", "body": _cut(c.get("body"))} for c in keep[-COMMENTS_MAX:]]  # O(1)
+        out[n] = (cs, node.get("stateReason") == "REOPENED")  # O(1)
+    return out
+
+
+def with_comments(trusted: list[dict], repo: str, public: bool, jira: bool = False) -> tuple[list[dict], list[str]]:
+    """(items, lines): each trusted issue plus its latest comments (oldest first) and reopened=True when GitHub reports a reopen; lines name every read that failed."""
+    if not trusted:  # O(1)
+        return [], []
+    import backlog
+    lines: list[str] = []
+    if jira:
+        out = []
+        for it in trusted:  # O(trusted)
+            key = it["number"]
+            try:
+                res = backlog._acli(["jira", "workitem", "comment", "list", "--key", str(key), "--json", "--limit", str(COMMENTS_MAX), "--order", "-created"])
+                cs = []
+                for c in reversed((res or {}).get("comments") or []):  # O(comments)
+                    body = c.get("body")
+                    body = backlog.adf_text(body) if isinstance(body, dict) else body  # O(len)
+                    a = c.get("author")
+                    a = (a.get("displayName") or a.get("name")) if isinstance(a, dict) else a  # O(1)
+                    cs.append({"author": _clean(a or "ghost"), "body": _cut(body)})  # O(len)
+                out.append({**it, "comments": cs[-COMMENTS_MAX:]})  # O(1)
+            except RuntimeError as e:
+                out.append({**it, "comments": []})
+                lines.append(f"comments: not read for {_clean(key)} ({_clean(e)[:120]})")  # O(1)
+        return out, lines
+    if not REPO_RE.match(repo or ""):  # O(len)
+        return [{**it, "comments": []} for it in trusted], [f"comments: not read (bad repo name {_clean(repo)}); triage sees the issue bodies only"]  # O(trusted)
+    owner, name = repo.split("/", 1)  # O(1)
+    got: dict = {}
+    for i in range(0, len(trusted), CHUNK):  # O(trusted)
+        part = trusted[i:i + CHUNK]  # O(chunk)
+        try:
+            got.update(_gh_chunk(owner, name, [it["number"] for it in part], public))
+        except RuntimeError as e:
+            lines.append(f"comments: not read ({_clean(e)[:120]}); triage sees the issue bodies only")  # O(1)
+    out = []
+    for it in trusted:  # O(trusted)
+        cs, reopened = got.get(it["number"], ([], False))  # O(1)
+        out.append({**it, "comments": cs, **({"reopened": True} if reopened else {})})  # O(1)
+    return out, lines
 
 
 def named_files(body: str, tracked: list[str]) -> list[str]:
