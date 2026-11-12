@@ -3,11 +3,12 @@
 
     run_tests.py [--fast PATHS... | --full] [--log PATH] [--ledger PATH]
                  [--summary PATH] [--background] [-m EXPR]
-    run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] --command CMD   (a full result run outside run_tests; report only, closes no incidents)
+    run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] [--scope WORD] --command CMD   (a result run outside run_tests; mode `recorded` with its scope, default external, never the full run; report only, closes no incidents)
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
 
 The test command comes from, in order: the project's `.superlite/test-cmd.json`, the main checkout's, the user-level entry for the detected language (`~/.config/superlite/test-cmd.json`), then detection.
 Every exit path leaves a summary: a usage error, an unknown task, a missing pytest, an unprepared tree or a crash (`run_tests crashed: ...`, exit 2) writes a red zero summary; `--wait` names a background run whose process died (its pid sits in `<summary>.pid`) and the log of one that timed out.
+A foreground full run also keeps its summary as `test-summary-full.json` beside the summary; no later fast, recorded or failed run overwrites it (#593). A `--fast` test file carrying a marker the project's addopts `-m` deselects runs with `-m "<marker> or (<addopts expr>)"` and says so on stderr; an explicit `-m` wins.
 A red Swift (xcodebuild) run reports each failure at its file and line (`failure_sites`, #499); a counted `--fast` run limited to Swift files covers them, so a later green run closes those files' located failures and an uncounted run closes none.
 When a run prints no test count and exits 0, the stop names the runner's own "no tests" line (`; runner: <line>`).
 Every run keeps its full output (pytest with `-rP`, so a passing test's prints show) in `<summary stem>.output.log` beside the summary (newest 20 kept); the summary's `output` names it, a foreground run prints `run_tests: output <path>` and `--wait` prints `output: <path>` right before its summary line (#501).
@@ -64,6 +65,7 @@ Stdlib only.
 #   sk = skipped tests, I = lines in the incident log (B = its bytes), d = depth of a dotted classname,
 #   p = pytest path args, O = bytes of pytest output, c = length of an incident context, w = width of one line
 import argparse  # O(1)
+import ast  # O(1)
 import contextlib  # O(1)
 import errno  # O(1)
 import configparser  # O(1)
@@ -97,6 +99,7 @@ import trees  # noqa: E402  # O(1) module load
 
 
 DEFAULT_SUMMARY = ".superlite/test-summary.json"  # O(1)
+FULL_COPY = "test-summary-full.json"  # O(1) the newest foreground full result, beside the summary (#593)
 POLL_SECONDS = 0.5  # O(1)
 DEFAULT_WAIT = 540.0  # O(1)
 DEFAULT_LIMIT = 3600.0  # O(1) wall-clock seconds for one test run; 0 = none
@@ -642,6 +645,8 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
     WRITTEN.add(p.resolve())  # O(1)
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")  # O(k + sk) dumps + write
     tmp.replace(p)  # O(1) rename
+    if mode == "full" and not error and run_stem(p.name) is None and not p.stem.endswith("-full"):  # a foreground full result keeps a copy no later run overwrites (#593) | O(1)
+        atomic_write(p.with_name(f"{p.stem}-full{p.suffix}"), p.read_text(encoding="utf-8"))  # O(summary size)
 
 
 def add_incidents(log, items, task=None, extra=None, raw=None):  # O(total c) + one locked append (no spawn in process)
@@ -1055,6 +1060,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--skipped", type=int, default=0, help="--record: tests that were skipped (default 0)")  # O(1)
     ap.add_argument("--seconds", type=float, default=0.0, help="--record: run time in seconds (default 0)")  # O(1)
     ap.add_argument("--command", default=None, help="--record: the command that ran them")  # O(1)
+    ap.add_argument("--scope", default=None, help="--record: one word naming what ran (default external; never full or fast)")  # O(1)
     ap.add_argument("--run-id", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     ap.add_argument("--publish", default=None, help=argparse.SUPPRESS)  # O(1) set by --background
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
@@ -1071,6 +1077,9 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     root = project_root(cwd) if a.wait_path is None else None  # --wait paths are absolute | O(d)
     if root is not None and root != cwd:  # O(1)
         to_root(a, argv, cwd, root)  # O(len argv + p)
+    if a.scope is not None and not a.record:  # O(1)
+        print("run_tests: --scope needs --record", file=sys.stderr)  # O(1)
+        return 2  # O(1)
     if a.record:  # O(1)
         return record_run(a)  # O(1)
     if a.wait_path is not None:  # O(1)
@@ -1164,12 +1173,17 @@ def record_run(a):  # a full result the agent ran outside run_tests: reports onl
         if val < 0:  # O(1)
             print(f"run_tests: {flag} must be >= 0", file=sys.stderr)  # O(1)
             return 2  # O(1)
-    write_summary(a.summary, "full", {"passed": a.passed, "failed": a.failed, "skipped": a.skipped, "skipped_tests": []}, [], a.seconds, started=a.started)  # O(1)
+    scope = "external" if a.scope is None else a.scope  # O(1)
+    if not re.fullmatch(r"\w+", scope) or scope in ("full", "fast"):  # O(1)
+        print(f"run_tests: --scope must be one word other than full or fast (a recorded run never counts as the full run): {scope}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    write_summary(a.summary, "recorded", {"passed": a.passed, "failed": a.failed, "skipped": a.skipped, "skipped_tests": []}, [], a.seconds, started=a.started)  # O(1)
     data = json.loads(Path(a.summary).read_text(encoding="utf-8"))  # O(1)
+    data["scope"] = scope  # O(1)
     data["recorded"] = a.command[:200]  # O(1)
     atomic_write(a.summary, json.dumps(data, ensure_ascii=False, indent=1) + "\n")  # O(1)
     pointer_path(a.summary).unlink(missing_ok=True)  # an older background run must not shadow the recorded result | O(1)
-    ct.append_ledger(a.ledger, f"- tests full passed={a.passed} failed={a.failed} skipped={a.skipped} seconds={round(a.seconds, 1):g} recorded")  # O(1)
+    ct.append_ledger(a.ledger, f"- tests {scope} passed={a.passed} failed={a.failed} skipped={a.skipped} seconds={round(a.seconds, 1):g} recorded")  # O(1)
     print(f"{a.passed} {a.failed} {a.skipped} {a.seconds:.1f}")  # O(1)
     return 0  # O(1)
 
@@ -1338,6 +1352,43 @@ def addopts_marker(root):  # O(file) (marker expression, config file name) of th
     return None  # O(1)
 
 
+def file_markers(path):  # O(file) the `<x>.mark.X` and `mark.X` names a test file uses (decorators, pytestmark); empty when unreadable or unparsable
+    try:  # O(1)
+        tree = ast.parse(Path(path).read_text(encoding="utf-8"))  # O(file)
+    except (OSError, SyntaxError, ValueError):  # O(1)
+        return set()  # O(1)
+    found = set()  # O(1)
+    for n in ast.walk(tree):  # O(nodes)
+        if isinstance(n, ast.Attribute) and ((isinstance(n.value, ast.Attribute) and n.value.attr == "mark")
+                                             or (isinstance(n.value, ast.Name) and n.value.id == "mark")):  # `<x>.mark.NAME` and a bare `mark.NAME` | O(1)
+            found.add(n.attr)  # O(1)
+    return found  # O(1)
+
+
+def honoured_marker(paths, root="."):  # O(p + files) (-m expression, notice) for test files marked with a marker the addopts `-m` deselects, else None
+    found = addopts_marker(root)  # O(file)
+    if not found:  # O(1)
+        return None  # O(1)
+    expr, cfg = found  # O(1)
+    negated = list(dict.fromkeys(re.findall(r"\bnot\s+(\w+)", expr)))  # O(len expr) EXPR's order
+    used, first = set(), None  # O(1)
+    for p in paths:  # O(p)
+        f = p.split("::")[0]  # O(len p)
+        full = Path(root) / f  # O(1)
+        if not f.endswith(".py") or not full.is_file():  # O(1)
+            continue  # O(1)
+        hit = set(file_markers(full)) & set(negated)  # O(file)
+        if hit:  # O(1)
+            used |= hit  # O(1)
+            first = first or (f, hit)  # O(1)
+    if not used:  # O(1)
+        return None  # O(1)
+    names = [m for m in negated if m in used]  # O(1)
+    new = " or ".join([*names, f"({expr})"])  # O(1)
+    shown = ", ".join(m for m in negated if m in first[1])  # O(1)
+    return new, f"run_tests: {first[0]} is marked {shown}, which addopts -m '{expr}' in {cfg} deselects; running with -m '{new}'"  # O(1)
+
+
 def nothing_collected(output, paths, marker, root):  # O(len output + file) why a pytest run (exit 5) collected nothing
     m = re.search(r"(\d+) deselected", output)  # O(len output)
     if m:  # O(1)
@@ -1449,6 +1500,12 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         if marked is None:  # O(1)
             return usage_error(a, label, f"-m EXPR selects pytest markers; the {spec['language']} test command `{spec['command']}` is not pytest")  # O(summary size)
         spec = {**spec, "command": marked}  # O(1)
+    elif not a.marker and not spec["python"] and paths and spec.get("source") != "plan":  # a --fast test file with a deselected marker, in a pytest test-cmd.json command (#593) | O(p + files)
+        honoured = honoured_marker(paths, ".")  # O(p + files)
+        marked = with_marker(spec["command"], honoured[0]) if honoured else None  # O(len)
+        if marked is not None:  # O(1)
+            spec = {**spec, "command": marked}  # O(1)
+            print(honoured[1], file=sys.stderr)  # O(1)
     if spec["python"] and paths:  # a missing path is a usage error, not a no-result stop (#235) | O(p)
         gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd())  # O(p)
         if gone:  # O(1)
@@ -1518,7 +1575,13 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             base = pyrun.pytest_cmd()  # O(1) + at most one probe spawn
         except pyrun.PytestUnavailable as e:  # O(1)
             return usage_error(a, label, str(e))  # the summary is written too | O(summary size)
-        cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), *(["-m", a.marker] if a.marker else []), "-q", "-rP", "-p", "no:cacheprovider",  # O(p) -rP: a passing test's prints reach the output log (#501)
+        marker = a.marker  # O(1)
+        if not marker and paths:  # a file marked with a marker the addopts deselect runs its tests (#593) | O(p + files)
+            honoured = honoured_marker(paths, ".")  # O(p + files)
+            if honoured:  # O(1)
+                marker = honoured[0]  # O(1)
+                print(honoured[1], file=sys.stderr)  # O(1)
+        cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), *(["-m", marker] if marker else []), "-q", "-rP", "-p", "no:cacheprovider",  # O(p) -rP: a passing test's prints reach the output log (#501)
                "-o", "junit_family=xunit1", f"--junitxml={xml_path}"]  # O(1)
         with full_suite_lock(a, label):  # O(wait / LOCK_POLL)
             t0 = time.monotonic()  # O(1)
