@@ -274,8 +274,12 @@ def park(data: dict, bid: str, reason: str) -> str:
     return f"{bid} parked: {reason}"
 
 
+def owed(b: dict) -> bool:  # a shipped batch whose worktree cleanup failed and whose folder still exists
+    return bool(b.get("cleanup_owed")) and bool(b.get("worktree")) and Path(b["worktree"]).is_dir()  # O(1)
+
+
 def in_round(data: dict, b: dict) -> bool:
-    if b["state"] != "shipped":  # O(1)
+    if b["state"] != "shipped" or owed(b):  # O(1)
         return True  # O(1)
     if isinstance(data.get("round"), list):  # O(1)
         return b["id"] in data["round"]  # O(round)
@@ -315,7 +319,11 @@ def status_lines(data: dict, all_: bool = False) -> list:
         else:
             nxt = (b.get("version") or "-") + "".join(f" {k}={len(b[k])}" for k in ("followups", "undone") if b.get(k)) + (" OPEN " + " ".join(ref(i) for i in b["open_issues"]) if b.get("open_issues") else "")
         issues = " ".join(ref(i) for i in b.get("issues", []))
+        nxt += " cleanup owed" if s == "shipped" and owed(b) else ""  # O(1)
         lines.append(f"{b['id']} | {issues} | {s} | {b.get('lead') or '-'} | {'#%s' % b['pr'] if b.get('pr') else '-'} | {nxt}")
+    for b in rows:  # O(batches)
+        if b["state"] == "shipped" and owed(b):  # O(1)
+            lines.append(f"cleanup owed: {b['id']} {b['worktree']}: {b['cleanup_owed']}; fix it, then maxapp ship -C {b['worktree']}")  # O(1)
     lines.extend(left_out_lines(data))
     if nl:
         lines.append(nl)

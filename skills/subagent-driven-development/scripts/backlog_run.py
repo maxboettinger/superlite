@@ -16,6 +16,7 @@ A lead whose brief Herdr refuses (after send_brief's one resend on a stall) is s
 A resumed batch's lead brief ends with the worktree state (commits, uncommitted files, answers already given).
 `wait` tells a live lead once when the Herdr panes of its fleet workers stay gone for GONE_MS (a crash), and flags it.
 `answer` takes one answer rule (backlog_answer, #586): a label, a label plus a note, or free text up to 2000 characters. `_shipped` also runs for a batch without lead or worktree (`ship B done` on a planned batch, #585).
+`remove_worktree` is the git-only worktree and branch removal (a PR head gets `-D`, #589); `_shipped(push=False)` uses it, never maxapp. A failed cleanup line carries git's error and the core.bare cause and is stored as the batch's `cleanup_owed`. `start` blocks a batch whose worktree.ensure raises or gives the main checkout.
 Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
 """
 # Complexity notation: b = batches, w = workers, m = lines of metrics.jsonl
@@ -243,8 +244,19 @@ def cmd_start(a) -> int:
             code = 2  # O(1)
             continue  # O(1)
         batch = bs.batch(data, bid)  # O(b)
-        wt, _ = worktree.ensure(f"{bid.lower()}-{batch['topic']}", root)  # O(w) + spawns
+        try:  # O(1)
+            wt, state = worktree.ensure(f"{bid.lower()}-{batch['topic']}", root)  # O(w) + spawns
+        except (worktree.BareCheckout, worktree.Taken, worktree.BadBranch, RuntimeError) as e:  # O(1)
+            print(f"BLOCKED: {bid} not started: {e}")  # O(1)
+            code = 2  # O(1)
+            continue  # O(1)
         wt = Path(wt)  # O(1)
+        linked = wt.resolve() != Path(root).resolve() and (Path(root) / worktree.PARENT).resolve() in wt.resolve().parents  # O(1)
+        if state not in ("created", "exists") or not linked:  # O(1)
+            cause = worktree.bare_flag(root)  # O(1) + spawn
+            print(f"BLOCKED: {bid} not started: worktree ensure gave {wt} ({state}), not a linked worktree under {root}/.claude/worktrees" + (f"; cause: {cause}" if cause else ""))  # O(1)
+            code = 2  # O(1)
+            continue  # O(1)
         backlog.seed_test_cmd(root, wt)  # main's .superlite/test-cmd.json before the brief (#334) | O(size)
         branch = "superlite/" + wt.name.replace("superlite-", "", 1)  # O(1)
         ctx = {"sl": str(HERE / "sl"), "backlog_md": str(HERE.parent / "backlog.md"), "repo": data.get("repo", ""),
@@ -278,7 +290,7 @@ def cmd_start(a) -> int:
         def mark(d, bid=bid, rec=rec, wt=wt, branch=branch):  # O(b)
             x = bs.batch(d, bid)
             x.update({"state": "running", "lead": rec["id"], "agent": rec["name"], "worktree": str(wt), "branch": branch,
-                      "since": _now_ms(), "reason": "", "ship_runs": 0, "reprompted": False, "question_reprompted": False,
+                      "since": _now_ms(), "reason": "", "ship_runs": 0, "ship_waits": 0, "reprompted": False, "question_reprompted": False,
                       "gone_seen": {}, "gone_workers": []})
         bs.update(p, mark)  # O(size)
         print(f"{bid} running lead={rec['id']} worktree={wt}")  # O(1)
@@ -374,18 +386,31 @@ def drop_worktree(root: Path, b: dict) -> list:  # O(cmd)
     fail = project_cleanup(root, Path(wt), br, bid)  # O(cmd)
     if fail:  # O(1)
         out.append(fail)  # O(1)
+    return out + remove_worktree(root, Path(wt), br, bid)  # O(cmd)
+
+
+def _git_err(msg: str) -> str:  # the last fatal:/error: line of git's output, else ""
+    ls = [x.strip() for x in msg.splitlines() if x.strip().startswith(("fatal:", "error:"))]  # O(out)
+    return ls[-1][:200] if ls else ""  # O(1)
+
+
+def remove_worktree(root: Path, wt: Path, branch: str, bid: str, head: str | None = None) -> list:  # O(cmd)
     rc, msg = _run(["git", "worktree", "remove", str(wt)], root)  # O(cmd)
     if rc:  # O(1)
-        out.append(f"{bid} worktree {wt} kept: {(msg.splitlines() or ['failed'])[-1][:120]}")  # O(len)
-        return out  # O(1)
+        last = _git_err(msg) or ([x for x in msg.splitlines() if x.strip()] or ["failed"])[-1].strip()[:200]  # O(out)
+        return [f"{bid} worktree {wt} kept: {last}"]  # O(1)
     line = f"{bid} worktree {wt} removed"  # O(1)
-    if br:  # O(1)
-        rc, _ = _run(["git", "branch", "-d", br], root)  # O(cmd)
-        line += f", branch {br} deleted" if rc == 0 else f", branch {br} kept (not merged)"  # O(1)
-    return out + [line]  # O(1)
+    if branch:  # O(1)
+        rc, _ = _run(["git", "branch", "-d", branch], root)  # O(cmd)
+        if rc and head:  # O(1)
+            rc2, tip = _run(["git", "rev-parse", branch], root)  # O(cmd)
+            if rc2 == 0 and tip.strip() == head and _run(["git", "branch", "-D", branch], root)[0] == 0:  # O(cmd)
+                return [line + f", branch {branch} deleted (PR head)"]  # O(1)
+        line += f", branch {branch} deleted" if rc == 0 else f", branch {branch} kept (not merged)"  # O(1)
+    return [line]  # O(1)
 
 
-def _shipped(p, sd, root, b, wt) -> list:  # O(size)
+def _shipped(p, sd, root, b, wt, push: bool = True, head: str | None = None) -> list:  # O(size)
     bid = b["id"]
     bs.update(p, lambda d: bs.batch(d, bid).__setitem__("state", "shipped"))  # O(size)
     if b.get("lead"):  # O(1)
@@ -405,9 +430,29 @@ def _shipped(p, sd, root, b, wt) -> list:  # O(size)
             out.append(fail)  # O(1)
     if not b.get("worktree") or wt is None:  # O(1)
         return out  # O(1)
-    rc, msg = _run(["maxapp", "ship", "-C", str(wt)], root)  # O(cmd)
-    if rc:  # O(1)
-        out.append(f"{bid} cleanup: {(msg.splitlines() or ['failed'])[-1][:120]}")  # O(len)
+    if push:  # O(1)
+        rc, msg = _run(["maxapp", "ship", "-C", str(wt)], root)  # O(cmd)
+        if rc:  # O(1)
+            line = f"{bid} cleanup: {([x for x in msg.splitlines() if x.strip()] or ['failed'])[-1].strip()[:120]}"  # O(out)
+            git_err = _git_err(msg)  # O(out)
+            if git_err and git_err not in line:  # O(1)
+                line += f": {git_err}"  # O(1)
+            import worktree
+            cause = worktree.bare_flag(root)  # O(1) + spawn
+            out.append(line + (f"; cause: {cause}" if cause else ""))  # O(1)
+        owed = out[-1] if rc else None  # O(1)
+    else:  # O(1)
+        lines = remove_worktree(root, Path(wt), b.get("branch") or "", bid, head)  # O(cmd)
+        out.extend(lines)  # O(1)
+        owed = lines[0] if " kept: " in lines[0] else None  # O(1)
+
+    def mark(d):  # O(b)
+        x = bs.batch(d, bid)
+        if owed:
+            x["cleanup_owed"] = owed
+        else:
+            x.pop("cleanup_owed", None)
+    bs.update(p, mark)  # O(size)
     return out
 
 
