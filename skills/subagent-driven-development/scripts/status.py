@@ -5,12 +5,15 @@
 
 P is a plan file or a run folder (default: the current run folder). Lines, in order: run folder and owner;
 orchestrator mode; plan and its task count; tasks (checkpointed, running, held, open); fleet workers;
-budget; last test run; and `after a crash: sl orchestrator resume ...` while a pool agent or fleet worker is
+budget; last test run; one `full run waiting: ...` line per waiting full run; and `after a crash: sl orchestrator resume ...` while a pool agent or fleet worker is
 busy. Exit 0. Stdlib only.
 """
 # Complexity notation:
 # t = tasks in the plan, a = pool agents, w = fleet workers, L = ledger lines
 import argparse  # O(1)
+import json  # O(1)
+import os  # O(1)
+import time  # O(1)
 import sys  # O(1)
 from pathlib import Path  # O(1)
 
@@ -106,6 +109,47 @@ def budget_line(sd: Path, plan) -> str:  # O(budget)
         return f"budget: unavailable ({type(e).__name__}: {e})"  # O(1)
 
 
+def pid_alive(pid: int) -> bool:  # O(1)
+    try:  # O(1)
+        os.kill(pid, 0)  # O(1) signal syscall
+    except PermissionError:  # alive, not ours | O(1)
+        return True  # O(1)
+    except (OSError, ValueError, OverflowError):  # O(1)
+        return False  # O(1)
+    return True  # O(1)
+
+
+def waiting_line(d: dict, now: float) -> str:  # O(1)
+    mins = max(0, int((now - float(d.get("since") or 0)) // 60))  # O(1)
+    if d.get("admission"):  # O(1)
+        return f"full run waiting: {mins} min for the admission command {d['admission']}"  # O(1)
+    stem = Path(str(d.get("lock") or "")).stem  # O(1)
+    tool = stem[len("full-suite-"):] if stem.startswith("full-suite-") and len(stem) > 11 else "python"  # O(1)
+    out = f"full run waiting: {mins} min for the {tool} full-suite lock"  # O(1)
+    if d.get("place") and d.get("queued"):  # O(1)
+        out += f", queue place {d['place']} of {d['queued']}"  # O(1)
+    h = d.get("holder")  # O(1)
+    if isinstance(h, dict) and h.get("pid"):  # O(1)
+        out += f" (held by pid {h['pid']}" + (f" in {h['root']}" if h.get("root") else "") + ")"  # O(1)
+    return out  # O(1)
+
+
+def waiting_lines(sd: Path, now: float | None = None, alive=None) -> list:  # O(n) notes
+    """One line per waiting full run: the `.lockwait` notes of sd whose waiting pid is alive."""
+    now = time.time() if now is None else now  # O(1)
+    alive = alive or pid_alive  # O(1)
+    out = []  # O(1)
+    for f in sorted(Path(sd).glob("test-summary*.lockwait")):  # O(n log n)
+        try:  # O(1)
+            d = json.loads(f.read_text(encoding="utf-8"))  # O(file)
+            if not isinstance(d, dict) or not d.get("pid") or not alive(int(d["pid"])):  # O(1)
+                continue  # O(1)
+            out.append(waiting_line(d, now))  # O(1)
+        except (OSError, ValueError, TypeError, AttributeError):  # O(1)
+            continue  # O(1)
+    return out  # O(n)
+
+
 def overview(sd: Path, plan) -> list:  # O(t + L + a + w)
     import orchestrator  # O(1)
     import plan_tools  # O(1)
@@ -124,6 +168,7 @@ def overview(sd: Path, plan) -> list:  # O(t + L + a + w)
             out.append(f"plan: {plan}: {len(tasks)} tasks")  # O(1)
             out.append(tasks_line(sd, [t.id for t in tasks], pool_data, fleet))  # O(t + L + a + w)
     out += [fleet_line(fleet), budget_line(sd, plan), orchestrator.test_run_line(sd)]  # O(w + budget)
+    out += waiting_lines(sd)  # O(n log n) notes
     busy = any(a.get("busy") for a in pool_data.get("agents", [])) or any(
         w.get("state") == "busy" for w in (fleet.get("workers") or {}).values())  # O(a + w)
     if busy:  # O(1)
