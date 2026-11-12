@@ -58,7 +58,7 @@ A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is
 SIGTERM and SIGHUP on a run kill its test processes and leave a red summary (`run_tests stopped by SIGTERM; ...`, exit 2).
 With `--task Tn` every summary carries `"task"` and `--background` also writes `test-summary-<Tn>.latest`; `--wait <earlier run of Tn>` then waits on Tn's newest run and says so on stderr.
 `-m EXPR` selects a pytest marker (`-m EXPR` goes onto the pytest argv, or onto a test-cmd.json pytest command; a runner that is not pytest is a usage error, exit 2) and makes the run a fast (narrowed) run. A pytest exit 5 stops with `pytest collected nothing (exit 5): <cause>`: all tests deselected (by `-m`, or by a deselecting `-m` in the project's addopts), or the paths hold no tests.
-A `--full` run holds a machine-wide lock per toolchain (`<superlite home>/locks/full-suite-<toolchain>.lock`, flock; the OS frees it when the process ends; toolchain = python, xcode, or the test-cmd.json language, shell by default) around its test command, so full suites of one toolchain on one machine run one at a time while other toolchains run alongside (#550). A waiting run prints `run_tests: waiting for the python full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS, N min ago; its last full run took M min); python full runs on one machine run one at a time`, then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for. A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
+A `--full` run holds a machine-wide lock per toolchain (`<superlite home>/locks/full-suite-<toolchain>.lock`, flock; the OS frees it when the process ends; toolchain = python, xcode, or the test-cmd.json language, shell by default) around its test command, so full suites of one toolchain on one machine run one at a time while other toolchains run alongside (#550). A waiting run prints `run_tests: waiting for the python full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS, N min ago; its last full run took M min); python full runs on one machine run one at a time, in arrival order: queue place N of M` (a free lock with another waiter first: `(next in line: pid Q in ROOT)`; waiters queue first come first served in `<lock>.queue`, #655), then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for; every waiting run writes `<summary>.lockwait` (lock, holder, pid, since, place, queued). A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
 A run in an isolated tree builds there: an `xcodebuild` word in the command (not `-list`, not one that already has `-derivedDataPath`) gets `-derivedDataPath <tree>/.build/DerivedData`, so the build output (module cache included) goes with the tree (#574); the tree is marked busy while the run lasts.
 Before each run (the run process, not the `--background` parent) the disk is checked (`trees.disk_gate`): below the floor the run stops (exit 2, red summary `disk: ...`, no tree made), below the warn level it prints a `disk: WARNING` line. Each run also removes the trees nothing needs (committed tasks, stopped workers' trees; never its own or a busy one) and orphaned DerivedData of removed trees. An `ENOSPC` anywhere ends the run with one `run_tests: disk full (ENOSPC): ...` line, exit 2, no traceback.
 A tree run exports `SUPERLITE_DERIVED_DATA_PATH=<tree>/.build/DerivedData` to the test command and its setup (a test-cmd.json `env` entry of that name wins), so a project script can pass it to xcodebuild (#614).
@@ -87,6 +87,7 @@ import sys  # O(1)
 import tempfile  # O(1)
 import time  # O(1)
 import traceback  # O(1)
+import uuid  # O(1)
 import xml.etree.ElementTree as ET  # O(1)
 try:  # O(1)
     import fcntl  # O(1)
@@ -97,6 +98,7 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(path list)
 import _pyrun as pyrun  # noqa: E402  # O(1) module load
 import testcmd  # noqa: E402  # O(1) module load
+import full_queue  # noqa: E402  # O(1) module load
 import failure_sites  # noqa: E402  # O(1) module load
 import gui_session  # noqa: E402  # O(1) module load
 import commit_task as ct  # noqa: E402  # O(1) module load
@@ -112,6 +114,7 @@ DEFAULT_WAIT = 540.0  # O(1)
 DEFAULT_LIMIT = 3600.0  # O(1) wall-clock seconds for one test run; 0 = none
 LOCK_ENV = "SUPERLITE_FULL_SUITE_LOCK"  # O(1) exported to the test processes: the pid holding the lock
 LOCK_POLL = 0.5  # O(1)
+QUEUE_SEEN = 30.0  # seconds between a waiter's refreshes of its queue entry | O(1)
 DEFAULT_LOCK_WAIT = 3600.0  # O(1) seconds a full run waits for the lock; 0 = no limit
 CURRENT_TASK = None  # --task of this run; write_summary records it | O(1)
 WRITTEN = set()  # resolved summary paths this process wrote; main clears it | O(1)
@@ -241,20 +244,33 @@ def full_suite_lock(a, label, toolchain="python", enabled=True):  # O(wait / LOC
         yield  # O(1)
         return  # O(1)
     note = Path(a.summary).with_suffix(".lockwait")  # O(1)
-    try:  # the finally frees the lock and deletes the note | O(1)
+    me = {"id": uuid.uuid4().hex, "pid": os.getpid(), "root": str(Path.cwd()), "task": a.task, "time": time.time(), "seen": time.time()}  # O(1)
+    try:  # the finally frees the lock, leaves the queue and deletes the note | O(1)
         t0 = time.monotonic()  # O(1)
         waited = False  # O(1)
+        last_seen = time.monotonic()  # O(1)
+        shown = None  # the (place, queued) the note holds | O(1)
         while True:  # O(wait / LOCK_POLL) iterations
+            if time.monotonic() - last_seen >= QUEUE_SEEN:  # O(1)
+                me["seen"], last_seen = time.time(), time.monotonic()  # O(1)
             try:  # O(1)
+                snap = full_queue.join(path, me)  # O(queue)
+            except OSError:  # an unwritable queue never blocks the run | O(1)
+                snap = {"place": 1, "queued": 1, "first": me}  # O(1)
+            try:  # O(1)
+                if snap["place"] != 1:  # only the queue head tries the lock | O(1)
+                    raise BlockingIOError  # O(1)
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # O(1)
                 break  # O(1)
             except BlockingIOError:  # O(1)
                 holder = lock_holder(path)  # O(file)
                 if not waited:  # O(1)
                     waited = True  # O(1)
-                    print(f"run_tests: waiting for the {toolchain} full-suite lock (held by {wait_detail(holder)}); {toolchain} full runs on one machine run one at a time", file=sys.stderr)  # O(1)
-                    if a.run_id:  # O(1)
-                        atomic_write(note, json.dumps({"lock": str(path), "holder": holder or {}}))  # O(1)
+                    detail = wait_detail(holder) if holder else "next in line: " + holder_text(snap["first"])  # O(file)
+                    print(f"run_tests: waiting for the {toolchain} full-suite lock (held by {detail}); {toolchain} full runs on one machine run one at a time, in arrival order: queue place {snap['place']} of {snap['queued']}".replace("(held by next in line:", "(next in line:"), file=sys.stderr)  # O(1)
+                if shown != (snap["place"], snap["queued"]):  # O(1)
+                    shown = (snap["place"], snap["queued"])  # O(1)
+                    atomic_write(note, json.dumps({"lock": str(path), "holder": holder or {}, "pid": os.getpid(), "since": time.time() - (time.monotonic() - t0), "place": snap["place"], "queued": snap["queued"]}))  # O(1)
                 remaining = None if a.lock_wait is None else a.lock_wait - (time.monotonic() - t0)  # O(1)
                 if remaining is not None and remaining <= 0:  # O(1)
                     raise LockBusy(a.lock_wait, holder)  # O(1)
@@ -282,6 +298,8 @@ def full_suite_lock(a, label, toolchain="python", enabled=True):  # O(wait / LOC
             with contextlib.suppress(OSError):  # O(1)
                 os.ftruncate(fd, 0)  # O(1)
     finally:  # O(1)
+        with contextlib.suppress(OSError):  # O(1)
+            full_queue.leave(path, me["id"])  # O(queue)
         with contextlib.suppress(OSError):  # O(1)
             note.unlink()  # O(1)
         os.close(fd)  # O(1)
