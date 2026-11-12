@@ -28,6 +28,8 @@ branch or the user's index) is stored under refs/superlite/<run>/<Tn> and its SH
 the ledger, probes and seam checks use; `sl autocommit on` (or SUPERLITE_AUTOCOMMIT=1)
 makes real commits.
 
+Files outside Owns: a task's plan `**Also-touches:**` files and the in-repo targets of its owned symlinks count as owned (run_tests --task syncs the same set); `--claim` prints `next: commit_task Tn` after its claim lines, since a claim commits nothing.
+
 Steps: scope check (a change outside every task's Owns blocks the commit and is logged as an incident when it was dirty
 before the run (stable.json `baseline_dirty`) or the run recorded no baseline; with a baseline, any other such file is
 unrelated to the task: it is left uncommitted and listed as `left uncommitted (outside every Owns): F`; files another
@@ -420,10 +422,26 @@ def also_owned(ledger):  # O(c)
 
 
 def add_also_owns(info, ledger):  # O(c + o)
-    """Append every recorded --also entry to its task's owns (once); ids not in the plan are ignored."""
+    """Append to each task's owns, once each: its recorded --also entries, its plan `**Also-touches:**` files, then the in-repo targets of its owned symlinks; ids not in the plan are ignored."""
     for entry, tid in also_owned(ledger).items():  # O(c) iterations
         if tid in info and entry not in info[tid]["owns"]:  # O(o)
             info[tid]["owns"] = info[tid]["owns"] + [entry]  # O(o)
+    for tid, t in info.items():  # O(n) iterations
+        for entry in nt.parse_owns(nt._field(t.get("body", ""), "Also-touches")):  # O(len body)
+            if entry not in t["owns"]:  # O(o)
+                t["owns"] = t["owns"] + [entry]  # O(o)
+    cwd = os.path.realpath(".")  # O(1)
+    for t in info.values():  # O(n) iterations
+        for entry in list(t["owns"]):  # O(o) iterations, the additions included
+            bare = entry.rstrip("/")  # O(1)
+            if not bare or not os.path.islink(bare):  # O(1) lstat
+                continue  # O(1)
+            rel = os.path.relpath(os.path.realpath(bare), cwd)  # O(1)
+            if rel == "." or rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel):  # target outside the cwd | O(1)
+                continue  # O(1)
+            target = Path(rel).as_posix() + ("/" if entry.endswith("/") else "")  # O(1)
+            if target not in t["owns"]:  # O(o)
+                t["owns"] = t["owns"] + [target]  # O(o)
 
 
 def seams(plan):  # O(n + e), plan parsed once per process (nt.taskgraph_full)
@@ -876,7 +894,9 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     if a.claim and a.also:  # O(1)
         nt.die("--claim and --also cannot be combined")  # O(1)
     if a.claim and len(a.task) != 1:  # O(1)
-        nt.die("--claim takes exactly one task")  # O(1)
+        files = " ".join(a.claim)  # O(k)
+        nt.die(f"--claim takes one task and commits nothing; to commit {files} with {a.task[0]} and commit {' '.join(a.task[1:])} in one call: "  # O(k)
+               f"commit_task {' '.join(a.task)} --also {files} --ruling TEXT")  # O(k)
 
     info = nt.parse_plan(a.plan)  # O(L) parse plan, once for every task
     if "T0" not in info:  # a Wave 0 task synthesized by `wave0` | O(1)
@@ -893,6 +913,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
             name = raw if raw.replace("\\", "/").endswith("/") else _rel(raw)  # O(1)
             append_ledger(a.ledger, f"- Ruling: {a.task[0]} also commits {name} - {a.ruling}")  # O(1) file I/O
             print(f"{a.task[0]} claimed {name}")  # O(1)
+        print(f"next: commit_task {a.task[0]} --plan {plan_arg} (a claim commits nothing; it records the ruling)")  # O(1)
         return 0  # O(1)
     a.claims = {}  # entry -> task for this call's --also, known to every task in the call | O(1)
     if a.also and a.task[0] in info:  # O(k)
