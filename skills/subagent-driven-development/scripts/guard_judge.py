@@ -48,7 +48,7 @@ import guard_files  # noqa: E402  O(1)
 import guard_lex  # noqa: E402  O(1)
 import guard_tools  # noqa: E402  O(1)
 
-__all__ = ["Verdict", "judge", "main"]  # O(1)
+__all__ = ["Verdict", "inline_owns", "judge", "main"]  # O(1)
 
 MAX_DEPTH = 8  # nested bodies judged before the rest counts as an unknown target | O(1)
 MAX_DIRS = 12  # directories tracked at once before the shell's directory counts as unknown | O(1)
@@ -109,6 +109,25 @@ class Verdict:  # O(1)
     cmd: str = field(default="", compare=False)  # the command (segment text) the verdict came from | O(1)
 
 
+def inline_owns(sd):  # O(plan) | (realpath of the plan's root, Owns) when the run's plan holds exactly one local task, else None
+    try:  # O(1)
+        import plan_tools  # lazy | O(1)
+        with open(os.path.join(sd, "stable.json"), encoding="utf-8") as f:  # O(1)
+            plan = json.load(f)["plan"]  # O(1)
+        tasks = plan_tools.Plan.load(plan).tasks  # O(plan)
+        if len(tasks) != 1 or tasks[0].repo:  # O(1)
+            return None  # O(1)
+        owns = [o for o in tasks[0].owns if isinstance(o, str) and o]  # O(owns)
+        return (os.path.realpath(plan_tools.stable_root(plan)), owns) if owns else None  # O(d)
+    except Exception:  # noqa: BLE001  any doubt: no inline Owns | O(1)
+        return None  # O(1)
+
+
+def _inline_for(sd, projreal):  # O(plan) | the inline Owns when the plan's root is this project, else none
+    got = inline_owns(sd) if sd else None  # O(plan)
+    return got[1] if got and got[0].lower() == projreal.lower() else []  # O(1)
+
+
 class _Ctx:  # O(p)
     def __init__(self, command, project, mode, sds=()):  # O(n + p)
         self.mode = mode  # O(1)
@@ -139,6 +158,7 @@ class _Ctx:  # O(p)
         self.caches = {d.rstrip("/") + "/python" for d in self.cache_dirs}  # protected in every mode | O(1)
         folders = [_clean(_winpath(d)) for d in sds if isinstance(d, str) and d and "\0" not in d]  # O(s * p)
         self.render = _render_files(self.sd) if mode == "active" else frozenset()  # files `sl render_edit start` recorded | O(f)
+        self.inline = _inline_for(self.sd, self.projreal) if mode == "active" else []  # Owns of the one task of an inline build | O(plan)
         self.prot_abs = {x.lower() for d in folders for n in NAMES for x in (d.rstrip("/") + "/" + n, os.path.realpath(d).rstrip("/") + "/" + n)}  # run files of state folders, by absolute path | O(s * p)
 
 
@@ -272,6 +292,11 @@ def _hardlinked(real):  # O(1) | an existing regular file with more than one nam
     return stat.S_ISREG(st.st_mode) and st.st_nlink > 1  # O(1)
 
 
+def _owned(rel, ctx):  # O(owns) | does the inline task own the project-relative path?
+    import next_tasks  # lazy | O(1)
+    return next_tasks.owns_match(rel, ctx.inline)  # O(owns)
+
+
 def _judge_path(path, base, ctx, name=None, stays=True):  # O(p + depth) | the policy's verdict for one path from directory base
     p = _winpath(path)  # O(p)
     if p == "" or p.startswith("/dev/"):  # O(1)
@@ -336,6 +361,8 @@ def _judge_path(path, base, ctx, name=None, stays=True):  # O(p + depth) | the p
     wt = _wt_rel(rel, ctx.projreal) if (ctx.enforce or rel.lower().endswith(NAMES)) else None  # O(depth)
     if wt is not None and wt.lower() in PROTECTED:  # also inside a linked worktree | O(p)
         return Verdict(rel, absolute, "protected")  # O(1)
+    if ctx.inline and _owned(rel, ctx):  # the one task of an inline build: its Owns | O(owns)
+        return None  # O(1)
     if not ctx.enforce or _allowed(rel, ctx.mode):  # O(patterns)
         return None  # O(1)
     if wt is not None and _allowed(wt, ctx.mode):  # judged from the worktree's root | O(patterns)
@@ -1627,6 +1654,7 @@ MESSAGES = {  # O(1)
              "- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
              "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file or folder git "
              "does not track and no task Owns.",
+             "- An inline build (the run's plan holds exactly one task): you may write that task's Owns yourself.",
              "- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; "
              "`sl render_edit restore` undoes it.",
              "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
@@ -1650,17 +1678,29 @@ def _incident(sd, kind, tool, target, rule=None, cwd=None):  # O(1) | append one
         pass  # O(1)
 
 
-def _args(argv):  # O(a) | (mode, project, sd)
+def _args(argv):  # O(a) | (mode, project, sd, owns or None)
     opts = {}  # O(1)
     it = iter(argv)  # O(1)
     for a in it:  # O(a)
-        if a in ("--mode", "--project", "--sd"):  # O(1)
+        if a in ("--mode", "--project", "--sd", "--owns"):  # O(1)
             opts[a[2:]] = next(it)  # O(1)
         else:  # O(1)
             raise ValueError("unknown argument " + a)  # O(1)
     if opts.get("mode") not in ("idle", "active", "human") or "project" not in opts or "sd" not in opts:  # O(1)
         raise ValueError("--mode, --project and --sd are required")  # O(1)
-    return opts["mode"], opts["project"], opts["sd"]  # O(1)
+    return opts["mode"], opts["project"], opts["sd"], opts.get("owns")  # O(1)
+
+
+def _owns_ok(path, project, sd):  # O(p + owns) | may the coordinator write this file as the inline task's Owns? any doubt is no
+    try:  # O(1)
+        ctx = _Ctx("", project, "active", (sd,))  # O(p)
+        if not ctx.inline or "\0" in path:  # O(1)
+            return False  # O(1)
+        full = _clean(path if path.startswith("/") else ctx.projn + "/" + path)  # O(p)
+        rel = _rel(_real(full), ctx.projreal)  # O(p)
+        return bool(rel) and _owned(rel, ctx) and _judge_path(path, ctx.projn, ctx) is None  # O(p + owns)
+    except Exception:  # noqa: BLE001  O(1)
+        return False  # O(1)
 
 
 def _err(text):  # O(len) | print on stderr whatever the stream's encoding
@@ -1677,9 +1717,14 @@ def _ack():  # O(1) | the allow line the hook waits for: an exit 0 without it wa
 
 def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every internal error
     try:  # O(1)
-        mode, project, sd = _args(sys.argv[1:] if argv is None else argv)  # O(a)
+        mode, project, sd, owns = _args(sys.argv[1:] if argv is None else argv)  # O(a)
     except (ValueError, StopIteration):  # O(1)
         return 0  # O(1)
+    if owns is not None:  # --owns PATH: exit 0 and the ack only for an active run's inline Owns file, else 1 | O(p)
+        if mode == "active" and _owns_ok(owns, project, sd):  # O(p)
+            _ack()  # O(1)
+            return 0  # O(1)
+        return 1  # O(1)
     tool, cmd = "", ""  # O(1)
     try:  # O(1)
         data = json.loads(sys.stdin.read())  # O(n)

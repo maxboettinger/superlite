@@ -24,7 +24,7 @@ def P(tmp_path):
     (p / ".superlite" / "pool.json").write_text("{}")
     (p / "docs" / "plans").mkdir()
     plan = p / "docs" / "plans" / "plan.md"
-    plan.write_text("# Plan\n\n### T1 a\n**Owns:** src/a.py, src/new.py\n")
+    plan.write_text("# Plan\n\n### T1 a\n**Owns:** src/a.py, src/new.py\n\n### T2 b\n**Owns:** lib/b.py\n")
     (p / "src" / "a.py").write_text("x = 1\n")
     (p / ".gitignore").write_text("build/\n")
     subprocess.run(["git", "init", "-q", str(p)], check=True)
