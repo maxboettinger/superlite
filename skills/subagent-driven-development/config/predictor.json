@@ -38,6 +38,27 @@
   "schedule": {
     "tail_min": 3.5
   },
+  "tests": {
+    "_comment": "#605 test-run cost: runs per task by its Tests field (red, green, review); included_*_min = test minutes per run the time coefficients and schedule.tail_min already hold; history_* = the ledger fallback when test-cmd.json names no run_min.",
+    "runs": {"fast": 3, "slow": 3, "build": 1},
+    "included_run_min": 0.5,
+    "included_full_min": 1.0,
+    "history_min_runs": 3,
+    "history_keep": 50,
+    "history_files": 20
+  },
+  "contention": {
+    "_comment": "#605: test runs scale by max(1, (1 + other live runs) / slots); the closing full run waits 1 + full_wait_share x max(others, full-suite lock held) runs; test-cmd.json slots overrides slots.",
+    "slots": 2,
+    "active_window_min": 120,
+    "full_wait_share": 0.5
+  },
+  "prose": {
+    "_comment": "#605: a task owning only these files, or Kind: prose (never Kind: mechanical), is evidence-checked prose; priors from the 1.5.121 run.",
+    "extensions": [".md", ".mdx", ".markdown", ".rst", ".txt", ".adoc"],
+    "time_factor": 2.0,
+    "calls_factor": 3.0
+  },
   "fit": {
     "n": 19,
     "mae_before_min": 2.1379,
