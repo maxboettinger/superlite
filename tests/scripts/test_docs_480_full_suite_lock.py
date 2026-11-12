@@ -25,4 +25,5 @@ def test_row_names_the_lock():
 def test_lock_text_follows_the_limit_text():
     r = row()
     assert r.index("a `no-result` incident); a full run (no `--fast`") > r.index("`--limit S` (default 3600; 0 = none)")
-    assert "and a `--fast` run without `--task` closes nothing; a run whose test processes a signal ended" in r
+    assert "A run whose test processes a signal ended" in r
+    assert r.index("A run whose test processes a signal ended") > r.index("`--limit S` (default 3600; 0 = none)")
