@@ -106,3 +106,11 @@ def test_invalid_destinations_ignored(tmp_path, capsys):
     (tmp_path / ".superlite" / "test-cmd.json").write_text(json.dumps({"language": "swift", "test": "echo hi", "destinations": "platform=macOS"}), encoding="utf-8")
     assert testcmd.resolve(tmp_path)["destinations"] == []
     assert 'must be a list of xcodebuild destination strings' in capsys.readouterr().err
+
+
+def test_with_destination_keeps_redirects_whole():
+    out = testcmd.with_destination("xcodebuild test -scheme A 2>&1 | xcpretty", "platform=macOS")
+    assert out == "xcodebuild test -scheme A -destination platform=macOS 2>&1 | xcpretty" or out == "xcodebuild test -scheme A 2>&1 -destination platform=macOS | xcpretty"
+    assert "2> -destination" not in out and "&1" in out and "2>&1" in out
+    both = testcmd.with_destination("xcodebuild test -scheme A &> out.log", "platform=macOS")
+    assert "&> out.log" in both and both.count("-destination") == 1

@@ -1030,6 +1030,8 @@ def _segments(command: str) -> list[str]:  # the command split at unquoted | || 
             buf.append(ch)  # O(1)
         else:  # O(1)
             m = SEGMENT_SPLIT.match(command, i)  # O(1)
+            if m and m.group(1) == "&" and (command[i - 1:i] in (">", "<") or command[i + 1:i + 2] == ">"):  # 2>&1, <&3 and &> are redirects | O(1)
+                m = None  # O(1)
             if m:  # O(1)
                 out.append("".join(buf))  # O(len)
                 out.append(m.group(1))  # O(1)
