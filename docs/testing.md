@@ -29,7 +29,7 @@ The green hashes (the newest 200 per layer) and each checkout's last green file 
 
 `run --wait S` sets the unit layer's wait (else `SUPERLITE_UNIT_WAIT`, else 540 s). A wait that ends with no result yet prints `unit: running ...` with the command to see the result, keeps the layer marked running on the background run's pid and the command exits with exit 4 (red stays exit 1). `run_tests --limit S` (default 3600 s, `0` = none) kills a test run that outlives it. Every `run_tests` run keeps its full output in `<summary stem>.output.log` beside the summary (the newest 20); a run that counts no tests stops with `no tests ran: ...; runner: ...`.
 
-`stamp --ruling` appends `Ruling: skip <layer> - <why>` to `.superlite/progress.md`, so the skip is visible in the run's log.
+`stamp --ruling` appends `Ruling: skip <layer> - <why>` to `.superlite/progress.md`, so the skip is visible in the run's log. The stamp also records the ruling, the UTC time and the red cases (`--red`, or for evals the cases below threshold in `evals/results/last.json`) next to the hash, `status` shows the layer as `stamped`, and the next green run of the same files clears the record.
 
 ## Stop hook
 

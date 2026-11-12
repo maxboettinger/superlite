@@ -28,10 +28,10 @@ def git(root, *args):
 
 
 class FakeStore:
-    """In-memory stand-in for layer_store: the same eight functions, no files."""
+    """In-memory stand-in for layer_store: the same nine functions, no files."""
 
     def __init__(self):
-        self.green, self.files, self.locks = {}, {}, {}
+        self.green, self.files, self.locks, self.stamps = {}, {}, {}, {}
 
     def store_path(self, root):
         return Path(root) / "fake-store.json"
@@ -39,9 +39,15 @@ class FakeStore:
     def is_green(self, store, layer, digest):
         return digest in self.green.get(layer, [])
 
-    def record_green(self, store, layer, digest, files, checkout=None):
+    def record_green(self, store, layer, digest, files, checkout=None, stamp=None):
         self.green.setdefault(layer, []).append(digest)
+        self.stamps[(layer, digest)] = stamp
+        if stamp is None:
+            self.stamps.pop((layer, digest))
         self.files[(layer, checkout)] = dict(files)
+
+    def stamp_of(self, store, layer, digest):
+        return self.stamps.get((layer, digest))
 
     def changed_files(self, store, layer, files, checkout=None):
         old = self.files.get((layer, checkout), {})
@@ -414,7 +420,7 @@ def test_status_lists_every_layer(repo, tmp_path):
     r = cli(repo, "status")
     lines = r.stdout.splitlines()
     assert r.returncode == 0 and len(lines) == 4
-    assert lines[0].startswith("unit green ")
+    assert lines[0].startswith("unit stamped ")
     assert lines[1].startswith("headless running ")
     assert lines[2].startswith("tui stale ")
     assert lines[3].startswith("evals stale ")
