@@ -121,3 +121,11 @@ def test_testcmd_cli_unknown_name_exit_2(tmp_path):
 def test_swift_test_no_match_line_is_empty():
     r = testcmd.parse_output("Test Suite 'Selected tests' started\nerror: No matching test cases were run\n", 1)
     assert r["empty"] == "error: No matching test cases were run"
+
+
+def test_names_slot_inside_quoted_pattern_is_not_requoted(tmp_path):
+    swift_project(tmp_path)
+    (tmp_path / ".superlite" / "test-cmd.json").write_text(
+        json.dumps({"language": "go", "test": "go test ./...", "test_file": "go test -run '^({names})$'"}), encoding="utf-8")
+    r = testcmd.resolve(tmp_path, ["a/FooTests.swift", "a/BarTests.swift"])
+    assert r["command"] == "go test -run '^(FooTests|BarTests)$'"
