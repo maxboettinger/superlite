@@ -152,3 +152,12 @@ def test_waited_left_out_of_seconds(tmp_path, monkeypatch, gate):
     with run_tests.full_run_gate(args(tmp_path), "full", "python", True) as g:
         g.run(["/bin/echo", "x"])
     assert g.waited >= 1.5
+
+
+def test_limit_hit_from_admitted_run_keeps_output(tmp_path, gate):
+    machine(gate)
+    (tmp_path / ".superlite").mkdir()
+    with run_tests.full_run_gate(args(tmp_path), "full", "python", True) as g:
+        with pytest.raises(run_tests.LimitHit) as ei:
+            g.run("echo kept-output; sleep 10", limit=1, shell=True)
+    assert "kept-output" in ei.value.text
