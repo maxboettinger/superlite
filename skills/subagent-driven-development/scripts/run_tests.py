@@ -762,7 +762,8 @@ def no_result_target(command, rc, log, cause=None):  # O(1) the feedback target 
 def signal_name(rc):  # O(1) the signal a return code means (-9 or 128+9 -> SIGKILL), None for an ordinary exit code
     num = -rc if rc < 0 else rc - 128 if 128 < rc <= 128 + 64 else 0  # O(1)
     try:  # O(1)
-        return signal.Signals(num).name if num else None  # O(1)
+        name = signal.Signals(num).name if num else None  # O(1)
+        return name if name in ("SIGKILL", "SIGTERM", "SIGHUP", "SIGINT") else None  # a crash signal is a real no-result | O(1)
     except ValueError:  # O(1)
         return None  # O(1)
 
