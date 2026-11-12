@@ -55,7 +55,7 @@ A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is
 SIGTERM and SIGHUP on a run kill its test processes and leave a red summary (`run_tests stopped by SIGTERM; ...`, exit 2).
 With `--task Tn` every summary carries `"task"` and `--background` also writes `test-summary-<Tn>.latest`; `--wait <earlier run of Tn>` then waits on Tn's newest run and says so on stderr.
 `-m EXPR` selects a pytest marker (`-m EXPR` goes onto the pytest argv, or onto a test-cmd.json pytest command; a runner that is not pytest is a usage error, exit 2) and makes the run a fast (narrowed) run. A pytest exit 5 stops with `pytest collected nothing (exit 5): <cause>`: all tests deselected (by `-m`, or by a deselecting `-m` in the project's addopts), or the paths hold no tests.
-A `--full` run holds a machine-wide lock (`<superlite home>/locks/full-suite.lock`, flock; the OS frees it when the process ends) around its test command, so full suites on one machine run one at a time. A waiting run prints `run_tests: waiting for the full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS); full runs on one machine run one at a time`, then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for. A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
+A `--full` run holds a machine-wide lock per toolchain (`<superlite home>/locks/full-suite-<toolchain>.lock`, flock; the OS frees it when the process ends; toolchain = python, xcode, or the test-cmd.json language, shell by default) around its test command, so full suites of one toolchain on one machine run one at a time while other toolchains run alongside (#550). A waiting run prints `run_tests: waiting for the python full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS, N min ago; its last full run took M min); python full runs on one machine run one at a time`, then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for. A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
 A run in an isolated tree builds there: an `xcodebuild` word in the command (not `-list`, not one that already has `-derivedDataPath`) gets `-derivedDataPath <tree>/.build/DerivedData`, so the build output (module cache included) goes with the tree (#574); the tree is marked busy while the run lasts.
 Before each run (the run process, not the `--background` parent) the disk is checked (`trees.disk_gate`): below the floor the run stops (exit 2, red summary `disk: ...`, no tree made), below the warn level it prints a `disk: WARNING` line. Each run also removes the trees nothing needs (committed tasks, stopped workers' trees; never its own or a busy one) and orphaned DerivedData of removed trees. An `ENOSPC` anywhere ends the run with one `run_tests: disk full (ENOSPC): ...` line, exit 2, no traceback.
 A tree run exports `SUPERLITE_DERIVED_DATA_PATH=<tree>/.build/DerivedData` to the test command and its setup (a test-cmd.json `env` entry of that name wins), so a project script can pass it to xcodebuild (#614).
@@ -127,8 +127,18 @@ class LockBusy(Exception):  # O(1) the full-suite lock stayed held past --lock-w
         self.seconds, self.holder = seconds, holder  # O(1)
 
 
-def full_lock_path():  # O(1) read at call time, so SUPERLITE_HOME moves it
-    return state.home() / "locks" / "full-suite.lock"  # O(1)
+def full_lock_path(toolchain):  # O(1) read at call time, so SUPERLITE_HOME moves it; one lock file per toolchain (#550)
+    return state.home() / "locks" / f"full-suite-{toolchain}.lock"  # O(1)
+
+
+def lock_toolchain(spec):  # O(len command) the toolchain a full run's lock is named for: python, xcode, or the spec's language
+    if spec.get("python"):  # O(1)
+        return "python"  # O(1)
+    command = str(spec.get("command") or "")  # O(1)
+    if "xcodebuild" in command:  # O(len)
+        return "xcode"  # O(len)
+    language = re.sub(r"[^a-z0-9]+", "-", str(spec.get("language") or "").lower()).strip("-")  # O(len)
+    return language or "shell"  # O(1)
 
 
 def lock_holder(path):  # O(file) the holder record in the lock file, None when missing, empty, half-written or not a record
@@ -151,6 +161,44 @@ def holder_text(info):  # O(1) `pid P in ROOT (task T) since HH:MM:SS`
     return text  # O(1)
 
 
+def wait_detail(holder):  # O(file) `pid P in ROOT (task T) since HH:MM:SS, N min ago` plus the holder root's last full run length when known
+    text = holder_text(holder)  # O(1)
+    if not holder:  # O(1)
+        return text  # O(1)
+    started = holder.get("started")  # O(1)
+    if isinstance(started, (int, float)) and not isinstance(started, bool):  # O(1)
+        text += f", {max(0, int((time.time() - started) / 60))} min ago"  # O(1)
+    try:  # O(1)
+        last = json.loads((Path(str(holder.get("root"))) / ".superlite" / FULL_COPY).read_text(encoding="utf-8"))["seconds"]  # O(file)
+        if isinstance(last, (int, float)) and not isinstance(last, bool) and last > 0:  # O(1)
+            text += f"; its last full run took {round(last / 60)} min"  # O(1)
+    except (OSError, ValueError, KeyError, TypeError):  # O(1)
+        pass  # O(1)
+    return text  # O(1)
+
+
+def note_holder(note):  # O(file) the lock's current holder named by a .lockwait note; the note's own copy, or a bare old-style holder dict, when the lock is free
+    try:  # O(1)
+        data = json.loads(Path(note).read_text(encoding="utf-8"))  # O(file)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+    if not isinstance(data, dict):  # O(1)
+        return None  # O(1)
+    if "lock" not in data:  # a note from before the per-toolchain locks is the holder itself | O(1)
+        return lock_holder(note)  # O(file)
+    current = lock_holder(data["lock"]) if isinstance(data["lock"], str) else None  # O(file)
+    inner = data.get("holder")  # O(1)
+    return current or (inner if isinstance(inner, dict) and isinstance(inner.get("pid"), int) else None)  # O(1)
+
+
+def lock_name(note):  # O(file) the toolchain in a .lockwait note's lock path, python for an old-style note
+    try:  # O(1)
+        name = Path(json.loads(Path(note).read_text(encoding="utf-8"))["lock"]).stem  # O(file)
+    except (OSError, ValueError, KeyError, TypeError):  # O(1)
+        return "python"  # O(1)
+    return name[len("full-suite-"):] if name.startswith("full-suite-") else "python"  # O(1)
+
+
 def is_ancestor(pid):  # O(64) ps calls; True when pid is a parent, grandparent... of this process
     cur = os.getppid()  # O(1)
     for _ in range(64):  # O(64)
@@ -167,11 +215,11 @@ def is_ancestor(pid):  # O(64) ps calls; True when pid is a parent, grandparent.
 
 
 @contextlib.contextmanager
-def full_suite_lock(a, label):  # O(wait / LOCK_POLL) polls; a full run holds the machine-wide lock around its test command
+def full_suite_lock(a, label, toolchain="python"):  # O(wait / LOCK_POLL) polls; a full run holds the machine-wide lock around its test command
     if label != "full" or fcntl is None:  # O(1)
         yield  # O(1)
         return  # O(1)
-    path = full_lock_path()  # O(1)
+    path = full_lock_path(toolchain)  # O(1)
     holder = lock_holder(path)  # O(file)
     if holder and (os.environ.get(LOCK_ENV) == str(holder["pid"]) or is_ancestor(holder["pid"])):  # an outer run holds it for us, also when the env lost LOCK_ENV | O(64)
         yield  # O(1)
@@ -195,9 +243,9 @@ def full_suite_lock(a, label):  # O(wait / LOCK_POLL) polls; a full run holds th
                 holder = lock_holder(path)  # O(file)
                 if not waited:  # O(1)
                     waited = True  # O(1)
-                    print(f"run_tests: waiting for the full-suite lock (held by {holder_text(holder)}); full runs on one machine run one at a time", file=sys.stderr)  # O(1)
+                    print(f"run_tests: waiting for the {toolchain} full-suite lock (held by {wait_detail(holder)}); {toolchain} full runs on one machine run one at a time", file=sys.stderr)  # O(1)
                     if a.run_id:  # O(1)
-                        atomic_write(note, json.dumps(holder or {}))  # O(1)
+                        atomic_write(note, json.dumps({"lock": str(path), "holder": holder or {}}))  # O(1)
                 remaining = None if a.lock_wait is None else a.lock_wait - (time.monotonic() - t0)  # O(1)
                 if remaining is not None and remaining <= 0:  # O(1)
                     raise LockBusy(a.lock_wait, holder)  # O(1)
@@ -483,7 +531,8 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
             alive = f" (pid {pid} still running)" if pid and pid > 0 and pid_alive(mine) else ""  # O(1)
             note = mine.with_suffix(".lockwait")  # O(1)
             if note.exists():  # the run still waits for the full-suite lock | O(1)
-                print(f"run_tests: {mine} is waiting for the full-suite lock (held by {holder_text(lock_holder(note))})", file=sys.stderr)  # O(file)
+                held = note_holder(note)  # O(file)
+                print(f"run_tests: {mine} is waiting for the {lock_name(note)} full-suite lock (held by {wait_detail(held)})", file=sys.stderr)  # O(file)
             print(f"tests: no result yet after {limit:g} s{alive}; run again: {wait_line(mine)[len('wait: '):]}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         time.sleep(POLL_SECONDS)  # O(1)
@@ -1624,7 +1673,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                     if warning:  # O(1)
                         warn_once(spec["command"], warning)  # O(warned)
                 spec = {**spec, "env": {"SUPERLITE_DERIVED_DATA_PATH": str(trees.derived_data_path(tree)), **(spec.get("env") or {})}}  # O(env)
-            with full_suite_lock(a, label):  # O(wait / LOCK_POLL)
+            with full_suite_lock(a, label, lock_toolchain(spec)):  # O(wait / LOCK_POLL)
                 rc = run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
             if tree and rc == 1:  # a red tree run names the changed files the tree lacks (#517) | O(f)
                 try:  # O(1)

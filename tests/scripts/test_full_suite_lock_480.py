@@ -46,7 +46,7 @@ def _no_outer_lock(monkeypatch):
 
 
 def hold(seconds):
-    proc = subprocess.Popen([sys.executable, "-c", HOLDER, str(run_tests.full_lock_path()), str(seconds)],
+    proc = subprocess.Popen([sys.executable, "-c", HOLDER, str(run_tests.full_lock_path("python")), str(seconds)],
                             stdout=subprocess.PIPE, text=True)
     assert proc.stdout.readline().strip() == "held"
     return proc
@@ -59,7 +59,7 @@ def stop(proc):
 
 
 def is_free():
-    return subprocess.run([sys.executable, "-c", PROBE, str(run_tests.full_lock_path())]).returncode == 0
+    return subprocess.run([sys.executable, "-c", PROBE, str(run_tests.full_lock_path("python"))]).returncode == 0
 
 
 def args(tmp_path, lock_wait=30.0, task=None, run_id=None):
@@ -79,7 +79,7 @@ def summary(tmp_path):
 
 def test_lock_path_follows_superlite_home(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "h"))
-    assert run_tests.full_lock_path() == tmp_path / "h" / "locks" / "full-suite.lock"
+    assert run_tests.full_lock_path("python") == tmp_path / "h" / "locks" / "full-suite-python.lock"
 
 
 def test_holder_text():
@@ -101,13 +101,13 @@ def test_lock_holder_reads_only_a_record(tmp_path):
 
 def test_fast_label_takes_no_lock(tmp_path):
     with run_tests.full_suite_lock(args(tmp_path), "fast"):
-        assert not run_tests.full_lock_path().exists()
+        assert not run_tests.full_lock_path("python").exists()
         assert run_tests.LOCK_ENV not in os.environ
 
 
 def test_full_label_holds_the_lock_and_records_the_holder(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    p = run_tests.full_lock_path()
+    p = run_tests.full_lock_path("python")
     with run_tests.full_suite_lock(args(tmp_path, task="T4"), "full"):
         assert not is_free()
         h = run_tests.lock_holder(p)
@@ -126,13 +126,13 @@ def test_waits_for_another_holder_then_takes_it(tmp_path, capsys):
         t0 = time.monotonic()
         with run_tests.full_suite_lock(args(tmp_path), "full"):
             waited = time.monotonic() - t0
-            assert run_tests.lock_holder(run_tests.full_lock_path())["pid"] == os.getpid()
+            assert run_tests.lock_holder(run_tests.full_lock_path("python"))["pid"] == os.getpid()
     finally:
         stop(proc)
     assert waited >= 1.0
     err = capsys.readouterr().err
-    assert f"run_tests: waiting for the full-suite lock (held by pid {proc.pid} in /elsewhere (task T9) since " in err
-    assert "); full runs on one machine run one at a time" in err
+    assert f"run_tests: waiting for the python full-suite lock (held by pid {proc.pid} in /elsewhere (task T9) since " in err
+    assert "); python full runs on one machine run one at a time" in err
     assert "run_tests: full-suite lock taken after " in err
 
 
@@ -176,7 +176,7 @@ def test_a_stale_marker_does_not_skip_the_lock(tmp_path, monkeypatch):
 def test_unusable_lock_path_runs_without_the_lock(tmp_path, monkeypatch, capsys):
     blocker = tmp_path / "file"
     blocker.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(run_tests, "full_lock_path", lambda: blocker / "locks" / "full-suite.lock")
+    monkeypatch.setattr(run_tests, "full_lock_path", lambda tc: blocker / "locks" / "full-suite.lock")
     ran = []
     with run_tests.full_suite_lock(args(tmp_path), "full"):
         ran.append(True)
@@ -199,7 +199,7 @@ def test_full_run_waits_for_the_lock_then_runs(tmp_path, monkeypatch, capsys):
 
 def test_the_test_processes_inherit_the_marker(tmp_path, monkeypatch):
     project(tmp_path, "import json, os\n\ndef test_ok():\n"
-                      "    rec = json.load(open(os.path.join(os.environ['SUPERLITE_HOME'], 'locks', 'full-suite.lock')))\n"
+                      "    rec = json.load(open(os.path.join(os.environ['SUPERLITE_HOME'], 'locks', 'full-suite-python.lock')))\n"
                       "    assert os.environ['SUPERLITE_FULL_SUITE_LOCK'] == str(rec['pid'])\n")
     monkeypatch.chdir(tmp_path)
     assert run_tests.main(["--full"]) == 0
@@ -247,7 +247,7 @@ def test_wait_names_the_lock_a_background_run_waits_for(tmp_path):
         w = run(RUN_TESTS, "--wait", str(mine), "--timeout", "1", cwd=tmp_path)
         assert w.returncode == 2, w.both
         lines = w.err.splitlines()
-        assert lines[-2].startswith(f"run_tests: {mine} is waiting for the full-suite lock (held by pid {proc.pid} in /elsewhere (task T9) since "), w.err
+        assert lines[-2].startswith(f"run_tests: {mine} is waiting for the python full-suite lock (held by pid {proc.pid} in /elsewhere (task T9) since "), w.err
         assert lines[-1].startswith("tests: no result yet after 1 s"), w.err
     finally:
         stop(proc)
