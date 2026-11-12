@@ -27,3 +27,8 @@ def test_pins_that_pass_today(proj):
     note = 'echo "Left undone: x" >> .superlite/notes.md; python3 - <<\'EOF\'\nimport json\nprint(json.load(open("docs/plans/a.json")))\nEOF'
     assert bash(proj, note).returncode == 0
     assert bash(proj, "python3 -I - <<EOF\nimport json\nprint(json.load(open('docs/plans/a.json')))\nEOF").returncode == 0
+
+
+def test_fstring_glob_directly_below_superlite_root_blocks(proj):
+    bad = "python3 - <<'EOF'\nimport sys\nfrom pathlib import Path\nx = sys.argv[1]\nPath(f\".superlite/{x}\").write_text('a')\nEOF"
+    assert bash(proj, bad).returncode == 2

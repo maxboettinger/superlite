@@ -505,7 +505,9 @@ def _final(v: str) -> str:  # O(len(v)) | an unknown piece becomes a `?` compone
     pre = v[:v.index(_UNK)]  # O(len(v))
     cut = max(pre.rfind("/"), pre.rfind("\\"))  # O(len(pre))
     glob = v[len(pre) + 1:len(pre) + 2] == _FGLOB  # an f-string's unknown piece: a glob below its literal folder  # O(1)
-    return pre[:cut + 1] + "?" if pre and cut >= 0 and (glob or _is_abs(pre)) else "?"  # O(len(pre))
+    folder = pre[:cut + 1]  # O(len(pre))
+    deep = folder.startswith(".superlite/") and folder.count("/") >= 2 and ".." not in folder  # a piece with ../ cannot climb from here to code in one step  # O(len(folder))
+    return folder + "?" if pre and cut >= 0 and ((glob and deep) or _is_abs(pre)) else "?"  # O(len(pre))
 
 
 def _scan_close(code: str, i: int) -> int:  # O(len(code)) | index of the bracket closing the one at i (len(code) if none)
