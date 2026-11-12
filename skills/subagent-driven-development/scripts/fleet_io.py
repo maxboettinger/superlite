@@ -87,7 +87,7 @@ def claim(sd, wid, sent):  # True once per send: a busy worker whose SENT matche
     with fs.locked(sd):  # O(1) plus wait
         data = fs.load(sd)  # O(w)
         w = data["workers"].get(wid)  # O(1)
-        if not w or w.get("state") != "busy" or int(w.get("sent") or 0) != int(sent) or int(w.get("collected") or 0) == int(sent):  # O(1)
+        if not w or w.get("state") not in ("busy", "blocked") or int(w.get("sent") or 0) != int(sent) or int(w.get("collected") or 0) == int(sent):  # O(1)
             return False  # O(1)
         w["collected"] = int(sent)  # O(1)
         fs.save(sd, data)  # O(w)
@@ -499,7 +499,7 @@ def _busy(sd, wid, label, sent, brief=None):  # worker busy on LABEL since SENT,
         data = fs.load(sd)  # O(w)
         if wid not in data["workers"]:  # O(1)
             raise KeyError(wid)  # O(1)
-        data["workers"][wid].update({"state": "busy", "task": label, "sent": sent, **({"brief": brief} if brief else {})})  # O(1)
+        data["workers"][wid].update({"state": "busy", "task": label, "sent": sent, "brief": brief})  # O(1)
         fs.save(sd, data)  # O(w)
         if pp.exists():  # O(1)
             pdata = pool.load(pp)  # O(pool bytes)

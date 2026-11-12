@@ -103,3 +103,16 @@ def test_timeout_line_names_finishers(world, tmp_path, capsys):
     world.fh.states = [{"sl-proj-w2": "working"}]
     io.wait(world.sd, ["W2"], 5000)
     assert capsys.readouterr().out.strip().splitlines()[-1] == "TIMEOUT W2"
+
+
+def test_blocked_then_answered_report_is_taken(world, tmp_path, capsys):
+    io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl"); sent = world.clock.t[0]
+    world.fh.states = [{"sl-proj-w1": "blocked"}]
+    assert io.wait(world.sd, ["W1"], 5000)[0]["status"] == "BLOCKED-UI"
+    assert fj(world)["W1"]["state"] == "blocked"; capsys.readouterr()
+    tr = tmp_path / "W1.jsonl"; transcript(tr, "Status: DONE")
+    stop(world, "W1", tr, sent + 10); world.fh.states = [{"sl-proj-w1": "done"}]
+    out = io.wait(world.sd, ["W1"], 5000)
+    o = capsys.readouterr().out
+    assert len(out) == 1 and out[0]["status"] == "DONE" and "already collected" not in o and "W1 T3 DONE" in o
+    assert (world.sd / "fleet" / "reports" / "T3.json").exists()
