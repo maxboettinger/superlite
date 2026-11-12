@@ -10,13 +10,12 @@ import backlog_run as br
 
 @pytest.fixture
 def ml(monkeypatch):
-    ns = types.SimpleNamespace(gates=[], regs=[], busy=set())
+    ns = types.SimpleNamespace(gates=[], busy=set())
 
     def gate(what, wait_s, over=False, poll_s=10.0):
         ns.gates.append((what, wait_s, over))
-        return "machine busy after 0 s: 2 leads, 1 fixer, 3 xcodebuild = 6 of limit 6" if what.split()[-1] in ns.busy else None
+        return "machine busy after 0 s: memory 10% free, floor 15% (23 agents, about 0.7 GB each)" if what.split()[-1] in ns.busy else None
     ns.gate = gate
-    ns.register = lambda name, role, root: ns.regs.append((name, role, root))
     monkeypatch.setitem(sys.modules, "machine_load", ns)
     return ns
 
@@ -26,9 +25,8 @@ def test_start_gates_each_lead(bk, ml, capsys):
     ml.busy = {"B8"}
     rc, out = run(capsys, "start", "B7", "B8", "--cap", "8")
     assert rc == 2
-    assert "BLOCKED: B8 not started: machine busy after 0 s: 2 leads, 1 fixer, 3 xcodebuild = 6 of limit 6; rerun sl backlog start B8, or --over-limit" in out
+    assert "BLOCKED: B8 not started: machine busy after 0 s: memory 10% free, floor 15% (23 agents, about 0.7 GB each); rerun sl backlog start B8, or --over-limit" in out
     assert (get(bk, "B7")["state"], get(bk, "B8")["state"]) == ("running", "planned")
-    assert ml.regs == [("sl-m-W1", "lead", str(bk.root))]
     assert [g[0] for g in ml.gates] == ["backlog start B7", "backlog start B8"]
     assert not any(c[0] == "spawn" and "b8" in c[1] for c in bk.calls)
 
@@ -61,13 +59,3 @@ def test_round_prepends_machine_line(bk, ml, capsys, monkeypatch):
     rc, out = run(capsys, "wait")
     assert out.splitlines() == ["machine: runner offline parks B3; fix the machine first, then sl backlog start B3",
                                 "B3 parked: runner offline"]
-
-
-def test_unwritable_registry_does_not_fail_started_lead(bk, ml, capsys):
-    def boom(name, role, root):
-        raise OSError("read-only")
-    ml.register = boom
-    put(bk, b("B1", ["a.py"]))
-    rc, out = run(capsys, "start", "B1")
-    assert rc == 0
-    assert get(bk, "B1")["state"] == "running"

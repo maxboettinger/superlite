@@ -38,9 +38,9 @@ def rw(world, monkeypatch, capsys):
     fleet.main(["on"]); capsys.readouterr()
     sd = world.sd
     (sd / "progress.md").write_text("- commit T3 abc1234 first\n")
-    r = type("R", (), {})(); r.sd, r.plan, r.spawns, r.sends, r.err, r.briefs = sd, plan, [], [], None, []
-    def spawn(sd_, plan_, tier, project, cfg=None, env=None, role="implementer"):
-        r.spawns.append(role)
+    r = type("R", (), {})(); r.sd, r.plan, r.spawns, r.sends, r.err, r.briefs = sd, plan, [], [], None, []; r.gates = []
+    def spawn(sd_, plan_, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0):
+        r.spawns.append(role); r.gates.append((over, machine_wait))
         with fs.locked(sd_):
             d = fs.load(sd_); d["workers"]["W4"] = {"id": "W4", "role": role, "state": "ready"}; fs.save(sd_, d)
         return {"id": "W4"}
@@ -57,6 +57,11 @@ def rw(world, monkeypatch, capsys):
 
 def _go(r, *args):
     return fleet.main(["spawn", *args, "--plan", str(r.plan)])
+
+
+def test_for_review_passes_machine_flags(rw):
+    assert _go(rw, "--for-review", "T3", "--over-limit", "--machine-wait", "7") == 0
+    assert rw.gates == [(True, 7.0)]
 
 
 def test_for_review_spawns_a_package_reviewer_and_sends_the_brief(rw, capsys):
