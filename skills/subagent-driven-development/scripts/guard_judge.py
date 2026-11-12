@@ -1679,9 +1679,10 @@ MESSAGES = {  # O(1)
               "five-line summary, ask the human to reply approve, end your turn, then run sl orchestrator approve "
               "--review <path>."],
     "code": ["Blocked: the superlite coordinator must not write project code. Dispatch it instead:",
-             "- Fix: give a fixer a finding id F-<Tn>-<n> and the note path .superlite/fixes/<id>.md, tiered per "
-             "skills/subagent-driven-development/fixing.md: known cause, one module -> fixer-sonnet; cross-module -> "
-             "fixer-sonnet-high; unknown cause -> fixer-opus.",
+             "- Fix: give a fixer a finding id F-<Tn>-<n>, tiered per skills/subagent-driven-development/fixing.md: known cause, "
+             "one module -> fixer-sonnet; cross-module -> fixer-sonnet-high; unknown cause -> fixer-opus. A brief you write by "
+             "hand goes to .superlite/briefs/fix-<id>.md (`sl findings route` writes them for you); .superlite/fixes/<id>.md "
+             "holds only the note the fixer writes itself.",
              "- Wave 0 skeleton/stub/config files belong to an implementer-haiku task.",
              "- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
              "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file or folder git "
