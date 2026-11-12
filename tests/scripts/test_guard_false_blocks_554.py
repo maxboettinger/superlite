@@ -185,3 +185,99 @@ def test_block_prints_why_after_the_refused_line(G, monkeypatch, capsys):
     k = lines.index(gj.REFUSED.format("rm -rf .build/owned"))
     assert lines[k + 1] == "Not housekeeping: owned by task T1"
     assert lines[-2:] == [f"Absolute target: {G}/.build/owned", "Blocked target: .build/owned"]
+
+
+# --- #665: $HOME, quoted values with spaces, perl's exec @ARGV, git config in a grep pattern --------------------
+import sys as _sys665  # noqa: E402
+from pathlib import Path as _P665  # noqa: E402
+
+import pytest as _pt665  # noqa: E402
+
+_sys665.path.insert(0, str(_P665(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "scripts"))
+from guard_judge import judge as _judge665  # noqa: E402
+
+
+@_pt665.fixture
+def H(tmp_path, monkeypatch):
+    p = (tmp_path / "p").resolve()
+    (p / "src").mkdir(parents=True)
+    (p / "src" / "x.py").write_text("x = 1\n")
+    (p / ".superlite").mkdir()
+    home = (tmp_path / "home").resolve()
+    (home / "Library").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("S", "T", "DD", "NOPE_665"):
+        monkeypatch.delenv(name, raising=False)
+    return str(p)
+
+
+def jh(cmd, P):
+    return _judge665(cmd, P, P, "active")
+
+
+def test_home_resolves_like_tilde(H):
+    for cmd in ('cp /tmp/x "$HOME/Library/x/x.pdf"', "cp /tmp/x $HOME/Library/x/x.pdf", "cp /tmp/x ${HOME}/Library/x.pdf",
+                'T="$HOME/Library/x"; cp /tmp/x "$T/x.pdf"',
+                'DD="$HOME/Library/Developer/Xcode/DerivedData"; for d in a b; do rm -rf "$DD/$d"; done'):
+        assert jh(cmd, H) is None, cmd
+
+
+def test_home_inside_the_project_still_blocks(H, monkeypatch):
+    v = jh(f'HOME={H}; echo hi > "$HOME/src/y.py"', H)  # an assigned HOME wins
+    assert v is not None and v.rel == "src/y.py"
+    monkeypatch.setenv("HOME", H)
+    v = jh('cp /tmp/x "$HOME/src/x.py"', H)
+    assert v is not None and v.rel == "src/x.py"
+
+
+@_pt665.mark.parametrize("value", ["", "rel/home"])
+def test_home_unset_or_relative_stays_unknown(H, monkeypatch, value):
+    monkeypatch.setenv("HOME", value)
+    v = jh("echo hi > $HOME/x.txt", H)
+    assert v is not None and v.word == "$HOME/x.txt"
+
+
+def test_quoted_value_with_spaces_resolves(H, tmp_path):
+    out = str((tmp_path / "a b").resolve())
+    for cmd in (f'T="{out}/c"; cp /tmp/x "$T/x.pdf"', f'T="{out}"; echo hi > "$T/x.log"',
+                'S=/tmp/s; T="$HOME/Library/x/File Provider Storage"; cp "$S/x.pdf" "$T/x.pdf"'):
+        assert jh(cmd, H) is None, cmd
+
+
+def test_unquoted_value_with_spaces_stays_unknown(H, tmp_path):
+    v = jh(f'T="{tmp_path}/a b"; cp /tmp/x $T/x.pdf', H)
+    assert v is not None and v.word == "$T/x.pdf"
+    v = jh(f'T="{tmp_path}/a b"; cp /tmp/x "$T"/$T/x.pdf', H)
+    assert v is not None and v.rel == "?"
+
+
+def test_targets_in_the_project_still_block(H):
+    v = jh(f'T="{H}/src/a b"; echo hi > "$T.py"', H)
+    assert v is not None and v.rel == "src/a b.py"
+    v = jh('cp /tmp/x "$NOPE_665/x.py"', H)
+    assert v is not None and v.word == "$NOPE_665/x.py"
+
+
+def test_perl_alarm_exec_argv_is_judged_by_its_command(H):
+    for cmd in ("perl -e 'alarm 30; exec @ARGV' xcrun simctl launch booted x", "perl -e 'alarm 30; exec @ARGV' echo hi",
+                "perl -e 'alarm shift; exec @ARGV' 30 echo hi", "perl -E 'alarm 5;exec(@ARGV);' ls"):
+        assert jh(cmd, H) is None, cmd
+    v = jh("perl -e 'alarm 30; exec @ARGV' rm src/x.py", H)
+    assert v is not None and v.rel == "src/x.py"
+    v = jh("perl -e 'alarm 30; exec @ARGV' sh -c 'echo hi > src/x.py'", H)
+    assert v is not None and v.rel == "src/x.py"
+    v = jh("perl -e 'alarm 30; system @ARGV' echo hi", H)  # another program: as today
+    assert v is not None and v.rel == "?"
+
+
+def test_git_lfs_env_with_a_grep_pattern_passes(H):
+    assert jh("git lfs env 2>&1 | grep -i -e A -e B -e 'git config filter'", H) is None
+    assert jh('git lfs env | grep -e "git config filter"', H) is None
+
+
+def test_unknown_git_target_names_its_token(H):
+    v = jh("git config alias.lfs x; git lfs env", H)
+    assert v is not None and v.rel == "?"
+    assert v.word == "? (from git: lfs: no git command, read as an alias while the command names git config)"
+    v = jh("perl -e 'alarm 30; system @ARGV' echo hi", H)
+    assert v.word == "? (from perl)"

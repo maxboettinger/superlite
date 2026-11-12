@@ -13,7 +13,8 @@ def test_quoted_target_judged(proj, T):
     assert bash(proj, f'cd {T} && rm "{proj}/src/a.py"').returncode == 2
     assert bash(proj, f'rm "{T}/x"').returncode == 0
     assert bash(proj, f"echo x > '{proj}/src/a.py'").returncode == 2
-    assert bash(proj, 'rm "$HOME/x y"').returncode == 2
+    assert bash(proj, 'rm "$HOME/x y"').returncode == 0
+    assert bash(proj, f'HOME={proj}; rm "$HOME/src/a.py"').returncode == 2
 
 
 def test_cd_only_when_it_moves(proj, T):
