@@ -260,6 +260,9 @@ def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = N
     def whole() -> list[str]:  # O(1)
         return [root if base else "."]  # O(1)
 
+    if sub == "apply" and any(a in ("--check", "--stat", "--numstat", "--summary") for a in args) \
+            and not any(a in ("--apply", "--index", "--cached", "-3", "--3way") for a in args):  # reads only  # O(len(args))
+        return []  # O(1)
     if sub in ("apply", "am"):  # the patch may touch any file below the directory git runs in  # O(1)
         return whole()  # O(1)
     if sub in _GIT_OUT:  # a command that writes its output to a named file or folder  # O(len(args))
@@ -483,6 +486,7 @@ class _Name(str):  # O(1) | an argument that stands for several literals (a name
 
 _NAMES: list[dict[str, list[str]]] = [{}]  # O(1) | the names of the code in hand that are assigned only literals
 _ASSIGN = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*([-+*/%|&^@]|//|\*\*|<<|>>)?=(?![=>])\s*")  # O(1)
+_TUP = re.compile(r"(?m)^[ \t]*([A-Za-z_]\w*(?:[ \t]*,[ \t]*[A-Za-z_]\w*)+)[ \t]*=(?![=>])[ \t]*")  # O(1) | a, b = x, y
 _FOR = re.compile(r"(?<![\w.])for\s+([A-Za-z_][\w\s,()]*?)\s+in\s+")  # O(1)
 _UNK = "\x00"  # an unknown piece inside a composed path
 _TEMP: list[str | None] = [None]  # O(1) | the temp root of the code in hand (None: unknown)
@@ -494,12 +498,13 @@ _IDENT = re.compile(r"[A-Za-z_]\w*")
 _STR_OPEN = re.compile(r"([rRbBuUfF]{0,2})('''|\"\"\"|'|\")")
 
 
-def _final(v: str) -> str:  # O(len(v)) | an unknown piece becomes a `?` component below an absolute literal prefix, else all is unknown
+def _final(v: str) -> str:  # O(len(v)) | an unknown piece becomes a `?` component below an absolute literal prefix (or an f-string's), else all is unknown
     if _UNK not in v:  # O(len(v))
         return v  # O(1)
     pre = v[:v.index(_UNK)]  # O(len(v))
     cut = max(pre.rfind("/"), pre.rfind("\\"))  # O(len(pre))
-    return pre[:cut + 1] + "?" if pre and _is_abs(pre) and cut >= 0 else "?"  # O(len(pre))
+    folder = pre[:cut + 1]  # O(len(pre))
+    return folder + "?" if pre and cut >= 0 and _is_abs(pre) else "?"  # O(len(pre))
 
 
 def _scan_close(code: str, i: int) -> int:  # O(len(code)) | index of the bracket closing the one at i (len(code) if none)
@@ -523,7 +528,7 @@ def _scan_close(code: str, i: int) -> int:  # O(len(code)) | index of the bracke
     return n  # O(1)
 
 
-def _stmt_end(code: str, i: int) -> int:  # O(len(code)) | end of the statement or argument starting at i
+def _stmt_end(code: str, i: int, commas: bool = False) -> int:  # O(len(code)) | end of the statement or argument starting at i
     depth, q, n = 0, "", len(code)  # O(1)
     while i < n:  # O(len(code))
         c = code[i]  # O(1)
@@ -540,7 +545,7 @@ def _stmt_end(code: str, i: int) -> int:  # O(len(code)) | end of the statement 
             if depth == 0:  # O(1)
                 return i  # O(1)
             depth -= 1  # O(1)
-        elif depth == 0 and c in ";\n,":  # O(1)
+        elif depth == 0 and c in (";\n" if commas else ";\n,"):  # O(1)
             return i  # O(1)
         i += 1  # O(1)
     return n  # O(1)
@@ -556,7 +561,7 @@ def _join1(x: str, y: str) -> str:  # O(len(x) + len(y)) | os.path.join / Path d
 
 class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, names, Path(...), os.path.join(...), `/`
     def __init__(self, s: str, names: dict[str, list[str]]):  # O(1)
-        self.s, self.i, self.names = s, 0, names  # O(1)
+        self.s, self.i, self.names, self.ctor = s, 0, names, False  # O(1)
 
     def ws(self) -> None:  # O(len(s))
         while self.i < len(self.s) and self.s[self.i] in " \t\r\n":  # O(len(s))
@@ -689,6 +694,7 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
         last = name.rsplit(".", 1)[-1]  # O(1)
         if last in _PATH_CTORS or name in _JOINS:  # O(1)
             acc = args[0] if args else ["."]  # O(1)
+            self.ctor = True  # O(1)
             for a in args[1:]:  # O(len(args))
                 acc = self._cross(acc, a, _join1)  # O(64)
             return acc  # O(1)
@@ -798,7 +804,10 @@ def _assigned(code: str, lang: str, scan: str | None = None,
     bad: set[str] = set()  # O(1)
     events: list = [(m.start(), _ASSIGN.match(code, m.start())) for m in _ASSIGN.finditer(scan)]  # found in scan, read in code  # O(len(code))
     events += [(m.start(), _FOR.match(code, m.start())) for m in _FOR.finditer(scan)] if lang == "py" else []  # O(len(code))
-    events = [e for e in events if e[1] is not None]  # O(len(events))
+    tups = [(m.start(), m) for m in _TUP.finditer(scan)] if lang == "py" else []  # tuple unpacking at a statement start  # O(len(code))
+    tup_ends = {t[1].end() for t in tups}  # O(len(tups))
+    events = [e for e in events if e[1] is not None and not (e[1].re is _ASSIGN and e[1].end() in tup_ends)]  # O(len(events))
+    events += [(off, _TUP.match(code, off)) for off, _ in tups]  # found in scan, read in code  # O(len(tups))
     events += [(off, (name, vals)) for off, name, vals in params or []]  # a helper's parameter, at its def line  # O(len(params))
     events.sort(key=lambda e: e[0])  # O(events * log events)
     for _, m in events:  # O(events)
@@ -808,6 +817,17 @@ def _assigned(code: str, lang: str, scan: str | None = None,
                 bad.add(m[0])  # O(1)
             else:  # O(1)
                 lits.setdefault(m[0], []).extend(v for v in m[1] if v not in lits.get(m[0], []))  # O(len(m[1]))
+            continue  # O(1)
+        if m.re is _TUP:  # a, b = x, y: each name takes its own value when the counts match, else all are unknown  # O(1)
+            names = _IDENT.findall(m.group(1))  # O(1)
+            parts = _split_top(code[m.end():_stmt_end(code, m.end(), True)])  # O(len(code))
+            raws = [_compose_raw(x, known) for x in parts] if len(parts) == len(names) else []  # O(len(parts))
+            for n, r in zip(names, raws):  # O(len(names))
+                if r is None or any(_UNK in v for v in r):  # O(len(r))
+                    bad.add(n)  # O(1)
+                else:  # O(1)
+                    lits.setdefault(n, []).extend(v for v in r if v not in lits.get(n, []))  # O(len(r))
+            bad.update(names[len(raws):])  # O(len(names))
             continue  # O(1)
         if m.re is _FOR:  # for NAME in (literal, ...): the name takes every value  # O(1)
             names = _IDENT.findall(m.group(1))  # O(1)

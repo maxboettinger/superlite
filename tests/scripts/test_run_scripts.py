@@ -29,9 +29,19 @@ ENV = {
 }
 
 
+OVERRIDES = ("SUPERLITE_SL", "SL_TEST_PYTHON", "SUPERLITE_AUTOCOMMIT", "SUPERLITE_PROBE_RUN")
+
+
+def _env(env=None):
+    """os.environ at call time (the per-test SUPERLITE_HOME) plus ENV's overrides, then what the caller changed."""
+    base = {**os.environ, **{k: v for k, v in ENV.items() if k in OVERRIDES}}
+    changed = {k: v for k, v in (env or {}).items() if ENV.get(k) != v or k in OVERRIDES}  # keys the caller set itself
+    return {**base, **changed}
+
+
 def run(script, *args, cwd=None, env=None):
     return subprocess.run([sys.executable, str(SCRIPTS / f"{script}.py"), *map(str, args)],
-                          capture_output=True, text=True, cwd=cwd, env=env or ENV,
+                          capture_output=True, text=True, cwd=cwd, env=_env(env),
                           encoding="utf-8")
 
 

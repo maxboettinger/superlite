@@ -55,7 +55,7 @@ A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is
 SIGTERM and SIGHUP on a run kill its test processes and leave a red summary (`run_tests stopped by SIGTERM; ...`, exit 2).
 With `--task Tn` every summary carries `"task"` and `--background` also writes `test-summary-<Tn>.latest`; `--wait <earlier run of Tn>` then waits on Tn's newest run and says so on stderr.
 `-m EXPR` selects a pytest marker (`-m EXPR` goes onto the pytest argv, or onto a test-cmd.json pytest command; a runner that is not pytest is a usage error, exit 2) and makes the run a fast (narrowed) run. A pytest exit 5 stops with `pytest collected nothing (exit 5): <cause>`: all tests deselected (by `-m`, or by a deselecting `-m` in the project's addopts), or the paths hold no tests.
-A `--full` run holds a machine-wide lock (`<superlite home>/locks/full-suite.lock`, flock; the OS frees it when the process ends) around its test command, so full suites on one machine run one at a time. A waiting run prints `run_tests: waiting for the full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS); full runs on one machine run one at a time`, then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for. A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
+A `--full` run holds a machine-wide lock per toolchain (`<superlite home>/locks/full-suite-<toolchain>.lock`, flock; the OS frees it when the process ends; toolchain = python, xcode, or the test-cmd.json language, shell by default) around its test command, so full suites of one toolchain on one machine run one at a time while other toolchains run alongside (#550). A waiting run prints `run_tests: waiting for the python full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS, N min ago; its last full run took M min); python full runs on one machine run one at a time`, then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for. A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
 A run in an isolated tree builds there: an `xcodebuild` word in the command (not `-list`, not one that already has `-derivedDataPath`) gets `-derivedDataPath <tree>/.build/DerivedData`, so the build output (module cache included) goes with the tree (#574); the tree is marked busy while the run lasts.
 Before each run (the run process, not the `--background` parent) the disk is checked (`trees.disk_gate`): below the floor the run stops (exit 2, red summary `disk: ...`, no tree made), below the warn level it prints a `disk: WARNING` line. Each run also removes the trees nothing needs (committed tasks, stopped workers' trees; never its own or a busy one) and orphaned DerivedData of removed trees. An `ENOSPC` anywhere ends the run with one `run_tests: disk full (ENOSPC): ...` line, exit 2, no traceback.
 A tree run exports `SUPERLITE_DERIVED_DATA_PATH=<tree>/.build/DerivedData` to the test command and its setup (a test-cmd.json `env` entry of that name wins), so a project script can pass it to xcodebuild (#614).
@@ -127,8 +127,18 @@ class LockBusy(Exception):  # O(1) the full-suite lock stayed held past --lock-w
         self.seconds, self.holder = seconds, holder  # O(1)
 
 
-def full_lock_path():  # O(1) read at call time, so SUPERLITE_HOME moves it
-    return state.home() / "locks" / "full-suite.lock"  # O(1)
+def full_lock_path(toolchain):  # O(1) read at call time, so SUPERLITE_HOME moves it; one lock file per toolchain (#550)
+    return state.home() / "locks" / f"full-suite-{toolchain}.lock"  # O(1)
+
+
+def lock_toolchain(spec):  # O(len command) the toolchain a full run's lock is named for: python, xcode, or the spec's language
+    if spec.get("python"):  # O(1)
+        return "python"  # O(1)
+    command = str(spec.get("command") or "")  # O(1)
+    if "xcodebuild" in command:  # O(len)
+        return "xcode"  # O(len)
+    language = re.sub(r"[^a-z0-9]+", "-", str(spec.get("language") or "").lower()).strip("-")  # O(len)
+    return language or "shell"  # O(1)
 
 
 def lock_holder(path):  # O(file) the holder record in the lock file, None when missing, empty, half-written or not a record
@@ -151,6 +161,44 @@ def holder_text(info):  # O(1) `pid P in ROOT (task T) since HH:MM:SS`
     return text  # O(1)
 
 
+def wait_detail(holder):  # O(file) `pid P in ROOT (task T) since HH:MM:SS, N min ago` plus the holder root's last full run length when known
+    text = holder_text(holder)  # O(1)
+    if not holder:  # O(1)
+        return text  # O(1)
+    started = holder.get("started")  # O(1)
+    if isinstance(started, (int, float)) and not isinstance(started, bool):  # O(1)
+        text += f", {max(0, int((time.time() - started) / 60))} min ago"  # O(1)
+    try:  # O(1)
+        last = json.loads((Path(str(holder.get("root"))) / ".superlite" / FULL_COPY).read_text(encoding="utf-8"))["seconds"]  # O(file)
+        if isinstance(last, (int, float)) and not isinstance(last, bool) and last > 0:  # O(1)
+            text += f"; its last full run took {round(last / 60)} min"  # O(1)
+    except (OSError, ValueError, KeyError, TypeError):  # O(1)
+        pass  # O(1)
+    return text  # O(1)
+
+
+def note_holder(note):  # O(file) the lock's current holder named by a .lockwait note; the note's own copy, or a bare old-style holder dict, when the lock is free
+    try:  # O(1)
+        data = json.loads(Path(note).read_text(encoding="utf-8"))  # O(file)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+    if not isinstance(data, dict):  # O(1)
+        return None  # O(1)
+    if "lock" not in data:  # a note from before the per-toolchain locks is the holder itself | O(1)
+        return lock_holder(note)  # O(file)
+    current = lock_holder(data["lock"]) if isinstance(data["lock"], str) else None  # O(file)
+    inner = data.get("holder")  # O(1)
+    return current or (inner if isinstance(inner, dict) and isinstance(inner.get("pid"), int) else None)  # O(1)
+
+
+def lock_name(note):  # O(file) the toolchain in a .lockwait note's lock path, python for an old-style note
+    try:  # O(1)
+        name = Path(json.loads(Path(note).read_text(encoding="utf-8"))["lock"]).stem  # O(file)
+    except (OSError, ValueError, KeyError, TypeError):  # O(1)
+        return "python"  # O(1)
+    return name[len("full-suite-"):] if name.startswith("full-suite-") else "python"  # O(1)
+
+
 def is_ancestor(pid):  # O(64) ps calls; True when pid is a parent, grandparent... of this process
     cur = os.getppid()  # O(1)
     for _ in range(64):  # O(64)
@@ -167,11 +215,11 @@ def is_ancestor(pid):  # O(64) ps calls; True when pid is a parent, grandparent.
 
 
 @contextlib.contextmanager
-def full_suite_lock(a, label):  # O(wait / LOCK_POLL) polls; a full run holds the machine-wide lock around its test command
+def full_suite_lock(a, label, toolchain="python"):  # O(wait / LOCK_POLL) polls; a full run holds the machine-wide lock around its test command
     if label != "full" or fcntl is None:  # O(1)
         yield  # O(1)
         return  # O(1)
-    path = full_lock_path()  # O(1)
+    path = full_lock_path(toolchain)  # O(1)
     holder = lock_holder(path)  # O(file)
     if holder and (os.environ.get(LOCK_ENV) == str(holder["pid"]) or is_ancestor(holder["pid"])):  # an outer run holds it for us, also when the env lost LOCK_ENV | O(64)
         yield  # O(1)
@@ -195,9 +243,9 @@ def full_suite_lock(a, label):  # O(wait / LOCK_POLL) polls; a full run holds th
                 holder = lock_holder(path)  # O(file)
                 if not waited:  # O(1)
                     waited = True  # O(1)
-                    print(f"run_tests: waiting for the full-suite lock (held by {holder_text(holder)}); full runs on one machine run one at a time", file=sys.stderr)  # O(1)
+                    print(f"run_tests: waiting for the {toolchain} full-suite lock (held by {wait_detail(holder)}); {toolchain} full runs on one machine run one at a time", file=sys.stderr)  # O(1)
                     if a.run_id:  # O(1)
-                        atomic_write(note, json.dumps(holder or {}))  # O(1)
+                        atomic_write(note, json.dumps({"lock": str(path), "holder": holder or {}}))  # O(1)
                 remaining = None if a.lock_wait is None else a.lock_wait - (time.monotonic() - t0)  # O(1)
                 if remaining is not None and remaining <= 0:  # O(1)
                     raise LockBusy(a.lock_wait, holder)  # O(1)
@@ -251,10 +299,20 @@ def project_root(start):  # O(d) stats, d = depth of start
 ALSO_RULING = "declared before the test run (run_tests --also)"  # the ledger text of an --also claim
 
 
+def root_relative(x, cwd, root):  # O(len x) x against cwd, unless only the root holds it: then x is already root-relative (#548)
+    mine = os.path.relpath(os.path.join(cwd, x), root)  # O(len)
+    bare = x.split("::", 1)[0]  # O(len)
+    prefix = os.path.relpath(cwd, root).replace(os.sep, "/") + "/"  # O(len) the cwd's own root-relative prefix; only a doubled prefix is read from the root
+    if "..." in x or not x.replace(os.sep, "/").startswith(prefix) or os.path.exists(os.path.join(root, mine.split("::", 1)[0])) or not os.path.exists(os.path.join(root, bare)):  # O(1) stats
+        return mine  # O(len)
+    print(f"run_tests: --fast {x} read from the root", file=sys.stderr)  # O(1)
+    return x  # O(1)
+
+
 def to_root(a, argv, cwd, root):  # O(len argv + p) rewrite --fast paths against cwd, then chdir to root
     """Relative --fast paths are rewritten (in a.fast and in argv) so they stay valid from the root."""
     def fix(chunk):  # O(len chunk)
-        parts = [x if os.path.isabs(x) else os.path.relpath(os.path.join(cwd, x), root) for x in chunk.split(",") if x]  # O(len chunk)
+        parts = [x if os.path.isabs(x) else root_relative(x, cwd, root) for x in chunk.split(",") if x]  # O(len chunk)
         return ",".join(parts)  # O(len chunk)
     eq = [j for j, x in enumerate(argv) if x.startswith("--fast=")]  # --fast=PATH spelling | O(len argv)
     if a.fast and eq:  # O(1)
@@ -483,7 +541,8 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
             alive = f" (pid {pid} still running)" if pid and pid > 0 and pid_alive(mine) else ""  # O(1)
             note = mine.with_suffix(".lockwait")  # O(1)
             if note.exists():  # the run still waits for the full-suite lock | O(1)
-                print(f"run_tests: {mine} is waiting for the full-suite lock (held by {holder_text(lock_holder(note))})", file=sys.stderr)  # O(file)
+                held = note_holder(note)  # O(file)
+                print(f"run_tests: {mine} is waiting for the {lock_name(note)} full-suite lock (held by {wait_detail(held)})", file=sys.stderr)  # O(file)
             print(f"tests: no result yet after {limit:g} s{alive}; run again: {wait_line(mine)[len('wait: '):]}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         time.sleep(POLL_SECONDS)  # O(1)
@@ -700,12 +759,32 @@ def no_result_target(command, rc, log, cause=None):  # O(1) the feedback target 
     return (f"nothing collected: {cause}; " if cause else "") + f"exit {rc} from `{command[:200]}`; log {log or 'not written'}"  # O(1)
 
 
-def record_no_result(a, reason, command, rc, lines, tree=None, cause=None):  # O(L + c) log the stop's trace, print its path, log the incident
+def signal_name(rc):  # O(1) the signal a return code means (-9 or 128+9 -> SIGKILL), None for an ordinary exit code
+    num = -rc if rc < 0 else rc - 128 if 128 < rc <= 128 + 64 else 0  # O(1)
+    try:  # O(1)
+        name = signal.Signals(num).name if num else None  # O(1)
+        return name if name in ("SIGKILL", "SIGTERM", "SIGHUP", "SIGINT") else None  # a crash signal is a real no-result | O(1)
+    except ValueError:  # O(1)
+        return None  # O(1)
+
+
+def killed_reason(sig, rc):  # O(1) the summary error of a run whose test processes a signal ended, with the machine snapshot when known
+    try:  # a snapshot failure never stops a run | O(registry + p)
+        import machine_load  # noqa: PLC0415  # O(module)
+        snap = machine_load.snapshot_text()  # O(registry + p)
+    except Exception:  # noqa: BLE001  # O(1)
+        snap = ""  # O(1)
+    return f"test run killed by {sig} (exit {rc}): its test processes were killed, not failed" + (f"; {snap}" if snap else "")  # O(1)
+
+
+def record_no_result(a, reason, command, rc, lines, tree=None, cause=None, sig=None):  # O(L + c) log the stop's trace, print its path, log the incident
     log = no_result_log(a.summary, command, str(tree) if tree else str(Path.cwd()), rc, lines)  # O(L)
     print(f"run_tests: no-result log {log}", file=sys.stderr)  # O(1)
     extra = {"target": no_result_target(command, rc, log, cause), "command": command[:300], "exit": rc, "log": log}  # O(1)
     if tree:  # O(1)
         extra["cwd"] = str(tree)  # O(1)
+    if sig:  # O(1)
+        extra["signal"] = sig  # O(1)
     add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task, extra)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
 
 
@@ -765,12 +844,15 @@ def resolve_passed(log, task, failures, files, green=False, full=False, started=
     add_incidents(log, items, task, raw=raw)  # O(total c) one append
 
 
-def missing_fast_paths(paths):  # O(p) the --fast paths that do not exist (a `::node` suffix is dropped)
-    return [p for p in paths if not Path(p.split("::", 1)[0]).exists()]  # O(p)
+NODE_TEST_SUFFIXES = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")  # O(1) --fast paths of a non-Python project that are checked for existence
 
 
-def missing_line(paths, cwd, root):  # O(p) the usage-error text for missing --fast paths, else None
-    gone = missing_fast_paths(paths)  # O(p)
+def missing_fast_paths(paths, python=True):  # O(p) the --fast paths that do not exist (a `::node` suffix is dropped; a `...` pattern is never checked; a non-Python project checks Node test files only)
+    return [p for p in paths if "..." not in p and (python or p.split("::", 1)[0].endswith(NODE_TEST_SUFFIXES)) and not Path(p.split("::", 1)[0]).exists()]  # O(p)
+
+
+def missing_line(paths, cwd, root, python=True):  # O(p) the usage-error text for missing --fast paths, else None
+    gone = missing_fast_paths(paths, python)  # O(p)
     if not gone:  # O(1)
         return None  # O(1)
     return f"test path not found: {', '.join(gone)} (cwd {cwd}, root {root})"  # O(p)
@@ -1169,7 +1251,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                 spec = fast_spec(fast, quiet=True)  # O(m + f)
             except FileNotFoundError:  # left to the child | O(1)
                 fast, spec = [], None  # O(1)
-            gone = missing_line(fast, a.cwd, Path.cwd()) if spec and spec["python"] and fast else None  # O(p)
+            gone = missing_line(fast, a.cwd, Path.cwd(), spec["python"]) if spec and fast else None  # O(p)
             gone = gone or node_install_line(Path.cwd(), spec)  # O(m + f)
             if gone:  # O(1)
                 print(f"run_tests: {gone}", file=sys.stderr)  # O(1)
@@ -1320,6 +1402,15 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
             covered = None  # O(1)
             if p["counted"]:  # a counted run (it compiled; an XCTest failure line is no build error) covers its files: a full run all, a fast run the Swift files it was limited to (#499) | O(p)
                 covered = True if label == "full" else [f.replace("\\", "/") for f in paths if f.replace("\\", "/").endswith(".swift")] if label == "fast" else None  # O(p)
+            sig = signal_name(r.returncode) if r.returncode and not (p["counted"] or p["passed"] or p["skipped"] or p["names"]) else None  # a kill with no result at all | O(1)
+            if sig:  # the test processes were killed from outside: no result, not a failing test (#548) | O(1)
+                reason = killed_reason(sig, r.returncode)  # O(registry + p)
+                print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+                write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
+                publish_summary(a)  # O(summary size)
+                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*p["tail"]], cwd, sig=sig)  # O(40 + c)
+                print(f"0 0 0 {seconds:.1f}")  # O(1)
+                return 2  # O(1)
             if r.returncode and not failures:  # a red exit with no names: name the command | O(1)
                 failures = [("-", 0, f"exit code {r.returncode} from `{spec['command']}`: {last}"[:200])]  # O(1)
             if r.returncode and p["error"]:  # a compile error leads the failures | O(1)
@@ -1569,8 +1660,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         if marked is not None:  # O(1)
             spec = {**spec, "command": marked}  # O(1)
             print(honoured[1], file=sys.stderr)  # O(1)
-    if spec["python"] and paths:  # a missing path is a usage error, not a no-result stop (#235) | O(p)
-        gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd())  # O(p)
+    if paths and (spec["python"] or label == "fast"):  # a missing path is a usage error, not a no-result stop (#235) | O(p)
+        gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd(), spec["python"])  # O(p)
         if gone:  # O(1)
             return usage_error(a, label, gone)  # O(summary size)
     refused = free_disk(a, {k for k in (a.task, worker_tree_name()) if k})  # before any tree or build | O(T + c)
@@ -1624,7 +1715,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                     if warning:  # O(1)
                         warn_once(spec["command"], warning)  # O(warned)
                 spec = {**spec, "env": {"SUPERLITE_DERIVED_DATA_PATH": str(trees.derived_data_path(tree)), **(spec.get("env") or {})}}  # O(env)
-            with full_suite_lock(a, label):  # O(wait / LOCK_POLL)
+            with full_suite_lock(a, label, lock_toolchain(spec)):  # O(wait / LOCK_POLL)
                 rc = run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
             if tree and rc == 1:  # a red tree run names the changed files the tree lacks (#517) | O(f)
                 try:  # O(1)
@@ -1661,13 +1752,14 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         if parsed is None and (r.returncode not in (0, 1) or not has_xml):  # O(1)
             tail = (r.stdout + r.stderr).strip().splitlines()[-5:]  # O(O)
             cause = nothing_collected(strip_ansi(r.stdout + r.stderr), paths, a.marker, Path(".")) if r.returncode == 5 else None  # O(O + file)
-            reason = f"pytest collected nothing (exit 5): {cause}" if cause else f"pytest produced no results (exit {r.returncode}): " + (" | ".join(tail) or "no output")  # O(1)
+            sig = signal_name(r.returncode) if parsed is None else None  # O(1)
+            reason = f"pytest collected nothing (exit 5): {cause}" if cause else killed_reason(sig, r.returncode) if sig else f"pytest produced no results (exit {r.returncode}): " + (" | ".join(tail) or "no output")  # O(1)
             print(reason, file=sys.stderr)  # O(1)
             write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
                                              "skipped_tests": []}, [], seconds,  # O(1)
                           error=reason)  # O(1)
             publish_summary(a)  # O(summary size)
-            record_no_result(a, reason, shlex.join(cmd), r.returncode, (r.stdout + r.stderr).splitlines(), cause=cause)  # O(O + c)
+            record_no_result(a, reason, shlex.join(cmd), r.returncode, (r.stdout + r.stderr).splitlines(), cause=cause, sig=sig)  # O(O + c)
             print(f"0 0 0 {seconds:.1f}")  # O(1)
             return 1 if r.returncode == 5 else 2  # O(1)
         counts, failures, files = parsed or parse_junit(xml_path)  # O(X + T*d)

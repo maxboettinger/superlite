@@ -39,12 +39,12 @@ def test_nested_full_run_skips_lock_held_by_ancestor(tmp_path):
     home = tmp_path / "home"
     env = {**os.environ, "SUPERLITE_HOME": str(home)}
     env.pop("SUPERLITE_FULL_SUITE_LOCK", None)
-    out = subprocess.run([sys.executable, "-c", PARENT, str(home / "locks" / "full-suite.lock"), str(SCRIPTS / "run_tests.py"), str(proj)],
+    out = subprocess.run([sys.executable, "-c", PARENT, str(home / "locks" / "full-suite-shell.lock"), str(SCRIPTS / "run_tests.py"), str(proj)],
                          env=env, capture_output=True, text=True, timeout=60)
     res = json.loads(out.stdout.strip().splitlines()[-1])
     assert res["secs"] < 15, res
     assert res["rc"] == 0, res
-    assert "waiting for the full-suite lock" not in res["err"], res
+    assert "full-suite lock" not in res["err"], res
 
 
 def test_is_ancestor():

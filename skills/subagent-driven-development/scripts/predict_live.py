@@ -10,7 +10,7 @@ ledger lines (runs that ran nothing do not count) in the repository's checkouts 
 `.superlite/runs/*/progress.md`), when at least `history_min_runs` lines exist. `slots` is an int >= 1 or None.
 Contention: other runs are session bindings with a live pid, a started run (`state.has_run`) outside `root` (this run's task
 trees included) and a marker or ledger changed within `active_window_min`; two sessions of one run count once. The full-suite
-lock counts when a live process outside `root` holds it. factor = max(1, (1 + others) / slots); full_factor = 1 +
+lock (any toolchain's) counts when a live process outside `root` holds it. factor = max(1, (1 + others) / slots); full_factor = 1 +
 full_wait_share x max(others, 1 when the lock is held). Stdlib only; predict.py wraps every call, so a failure here never
 breaks a prediction.
 """
@@ -182,14 +182,20 @@ def other_runs(root: Path, window_min: float, now: float | None = None) -> int: 
     return len(seen)  # O(1)
 
 
-def full_lock_held(root: Path) -> bool:  # a live process outside root holds the full-suite lock | O(1)
-    info = run_tests.lock_holder(run_tests.full_lock_path())  # O(file)
-    if not info or not is_alive(info.get("pid")):  # O(1)
+def full_lock_held(root: Path) -> bool:  # a live process outside root holds any toolchain's full-suite lock | O(l)
+    mine = Path(root).resolve()  # O(1)
+    try:  # O(1)
+        locks = sorted(run_tests.full_lock_path("x").parent.glob("full-suite-*.lock"))  # O(l log l)
+    except OSError:  # O(1)
         return False  # O(1)
-    where = info.get("root")  # O(1)
-    if not isinstance(where, str) or not where:  # O(1)
-        return True  # O(1)
-    return not _inside(Path(where).resolve(), Path(root).resolve())  # O(d)
+    for lock in locks:  # O(l) iterations
+        info = run_tests.lock_holder(lock)  # O(file)
+        if not info or not is_alive(info.get("pid")):  # O(1)
+            continue  # O(1)
+        where = info.get("root")  # O(1)
+        if not isinstance(where, str) or not where or not _inside(Path(where).resolve(), mine):  # O(d)
+            return True  # O(1)
+    return False  # O(1)
 
 
 def contention(root: Path, cfg: dict, slots: int | None = None) -> dict:  # others, lock, factors | O(s)

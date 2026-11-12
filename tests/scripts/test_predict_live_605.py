@@ -184,16 +184,24 @@ def test_a_fresh_ledger_keeps_an_old_marker_active(tmp_path):
 
 def test_a_live_full_suite_lock_holder_elsewhere_counts(tmp_path):
     root = project(tmp_path)
-    lock = run_tests.full_lock_path()
+    lock = run_tests.full_lock_path("python")
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text(json.dumps({"pid": os.getpid(), "root": str(tmp_path / "elsewhere"), "task": None, "started": time.time()}))
     assert predict_live.contention(root, CFG) == {
         "others": 0, "full_lock": True, "slots": 2, "factor": 1.0, "full_factor": 1.5}
 
 
+def test_a_live_holder_of_another_toolchain_lock_counts(tmp_path):
+    root = project(tmp_path)
+    lock = run_tests.full_lock_path("xcode")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(json.dumps({"pid": os.getpid(), "root": str(tmp_path / "elsewhere"), "task": None, "started": time.time()}))
+    assert predict_live.contention(root, CFG)["full_lock"] is True
+
+
 def test_a_dead_or_own_lock_holder_does_not_count(tmp_path):
     root = project(tmp_path)
-    lock = run_tests.full_lock_path()
+    lock = run_tests.full_lock_path("python")
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text(json.dumps({"pid": DEAD, "root": "/elsewhere", "task": None, "started": 1.0}))
     assert predict_live.contention(root, CFG)["full_lock"] is False

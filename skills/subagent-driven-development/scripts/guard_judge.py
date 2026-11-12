@@ -55,8 +55,8 @@ MAX_DIRS = 12  # directories tracked at once before the shell's directory counts
 MAX_STEPS = 20000  # commands and bodies walked before the whole command counts as unknown (loop re-walks multiply) | O(1)
 MAX_SECONDS = 1.5  # wall-clock budget of one judge call, well inside the hook timeout | O(1)
 MAX_BRACE = 64  # words one brace expansion may give before it counts as unknown | O(1)
-PROTECTED = (".superlite/orchestrator.json", ".superlite/human-replies.jsonl", ".superlite/backlog.json")  # O(1)
-NAMES = ("orchestrator.json", "human-replies.jsonl", "backlog.json")  # O(1)
+PROTECTED = (".superlite/orchestrator.json", ".superlite/human-replies.jsonl", ".superlite/backlog.json", ".superlite/render-edits.json")  # O(1)
+NAMES = ("orchestrator.json", "human-replies.jsonl", "backlog.json", "render-edits.json")  # O(1)
 ACTIVE_OK = ("docs/plans/*", "docs/*/plans/*", "docs/*.md", "SPEC*.md", "*/SPEC*.md", "docs.md", "*/docs.md",  # O(1)
              "docs/*.png", "docs/*.jpg", "docs/*.jpeg", "docs/*.gif", "docs/*.svg", "docs/*.webp",  # O(1)
              ".superlite/*", ".git/info/exclude")  # O(1)
@@ -138,7 +138,17 @@ class _Ctx:  # O(p)
         self.cache_dirs = {x.lower() for d in dirs for x in (d, os.path.realpath(d))}  # as written and resolved | O(p)
         self.caches = {d.rstrip("/") + "/python" for d in self.cache_dirs}  # protected in every mode | O(1)
         folders = [_clean(_winpath(d)) for d in sds if isinstance(d, str) and d and "\0" not in d]  # O(s * p)
+        self.render = _render_files(self.sd) if mode == "active" else frozenset()  # files `sl render_edit start` recorded | O(f)
         self.prot_abs = {x.lower() for d in folders for n in NAMES for x in (d.rstrip("/") + "/" + n, os.path.realpath(d).rstrip("/") + "/" + n)}  # run files of state folders, by absolute path | O(s * p)
+
+
+def _render_files(sd):  # O(f) | the root-relative files of <sd>/render-edits.json; any doubt is none
+    try:  # O(1)
+        with open(os.path.join(sd, "render-edits.json"), encoding="utf-8") as f:  # O(f)
+            files = json.load(f).get("files")  # O(f)
+        return frozenset(k for k in files if isinstance(k, str)) if isinstance(files, dict) else frozenset()  # O(f)
+    except (OSError, ValueError, AttributeError, TypeError):  # O(1)
+        return frozenset()  # O(1)
 
 
 class _Unknown(Exception):  # O(1)
@@ -319,8 +329,10 @@ def _judge_path(path, base, ctx, name=None, stays=True):  # O(p + depth) | the p
         return Verdict(".", absolute, ctx.kind) if ctx.enforce else None  # O(1)
     if rel.lower() in PROTECTED:  # O(p)
         return Verdict(rel, absolute, "protected")  # O(1)
-    if ctx.enforce and _hardlinked(real):  # a second name for a file that may be code: a write here writes there | O(1)
+    if ctx.enforce and _hardlinked(real):  # a second name for a file that may be code: a write here writes there, a recorded render edit too | O(1)
         return Verdict(rel, absolute, ctx.kind)  # O(1)
+    if rel in ctx.render:  # a throwaway render edit recorded by `sl render_edit start` | O(1)
+        return None  # O(1)
     wt = _wt_rel(rel, ctx.projreal) if (ctx.enforce or rel.lower().endswith(NAMES)) else None  # O(depth)
     if wt is not None and wt.lower() in PROTECTED:  # also inside a linked worktree | O(p)
         return Verdict(rel, absolute, "protected")  # O(1)
@@ -470,7 +482,8 @@ def _glob_check(t, inn, st, ctx, name=None, protect_only=False):  # O(d * p) | a
             return Verdict(t, full, "protected")  # O(1)
         if protect_only:  # O(1)
             continue  # O(1)
-        q = "/".join(parts[:k] + ["?"] + parts[k + 1:]) if k is not None else p  # O(p)
+        ext = GLOB_EXT.fullmatch(parts[k]) if k is not None and k == len(parts) - 1 and name and name != "?" else None  # a cp/mv glob `*.md` keeps its extension | O(p)
+        q = "/".join(parts[:k] + ["?" + (ext.group(1) if ext else "")] + parts[k + 1:]) if k is not None else p  # O(p)
         v = _judge_path(q, base, ctx, name, stays=False)  # O(p + depth)
         if v is not None and (found is None or v.kind == "protected"):  # O(1)
             found = v  # O(1)
@@ -850,12 +863,21 @@ def _mkdir(words, c, st, ctx):  # O(t) | `mkdir -p X && cd X`: the folder exists
         c.fail = ()  # O(1)
 
 
+GLOB_EXT = re.compile(r"[*?]+(\.[A-Za-z0-9]+)")  # O(1) | `*.md`: any stem, one literal extension
+
+
 def _source_name(w, t):  # O(w) | the file name a cp/mv/ln/install of the first source would give inside folder t
+    own = GLOB_EXT.fullmatch(t.rstrip("/").rsplit("/", 1)[-1])  # O(p)
+    if own and w[0] == "mv" and t in w[1:]:  # mv removes a glob source: the files it names share the extension | O(w)
+        return "x" + own.group(1)  # O(1)
     for x in w[1:]:  # O(w)
         if not x.startswith("-") and x.rstrip("/") != t.rstrip("/"):  # O(1)
             if x.endswith("/") and w[0] in ("rsync", "cp") and len(x) > 1:  # `src/` copies its contents (rsync, BSD cp): any name | O(1)
                 return "?"  # O(1)
             nm = x.rstrip("/").rsplit("/", 1)[-1]  # O(p)
+            if nm and any(ch in nm for ch in "*?[") and "$" not in nm and "`" not in nm:  # a glob: the files share its literal extension when every source says so | O(w)
+                exts = {GLOB_EXT.fullmatch(y.rstrip("/").rsplit("/", 1)[-1]) and GLOB_EXT.fullmatch(y.rstrip("/").rsplit("/", 1)[-1]).group(1) for y in w[1:] if not y.startswith("-") and y.rstrip("/") != t.rstrip("/")}  # O(w * p)
+                return "x" + exts.pop() if len(exts) == 1 and None not in exts and w[0] in ("cp", "mv") else "?"  # O(1)
             return nm if nm and not any(ch in nm for ch in "$`*?[") else "?"  # O(p)
     return "?"  # O(1)
 
@@ -1605,6 +1627,8 @@ MESSAGES = {  # O(1)
              "- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
              "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file or folder git "
              "does not track and no task Owns.",
+             "- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; "
+             "`sl render_edit restore` undoes it.",
              "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
              ".superlite by hand."],
 }  # O(1)
