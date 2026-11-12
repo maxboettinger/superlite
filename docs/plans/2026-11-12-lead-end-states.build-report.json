@@ -1,0 +1,116 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-12T16:40:11 (plan edited since)",
+ "headline": {
+  "wall_min": {
+   "projected": 5.559,
+   "actual": 11.868
+  },
+  "cost_usd_agents": {
+   "projected": 0.424568,
+   "actual": 1.341184
+  },
+  "task_min": {
+   "projected": 21.122,
+   "actual": 5.768
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 9
+  }
+ },
+ "cost_split": {
+  "agents_usd": 1.001754,
+  "rework_usd": 0.33943,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 1.341184
+ },
+ "concurrency": {
+  "peak": 3,
+  "projected_peak": 4
+ },
+ "critical_path": {
+  "actual": [
+   "T2",
+   "T3"
+  ],
+  "projected": [
+   "T3"
+  ],
+  "projected_min": 5.559
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 4,
+   "cost_usd": 1.3411840000000002
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 7632,
+   "failed": 0,
+   "skipped": 9,
+   "seconds": 208.0,
+   "recorded": false
+  },
+  "tests_newer": null,
+  "tests_from": "progress.md",
+  "first_time_pass": 2,
+  "first_time_n": 4,
+  "rework_dispatches": 2,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 5.479,
+   "actual_min": 1.115,
+   "delta": {
+    "abs": -4.364,
+    "pct": -79.6
+   },
+   "cost_usd": 0.201853,
+   "first_time_pass": true
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 5.559,
+   "actual_min": 1.52,
+   "delta": {
+    "abs": -4.039,
+    "pct": -72.7
+   },
+   "cost_usd": 0.609925,
+   "first_time_pass": false
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 5.532,
+   "actual_min": 1.567,
+   "delta": {
+    "abs": -3.9653,
+    "pct": -71.7
+   },
+   "cost_usd": 0.309812,
+   "first_time_pass": false
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 4.552,
+   "actual_min": 1.567,
+   "delta": {
+    "abs": -2.9853,
+    "pct": -65.6
+   },
+   "cost_usd": 0.219594,
+   "first_time_pass": true
+  }
+ ]
+}
