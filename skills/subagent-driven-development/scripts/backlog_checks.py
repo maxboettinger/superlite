@@ -4,7 +4,7 @@ import copy
 import json
 import re
 
-ID_RE = re.compile(r"^B[1-9][0-9]?$")
+ID_RE = re.compile(r"^B[1-9][0-9]{0,5}$")
 TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 FENCE_RE = re.compile(r"```json[ \t]*\r?\n(.*?)```", re.S)
 REC = " (Recommended)"
@@ -126,6 +126,34 @@ def _fit_topic(b: dict, k: int, notes: list) -> None:
     notes.append(f'"{bid if isinstance(bid, str) else f"batch {k}"}" topic: {len(v)} -> {len(c)} characters')  # O(1)
 
 
+def topic_slug(text: str) -> str:
+    """text as a topic: lowercase words joined by -, at most 40 characters, cut at the last whole word; "" when no word is left."""
+    v = re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")  # O(len)
+    if len(v) <= 40:  # O(1)
+        return v  # O(1)
+    head = v[:40]  # O(1)
+    c = head.rsplit("-", 1)[0] if v[40] != "-" and "-" in head else head  # O(1)
+    return c.strip("-") or head.strip("-")  # O(1)
+
+
+def normalise_topics(obj: object) -> list[str]:
+    """Rewrite every topic that is not already a valid one to its slug, in place; one `topic: "<id>" "<old>" -> <new>` note per rewrite."""
+    notes: list[str] = []
+    batches = obj.get("batches") if isinstance(obj, dict) else None
+    for k, b in enumerate(batches if isinstance(batches, list) else [], 1):  # O(batches * len)
+        t = b.get("topic") if isinstance(b, dict) else None
+        if not isinstance(t, str) or TOPIC_RE.match(t):  # O(1)
+            continue
+        new = topic_slug(t)  # O(len)
+        if not new:  # O(1)
+            continue
+        bid = b.get("id")
+        old = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", t).split())[:60]  # O(len)
+        b["topic"] = new
+        notes.append(f'topic: "{bid if isinstance(bid, str) else f"batch {k}"}" "{old}" -> {new}')  # O(1)
+    return notes
+
+
 def fit_proposal(obj: object) -> list[str]:
     """Cut an over-long question (300), header (12), option label (60) and option description (200) in place; return one note per cut.
 
@@ -220,7 +248,7 @@ def _reach(batches: list[dict]) -> dict:
     return out
 
 
-def check_proposal(obj: dict, known: set[int]) -> tuple[list[dict], list[str]]:
+def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> tuple[list[dict], list[str]]:
     if not isinstance(obj, dict) or not isinstance(obj.get("batches"), list):  # O(1)
         return [], ["proposal: not an object with batches"]
     raw = obj["batches"]
@@ -236,7 +264,7 @@ def check_proposal(obj: dict, known: set[int]) -> tuple[list[dict], list[str]]:
             continue
         bid = b.get("id")
         if not isinstance(bid, str) or not ID_RE.match(bid):
-            errs.append(f"batch {n}: id must be B<n>")
+            errs.append(f"batch {n}: id must be B<n>, B1 to B999999 (got {bid!r})")
             continue
         if bid in ids:
             errs.append(f"{bid}: duplicate id")
@@ -287,8 +315,8 @@ def check_proposal(obj: dict, known: set[int]) -> tuple[list[dict], list[str]]:
                     "decisions": cleaned, **copy.deepcopy(DEFAULTS)})
     for b in out:  # O(batches * deps)
         for d in b["depends"]:
-            if d not in ids or d == b["id"]:
-                errs.append(f"{b['id']}: depends on unknown batch {d}" if d not in ids else f"{b['id']}: depends on itself")
+            if (d not in ids and d not in batches) or d == b["id"]:  # local ids win over backlog ids
+                errs.append(f"{b['id']}: depends on unknown batch {d}" if d not in ids and d not in batches else f"{b['id']}: depends on itself")
     if not errs:
         r = _reach(out)
         cyc = sorted(k for k, v in r.items() if k in v)
