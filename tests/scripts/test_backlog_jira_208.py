@@ -40,7 +40,8 @@ def test_jql_plans_batches_with_keys(jk, capsys):
     d = load(jk)
     assert rc == 0 and "B1 | PIX-1 PIX-2 | planned" in out
     assert d["batches"][0]["issues"] == ["PIX-1", "PIX-2"] and d["titles"] == {"PIX-1": "One", "PIX-2": "Two"} and d["outside"] == []
-    assert jk.acli == [["jira", "workitem", "search", "--jql", "project = PIX", "--fields", "key,summary,description", "--paginate", "--json"]]
+    assert jk.acli[0] == ["jira", "workitem", "search", "--jql", "project = PIX", "--fields", "key,summary,description", "--paginate", "--json"]
+    assert [c[:4] + c[5:6] for c in jk.acli[1:]] == [["jira", "workitem", "comment", "list", "PIX-1"], ["jira", "workitem", "comment", "list", "PIX-2"]]  # comments are read per key (#602)
     assert briefed(jk) == [{"number": "PIX-1", "title": "One", "body": "body one"}, {"number": "PIX-2", "title": "Two", "body": ""}]
     assert no_api(jk)
 
