@@ -19,10 +19,10 @@ What to do: do not retry the grant. Untried options: run these tests on a device
 
 ## watchOS: friction in the screenshot step
 
-Seen: once, 2026-11-11, superlite 1.5.109, in a lead's pre-plan screenshot step of a watch app ([#571](https://github.com/maxboettinger/superlite/issues/571)). Every watch run meets these:
+Seen: once, 2026-11-11, superlite 1.5.109, in a lead's pre-plan screenshot step of a watch app ([#571](https://github.com/maxboettinger/superlite/issues/571)). The entry that recorded them says every watch run of that project met them:
 
 - **Build.** `maxapp build` needs a `.maxapp` file at the project root; without one it cannot build the watch target. Build with plain `xcodebuild` and `-destination 'platform=watchOS Simulator,id=<udid>'`. Where `xcodebuild` on `PATH` is the build-slot shim, the direct call still waits for a build slot.
 - **Typing.** `rocketsim interact type` types nothing into the watchOS system text input sheet. What worked: the Xcode MCP's `DeviceInteractionSynthesize` with `sender keyboard kbd <text>`.
 - **Sessions.** An Xcode MCP DeviceInteraction session is lost after each app relaunch. Start a new session after every relaunch, before the next tap or text.
-- **Simulators.** `xcrun simctl clone` refuses a watch simulator. Create a per-worktree watch simulator with `xcrun simctl create <name> <watch device type> <watchOS runtime>` instead, and delete it before the batch ships.
-- **Xcode MCP.** The Xcode MCP server disconnected mid-session. When its tools stop answering, reconnect the server, then start a new DeviceInteraction session.
+- **Simulators.** `xcrun simctl clone` refuses a watch simulator. Create a per-worktree watch simulator with `xcrun simctl create <name> <watch device type> <watchOS runtime>` instead.
+- **Xcode MCP.** The Xcode MCP server disconnected mid-session. Untried: reconnect the server, then start a new DeviceInteraction session.
