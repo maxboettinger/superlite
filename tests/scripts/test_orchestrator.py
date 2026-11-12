@@ -316,6 +316,8 @@ SDD_CAP = 13300  # the one size cap of the SDD SKILL.md, with headroom (#555); o
 # Every phrase another test in tests/scripts/ pins in the SDD SKILL.md, so a trim fails here first (#555).
 # A test that pins a new SKILL.md phrase adds it here too.
 SDD_PINNED = (
+    # test_docs_inline_owns_599.py
+    "`use` true also adds `graphify-out/` to info/exclude.",
     # test_agent_mcp_tools.py
     "approved before dispatch",
     "background agents",
