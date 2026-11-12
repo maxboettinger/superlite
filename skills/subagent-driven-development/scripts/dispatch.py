@@ -11,6 +11,11 @@ stdout, one line per batch of ready tasks (one agent, one message), longest pred
     T0 wave0             synthesized Wave 0 skeleton still pending (`sl wave0`): its own agent, first line;
                          a ledger line `- Ruling: skip T0` silences it
 In fleet mode a worker fleet.json marks busy is not idle: no agent= line offers it, and pool.json is not written (#553).
+Disk (#574): below SUPERLITE_DISK_FLOOR_GB (20) free, exit 3 with stderr `dispatch: BLOCKED: disk: ...` and no stdout;
+below SUPERLITE_DISK_WARN_GB (50), stderr `dispatch: disk: WARNING: ...` and dispatch goes on. Each round first sweeps orphaned
+Xcode DerivedData, then drops the trees of committed tasks and stopped workers that are not busy
+(stderr `dispatch: removed N tree(s) nothing needs: ...`) and the tree of an evicted worker. Only when the pool sits in
+`<root>/.superlite/`; `run(..., gate=False)` skips the disk check.
 A task with a ledger `- Hold Tn: reason` (and no later `- Release Tn`) is never offered; stderr `held=Tn reason`.
 A stable.json `fix` task whose only reasons are `depends on unstable X` is offered once every such X is committed.
 stderr `unstable=Tn reason; rerun sl lint --stable` names each ready task stable.json still holds back.
@@ -48,6 +53,7 @@ import routing  # noqa: E402 | O(1)
 import next_tasks as nt  # noqa: E402 | O(1)
 import pool as poolmod  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
+import trees  # noqa: E402 | O(1)
 try:  # fleet mode is off when the module is absent | O(1)
     import fleet_state  # noqa: E402 | O(1)
 except ImportError:  # O(1)
@@ -267,8 +273,40 @@ def render(lines, evict):  # O(R + a)
         print(f"{t} {decision}")  # O(1)
 
 
-def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=None):  # O(c + L + n + e + R*a*(F + o))
-    """Library entry for commit_task --dispatch; flags left as None take their defaults."""
+def tree_root(sd):  # the checkout a run folder `<root>/.superlite` belongs to, else None | O(1)
+    sd = Path(sd).resolve()  # O(1)
+    return sd.parent if sd.name == ".superlite" else None  # O(1)
+
+
+def disk_check(sd):  # "ok" | "warn" | "refuse"; sweeps orphaned DerivedData first, prints the gate line to stderr | O(folders + files)
+    """Free space of the run's checkout (else the run folder) against the floor and warn level (#574)."""
+    try:  # best effort: a sweep never blocks dispatch | O(1)
+        trees.sweep_derived_data()  # O(folders + files)
+    except Exception:  # noqa: BLE001 | O(1)
+        pass  # O(1)
+    level, line = trees.disk_gate(tree_root(sd) or sd)  # O(1)
+    if level == "refuse":  # O(1)
+        print(f"dispatch: BLOCKED: {line}", file=sys.stderr)  # O(1)
+    elif level == "warn":  # O(1)
+        print(f"dispatch: {line}", file=sys.stderr)  # O(1)
+    return level  # O(1)
+
+
+def reap_trees(sd, done, busy):  # drop the trees of committed tasks and stopped workers that nothing runs in | O(T) + drops
+    root = tree_root(sd)  # O(1)
+    if root is None:  # a pool outside a .superlite folder: no tree work | O(1)
+        return []  # O(1)
+    dropped = trees.reap(root, set(done), trees.stopped_workers(sd), keep=set(busy))  # O(T)
+    if dropped:  # O(1)
+        print(f"dispatch: removed {len(dropped)} tree(s) nothing needs: {', '.join(dropped)}", file=sys.stderr)  # O(1)
+    return dropped  # O(1)
+
+
+def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=None, gate=True):  # O(c + L + n + e + R*a*(F + o))
+    """Library entry for commit_task --dispatch; flags left as None take their defaults. `gate` checks the disk
+    first: below the floor it returns ([], {}) after the stderr BLOCKED line (main exits 3 before calling with gate=False)."""
+    if gate and disk_check(Path(pool_path).parent) == "refuse":  # O(folders + files)
+        return [], {}  # O(1)
     pool = load_pool(pool_path)  # O(pool bytes)
     if Path(pool_path).exists():  # real context_k, idle_min, busy from the stop records; saved only when a value changed | O(a*m + a*T)
         before = json.dumps(pool, sort_keys=True)  # O(pool bytes)
@@ -290,7 +328,12 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=Non
     for hint in external_hints(lines, nt.parse_plan(plan)):  # O(R)
         print(hint, file=sys.stderr)  # O(1)
     nt.print_unstable(nt.stable_blocked(plan, graph, done, busy, nt.taskgraph_full(plan).get("status", {}), held))  # O(n + e + S)
-    drop_evicted(pool_path, evict)  # an evicted agent is never offered by a later round | O(pool bytes)
+    gone = drop_evicted(pool_path, evict)  # an evicted agent is never offered by a later round | O(pool bytes)
+    sd = Path(pool_path).parent  # O(1)
+    for aid in gone:  # an evicted worker's tree is not needed any more | O(len gone)
+        if tree_root(sd) is not None and not trees.is_busy(tree_root(sd), f"worker-{aid}"):  # O(1)
+            trees.drop(tree_root(sd), f"worker-{aid}")  # O(tree size)
+    reap_trees(sd, done, set(busy) | {f"worker-{ag['id']}" for ag in pool.get("agents", []) if not is_idle(ag)})  # O(T)
     if w0:  # first line, a haiku lane agent | O(R)
         cfg = routing.load_cfg()  # O(file)
         lt = (cfg.get("lane") or {}).get("tier", "haiku")  # O(1)
@@ -301,11 +344,12 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=Non
 def drop_evicted(pool_path, evict):  # O(pool bytes + a*len(evict))
     """Remove every evicted agent that is still idle from pool.json; one atomic save, only when something was removed."""
     if not evict or not Path(pool_path).exists():  # O(1)
-        return  # O(1)
+        return []  # O(1)
     data = load_pool(pool_path)  # fresh read: narrows the window to a concurrent pool edit | O(pool bytes)
     gone = [ag["id"] for ag in data.get("agents") or [] if ag.get("id") in evict and is_idle(ag)]  # one made busy since the plan stays | O(a)
     if [poolmod.remove(data, aid) for aid in gone].count(True):  # O(a*len(gone))
         poolmod.save(pool_path, data)  # O(pool bytes) atomic
+    return gone  # O(1)
 
 
 def main(argv=None):  # O(c + L + n + e + R*a*(F + o))
@@ -330,7 +374,9 @@ def main(argv=None):  # O(c + L + n + e + R*a*(F + o))
     if batch is None:  # the run claimed an experiment (`sl experiment`, #53): its batch | O(f)
         import experiment  # O(1)
         batch = (experiment.for_plan(plan, Path(a.pool).parent) or {}).get("batch")  # O(f)
-    render(*run(plan, a.pool, a.ledger, a.committed, a.running, a.cap, batch))  # see run
+    if disk_check(Path(a.pool).parent) == "refuse":  # nearly full disk: no dispatch, nothing on stdout (#574) | O(folders + files)
+        return 3  # O(1)
+    render(*run(plan, a.pool, a.ledger, a.committed, a.running, a.cap, batch, gate=False))  # see run
     try:  # the budget line when it changed (needs .superlite/metrics.jsonl) | O(compute)
         import budget  # O(1)
         budget.maybe_print(plan, str(Path(a.pool).parent))  # O(compute)
