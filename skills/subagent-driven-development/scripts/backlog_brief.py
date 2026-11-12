@@ -143,6 +143,9 @@ def lead_brief(batch, ctx):  # O(i + f + a)
                "background commands, and a restarted wait still reports every worker that finished meanwhile.")  # O(1)
     out.append("Escalate a new major decision: let running workers finish, write .superlite/question.json in the "
                "AskUserQuestion shape, end your turn with Status: NEEDS_DECISION.")  # O(1)
+    out.append("Evals layer red on a case your batch's files do not touch: never stamp it yourself (no `test_layers.py stamp`); "
+               "write .superlite/question.json naming the case and its failing graders (options: main stamps it by ruling, "
+               "or the batch waits for the case's fix), then end your turn with Status: NEEDS_DECISION.")  # O(1)
     ap = ctx.get("approved")  # O(1)
     prbody = ("one `Closes #N` line per issue (\"Fixes #1, #2\" closes only #1); merge adds a missing one and prints `OPEN #N` for an "
               "issue still open after the merge.")  # O(1)
