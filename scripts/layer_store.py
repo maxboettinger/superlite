@@ -153,11 +153,16 @@ def lock_path(store: Path) -> Path:  # O(1)
     return Path(store).with_name("running.json")  # O(1)
 
 
-def start_run(store: Path, layer: str, digest: str, pid: int) -> None:  # O(1)
+def start_run(store: Path, layer: str, digest: str, pid: int, wait: str | None = None) -> None:  # O(1)
     with _lock(store):  # O(wait)
         lock = read_json(lock_path(store))  # O(size)
-        lock[layer] = {"pid": pid, "digest": digest}  # O(1)
+        lock[layer] = {"pid": pid, "digest": digest, **({"wait": wait} if wait else {})}  # O(1)
         write_json(lock_path(store), lock)  # O(size)
+
+
+def pending(store: Path, layer: str) -> dict:  # O(1)
+    held = read_json(lock_path(store)).get(layer)  # O(size)
+    return held if isinstance(held, dict) else {}  # O(1)
 
 
 def end_run(store: Path, layer: str) -> None:  # O(1)

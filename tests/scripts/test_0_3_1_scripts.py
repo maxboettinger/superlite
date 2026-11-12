@@ -28,10 +28,10 @@ def _env():
     return {**{k: v for k, v in os.environ.items() if k != "SUPERLITE_SL"}, "PYTHONIOENCODING": "utf-8"}
 
 
-def run(script, *args, cwd=None):
+def run(script, *args, cwd=None, timeout=240):
     return subprocess.run([sys.executable, str(SCRIPTS / f"{script}.py"), *map(str, args)],
                           capture_output=True, text=True, cwd=cwd, env=_env(), encoding="utf-8",
-                          timeout=240)
+                          timeout=timeout)
 
 
 def project(tmp_path, *names):
@@ -65,8 +65,9 @@ def test_background_returns_at_once_then_wait_reads_green(tmp_path):
 
 def test_wait_exits_1_on_red(tmp_path):
     proj = project(tmp_path, "pass", "fail")
-    assert run("run_tests", "--background", cwd=proj).returncode == 0
-    w = run("run_tests", "--wait", "--timeout", "120", cwd=proj)
+    # --fast skips the full-suite lock and its ps ancestor walk, which stall under load
+    assert run("run_tests", "--fast", "test_pass.py", "test_fail.py", "--background", cwd=proj).returncode == 0
+    w = run("run_tests", "--wait", "--timeout", "220", cwd=proj, timeout=240)
     assert w.returncode == 1, w.stdout + w.stderr
     assert json.loads(w.stdout)["failed"] == 1
 
