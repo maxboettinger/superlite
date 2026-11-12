@@ -28,6 +28,8 @@ A stalled prime waits up to STALL_WAIT_MS for a late start, then is resent once;
 A primed worker whose pane shows the folder trust dialog gets Down, Enter and the prime once more; one-turn roles and leads check the screen once after the start; a dialog that stays open is named in the BLOCKED line (#514).
 `spawn --for-dispatch|--for-review|--package` accept the run folder as `--plan`: it becomes the plan file stable.json, pool.json or plan.md names, else exit 2 (#508).
 While the run's fleet.json says off, `spawn` (both forms) starts nothing: `BLOCKED: fleet is off in <state dir>; run sl fleet on [--plan P] first ...`, exit 3 (#355).
+`stop` drops the worker's tree `worker-<id>` unless a live process marks it busy (#614).
+`spawn` (not `--for-dispatch`, which dispatch gates itself) refuses on a nearly full disk: `BLOCKED: fleet spawn: disk: ...`, exit 3; below the warn level it warns on stderr (#614).
 """
 
 # Complexity notation:
@@ -585,6 +587,13 @@ def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr cal
         except hc.HerdrError:  # O(1)
             pass  # O(1)
         fs.set_state(sd, wid, "stopped")  # O(w)
+        if sd.name == ".superlite":  # the worker's tree is no longer needed (#614) | O(tree size)
+            try:  # O(1)
+                import trees  # noqa: E402 | O(1) lazy
+                if not trees.is_busy(sd.parent, f"worker-{wid}"):  # O(markers)
+                    trees.drop(sd.parent, f"worker-{wid}")  # O(tree size)
+            except Exception:  # noqa: BLE001 | O(1) cleanup is best effort
+                pass  # O(1)
         if pdata is not None:  # O(1)
             pool.remove(pdata, wid)  # O(w)
     if pdata is not None and targets:  # O(1)
@@ -845,6 +854,14 @@ def main(argv=None):  # O(w) plus command cost
                 print(f"error: --plan {a.plan} is a run folder with no plan file (stable.json, pool.json or plan.md name none); pass the plan file", file=sys.stderr)  # O(1)
                 return 2  # O(1) before dispatch: no pane, no worker id
             a.plan = str(found)  # O(1)
+        if not a.for_dispatch:  # dispatch gates the disk itself (#614) | O(1)
+            import trees  # noqa: E402 | O(1) lazy
+            level, line = trees.disk_gate(state.git_root(sd) or sd.parent)  # O(1)
+            if level == "refuse":  # O(1)
+                print(f"BLOCKED: fleet spawn: {line}")  # O(1)
+                return 3  # O(1) before any pane
+            if level == "warn":  # O(1)
+                print(f"fleet: {line}", file=sys.stderr)  # O(1)
         if a.for_dispatch:  # O(1)
             return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent)  # O(R * (spawn + send))
         if a.for_review is not None or a.package:  # O(1)
