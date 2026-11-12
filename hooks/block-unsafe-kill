@@ -1,87 +1,874 @@
 #!/usr/bin/env bash
-# PreToolUse hook (Bash, PowerShell): block commands that kill processes by name or
-# pattern (taskkill /IM or /FI, pkill, killall, Stop-Process -Name, Get-Process | Stop-Process, kill -9 -1). Killing by PID
-# is allowed. Bash builtins only (no external process is spawned: each spawn costs ~250 ms on
-# Windows), so it adds almost nothing per call.
-# Exit 2 blocks the command (message on stderr); anything else, including malformed
+# PreToolUse hook (Bash, PowerShell): block commands that kill processes by name or pattern
+# (pkill, killall, taskkill /IM or /FI, Stop-Process -Name, Get-Process | Stop-Process, kill ... -1)
+# and `kill PID` of a service shared with the user (Xcode, the Simulator, herdr, claude, launchd ...).
+# Killing your own PIDs is allowed.
+#
+# Only a command word is read (#666): the command string is split into simple commands the way the
+# shell does (quotes, escapes, comments, redirects, heredocs, substitutions) and each command word is
+# judged after assignments, control words and wrappers (env, sudo, nohup, xargs, timeout ...). Text in
+# quotes, comments, heredoc bodies and the arguments of other commands is data and never blocks. The
+# bodies the shell would run are read as commands too: $(...), backticks, <(...), `sh -c`, eval,
+# `env -S`, `find -exec`, `cmd /c`, `powershell -Command` and the heredoc or here-string of a stdin shell.
+#
+# Bash builtins only (no external process but the one `ps` call: each spawn costs ~250 ms on Windows),
+# bash 3.2 syntax. Exit 2 blocks the command (message on stderr); anything else, including malformed
 # input, exits 0 with no output (fail open).
 
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
+shopt -s extglob
+LC_ALL=C
 
-re_tool='"tool_name"[[:space:]]*:[[:space:]]*"(Bash|PowerShell)"'
-[[ $input =~ $re_tool ]] || exit 0
+[[ $input == *'"tool_name"'* ]] || exit 0
+t=${input#*\"tool_name\"}
+re_tool='^[[:space:]]*:[[:space:]]*"(Bash|PowerShell)"'
+[[ $t =~ $re_tool ]] || exit 0
+MODE=bash
+[[ ${BASH_REMATCH[1]} == PowerShell ]] && MODE=ps
+shopt -s nocasematch
 
-# The command string, still JSON-escaped; the patterns below survive the escaping.
-re_cmd='"command"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
-[[ $input =~ $re_cmd ]] || exit 0
-cmd="${BASH_REMATCH[1]}"
+# Replace every literal $2 in $1 by $3 (result in SUBST). A loop of pattern removals: bash 3.2's
+# ${var//x/y} is quadratic in the number of matches.
+subst() {
+  local s=$1 out="" pre
+  while [[ $s == *"$2"* ]]; do
+    pre=${s%%"$2"*}
+    out+=$pre$3
+    s=${s:${#pre}+${#2}}
+  done
+  SUBST=$out$s
+}
+
+# The command string, still JSON-escaped.
+[[ $input == *'"command"'* ]] || exit 0
+t=${input#*\"command\"}
+re_start='^[[:space:]]*:[[:space:]]*"'
+[[ $t =~ $re_start ]] || exit 0
+t=${t#"${BASH_REMATCH[0]}"}
+# Escaped backslashes and quotes become placeholders first, so the first quote left closes the string.
+ph=$'\001'
+phq=$'\002'
+subst "$t" '\\' "$ph"
+subst "$SUBST" '\"' "$phq"
+t=$SUBST
+[[ $t == *\"* ]] || exit 0   # unterminated string
+cmd=${t%%\"*}
 [ -n "$cmd" ] || exit 0
 
-# Literal \n \r \t escapes (still JSON-escaped) become spaces, so multi-line commands match.
-cmd="${cmd//\\[nrt]/ }"
-
-shopt -s nocasematch
-w='[^[:alnum:]_]'
-# Get-Process ... | Stop-Process (no -Id after Stop-Process) kills by name.
-gp_pipe=0
-re_gp="(^|$w)get-process($w.*)?\|[[:space:]]*stop-process"
-re_gp_id="stop-process[^|;]*[[:space:]]-id($w|\$)"
-if [[ $cmd =~ $re_gp ]] && ! [[ $cmd =~ $re_gp_id ]]; then
-  gp_pipe=1
-fi
-re_kill="(^|$w)taskkill($w.*)?[[:space:]]//?fi($w|\$)|(^|$w)kill[[:space:]]+(-s[[:space:]]+(kill|9)|-(kill|sigkill|9))[[:space:]]+-1([^0-9]|\$)|(^|$w)taskkill($w.*)?[[:space:]]//?im($w|\$)|(^|$w)(pkill|killall)($w|\$)|(^|$w)stop-process($w.*)?[[:space:]]-name($w|\$)|(^|$w)kill[[:space:]]+-9[[:space:]]+-1([^0-9]|\$)"
-if [ "$gp_pipe" = 1 ] || [[ $cmd =~ $re_kill ]]; then
-  echo "Blocked: this command kills processes by name or pattern, which can stop other sessions' processes. Kill only the PIDs you started (kill <PID>, taskkill /PID <PID>, Stop-Process -Id <PID>)." >&2
-  exit 2
+# Fast path: no kill word anywhere (a \u escape could hide one).
+if [[ $cmd != *kill* && $cmd != *stop-process* && $cmd != *spps* && $cmd != *\\u* ]]; then
+  exit 0
 fi
 
-# kill [-SIG] PID...: collect the literal PIDs of every kill in the command, resolve them with one
-# ps call, and block a shared service (Xcode, the Simulator, herdr, claude, the login session ...).
-# Jobs (%1), probes (-0, -l) and non-literal arguments are skipped; no ps on PATH fails open.
-re_kp="(^|$w)kill[[:space:]]+([^;&|<>\`)]*)"
-rest="$cmd"
-pids=""
-set -f
-while [[ $rest =~ $re_kp ]]; do
-  m="${BASH_REMATCH[0]}"
-  args="${BASH_REMATCH[2]}"
-  rest="${rest#*"$m"}"
-  arr=($args)
-  n=${#arr[@]}
-  # an attached fd redirect (kill 1 2>/dev/null) is not a PID
-  if [ "$n" -gt 0 ] && [[ $rest == [\<\>]* ]] && [[ $args != *[[:space:]] ]]; then
-    n=$((n - 1))
-  fi
-  found=""
-  probe=0
-  sigval=0
-  i=0
-  while [ "$i" -lt "$n" ]; do
-    tok="${arr[$i]//[\\\"\']/}"
-    i=$((i + 1))
-    if [ "$sigval" = 1 ]; then
-      sigval=0
-      [ "$tok" = 0 ] && probe=1
-      continue
+# Decode the JSON string with global replacements, not a per-character loop.
+bs='\'
+subst "$cmd" '\n' $'\n'
+subst "$SUBST" '\t' $'\t'
+subst "$SUBST" '\r' ' '
+subst "$SUBST" '\b' ' '
+subst "$SUBST" '\f' ' '
+subst "$SUBST" '\/' '/'
+subst "$SUBST" "$phq" '"'
+cmd=$SUBST
+re_hex='^[0-9a-fA-F]{4}$'
+while [[ $cmd == *\\u* ]]; do
+  pre=${cmd%%\\u*}
+  post=${cmd:${#pre}+2}
+  hex=${post:0:4}
+  post=${post:4}
+  ch=x
+  if [[ $hex =~ $re_hex ]]; then
+    v=$((16#$hex))
+    if ((v < 32)); then
+      ch=' '
+    elif ((v == 92)); then
+      ch=$ph
+    elif ((v < 127)); then
+      printf -v ch "\\x%02x" "$v"
     fi
-    case $tok in
-      -s|-n) sigval=1 ;;
-      -0|-l|-L) probe=1 ;;
-      -*|%*|'') ;;
-      *[!0-9]*) ;;
-      *) found="$found,$tok" ;;
+  fi
+  cmd=$pre$ch$post
+done
+subst "$cmd" "$ph" "$bs"
+cmd=$SUBST
+
+BLOCK_MSG="Blocked: this command kills processes by name or pattern, which can stop other sessions' processes. Kill only the PIDs you started (kill <PID>, taskkill /PID <PID>, Stop-Process -Id <PID>)."
+block() {
+  echo "$BLOCK_MSG" >&2
+  exit 2
+}
+
+QT=()
+QM=()
+qn=0
+queue() {
+  QT[qn]=$1
+  QM[qn]=$2
+  qn=$((qn + 1))
+}
+
+PIDS=""
+PGP=0
+FOUND=""
+re_assign='^[A-Za-z_][A-Za-z0-9_]*[+]?='
+tab=$'\t'
+
+# Append the all-digit items of a comma list to FOUND.
+add_pids() {
+  local v=$1 x
+  while [[ -n $v ]]; do
+    x=${v%%,*}
+    if [[ $v == *,* ]]; then v=${v#*,}; else v=""; fi
+    case $x in
+      '' | *[!0-9]*) ;;
+      *) FOUND="$FOUND,$x" ;;
     esac
   done
-  [ "$probe" = 0 ] && pids="$pids$found"
+}
+
+# Judge one simple command, given as its words.
+judge_words() {
+  local -a a=("$@")
+  local -a sl=()
+  local n=$# i=0 j k w base t vals found probe opts hasid p v cflag sflag
+  while ((i < n)); do
+    w=${a[i]}
+    if [[ $w =~ $re_assign ]]; then
+      i=$((i + 1))
+      continue
+    fi
+    base=${w##*/}
+    base=${base##*\\}
+    base=${base%.[eE][xX][eE]}
+    case $base in
+      if | then | else | elif | do | while | until | '!' | '{' | '}')
+        i=$((i + 1))
+        continue ;;
+      env | sudo | doas | nohup | time | exec | command | builtin | nice | timeout | xargs | stdbuf | caffeinate | watch | setsid)
+        i=$((i + 1))
+        vals=" "
+        case $base in
+          env) vals=" -u -C -P " ;;
+          sudo | doas) vals=" -u -g -h -p -C -D -r -t -U -T -R " ;;
+          exec) vals=" -a " ;;
+          nice) vals=" -n " ;;
+          timeout) vals=" -s -k " ;;
+          xargs) vals=" -I -J -L -n -P -s -d -E -a -R " ;;
+          stdbuf) vals=" -i -o -e " ;;
+          caffeinate) vals=" -t -w " ;;
+          watch) vals=" -n " ;;
+        esac
+        while ((i < n)); do
+          t=${a[i]}
+          if [[ $t == -- ]]; then
+            i=$((i + 1))
+            break
+          fi
+          [[ $t == -?* ]] || break
+          if [[ $base == env && $t == -S ]]; then
+            ((i + 1 < n)) && queue "${a[i + 1]}" "$MODE"
+            return 0
+          fi
+          if [[ $base == command && ($t == -v || $t == -V) ]]; then
+            return 0
+          fi
+          if [[ $vals == *" $t "* ]]; then i=$((i + 2)); else i=$((i + 1)); fi
+        done
+        [[ $base == timeout ]] && i=$((i + 1))   # the duration operand
+        continue ;;
+      pkill | killall)
+        block ;;
+      taskkill)
+        for ((j = i + 1; j < n; j++)); do
+          case ${a[j]} in
+            /im | //im | -im | /fi | //fi | -fi) block ;;
+          esac
+        done
+        return 0 ;;
+      eval)
+        ((i + 1 < n)) && queue "${a[*]:i+1}" "$MODE"
+        return 0 ;;
+      cmd)
+        for ((j = i + 1; j < n; j++)); do
+          case ${a[j]} in
+            /c | /k | /r | //c | //k | //r)
+              ((j + 1 < n)) && queue "${a[*]:j+1}" "$MODE"
+              break ;;
+          esac
+        done
+        return 0 ;;
+      powershell | pwsh)
+        for ((j = i + 1; j < n; j++)); do
+          case ${a[j]} in
+            -c | -command | -cwa | -commandwithargs)
+              ((j + 1 < n)) && queue "${a[*]:j+1}" ps
+              break ;;
+          esac
+        done
+        return 0 ;;
+      sh | bash | zsh | dash | ksh | ash)
+        cflag=0
+        sflag=0
+        j=$((i + 1))
+        while ((j < n)); do
+          t=${a[j]}
+          if [[ $t == -- ]]; then
+            j=$((j + 1))
+            break
+          fi
+          if [[ $t == --rcfile || $t == --init-file || $t == -o || $t == +o || $t == -O || $t == +O ]]; then
+            j=$((j + 2))
+            continue
+          fi
+          if [[ $t == -?* || $t == +?* ]]; then
+            if [[ $t != --* ]]; then
+              [[ $t == -*c* ]] && cflag=1
+              [[ $t == -*s* ]] && sflag=1
+            fi
+            j=$((j + 1))
+            continue
+          fi
+          break
+        done
+        if ((cflag)); then
+          ((j < n)) && queue "${a[j]}" "$MODE"
+        elif ((sflag || j >= n)); then
+          STDINSH=1
+        fi
+        return 0 ;;
+      find)
+        j=$((i + 1))
+        while ((j < n)); do
+          case ${a[j]} in
+            -exec | -execdir | -ok | -okdir)
+              sl=()
+              k=$((j + 1))
+              while ((k < n)) && [[ ${a[k]} != ';' && ${a[k]} != '+' ]]; do
+                sl[${#sl[@]}]=${a[k]}
+                k=$((k + 1))
+              done
+              ((${#sl[@]} > 0)) && judge_words "${sl[@]}"
+              j=$k ;;
+          esac
+          j=$((j + 1))
+        done
+        return 0 ;;
+      get-process | gps)
+        PGP=1
+        return 0 ;;
+      ps)
+        [[ $MODE == ps ]] && PGP=1
+        return 0 ;;
+      kill | stop-process | spps)
+        found=""
+        FOUND=""
+        j=$((i + 1))
+        if [[ $MODE == ps || $base != kill ]]; then
+          hasid=0
+          while ((j < n)); do
+            t=${a[j]}
+            j=$((j + 1))
+            if [[ $t == -* ]]; then
+              p=${t#-}
+              v=""
+              if [[ $p == *:* ]]; then
+                v=${p#*:}
+                p=${p%%:*}
+              fi
+              case $p in
+                n | na | nam | name | processname) block ;;
+                i | id)
+                  hasid=1
+                  if [[ -z $v ]] && ((j < n)); then
+                    v=${a[j]}
+                    j=$((j + 1))
+                  fi
+                  add_pids "$v" ;;
+              esac
+              continue
+            fi
+            add_pids "$t"
+          done
+          if ((!hasid)) && [[ -z $FOUND ]] && ((PGP)); then
+            block
+          fi
+          PIDS="$PIDS$FOUND"
+        else
+          probe=0
+          opts=1
+          while ((j < n)); do
+            t=${a[j]}
+            j=$((j + 1))
+            if ((opts)); then
+              case $t in
+                --)
+                  opts=0
+                  continue ;;
+                -s | -n)
+                  opts=0
+                  ((j < n)) && [[ ${a[j]} == 0 ]] && probe=1
+                  j=$((j + 1))
+                  continue ;;
+                -0)
+                  probe=1
+                  opts=0
+                  continue ;;
+                -l | -L)
+                  probe=1
+                  break ;;
+                -?*)
+                  opts=0
+                  continue ;;
+              esac
+              opts=0
+            fi
+            case $t in
+              -1) block ;;
+              %* | '' | *[!0-9]*) ;;
+              *) FOUND="$FOUND,$t" ;;
+            esac
+          done
+          ((probe)) || PIDS="$PIDS$FOUND"
+        fi
+        return 0 ;;
+      *)
+        return 0 ;;
+    esac
+  done
+  return 0
+}
+
+# --- the lexer: one pass per queued body; state is global (no recursion)
+W=()
+wn=0
+wd=""
+inword=0
+RD=""
+HD=()
+HDD=()
+HDQ=()
+HSL=()
+STDINSH=0
+HB=""
+BODY=""
+wq=0
+
+end_word() {
+  [[ $inword == 1 ]] || return 0
+  inword=0
+  local w=$wd
+  wd=""
+  case $RD in
+    "") W[wn]=$w; wn=$((wn + 1)) ;;
+    hd) HD[${#HD[@]}]=$w; HDD[${#HDD[@]}]=0; HDQ[${#HDQ[@]}]=$wq ;;
+    hdd) HD[${#HD[@]}]=$w; HDD[${#HDD[@]}]=1; HDQ[${#HDQ[@]}]=$wq ;;
+    hs) HSL[${#HSL[@]}]=$w ;;
+  esac
+  RD=""
+  wq=0
+}
+
+# $1: pipe | hold keep the Get-Process mark; any other separator clears it.
+end_cmd() {
+  end_word
+  RD=""
+  if ((wn > 0)); then
+    judge_words "${W[@]}"
+  fi
+  W=()
+  wn=0
+  case $1 in
+    pipe | hold) ;;
+    *) PGP=0 ;;
+  esac
+}
+
+# R is the text after a "$(" (depth 1) or "$((" (depth 2): sets BODY, advances R past the close.
+scan_paren() {
+  local depth=$1 acc="" chunk c
+  while :; do
+    if [[ $R != *[\'\"\`\(\)\\]* ]]; then
+      BODY=$acc$R
+      R=""
+      return
+    fi
+    chunk=${R%%[\'\"\`\(\)\\]*}
+    acc+=$chunk
+    R=${R:${#chunk}}
+    c=${R:0:1}
+    R=${R:1}
+    case $c in
+      '(')
+        depth=$((depth + 1))
+        acc+=$c ;;
+      ')')
+        depth=$((depth - 1))
+        if ((depth == 0)); then
+          BODY=$acc
+          return
+        fi
+        acc+=$c ;;
+      "'")
+        acc+=$c
+        if [[ $R == *\'* ]]; then
+          chunk=${R%%\'*}
+          acc+="$chunk'"
+          R=${R:${#chunk}+1}
+        else
+          acc+=$R
+          R=""
+        fi ;;
+      '"')
+        acc+=$c
+        while :; do
+          if [[ $R != *[\"\\]* ]]; then
+            acc+=$R
+            R=""
+            break
+          fi
+          chunk=${R%%[\"\\]*}
+          acc+=$chunk
+          R=${R:${#chunk}}
+          c=${R:0:1}
+          R=${R:1}
+          acc+=$c
+          [[ $c == '"' ]] && break
+          acc+=${R:0:1}
+          R=${R:1}
+        done ;;
+      '`')
+        if [[ $MODE == ps ]]; then
+          acc+=$c${R:0:1}
+          R=${R:1}
+        else
+          acc+=$c
+          if [[ $R == *\`* ]]; then
+            chunk=${R%%\`*}
+            acc+="$chunk\`"
+            R=${R:${#chunk}+1}
+          else
+            acc+=$R
+            R=""
+          fi
+        fi ;;
+      '\')
+        if [[ $MODE == ps ]]; then
+          acc+=$c
+        else
+          acc+=$c${R:0:1}
+          R=${R:1}
+        fi ;;
+    esac
+  done
+}
+
+# R is the text after an opening backtick: sets BODY, advances R past the closing backtick.
+scan_tick() {
+  local acc="" chunk c
+  while :; do
+    if [[ $R != *[\`\\]* ]]; then
+      BODY=$acc$R
+      R=""
+      return
+    fi
+    chunk=${R%%[\`\\]*}
+    acc+=$chunk
+    R=${R:${#chunk}}
+    c=${R:0:1}
+    R=${R:1}
+    if [[ $c == '`' ]]; then
+      BODY=$acc
+      return
+    fi
+    acc+=$c${R:0:1}
+    R=${R:1}
+  done
+}
+
+# R is the text after $' : the quoted text is data.
+ansi_scan() {
+  local chunk c
+  while :; do
+    if [[ $R != *[\'\\]* ]]; then
+      wd+=$R
+      R=""
+      return
+    fi
+    chunk=${R%%[\'\\]*}
+    wd+=$chunk
+    R=${R:${#chunk}}
+    c=${R:0:1}
+    R=${R:1}
+    [[ $c == "'" ]] && return
+    wd+=${R:0:1}
+    R=${R:1}
+  done
+}
+
+# R is the text after a "$" (outside or inside double quotes).
+dollar() {
+  local chunk
+  case $R in
+    '(('*)
+      R=${R#??}
+      scan_paren 2
+      wd+='$_' ;;
+    '('*)
+      R=${R#\(}
+      scan_paren 1
+      queue "$BODY" "$MODE"
+      wd+='$_' ;;
+    '{'*)
+      if [[ $R == *\}* ]]; then
+        chunk=${R%%\}*}
+        R=${R:${#chunk}+1}
+      else
+        R=""
+      fi
+      wd+='$_' ;;
+    *)
+      wd+='$' ;;
+  esac
+}
+
+# R is the text after an opening double quote.
+dq_scan() {
+  local chunk c n
+  while :; do
+    if [[ $R != *[\"\\\$\`]* ]]; then
+      wd+=$R
+      R=""
+      return
+    fi
+    chunk=${R%%[\"\\\$\`]*}
+    wd+=$chunk
+    R=${R:${#chunk}}
+    c=${R:0:1}
+    R=${R:1}
+    case $c in
+      '"')
+        if [[ $MODE == ps && $R == '"'* ]]; then
+          wd+='"'
+          R=${R:1}
+          continue
+        fi
+        return ;;
+      '\')
+        if [[ $MODE == ps ]]; then
+          wd+=$c
+        else
+          n=${R:0:1}
+          case $n in
+            '"' | '\' | '$' | '`')
+              wd+=$n
+              R=${R:1} ;;
+            $'\n') R=${R:1} ;;
+            *) wd+=$c ;;
+          esac
+        fi ;;
+      '`')
+        if [[ $MODE == ps ]]; then
+          wd+=${R:0:1}
+          R=${R:1}
+        else
+          scan_tick
+          queue "$BODY" "$MODE"
+          wd+='$_'
+        fi ;;
+      '$') dollar ;;
+    esac
+  done
+}
+
+# R is the text after the first < or > of a redirect operator.
+redirect() {
+  local c=$1 chunk
+  if [[ $R == '('* ]]; then   # <(...) or >(...)
+    R=${R#\(}
+    scan_paren 1
+    queue "$BODY" "$MODE"
+    wd+='$_'
+    inword=1
+    return
+  fi
+  if [[ $MODE == ps && $c == '<' && $R == '#'* ]]; then   # <# ... #> block comment
+    if [[ $R == *'#>'* ]]; then
+      chunk=${R%%'#>'*}
+      R=${R:${#chunk}+2}
+    else
+      R=""
+    fi
+    return
+  fi
+  if [[ $inword == 1 && $wd == +([0-9]) ]]; then   # an fd number
+    wd=""
+    inword=0
+    wq=0
+  else
+    end_word
+  fi
+  if [[ $c == '<' ]]; then
+    case $R in
+      '<<'*) R=${R#<<}; RD=hs ;;
+      '<-'*) R=${R#<-}; RD=hdd ;;
+      '<'*) R=${R#<}; RD=hd ;;
+      '>'* | '&'*) R=${R:1}; RD=file ;;
+      *) RD=file ;;
+    esac
+  else
+    case $R in
+      '>'* | '|'* | '&'*) R=${R:1}; RD=file ;;
+      *) RD=file ;;
+    esac
+  fi
+}
+
+# An unquoted heredoc delimiter: the shell expands the body, so its $(...) and backtick bodies run
+# (HB is the body). The rest of the body is data.
+heredoc_subs() {
+  local saved=$R chunk c
+  R=$HB
+  while ((qn < 32)) && [[ $R == *[\\\$\`]* ]]; do
+    chunk=${R%%[\\\$\`]*}
+    R=${R:${#chunk}}
+    c=${R:0:1}
+    R=${R:1}
+    case $c in
+      '\') R=${R:1} ;;
+      '`')
+        scan_tick
+        queue "$BODY" bash ;;
+      '$')
+        case $R in
+          '(('*)
+            R=${R#??}
+            scan_paren 2 ;;
+          '('*)
+            R=${R#\(}
+            scan_paren 1
+            queue "$BODY" bash ;;
+        esac ;;
+    esac
+  done
+  R=$saved
+}
+
+# At a line end (R is the text after the newline) or at the text end: read the pending heredoc bodies
+# and queue them, and the here-strings, when a stdin shell stands on the line.
+flush_line() {
+  local i=0 d rest2 body after
+  while ((i < ${#HD[@]})); do
+    d=${HD[i]}
+    rest2=$'\n'$R
+    if [[ ${HDD[i]} == 1 ]]; then
+      body=${rest2%%$'\n'*("$tab")"$d"$'\n'*}
+      [[ $body == "$rest2" ]] && body=${rest2%%$'\n'*("$tab")"$d"}
+    else
+      body=${rest2%%$'\n'"$d"$'\n'*}
+      [[ $body == "$rest2" ]] && body=${rest2%%$'\n'"$d"}
+    fi
+    if [[ $body == "$rest2" ]]; then   # no terminator line: the body runs to the text end
+      HB=${rest2#?}
+      R=""
+    else
+      after=${rest2:${#body}}
+      if [[ ${HDD[i]} == 1 ]]; then
+        after=${after#$'\n'*("$tab")"$d"}
+      else
+        after=${after#$'\n'"$d"}
+      fi
+      R=${after#$'\n'}
+      HB=${body#?}
+    fi
+    if ((STDINSH)); then
+      queue "$HB" bash
+    elif [[ ${HDQ[i]} == 0 ]]; then
+      heredoc_subs
+    fi
+    i=$((i + 1))
+  done
+  HD=()
+  HDD=()
+  HDQ=()
+  if ((STDINSH)); then
+    i=0
+    while ((i < ${#HSL[@]})); do
+      queue "${HSL[i]}" bash
+      i=$((i + 1))
+    done
+  fi
+  HSL=()
+  STDINSH=0
+}
+
+lex() {
+  R=$1
+  MODE=$2
+  W=()
+  wn=0
+  wd=""
+  inword=0
+  RD=""
+  HD=()
+  HDD=()
+  HDQ=()
+  HSL=()
+  STDINSH=0
+  wq=0
+  PGP=0
+  local c chunk q
+  while [[ -n $R ]]; do
+    if [[ $inword == 0 ]]; then
+      if [[ $R == '#'* ]]; then   # comment to the line end
+        chunk=${R%%$'\n'*}   # to the line end
+        R=${R:${#chunk}}
+        continue
+      fi
+      if [[ $MODE == ps && ($R == @\'* || $R == @\"*) ]]; then   # PowerShell here-string: data
+        q=${R:1:1}
+        if [[ $R == *$'\n'"$q"@* ]]; then
+          chunk=${R%%$'\n'"$q"@*}
+          R=${R:${#chunk}+3}
+        else
+          R=""
+        fi
+        wd+=x
+        inword=1
+        continue
+      fi
+    fi
+    if [[ $MODE == ps ]]; then
+      chunk=${R%%[$' \t\n;&|()<>\'"\\`${}']*}
+    else
+      chunk=${R%%[$' \t\n;&|()<>\'"\\`$']*}
+    fi
+    if [[ -n $chunk ]]; then
+      wd+=$chunk
+      inword=1
+      R=${R:${#chunk}}
+      continue
+    fi
+    c=${R:0:1}
+    R=${R:1}
+    case $c in
+      ' ' | $'\t') end_word ;;
+      $'\n')
+        end_cmd other
+        flush_line ;;
+      ';') end_cmd other ;;
+      '&')
+        if [[ $R == '>'* ]]; then   # &> redirect
+          R=${R#>}
+          [[ $R == '>'* ]] && R=${R#>}
+          end_word
+          RD=file
+        elif [[ $R == '&'* ]]; then
+          R=${R#&}
+          end_cmd other
+        else
+          end_cmd other
+        fi ;;
+      '|')
+        if [[ $R == '|'* ]]; then
+          R=${R#|}
+          end_cmd other
+        elif [[ $R == '&'* ]]; then
+          R=${R#&}
+          end_cmd pipe
+        else
+          end_cmd pipe
+        fi ;;
+      '(' | ')') end_cmd other ;;
+      '{' | '}') end_cmd hold ;;
+      '<' | '>') redirect "$c" ;;
+      "'")
+        inword=1
+        wq=1
+        if [[ $R == *\'* ]]; then
+          chunk=${R%%\'*}
+          wd+=$chunk
+          R=${R:${#chunk}+1}
+        else
+          wd+=$R
+          R=""
+        fi
+        if [[ $MODE == ps ]]; then
+          while [[ $R == \'* ]]; do   # '' inside is a quote
+            wd+="'"
+            R=${R#\'}
+            if [[ $R == *\'* ]]; then
+              chunk=${R%%\'*}
+              wd+=$chunk
+              R=${R:${#chunk}+1}
+            else
+              wd+=$R
+              R=""
+            fi
+          done
+        fi ;;
+      '"')
+        inword=1
+        wq=1
+        dq_scan ;;
+      '`')
+        inword=1
+        if [[ $MODE == ps ]]; then   # the escape character
+          if [[ $R == $'\n'* ]]; then
+            R=${R:1}
+          else
+            wd+=${R:0:1}
+            R=${R:1}
+          fi
+        else
+          scan_tick
+          queue "$BODY" "$MODE"
+          wd+='$_'
+        fi ;;
+      '\')
+        inword=1
+        wq=1
+        if [[ $MODE == ps ]]; then
+          wd+=$c
+        elif [[ $R == $'\n'* ]]; then
+          R=${R:1}
+        else
+          wd+=${R:0:1}
+          R=${R:1}
+        fi ;;
+      '$')
+        inword=1
+        if [[ $MODE == bash && $R == \'* ]]; then
+          R=${R:1}
+          wq=1
+          ansi_scan
+        elif [[ $MODE == bash && $R == \"* ]]; then
+          wq=1
+        else
+          dollar
+        fi ;;
+    esac
+  done
+  end_cmd other
+  flush_line
+}
+
+queue "$cmd" "$MODE"
+qi=0
+while ((qi < qn && qi < 32)); do
+  lex "${QT[qi]}" "${QM[qi]}"
+  qi=$((qi + 1))
 done
-set +f
-if [ -n "$pids" ] && command -v ps >/dev/null 2>&1; then
-  out="$(ps -o comm= -p "${pids#,}" 2>/dev/null)"
+
+# kill [-SIG] PID...: the literal PIDs of every kill command, resolved with one ps call; block a
+# shared service (Xcode, the Simulator, herdr, claude, the login session ...). Jobs (%1), probes
+# (-0, -l) and non-literal arguments are skipped; no ps on PATH fails open.
+if [ -n "$PIDS" ] && command -v ps >/dev/null 2>&1; then
+  out="$(ps -o comm= -p "${PIDS#,}" 2>/dev/null)"
   while IFS= read -r line; do
     base="${line##*/}"
     case $base in
       Xcode|Simulator|mcpbridge|SourceKitService|com.apple.dt.*|com.apple.CoreSimulator*|herdr|claude|launchd|WindowServer|Finder|Dock|loginwindow)
-        echo "Blocked: kill ${pids#,} would stop $base, a service shared with the user and other sessions. Ask the user to stop it; do not kill it yourself." >&2
+        echo "Blocked: kill ${PIDS#,} would stop $base, a service shared with the user and other sessions. Ask the user to stop it; do not kill it yourself." >&2
         exit 2 ;;
     esac
   done <<< "$out"
