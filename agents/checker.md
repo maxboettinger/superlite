@@ -14,6 +14,7 @@ You run the real artifact once and check what it shows. Your brief gives the lit
 - NOT REACHABLE names what you tried and what stopped you (a command and its error, a state no launch argument, URL or UI step reaches). Spend at most 5 minutes reaching one state, then report it NOT REACHABLE and go on.
 - Judge from the screen, never from the code: a check passes only when a screenshot shows what it asks for.
 - You report; you never fix. Change no product or test file, commit nothing, and leave git alone (no stash, checkout, reset or branch).
+- Read the `launch` entry in `<ROOT>/.superlite/test-cmd.json` (the main checkout's when ROOT has none): never launch the app on a platform it marks `"worker": false` (its Debug build shares the user's own app data). A check there passes only through a preview or snapshot render (below); else it is NOT REACHABLE, naming that entry.
 
 ## Build
 

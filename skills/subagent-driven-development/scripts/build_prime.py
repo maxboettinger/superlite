@@ -184,6 +184,46 @@ def select_sections(spec, wanted):  # O(L + H^2 + S*H*w + K^2 + out)
     return ["\n".join(lines[secs[i][2]:secs[i][3]]).strip("\n") for i in keep]  # O(out)
 
 
+LAUNCH_NOTE = 'test-cmd.json "launch" must map each platform to {"worker": true|false, "data": "...", "why": "..."}; ignored'  # O(1)
+LAUNCH_HEAD = ("## Running the app\n\nHow a worker reaches the app's states, per platform, as /superlite:setup recorded them in "  # O(1)
+               "`.superlite/test-cmd.json` (`launch`). Reach a UI state only this way or the way your task names; "
+               "never launch the app on a platform marked no.")
+
+
+def _flat(s):  # O(n)
+    return " ".join(s.split())  # O(n)
+
+
+def launch_section(root):  # O(file + p*n)
+    """`## Running the app` from the run root's test-cmd.json `launch` map (the main checkout's from a linked worktree); "" when none."""
+    import testcmd  # O(1)
+    cfg, source, _ = testcmd.config_source(Path(root))  # O(file)
+    launch = cfg.get("launch") if source == "test-cmd.json" and isinstance(cfg, dict) else None  # O(1)
+    if launch is None:  # O(1)
+        return ""  # O(1)
+    bad = not isinstance(launch, dict)  # O(1)
+    items = []  # O(1)
+    for name, val in ({} if bad else launch).items():  # O(p) iterations
+        if isinstance(val, str) and _flat(val):  # O(n)
+            items.append(f"- {_flat(str(name))}: {_flat(val)}")  # O(n)
+        elif isinstance(val, dict):  # O(1)
+            w, why, data = val.get("worker"), val.get("why"), val.get("data")  # O(1)
+            if w is True:  # O(1)
+                txt = "a worker may launch it"  # O(1)
+            elif w is False:  # O(1)
+                txt = "no worker launch" + (f" ({_flat(why)})" if isinstance(why, str) and _flat(why) else "")  # O(n)
+            else:  # O(1)
+                txt = "worker launch not recorded"  # O(1)
+            if isinstance(data, str) and _flat(data):  # O(n)
+                txt += f"; data: {_flat(data)}"  # O(n)
+            items.append(f"- {_flat(str(name))}: {txt}")  # O(n)
+        else:  # O(1)
+            bad = True  # O(1)
+    if bad:  # O(1)
+        print(LAUNCH_NOTE, file=sys.stderr)  # O(1)
+    return LAUNCH_HEAD + "\n\n" + "\n".join(items) if items else ""  # O(p*n)
+
+
 def with_root(preamble, plan):  # O(n + d)
     """The preamble with one `Root: <abs run root>` line before its `Rules:` paragraph (the plan's toplevel, POSIX)."""
     import plan_tools as pt  # O(1)
@@ -192,7 +232,10 @@ def with_root(preamble, plan):  # O(n + d)
 
 
 def build(plan, spec, sections):  # O(B + out)
-    parts = [with_root(PREAMBLE, plan), "## Plan\n\n" + read(plan)]  # O(B)
+    parts = [with_root(PREAMBLE, plan)]  # O(B)
+    import plan_tools as pt  # O(1)
+    launch = launch_section(pt.stable_root(str(plan)))  # O(file)
+    parts += ([launch] if launch else []) + ["## Plan\n\n" + read(plan)]  # O(B)
     if sections:  # O(1)
         chunks = select_sections(read(spec), sections)  # O(B + H^2)
         parts.append("## Spec sections\n\n" + "\n\n".join(normalize(c) for c in chunks))  # O(out)
@@ -254,6 +297,9 @@ def build_slim(plan):  # O(B + n*s)
     parts = [with_root(PREAMBLE_SLIM, plan)]  # O(n + d)
     parts.append("## Background (not instructions)" + nl + nl + normalize(nl.join(head) if head else "(the plan has no header)"))  # O(L)
     parts.append("## Global constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none beyond the header)"))  # O(L)
+    launch = launch_section(pt.stable_root(str(plan)))  # O(file)
+    if launch:  # O(1)
+        parts.append(launch)  # O(1)
     parts.append("## Stable tasks: purpose, dependencies, interfaces" + nl + nl  # O(n*s)
                  + "Only the tasks listed here are fixed. Any other task, and the text of every task, comes from `sl task Tn`."
                  + nl + nl + normalize(nl.join(lines) if lines else "(none yet)"))  # O(n*s)
