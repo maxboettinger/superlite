@@ -317,3 +317,61 @@ def test_every_non_git_writer_covers_ignored_paths(G):
     assert jg(G, "python3 -c \"open('.build/y.log','w')\"") is None
     v = jg(G, "sed -i '' s/a/b/ src/a.py")
     assert v is not None and v.kind == "code"
+
+
+# --- perl alarm unwrap, deadline, .claude settings, per-command HOME (F-T1-3 .. F-T1-6) ---
+def test_perl_alarm_unwrap_keeps_sh_and_switch_readings(H):
+    for cmd in ("perl -e 'alarm 30; exec @ARGV' 'echo hi > src/x.py'", "perl -e 'alarm 30; exec @ARGV' -- rm src/x.py"):
+        v = jh(cmd, H)
+        assert v is not None and v.rel == "src/x.py", cmd
+    assert jh("perl -e 'alarm 30; exec @ARGV' -w rm src/x.py", H) is not None
+    assert jh("perl -e 'alarm 30; exec @ARGV' -- echo hi", H) is None
+    assert jh("perl -e 'alarm 30; exec @ARGV' 'echo hi'", H) is None
+
+
+def test_housekeeping_past_deadline_runs_no_git(G, monkeypatch):
+    ctx = gj._Ctx("rm -rf .build/dd", str(G), "active", (str(G / ".superlite"),))
+    ctx.deadline = 0.0
+    from types import SimpleNamespace
+    v = SimpleNamespace(rel=".build/dd", abs=str(G / ".build" / "dd"), kind="code", why="")
+
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(a))
+    assert gj._housekeeping(v, ctx, True) == (False, "git could not tell")
+    assert not calls
+
+
+def test_claude_settings_keep_their_rules(G):
+    (G / ".gitignore").write_text(".build/\n*.log\ntmp/\n.claude/\n")
+    _git(G, "add", ".gitignore")
+    _git(G, "commit", "-q", "-m", "claude")
+    (G / ".claude").mkdir()
+    (G / ".claude" / "settings.local.json").write_text("{}")
+    v = jg(G, "echo '{}' > .claude/settings.local.json")
+    assert v is not None and v.why == ".claude settings keep their own rules"
+    v = jg(G, "rm -rf .claude")
+    assert v is not None and v.why == ".claude settings keep their own rules"
+
+
+def test_linked_worktree_under_claude_is_judged_from_its_root(G):
+    (G / ".gitignore").write_text(".build/\n*.log\ntmp/\n.claude/\n")
+    _git(G, "add", ".gitignore")
+    _git(G, "commit", "-q", "-m", "claude")
+    (G / ".claude" / "worktrees").mkdir(parents=True)
+    _git(G, "worktree", "add", "-q", "-b", "wt", ".claude/worktrees/wt")
+    _files(G / ".claude" / "worktrees" / "wt" / ".build" / "dd", 3)
+    assert jg(G, "rm -rf .claude/worktrees/wt/.build/dd") is None
+    v = jg(G, "echo x > .claude/worktrees/wt/.claude/settings.local.json")
+    assert v is not None and v.why == ".claude settings keep their own rules"
+
+
+def test_per_command_home_does_not_reach_a_nested_shell(H, monkeypatch, tmp_path):
+    for cmd in ('HOME=$PWD bash -c \'echo hi > "$HOME/src/x.py"\'', "env HOME=src sh -c 'echo hi > $HOME/x.py'"):
+        v = jh(cmd, H)
+        assert v is not None and v.word.startswith("$HOME/"), cmd
+    t = (tmp_path / "tmp").resolve()
+    t.mkdir()
+    monkeypatch.setenv("TMPDIR", str(t))
+    assert jh('bash -c \'echo hi > "$TMPDIR/x.py"\'', H) is None
+    v = jh('TMPDIR=src bash -c \'echo hi > "$TMPDIR/x.py"\'', H)
+    assert v is not None and v.word.startswith("$TMPDIR/")
