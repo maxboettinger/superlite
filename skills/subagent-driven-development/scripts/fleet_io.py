@@ -550,7 +550,7 @@ def _lags(text, last, label):  # the transcript text is behind its stop record: 
     return not text.strip() or fleet_report.parse(last, label)["status"] != "UNKNOWN"  # O(len)
 
 
-def _finish(sd, wid, w, text, source, tail=None, cut=None):  # TAIL: the last pane lines of a turn that ended without a report; CUT: the stop record line of a transcript that stayed behind | O(len + w)
+def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follows an APPROVED that left packet lines unread; TAIL: the last pane lines of a turn that ended without a report; CUT: the stop record line of a transcript that stayed behind | O(len + w)
     label = w.get("task") or wid  # O(1)
     rid = label.split(",")[0]  # O(1)
     rdir = Path(sd) / "fleet" / "reports"  # O(1)
@@ -564,7 +564,7 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # TAIL: the last pa
     _write(jp, json.dumps({**rep, "id": wid, "label": label, "role": w.get("role") or "implementer", "source": source, "report": str(mp)}, indent=2) + "\n")  # O(len)
     n = len(rep["findings"])  # O(1)
     nc = len(rep.get("concerns") or [])  # O(1)
-    print(f"{wid} {label} {rep['status']} findings={n}" + (f" concerns={nc}" if nc else "") + f" {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
+    print(f"{wid} {label} {rep['status']} findings={n}" + (f" concerns={nc}" if nc else "") + (" partial" if rep["status"] == "APPROVED" and fleet_report.partial(text) else "") + f" {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
     _ready(sd, wid, label)  # O(w)
     pane_label(sd, wid, pane_title(sd, wid, label, "reported, waiting for coordinator"))  # before the worker may be stopped | O(w)
     if w.get("one_turn") and rep["status"] in FINAL:  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker | O(1)

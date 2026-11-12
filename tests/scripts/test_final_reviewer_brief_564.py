@@ -7,7 +7,7 @@ AGENTS_DOC = (ROOT / "docs" / "skills-and-agents.md").read_text(encoding="utf-8"
 
 R_BRIEF = ("- Your brief (the message, or the brief file sent as your packet) may name files to read or a search to run: "
            "read each named file, one Read each, and run each named search with Grep or Glob, also on the fast path, "
-           "each with a `Checked:` line. A brief that names them overrides `nothing else` and the packet's `no tools` line for exactly those; "
+           "each with a `Checked:` line. A brief that names them overrides `nothing else` for exactly those; "
            "never answer that your role forbids them.")
 
 
@@ -24,7 +24,7 @@ def test_description_names_brief_files():
 
 def test_brief_rule_follows_the_read_paragraph():
     lines = REVIEWER.splitlines()
-    i = next(k for k, ln in enumerate(lines) if ln.startswith("Read `.superlite/review-packet.md` once"))
+    i = next(k for k, ln in enumerate(lines) if ln.startswith("Read `.superlite/review-packet.md` whole"))
     assert lines[i + 2] == R_BRIEF
     assert "no searching, no other reads" not in REVIEWER
     assert "Answer in one turn: no other searches or reads." in lines[i]
