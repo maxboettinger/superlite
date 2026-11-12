@@ -78,7 +78,7 @@ def test_tree_stop_names_the_tree(tmp_path):
     cmd = swift_zero(tmp_path)
     spec = {"language": "swift", "test": cmd, "test_file": cmd, "isolate": True}
     (tmp_path / ".superlite" / "test-cmd.json").write_text(json.dumps(spec), encoding="utf-8")
-    cp = run(RUN_TESTS, "--fast", "src/a.txt", "--task", "T1", "--plan", plan, cwd=tmp_path)
+    cp = run(RUN_TESTS, "--fast", "src/a.c", "--task", "T1", "--plan", plan, cwd=tmp_path)
     assert cp.returncode == 1, cp.both
     (inc,) = incidents(tmp_path)
     assert inc["cwd"].replace("\\", "/").endswith(".superlite/trees/T1")

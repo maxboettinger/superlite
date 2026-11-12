@@ -1,5 +1,5 @@
 name: superlite
-version: 1.5.148
+version: 1.5.149
 description: Superlite skills and workflow bootstrap for Hermes Agent
 author: CWogu
 provides_hooks:

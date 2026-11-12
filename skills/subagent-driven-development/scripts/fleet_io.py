@@ -37,6 +37,7 @@ import importlib  # O(1)
 import io as _io  # O(1)
 import json  # O(1)
 import re  # O(1)
+import shlex  # O(1)
 import sys  # O(1)
 import tempfile  # O(1)
 import time  # O(1)
@@ -105,6 +106,13 @@ def sleep(s):  # O(1)
 DOCS = (".md", ".markdown", ".mdx", ".rst", ".txt", ".adoc")  # files that are no code | O(1)
 
 
+DEST_RE = re.compile(r"""--?destination[ =]+(?:'([^']*)'|"([^"]*)"|([^\s'"`,;.)]+(?:\.[^\s'"`,;.)]+)*))""")  # a destination flag and its value, quoted or bare | O(1)
+
+
+def named_destinations(text):  # the destinations TEXT names after -destination / --destination, deduped in order | O(len)
+    return list(dict.fromkeys(next(g for g in m.groups() if g is not None) for m in DEST_RE.finditer(text or "")))  # O(len)
+
+
 def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + k*s)
     plan = Path(plan).resolve()  # O(1)
     pl = pt.Plan.load(str(plan))  # O(L)
@@ -125,13 +133,15 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
 
     def line(ts, tid, tests, build, code):  # O(o)
         c = cmds.get(tid)  # O(1)
+        t = pl.by_id[tid]  # O(1)
+        dest = "".join(f" --destination {shlex.quote(d)}" for d in named_destinations(t.field_text("steps") + " " + t.field_text("notes")))  # O(len)
         if c:  # O(1)
             return f"`{sl_path} run_tests --task {tid} --background` (runs its **Tests:** cmd=`{c}`)" + tail  # O(1)
         if build:  # O(1)
-            return f"`{sl_path} run_tests --full --task {tid} --background` (Tests: build, a build check)" + tail  # O(1)
+            return f"`{sl_path} run_tests --full --task {tid}{dest} --background` (Tests: build, a build check)" + tail  # O(1)
         if not code:  # O(1)
             return None  # O(1)
-        return f"`{sl_path} run_tests --fast {' '.join(tests)} --task {tid} --background`" + tail  # O(o)
+        return f"`{sl_path} run_tests --fast {' '.join(tests)} --task {tid}{dest} --background`" + tail  # O(o)
     if ext:  # O(1)
         out += [f"Verify: `{sl_path} plan_tools external {tasks[0]} --plan {plan} --test` (its **Repo test:** command in the task's tree), not run_tests."]  # O(1)
     else:  # O(1)
