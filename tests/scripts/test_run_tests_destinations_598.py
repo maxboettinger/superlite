@@ -45,10 +45,16 @@ def project(tmp_path, destinations=None, command="xcodebuild test -scheme A", pa
     return tmp_path
 
 
-def run(tmp_path, *args, red=False):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_") and k not in ("FAKE_MAC_RED",)}
-    env.update(SUPERLITE_HOME=str(tmp_path / "home"), PYTHONIOENCODING="utf-8", FAKE_LOG=str(tmp_path / "fake.log"),
+def child_env(tmp_path):
+    env = {k: v for k, v in os.environ.items() if (not k.startswith("SUPERLITE_") or k == "SUPERLITE_USER_TEST_CMD") and k not in ("FAKE_MAC_RED",)}
+    env.update(SUPERLITE_HOME=str(tmp_path / "home"), SUPERLITE_DISK_FLOOR_GB="0", SUPERLITE_DISK_WARN_GB="0",
+               SUPERLITE_MACHINE_LIMIT="0", PYTHONIOENCODING="utf-8", FAKE_LOG=str(tmp_path / "fake.log"),
                PATH=str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
+    return env
+
+
+def run(tmp_path, *args, red=False):
+    env = child_env(tmp_path)
     if red:
         env["FAKE_MAC_RED"] = "1"
     sl = tmp_path / ".superlite"
@@ -135,3 +141,11 @@ def test_no_warning_when_covered(tmp_path):
     cp = run(tmp_path, "--full")
     assert "WARNING" not in cp.stderr, cp.both
     assert "warning" not in summary(tmp_path)
+
+
+def test_child_env_ignores_outer_disk_floor(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_DISK_FLOOR_GB", "100000")
+    monkeypatch.setenv("SUPERLITE_USER_TEST_CMD", "x")
+    env = child_env(tmp_path)
+    assert (env["SUPERLITE_DISK_FLOOR_GB"], env["SUPERLITE_DISK_WARN_GB"], env["SUPERLITE_MACHINE_LIMIT"]) == ("0", "0", "0")
+    assert env["SUPERLITE_HOME"] == str(tmp_path / "home") and env["SUPERLITE_USER_TEST_CMD"] == "x"
