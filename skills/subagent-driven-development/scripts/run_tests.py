@@ -58,6 +58,9 @@ With `--task Tn` every summary carries `"task"` and `--background` also writes `
 A `--full` run holds a machine-wide lock (`<superlite home>/locks/full-suite.lock`, flock; the OS frees it when the process ends) around its test command, so full suites on one machine run one at a time. A waiting run prints `run_tests: waiting for the full-suite lock (held by pid P in ROOT (task T) since HH:MM:SS); full runs on one machine run one at a time`, then `run_tests: full-suite lock taken after N s`. The test processes get `SUPERLITE_FULL_SUITE_LOCK=<pid>`, so a nested run skips the lock. `--lock-wait S` (default 3600; 0 = no limit) bounds the wait: exit 2, a red summary `full-suite lock: still held by ... after S s (run_tests --lock-wait S; 0 = no limit)`, no incident. `--wait` names the lock a background run still waits for. A lock file that cannot be opened prints `run_tests: full-suite lock not taken: ...; running without it`.
 A run in an isolated tree builds there: an `xcodebuild` word in the command (not `-list`, not one that already has `-derivedDataPath`) gets `-derivedDataPath <tree>/.build/DerivedData`, so the build output (module cache included) goes with the tree (#574); the tree is marked busy while the run lasts.
 Before each run (the run process, not the `--background` parent) the disk is checked (`trees.disk_gate`): below the floor the run stops (exit 2, red summary `disk: ...`, no tree made), below the warn level it prints a `disk: WARNING` line. Each run also removes the trees nothing needs (committed tasks, stopped workers' trees; never its own or a busy one) and orphaned DerivedData of removed trees. An `ENOSPC` anywhere ends the run with one `run_tests: disk full (ENOSPC): ...` line, exit 2, no traceback.
+A tree run exports `SUPERLITE_DERIVED_DATA_PATH=<tree>/.build/DerivedData` to the test command and its setup (a test-cmd.json `env` entry of that name wins), so a project script can pass it to xcodebuild (#614).
+A Swift project with an Xcode project whose command has no xcodebuild word to rewrite and names no script reading that variable prints one `run_tests: WARNING` line per command (remembered in `.superlite/derived-data-warned.json`) (#614).
+When the disk is below the warn level the run also removes module cache entries (`ModuleCache.noindex` under the DerivedData home) untouched for 24 h and prints `module cache: removed N entries` (#614).
 Stdlib only.
 """
 # Complexity notation:
@@ -964,6 +967,63 @@ def with_derived_data(command, tree):  # O(len command) build in the tree: -deri
     return command  # O(1)
 
 
+MODULE_CACHE_HOURS = 24  # O(1) module cache entries older than this go when the disk is below the warn level
+WARNED = ".superlite/derived-data-warned.json"  # O(1) a JSON list of commands already warned about
+PROJECT_SKIP = {"node_modules", ".build", "DerivedData"}  # O(1) folders not searched for an Xcode project
+SCRIPT_MAX = 1024 * 1024  # O(1) a script larger than this is not read
+
+
+def has_xcode_project(root):  # an .xcodeproj or .xcworkspace in root or one or two folder levels below | O(entries)
+    def scan(folder, depth):  # O(entries)
+        try:  # O(1)
+            entries = sorted(folder.iterdir())  # O(entries)
+        except OSError:  # O(1)
+            return False  # O(1)
+        for e in entries:  # O(entries)
+            if e.suffix in (".xcodeproj", ".xcworkspace"):  # O(1)
+                return True  # O(1)
+        if depth == 0:  # O(1)
+            return False  # O(1)
+        return any(scan(e, depth - 1) for e in entries if e.is_dir() and not e.name.startswith(".") and e.name not in PROJECT_SKIP)  # O(entries)
+    return scan(Path(root), 2)  # O(entries)
+
+
+def wrapped_build_warning(command, tree, root, language):  # the warning line for a wrapped xcodebuild the tree path cannot reach, else None | O(len + files)
+    if language != "swift" or not has_xcode_project(root) or "SUPERLITE_DERIVED_DATA_PATH" in command:  # O(entries)
+        return None  # O(1)
+    try:  # O(1)
+        words = shlex.split(command)  # O(len)
+    except ValueError:  # O(1)
+        words = command.split()  # O(len)
+    for w in words:  # O(w)
+        for base in (Path(tree), Path(root)):  # O(1)
+            f = base / w  # an absolute word stays as it is | O(1)
+            try:  # O(1)
+                if f.is_file() and f.stat().st_size <= SCRIPT_MAX and "SUPERLITE_DERIVED_DATA_PATH" in f.read_text(encoding="utf-8", errors="replace"):  # O(size)
+                    return None  # O(1)
+            except OSError:  # O(1)
+                continue  # O(1)
+    shown = command if len(command) <= 200 else command[:200] + "..."  # O(1)
+    return f'run_tests: WARNING: the test command `{shown}` has no xcodebuild word to rewrite and no script it names reads SUPERLITE_DERIVED_DATA_PATH, so it builds in the shared DerivedData; pass -derivedDataPath "$SUPERLITE_DERIVED_DATA_PATH" to xcodebuild in that script'  # O(1)
+
+
+def warn_once(command, line):  # print the line unless the command was warned about before; remember it | O(warned)
+    path = Path(WARNED)  # O(1)
+    try:  # O(1)
+        seen = json.loads(path.read_text(encoding="utf-8"))  # O(warned)
+        seen = seen if isinstance(seen, list) else []  # O(1)
+    except (OSError, ValueError):  # O(1)
+        seen = []  # O(1)
+    if command in seen:  # O(warned)
+        return  # O(1)
+    print(line, file=sys.stderr)  # O(1)
+    try:  # O(1)
+        path.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+        path.write_text(json.dumps(seen + [command]), encoding="utf-8")  # O(warned)
+    except OSError:  # O(1)
+        pass  # O(1)
+
+
 def free_disk(a, keep):  # O(T) + drops: reap, then gate; a removal or a low level sweeps DerivedData and gates again. The refusal line, else None
     removed = 0  # O(1)
     try:  # cleanup is best effort | O(1)
@@ -979,6 +1039,9 @@ def free_disk(a, keep):  # O(T) + drops: reap, then gate; a removal or a low lev
             folders, size = trees.sweep_derived_data()  # O(folders + files)
             if folders:  # O(1)
                 print(f"run_tests: removed {folders} orphaned DerivedData folder(s), {size / 1024 ** 3:.1f} GB", file=sys.stderr)  # O(1)
+            if state != "ok":  # O(1)
+                n, freed = trees.prune_module_cache(MODULE_CACHE_HOURS)  # O(files)
+                print(f"run_tests: module cache: removed {n} entries older than {MODULE_CACHE_HOURS} h, {freed / 1024 ** 3:.1f} GB", file=sys.stderr)  # O(1)
         except Exception:  # noqa: BLE001  # O(1)
             pass  # O(1)
         state, line = trees.disk_gate(Path("."))  # only this result refuses or warns | O(1)
@@ -1556,6 +1619,11 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                 if built != spec["command"] or (spec.get("setup") and with_derived_data(spec["setup"], tree) != spec["setup"]):  # O(len)
                     spec = {**spec, "command": built, "setup": with_derived_data(spec["setup"], tree) if spec.get("setup") else spec.get("setup")}  # setup builds there too | O(len)
                     print(f"run_tests: build output in {trees.derived_data_path(tree)} (removed with the tree)", file=sys.stderr)  # O(1)
+                else:  # a wrapped build the rewrite cannot reach: warn once per command | O(len + files)
+                    warning = wrapped_build_warning(spec["command"], tree, Path.cwd(), spec.get("language"))  # O(len + files)
+                    if warning:  # O(1)
+                        warn_once(spec["command"], warning)  # O(warned)
+                spec = {**spec, "env": {"SUPERLITE_DERIVED_DATA_PATH": str(trees.derived_data_path(tree)), **(spec.get("env") or {})}}  # O(env)
             with full_suite_lock(a, label):  # O(wait / LOCK_POLL)
                 rc = run_other(a, spec, paths, label, cwd=tree)  # O(X + o)
             if tree and rc == 1:  # a red tree run names the changed files the tree lacks (#517) | O(f)
