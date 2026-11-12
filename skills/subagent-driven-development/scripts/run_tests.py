@@ -28,7 +28,7 @@ test becomes a `test-failure` incident; on a --full run each test file whose
 tests all pass becomes a `verified` incident (once per distinct entry). With `--task Tn` each
 `test-failure` incident carries `task`, and a later run closes that task's open ones whose test
 now passes (`resolution` `fixed`, as `sl incident resolve` writes it); a green `--task` run closes that task's `-` failures and re-logs other tasks' open ones there, and a green `--full` run without `--task` closes every run_tests failure (#380); a pytest run that produces
-no results logs one `no-result` incident (so does a non-Python run that prints no test count: `no tests ran:`). A `--fast` path that does not exist (node suffix `::` ignored) is a usage error: exit 2, `test path not found`, no incident. A Node project without `node_modules` is refused the same way
+no results logs one `no-result` incident (so does a non-Python run that prints no test count: `no tests ran:`). A `--fast` path that does not exist (node suffix `::` ignored) is a usage error: exit 2, `test path not found`, no incident; a `--fast` value with spaces is split into paths unless it is one existing path; a missing `.py` path counts too when the test-cmd.json command is pytest; the built-in pytest runner refuses an existing non-`.py` path (exit 2, no incident); an xcsift JSON summary places each failure at its file and line. A Node project without `node_modules` is refused the same way
 (exit 2, `node_modules missing in <dir>: run <install> first`, no incident); in an isolated `--task` tree the root's and each workspace package's `node_modules` are symlinked in first (relative link, no setup command), and the guard checks the tree. Appends
 a `tests` line to the progress ledger. On every run it also writes
 `.superlite/test-summary.json` (--summary), the file `pt_review packet` reads:
@@ -409,7 +409,7 @@ def root_relative(x, cwd, root):  # O(len x) x against cwd, unless only the root
 def to_root(a, argv, cwd, root):  # O(len argv + p) rewrite --fast paths against cwd, then chdir to root
     """Relative --fast paths are rewritten (in a.fast and in argv) so they stay valid from the root."""
     def fix(chunk):  # O(len chunk)
-        parts = [x if os.path.isabs(x) else root_relative(x, cwd, root) for x in chunk.split(",") if x]  # O(len chunk)
+        parts = [x if os.path.isabs(x) else root_relative(x, cwd, root) for x in split_fast(chunk, cwd)]  # O(len chunk)
         return ",".join(parts)  # O(len chunk)
     eq = [j for j, x in enumerate(argv) if x.startswith("--fast=")]  # --fast=PATH spelling | O(len argv)
     if a.fast and eq:  # O(1)
@@ -971,12 +971,43 @@ def resolve_passed(log, task, failures, files, green=False, full=False, started=
 NODE_TEST_SUFFIXES = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")  # O(1) --fast paths of a non-Python project that are checked for existence
 
 
-def missing_fast_paths(paths, python=True):  # O(p) the --fast paths that do not exist (a `::node` suffix is dropped; a `...` pattern is never checked; a non-Python project checks Node test files only)
-    return [p for p in paths if "..." not in p and (python or p.split("::", 1)[0].endswith(NODE_TEST_SUFFIXES)) and not Path(p.split("::", 1)[0]).exists()]  # O(p)
+def split_fast(chunk, base="."):  # O(len chunk) the --fast chunk as paths: commas split, a part with spaces is a space list unless it is one existing path under base
+    out = []  # O(1)
+    for part in nt.csv(chunk):  # O(len chunk)
+        if re.search(r"\s", part) and not (Path(base) / part.split("::", 1)[0]).exists():  # O(1)
+            out.extend(part.split())  # O(len part)
+        else:  # O(1)
+            out.append(part)  # O(1)
+    return out  # O(1)
 
 
-def missing_line(paths, cwd, root, python=True):  # O(p) the usage-error text for missing --fast paths, else None
-    gone = missing_fast_paths(paths, python)  # O(p)
+def is_pytest_command(command):  # O(len command) True when a word of the command is pytest or py.test
+    try:  # O(1)
+        lex = shlex.shlex(command, posix=True, punctuation_chars=True)  # O(1)
+        lex.whitespace_split = True  # O(1)
+        words = list(lex)  # O(len)
+    except ValueError:  # O(1)
+        return False  # O(1)
+    return any(Path(w.replace("\\", "/")).name in ("pytest", "py.test") for w in words)  # O(len)
+
+
+def uncollectable_paths(paths):  # O(p) existing files that are not .py: pytest cannot collect them
+    return [p for p in paths if "..." not in p and not p.split("::", 1)[0].endswith(".py") and Path(p.split("::", 1)[0]).is_file()]  # O(p)
+
+
+def uncollectable_line(paths):  # O(p) the usage-error text for such paths, else None
+    bad = uncollectable_paths(paths)  # O(p)
+    if not bad:  # O(1)
+        return None  # O(1)
+    return f"pytest cannot collect {', '.join(bad)} (not a .py file): run it through the task's **Tests:** cmd=<command> or a .superlite/test-cmd.json command that runs it"  # O(p)
+
+
+def missing_fast_paths(paths, python=True, pytest=False):  # O(p) the --fast paths that do not exist (a `::node` suffix is dropped; a `...` pattern is never checked; a non-Python project checks Node test files only)
+    return [p for p in paths if "..." not in p and (python or p.split("::", 1)[0].endswith(NODE_TEST_SUFFIXES + ((".py",) if pytest else ()))) and not Path(p.split("::", 1)[0]).exists()]  # O(p)
+
+
+def missing_line(paths, cwd, root, python=True, pytest=False):  # O(p) the usage-error text for missing --fast paths, else None
+    gone = missing_fast_paths(paths, python, pytest)  # O(p)
     if not gone:  # O(1)
         return None  # O(1)
     return f"test path not found: {', '.join(gone)} (cwd {cwd}, root {root})"  # O(p)
@@ -1422,7 +1453,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                 print(f"run_tests: {node_gone}", file=sys.stderr)  # O(1)
                 return 2  # O(1)
         if a.fast:  # a missing path is refused here, not in the detached child | O(1)
-            fast, skipped = skip_non_test([p for chunk in a.fast for p in nt.csv(chunk)])  # O(p)
+            fast, skipped = skip_non_test([p for chunk in a.fast for p in split_fast(chunk)])  # O(p)
             if non_test_reason(fast, skipped):  # nothing spawned | O(1)
                 print(f"run_tests: {non_test_reason(fast, skipped)}", file=sys.stderr)  # O(p)
                 return 2  # O(1)
@@ -1434,7 +1465,8 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
             except testcmd.UnknownTestName as e:  # refused in the parent: nothing spawned | O(1)
                 print(f"run_tests: {e}", file=sys.stderr)  # O(1)
                 return 2  # O(1)
-            gone = missing_line(fast, a.cwd, Path.cwd(), spec["python"]) if spec and fast else None  # O(p)
+            gone = missing_line(fast, a.cwd, Path.cwd(), spec["python"], pytest=not spec["python"] and is_pytest_command(spec["command"])) if spec and fast else None  # O(p)
+            gone = gone or (uncollectable_line(fast) if spec and fast and spec["python"] else None)  # O(p)
             gone = gone or node_install_line(Path.cwd(), spec)  # O(m + f)
             if gone:  # O(1)
                 print(f"run_tests: {gone}", file=sys.stderr)  # O(1)
@@ -1647,7 +1679,29 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
                     files.setdefault(path, [0, 0])[1] += 1  # O(1)
                 else:  # O(1)
                     failures.append(("-", 0, f"{n}: {msg or 'failed'}" if n in reasons else f"{n}: failed"))  # O(1)
-            if XCODE_OUT.search(text) or spec.get("language") == "swift":  # xcodebuild output: failures with file and line (#499) | O(o)
+            if p.get("format") == "xcsift":  # xcsift JSON: failures at their file, no xcodebuild lines to scan | O(k)
+                base = (Path(cwd) if cwd else root).resolve()  # a relative or symlinked tree still prefixes its sites | O(1)
+                failures = []  # O(1)
+                for sf, sline, ctx in p["sites"]:  # O(k)
+                    sp = Path(sf) if sf else None  # O(1)
+                    rel = None  # O(1)
+                    if sp is not None and sp.is_absolute():  # O(1)
+                        for cand in (sp, sp.resolve()):  # the path as given, then through symlinks | O(1)
+                            try:  # O(1)
+                                rel = cand.relative_to(base)  # O(1)
+                                break  # O(1)
+                            except ValueError:  # O(1)
+                                rel = None  # O(1)
+                    elif sp is not None:  # O(1)
+                        rel = sp  # O(1)
+                    if rel is not None and (base / rel).is_file():  # O(1)
+                        failures.append((rel.as_posix(), sline, ctx))  # O(1)
+                        files.setdefault(rel.as_posix(), [0, 0])[1] += 1  # O(1)
+                    else:  # O(1)
+                        failures.append(("-", 0, ctx))  # O(1)
+                if p["failed"] and not failures:  # O(1)
+                    failures.append(("-", 0, f"build error: {p['error']}"[:160] if p["error"] else "xcsift summary: status failed"))  # O(1)
+            elif XCODE_OUT.search(text) or spec.get("language") == "swift":  # xcodebuild output: failures with file and line (#499) | O(o)
                 sites = failure_sites.failures(strip_ansi(text), str(Path(cwd) if cwd else root), paths, p["names"])  # O(o + f*n)
                 if sites:  # O(1)
                     failures = sites  # O(1)
@@ -1688,7 +1742,7 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
                 failures += [("-", 0, f"destination {dests[0]}: exit {r.returncode}")]  # O(1)
             if r.returncode and not failures:  # a red exit with no names: name the command | O(1)
                 failures = [("-", 0, f"exit code {r.returncode} from `{spec['command']}`: {last}"[:200])]  # O(1)
-            if r.returncode and p["error"]:  # a compile error leads the failures | O(1)
+            if r.returncode and p["error"] and ("-", 0, f"build error: {p['error']}"[:160]) not in failures:  # a compile error leads the failures, once (the xcsift branch may have added it) | O(k)
                 failures.insert(0, ("-", 0, f"build error: {p['error']}"[:160]))  # O(1)
             tail_set = {x.strip() for x in p["tail"]}  # O(40)
             kept = [x for x in (p["error"] if r.returncode else "", p["marker"]) if x and x not in tail_set]  # the error and marker may sit above the last 40 lines | O(40)
@@ -1902,7 +1956,7 @@ def task_cmd_spec(a):  # O(L + m + f) the spec of the `cmd=` in --task's plan **
 
 
 def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
-    paths = [p for chunk in (a.fast or []) for p in nt.csv(chunk)]  # O(p)
+    paths = [p for chunk in (a.fast or []) for p in split_fast(chunk)]  # O(p)
     label = "fast" if paths or a.marker or getattr(a, "passthrough", None) else "full"  # O(1)
     if a.also and not a.task:  # O(1)
         return usage_error(a, label, "--also needs --task Tn")  # O(summary size)
@@ -1970,9 +2024,12 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             spec = {**spec, "command": marked}  # O(1)
             print(honoured[1], file=sys.stderr)  # O(1)
     if paths and (spec["python"] or label == "fast"):  # a missing path is a usage error, not a no-result stop (#235) | O(p)
-        gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd(), spec["python"])  # O(p)
+        gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd(), spec["python"], pytest=not spec["python"] and is_pytest_command(spec["command"]))  # O(p)
         if gone:  # O(1)
             return usage_error(a, label, gone)  # O(summary size)
+        bad = uncollectable_line(paths) if spec["python"] else None  # the built-in pytest runner cannot run a .sh test | O(p)
+        if bad:  # O(1)
+            return usage_error(a, label, bad)  # O(summary size)
     if label == "full" and not a.task and not tspec and not getattr(a, "destination", None) and not spec["python"]:  # a green maxapp test stamp answers a full run (#639) | O(d + n)
         hit = stamp_hit(a, spec, label)  # O(d + n)
         if hit is not None:  # O(1)

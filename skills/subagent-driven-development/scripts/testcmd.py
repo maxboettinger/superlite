@@ -2,8 +2,9 @@
 """Resolve the project's test command, language-neutrally.
 
     testcmd.py [--fast PATHS...] [--root .]      print the resolved command as JSON
-    testcmd.py --propose [--root .]              print the proposed project test command, its target file and whether it exists
-    testcmd.py --write [--test CMD] [--test-file T] [--language L] [--root .]   write the proposal to .superlite/test-cmd.json
+    testcmd.py --propose [--root .] [--shared] [--plan P]   print the proposed project test command, its target file and whether it exists
+    testcmd.py --write [--test CMD] [--test-file T] [--language L] [--root .] [--shared] [--plan P]   write the proposal to .superlite/test-cmd.json
+The write target is the root's own .superlite/test-cmd.json; --shared writes the main checkout's instead, --plan P writes the run folder of plan P (and, without --root, takes its project as root).
 
 Order: (a0) a `.maxapp` file (`package` and `package_scheme` keys, `maxapp` on PATH) resolves to `maxapp test` below (a) and (a2), above (a3); (a) `.superlite/test-cmd.json` {"language","test","test_file","junit","setup","related"} (JSON; `test_file` is a template
 with {files}; `{junit}` in a command is replaced by the path run_tests wants the JUnit XML at; a literal `junit` path is read
@@ -14,7 +15,7 @@ vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo
 (pyproject.toml, pytest.ini, setup.cfg, tox.ini, conftest.py, or test_*.py files); (c) otherwise None.
 `not_code` in (a) is a list of globs of paths that are not code (read by not_code_globs, returned as spec["not_code"]).
 `{only_testing}` expands (to `--only <Target>/<Suite>` pairs in a `maxapp test` command) to one shell-quoted -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing); the target comes from Xcode target membership and Package.swift test targets, else the folder name; a path in no test target runs the unfiltered `test` command.
-Library: resolve, propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
+Library: resolve, propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit), xcsift_summary (the `summary` object's int `passed_tests`, `failed_tests` and `skipped_tests` and the `failed_tests` entries of xcsift's JSON, when no raw xcodebuild lines were printed). Stdlib only.
 """
 # Complexity notation:
 #   m = marker files checked, f = files walked for the Python test-file scan (bounded), o = output lines
@@ -838,13 +839,18 @@ def propose(root: Path):  # {"config", "from"} for the project's own test comman
     return None  # O(1)
 
 
-def config_target(root: Path) -> Path:  # where .superlite/test-cmd.json belongs: the main checkout's when root is a linked worktree | O(1)
-    main = _main_checkout_root(Path(root))  # O(1)
-    return (main if main else Path(root)).resolve() / CONFIG  # O(1)
+def config_target(root: Path, shared: bool = False, plan: str | None = None) -> Path:  # where --write puts test-cmd.json: the plan's run folder, the main checkout's (shared) or root's own | O(d)
+    if plan:  # O(1)
+        import state  # O(1)
+        return state.plan_dir(plan).resolve() / "test-cmd.json"  # O(d)
+    if shared:  # O(1)
+        main = _main_checkout_root(Path(root))  # O(1)
+        return (main if main else Path(root)).resolve() / CONFIG  # O(1)
+    return Path(root).resolve() / CONFIG  # O(1)
 
 
-def write_config(root: Path, config: dict) -> Path:  # O(file)
-    target = config_target(root)  # O(1)
+def write_config(root: Path, config: dict, target: Path | None = None) -> Path:  # O(file)
+    target = target or config_target(root)  # O(1)
     if target.exists():  # O(1)
         raise FileExistsError(str(target))  # O(1)
     target.parent.mkdir(parents=True, exist_ok=True)  # O(1)
@@ -1410,6 +1416,62 @@ def _parse_pytest(lines: list[str], rc: int) -> tuple[int, int, int, list[str], 
     return passed, failed, skipped, names, reasons  # O(1)
 
 
+def _int_key(d: dict, key: str) -> int | None:  # an int that is not a bool, else None | O(1)
+    v = d.get(key)  # O(1)
+    return v if isinstance(v, int) and not isinstance(v, bool) else None  # O(1)
+
+
+def xcsift_summary(lines: list[str], rc: int) -> dict | None:  # counts, failing tests and sites from xcsift's JSON summary, else None | O(o^2)
+    if not any('"passed_tests"' in ln or '"failed_tests"' in ln for ln in lines):  # O(o)
+        return None  # O(1)
+    cands = [i for i, ln in enumerate(lines) if ln.lstrip().startswith("{")][-200:]  # O(o)
+    obj = None  # O(1)
+    for i in reversed(cands):  # the last summary wins | O(o)
+        try:  # O(1)
+            got, _ = json.JSONDecoder().raw_decode("\n".join(lines[i:]).lstrip())  # O(o)
+        except ValueError:  # O(1)
+            continue  # O(1)
+        sm = got.get("summary") if isinstance(got, dict) else None  # O(1)
+        if isinstance(sm, dict) and (_int_key(sm, "passed_tests") is not None or _int_key(sm, "failed_tests") is not None):  # O(1)
+            obj = got  # O(1)
+            break  # O(1)
+    if obj is None:  # O(1)
+        return None  # O(1)
+    sm = obj["summary"]  # O(1)
+    passed, failed, skipped = (_int_key(sm, k) or 0 for k in ("passed_tests", "failed_tests", "skipped_tests"))  # O(1)
+    names: list[str] = []  # O(1)
+    reasons: dict[str, tuple[str, int]] = {}  # O(1)
+    sites: list[tuple[str, int, str]] = []  # O(1)
+    entries = obj.get("failed_tests")  # O(1)
+    for e in (entries if isinstance(entries, list) else [])[:50]:  # O(1)
+        if not isinstance(e, dict):  # O(1)
+            continue  # O(1)
+        name = str(e.get("test") or "").strip()[:120]  # O(1)
+        if not name or name in names:  # O(1)
+            continue  # O(1)
+        msg = str(e.get("message") or "").strip()[:160]  # O(1)
+        line = _int_key(e, "line") or 0  # O(1)
+        path = e["file"] if isinstance(e.get("file"), str) else ""  # O(1)
+        names.append(name)  # O(1)
+        reasons[name] = (msg, line)  # O(1)
+        sites.append((path, line, f"{name}: {msg or 'failed'}"))  # O(1)
+    failed = max(failed, len(names))  # O(1)
+    counted = bool(passed or failed or skipped)  # O(1)
+    if not failed and (rc or obj.get("status") == "failed"):  # O(1)
+        failed = 1  # O(1)
+    mk = _error_marker(lines)  # O(o)
+    errs = obj.get("errors")  # O(1)
+    first = errs[0] if isinstance(errs, list) and errs and isinstance(errs[0], dict) else None  # O(1)
+    if first is not None:  # O(1)
+        msg = str(first.get("message") or "").strip()  # O(1)
+        path = first.get("file") if isinstance(first.get("file"), str) else ""  # O(1)
+        error = f"{path}:{_int_key(first, 'line') or 0}: {msg}" if path else msg  # O(1)
+    else:  # O(1)
+        error = mk["error"]  # O(1)
+    empty = "" if counted else "xcsift summary: 0 passed, 0 failed tests"  # O(1)
+    return {"passed": passed, "failed": failed, "skipped": skipped, "names": names, "reasons": reasons, "sites": sites, "counted": counted, "empty": empty, "format": "xcsift", "error": error, "marker": mk["marker"], "tail": lines[-40:]}  # O(1)
+
+
 def parse_output(text: str, rc: int) -> dict:  # O(o)
     """Best-effort counts and failing test names from a runner's plain output (no JUnit).
 
@@ -1420,6 +1482,9 @@ def parse_output(text: str, rc: int) -> dict:  # O(o)
     xc = _parse_xcode(lines, rc)  # O(o)
     if xc is not None:  # O(1)
         return xc  # O(1)
+    xs = xcsift_summary(lines, rc)  # O(o)
+    if xs is not None:  # O(1)
+        return xs  # O(1)
     names: list[str] = []  # O(1)
     reasons: dict[str, tuple[str, int]] = {}  # O(1)
     py = _parse_pytest(lines, rc)  # O(o)
@@ -1454,22 +1519,30 @@ def parse_output(text: str, rc: int) -> dict:  # O(o)
 def main(argv=None):  # O(m + f)
     ap = argparse.ArgumentParser(description=__doc__.split(chr(10))[0])  # O(1)
     ap.add_argument("--fast", nargs="*", default=[])  # O(1)
-    ap.add_argument("--root", default=".")  # O(1)
+    ap.add_argument("--root", default=None)  # O(1)
+    ap.add_argument("--shared", action="store_true")  # O(1)
+    ap.add_argument("--plan")  # O(1)
     ap.add_argument("--propose", action="store_true")  # O(1)
     ap.add_argument("--write", action="store_true")  # O(1)
     ap.add_argument("--test")  # O(1)
     ap.add_argument("--test-file")  # O(1)
     ap.add_argument("--language")  # O(1)
     a = ap.parse_args(argv)  # O(1)
-    root = Path(a.root)  # O(1)
+    if a.root is not None:  # O(1)
+        root = Path(a.root)  # O(1)
+    elif a.plan:  # O(1)
+        import state  # O(1)
+        root = state.plan_dir(a.plan).parent  # O(d)
+    else:  # O(1)
+        root = Path(".")  # O(1)
     if a.propose:  # O(1)
-        prop, target = propose(root), config_target(root)  # O(m + f)
+        prop, target = propose(root), config_target(root, a.shared, a.plan)  # O(m + f)
         print(json.dumps({"proposal": prop["config"] if prop else None, "from": prop["from"] if prop else None,
                           "target": target.as_posix(), "exists": target.exists()}))  # O(1)
         return 0  # O(1)
     if a.write:  # O(1)
         _, source, origin = config_source(root)  # O(m + f)
-        target = config_target(root)  # O(1)
+        target = config_target(root, a.shared, a.plan)  # O(d)
         if source == "test-cmd.json":  # O(1)
             print(f"testcmd: {origin} already sets the test command; nothing written", file=sys.stderr)  # O(1)
             return 2  # O(1)
@@ -1494,8 +1567,14 @@ def main(argv=None):  # O(m + f)
             return 1  # O(1)
         order = {k: cfg[k] for k in ("language", "test", "test_file") if k in cfg}  # O(1)
         order.update({k: v for k, v in cfg.items() if k not in order})  # O(1)
-        path = write_config(root, order)  # O(file)
+        path = write_config(root, order, target)  # O(file)
         print(f"wrote {path.as_posix()}: {order['test']}")  # O(1)
+        _, src, origin = config_source(root)  # O(m + f)
+        if src == "test-cmd.json":  # O(1)
+            reads = origin if os.path.isabs(origin) else (Path(root) / origin).resolve().as_posix()  # O(1)
+        else:  # O(1)
+            reads = f"no test-cmd.json ({origin})"  # O(1)
+        print(f"testcmd: run_tests in {Path(root).resolve().as_posix()} reads {reads}")  # O(1)
         return 0  # O(1)
     try:  # O(1)
         print(json.dumps(resolve(a.root, a.fast)))  # O(1)

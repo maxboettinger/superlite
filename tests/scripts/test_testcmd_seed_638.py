@@ -86,3 +86,17 @@ def test_testcmd_cli_prints_note(tmp_path):
     assert r.stderr.strip().startswith("testcmd: this worktree's .superlite/test-cmd.json differs")
     out = json.loads(r.stdout)
     assert out["command"] == "echo mine" and out["source"] == "test-cmd.json" and out["origin"] == testcmd.CONFIG
+
+
+def test_write_in_seeded_worktree_refuses(tmp_path):
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "PATH": __import__("os").environ["PATH"], "HOME": str(tmp_path)}
+    g = lambda *a, cwd=main: subprocess.run(["git", *a], cwd=cwd, env=env, check=True, capture_output=True)
+    main.mkdir(); g("init", "-q"); g("commit", "-q", "--allow-empty", "-m", "i"); g("worktree", "add", "-q", str(wt))
+    for d in (main, wt):
+        (d / ".superlite").mkdir(exist_ok=True)
+    put(main, "test-cmd.json", '{"test": "echo main"}'); put(wt, "test-cmd.json", '{"test": "echo main"}')
+    before = [(d / ".superlite" / "test-cmd.json").read_bytes() for d in (main, wt)]
+    r = subprocess.run([sys.executable, str(SCRIPTS / "testcmd.py"), "--root", str(wt), "--write", "--test", "x"], capture_output=True, text=True, env=env)
+    assert r.returncode == 2 and "already sets the test command" in r.stderr, r.stdout + r.stderr
+    assert before == [(d / ".superlite" / "test-cmd.json").read_bytes() for d in (main, wt)]
