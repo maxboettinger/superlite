@@ -831,6 +831,22 @@ def _is_sl(words):  # O(w) | an sl call: `$SL`, or a script that really lies in 
     return False  # O(1)
 
 
+def _wrote_script(operand, c, st, ctx, depth):  # O(n) | verdict for a script file this command wrote earlier: its heredoc text is judged like a -c body, any other write is unknown, a file from an earlier call is None
+    for d in c.inn:  # O(d)
+        full = _clean(_winpath(operand)) if operand.startswith("/") else (_clean(d + "/" + operand) if d else None)  # O(p)
+        if full is None:  # O(1)
+            continue  # O(1)
+        if full in st.shared["scripts"]:  # O(1)
+            st2 = st.fork_for(c)  # O(v)
+            st2.nested = True  # O(1)
+            v = _walk_text(st.shared["scripts"][full], st2, ctx, depth + 1)  # O(n)
+            if v is not None:  # O(1)
+                return v  # O(1)
+        elif full in st.shared["wrote"]:  # O(1)
+            return _unknown(ctx, operand)  # O(1)
+    return None  # O(1)
+
+
 def _shell(words, dyn, c, st, ctx, depth):  # O(n) | a shell's -c body, stdin program or process substitution
     i, n, body, bi, has_s = 1, len(words), None, -1, False  # O(1)
     while i < n:  # O(w)
@@ -864,7 +880,7 @@ def _shell(words, dyn, c, st, ctx, depth):  # O(n) | a shell's -c body, stdin pr
     if script is not None and (script.startswith(("<(", ">("))):  # process substitution: a program the guard cannot read | O(1)
         return _unknown(ctx, script)  # O(1)
     if script is not None and not has_s and script not in ("/dev/stdin", "/dev/fd/0", "-"):  # a script file | O(1)
-        return None  # O(1)
+        return _wrote_script(script, c, st, ctx, depth)  # O(n)
     if c.docs:  # O(1)
         return _walk_docs(c.docs, c, st, ctx, depth)  # O(docs)
     return _unknown(ctx, f"program piped into {words[0]}") if c.piped else None  # a program piped in: unknown | O(1)
@@ -894,7 +910,7 @@ def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and sou
     if operand is not None and ACTIVATE.search(operand):  # O(p)
         return None  # O(1)
     c.ok = c.fail = (None,)  # a script file may cd | O(1)
-    return None  # O(1)
+    return _wrote_script(operand, c, st, ctx, depth) if operand is not None else None  # O(n)
 
 
 def _cd(base, words, c, st, ctx):  # O(d * p) | the directories after cd, pushd, popd
@@ -1222,7 +1238,11 @@ def _write_through_why(top, projreal):  # O(MAX_TREE) | why writing into this ex
         return "unreadable folder"  # O(1)
 
 
-def _housekeeping(v, ctx, folders, write=False, wrote=()):  # O(p) + git | (ok, why): may the coordinator remove (folders: a folder too) or write this literal target as housekeeping in an active run? (False, "") when the rule does not apply
+def _raw(t, d):  # O(p) | the literal target joined to its folder, a trailing slash cut
+    return _clean(_winpath(t) if t.startswith("/") else d + "/" + t).rstrip("/") or "/"  # O(p)
+
+
+def _housekeeping(v, ctx, folders, write=False, wrote=(), raw=None):  # O(p) + git | (ok, why): may the coordinator remove (folders: a folder too) or write this literal target as housekeeping in an active run? (False, "") when the rule does not apply
     try:  # O(1)
         if ctx.mode != "active" or v.rel in ("?", ".") or "?" in v.abs:  # O(1)
             return False, ""  # O(1)
@@ -1251,6 +1271,10 @@ def _housekeeping(v, ctx, folders, write=False, wrote=()):  # O(p) + git | (ok, 
             tasks = None  # O(1)
         if not tasks:  # O(1)
             return False, "no run plan to read Owns from"  # O(1)
+        if raw and os.path.islink(raw):  # the literal target is itself a link: v names what it leads to | O(1)
+            rtop = os.path.dirname(raw)  # O(p)
+            if _tracked_ignore(os.path.basename(raw), rtop, ctx) and (write or _rel(os.path.realpath(raw), os.path.realpath(ctx.projreal)) is not None):  # an ignored link to a project path reaches it | O(git)
+                return False, "symlink"  # O(1)
         top = os.path.dirname(v.abs)  # O(p)
         while top and not os.path.isdir(top) and os.path.dirname(top) != top:  # the deepest existing folder | O(depth)
             top = os.path.dirname(top)  # O(1)
@@ -1269,7 +1293,9 @@ def _housekeeping(v, ctx, folders, write=False, wrote=()):  # O(p) + git | (ok, 
         ign = _tracked_ignore(rel, top, ctx)  # only a tracked .gitignore counts | O(git)
         if ign is None:  # O(1)
             return False, "git could not tell"  # O(1)
-        if ign:  # ignored: no size, symlink or link check | O(1)
+        if ign:  # ignored: a link into the project is refused, other checks follow | O(1)
+            if os.path.islink(v.abs) and (write or _rel(real, os.path.realpath(ctx.projreal)) is not None):  # a link to a project file or folder reaches it | O(p)
+                return False, "symlink"  # O(1)
             if write and _hardlinked(v.abs):  # a write through another name reaches that file | O(1)
                 return False, "hard link"  # O(1)
             if write and isdir:  # a copy into an existing folder writes through links below it | O(MAX_TREE)
@@ -1383,7 +1409,7 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
         v = _check(t, inn, st, ctx, name, flag)  # O(d * p)
         one = len(inn) == 1 and inn[0] is not None and "$" not in t and "`" not in t  # one known folder, literal target | O(p)
         if v is not None and one and base != "git" and v.kind == "code" and not flag:  # O(1)
-            ok, why = _housekeeping(v, ctx, base != "unlink", wrote=before) if base in ("rm", "rmdir", "unlink") else _housekeeping(v, ctx, False, write=True, wrote=before)  # O(git)
+            ok, why = _housekeeping(v, ctx, base != "unlink", wrote=before, raw=_raw(t, inn[0])) if base in ("rm", "rmdir", "unlink") else _housekeeping(v, ctx, False, write=True, wrote=before, raw=_raw(t, inn[0]))  # O(git)
             if ok:  # git-ignored or untracked and no task owns it: housekeeping | O(1)
                 continue  # O(1)
             v.why = why  # O(1)
@@ -1419,6 +1445,8 @@ def _run_words(words, dyn, c, st, ctx, depth, bare=None):  # O(n) | judge one co
             v = _check(w, c.inn, st, ctx, None, fl.get(w, ""))  # O(d * p)
             if v is not None:  # O(1)
                 break  # O(1)
+    elif "/" in words[0] and base not in SHELLS and _wrote_script(words[0], c, st, ctx, depth) is not None:  # a script written earlier in this call, run by its path | O(n)
+        v = _wrote_script(words[0], c, st, ctx, depth)  # O(n)
     elif base in SHELLS:  # O(1)
         v = _shell(words, dyn, c, st, ctx, depth)  # O(n)
     elif base in ("eval", "source", "."):  # O(1)
@@ -1516,7 +1544,7 @@ def _run_seg(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects
         before = set(st.shared["wrote"])  # O(w)
         v = _check(tgt, c.inn, st, ctx, None, r.glob, not r.bare)  # O(d * p)
         if v is not None and v.kind == "code" and not r.glob and len(c.inn) == 1 and c.inn[0] is not None and "$" not in tgt and "`" not in tgt:  # a literal target from one known folder | O(1)
-            ok, why = _housekeeping(v, ctx, False, write=True, wrote=before)  # O(git)
+            ok, why = _housekeeping(v, ctx, False, write=True, wrote=before, raw=_raw(tgt, c.inn[0]))  # O(git)
             if ok:  # O(1)
                 v = None  # O(1)
             else:  # O(1)

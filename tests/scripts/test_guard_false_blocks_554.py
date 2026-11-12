@@ -458,3 +458,30 @@ def test_home_with_ifs_character_splits_unquoted_only(H, tmp_path, monkeypatch):
     assert jh('echo hi > "$HOME/x.log"', H) is None
     monkeypatch.setenv("HOME", str((tmp_path / "home").resolve()))
     assert jh("rm -rf $HOME/x", H) is None
+
+
+def test_shell_script_written_to_an_ignored_path_is_judged_when_run(G):  # F-T1-15
+    body = "cat > .build/x.sh <<'EOF'\nrm -rf src\nEOF\n"
+    for run in ("sh .build/x.sh", "bash .build/x.sh", ". .build/x.sh", "source .build/x.sh",
+                "chmod +x .build/x.sh && ./.build/x.sh"):
+        assert jg(G, body + run) is not None, run
+    assert jg(G, "cp tools/run.sh .build/x.sh && sh .build/x.sh") is not None
+    assert jg(G, "cat > .build/x.sh <<'EOF'\necho hi > .build/out.log\nEOF\nsh .build/x.sh") is None
+    assert jg(G, "sh .build/x.sh") is None  # a script from an earlier call is a follow-up
+
+
+def test_ignored_target_that_is_a_symlink_into_the_project_blocks(G, tmp_path):  # F-T1-16
+    (G / ".build").mkdir()
+    os.symlink("../src/a.py", G / ".build" / "l")
+    os.symlink("../src", G / ".build" / "s")
+    out = tmp_path / "outside"
+    out.mkdir()
+    os.symlink(out, G / ".build" / "o")
+    (G / ".build" / "x.log").write_text("x")
+    v = jg(G, "echo x > .build/l")
+    assert v is not None and v.why == "symlink", v
+    for cmd in ("rm -rf .build/s/", "rm -rf .build/s"):
+        v = jg(G, cmd)
+        assert v is not None and v.why == "symlink", cmd
+    assert jg(G, "rm -rf .build/o") is None
+    assert jg(G, "echo x > .build/x.log") is None
