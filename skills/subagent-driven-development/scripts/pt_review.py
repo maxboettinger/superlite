@@ -1602,7 +1602,66 @@ def cmd_adapter(a: argparse.Namespace) -> int:  # O(template size) + file write 
 # --------------------------------------------------------------------------- packet command
 
 
-def read_incidents(path: Path) -> list[dict]:  # O(file size) total, single pass
+def norm_path(root: Path, file: str) -> str:  # O(m + d) path syscalls total
+    """A repo-relative path: the root prefix and `./` dropped, a doubled leading folder (`pkg/pkg/x`) resolved once when only the shorter path exists."""
+    f = str(file).replace("\\", "/")  # O(m)
+    if f in ("", "-"):  # O(1)
+        return f  # O(1)
+    f = _rel(f, root)  # O(m)
+    parts = f.split("/")  # O(m)
+    while len(parts) > 2 and parts[0] == parts[1] and not (root / "/".join(parts)).exists() and (root / "/".join(parts[1:])).exists():  # O(d) iterations
+        parts = parts[1:]  # O(d)
+    return "/".join(parts)  # O(m)
+
+
+def on_disk(root: Path, file: str) -> bool:  # O(1) stat calls
+    """`-` and an empty file name stand for no file; any other must be a file under the root or its src folder."""
+    if file in ("", "-"):  # O(1)
+        return True  # O(1)
+    return (root / file).is_file() or (root / "src" / file).is_file()  # O(1)
+
+
+def ledger_rulings(path: Path) -> list[str]:  # O(file size) total
+    """The text of every `- Ruling:` line of the ledger."""
+    if not path.is_file():  # O(1)
+        return []  # O(1)
+    out: list[str] = []  # O(1)
+    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():  # O(L) iterations
+        m = re.match(r"\s*[-*]\s*Ruling:\s*(.+)", ln)  # O(m)
+        if m:  # O(1)
+            out.append(m.group(1).strip())  # O(m)
+    return out  # O(L)
+
+
+def ruled(entry: dict, rulings: list[str]) -> bool:  # O(R*m) total
+    """A ledger ruling names the entry's `file:line` (no digit after the line) or, for a test failure, its `file::test`."""
+    file, line = str(entry.get("file", "")), entry.get("line", 0)  # O(1)
+    if file in ("", "-"):  # O(1)
+        return False  # O(1)
+    pats = [rf"(?<![\w./-]){re.escape(file)}:{line}(?!\d)"]  # O(m)
+    tid = str(entry.get("context", "")).split(": ", 1)[0]  # O(m)
+    if entry.get("kind") == "test-failure" and "::" in tid and tid.startswith(file):  # O(1)
+        pats.append(rf"(?<![\w./-]){re.escape(tid)}(?!\w)")  # O(m)
+    return any(re.search(pt_, r) for r in rulings for pt_ in pats)  # O(R*m)
+
+
+def killed(summary: dict) -> bool:  # O(1)
+    """A run that was stopped or killed (its `error` says so): no result."""
+    err = str(summary.get("error") or "")  # O(1)
+    return bool(err) and ("stopped by" in err or "were killed" in err or "SIGTERM" in err)  # O(1)
+
+
+def norm_summary(d: dict, root: Path) -> dict:  # O(F*m) total
+    """A copy of a test summary whose `files` keys and failure file parts went through norm_path."""
+    out = dict(d)  # O(F)
+    if isinstance(d.get("files"), dict):  # O(1)
+        out["files"] = {norm_path(root, k): v for k, v in d["files"].items()}  # O(F*m)
+    if isinstance(d.get("failures"), list):  # O(1)
+        out["failures"] = [norm_path(root, str(f).split("::", 1)[0]) + "::" + str(f).split("::", 1)[1] if "::" in str(f) else f for f in d["failures"]]  # O(F*m)
+    return out  # O(1)
+
+
+def read_incidents(path: Path, root: Path | None = None) -> list[dict]:  # O(file size) total, single pass
     out: list[dict] = []  # O(m)
     if path.is_file():  # O(m)
         for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():  # O(K) iterations
@@ -1615,6 +1674,8 @@ def read_incidents(path: Path) -> list[dict]:  # O(file size) total, single pass
                 continue  # O(m)
             if isinstance(e, dict) and "file" in e:  # O(m)
                 e["file"] = str(e.get("file", "")).replace("\\", "/")  # O(m)
+                if root is not None:  # O(m)
+                    e["file"] = norm_path(root, e["file"])  # O(m)
                 try:  # O(m)
                     e["line"] = int(e.get("line") or 0)  # O(m)
                 except (TypeError, ValueError):  # O(m)
@@ -1713,10 +1774,14 @@ def claimed_fix_items(entries: list[dict], changed: set[str], root: Path | None 
     for e in entries:  # O(K) iterations
         if e.get("kind") != "verified":  # O(1)
             newest[(_rel(e.get("file", ""), root), e.get("line", 0))] = e  # a later entry overwrites | O(1)
+    runs_decide = {(_rel(e.get("file", ""), root), e.get("line", 0)) for e in entries  # locations a test run decided | O(K)
+                   if e.get("kind") in ("test-failure", "no-result") or e.get("agent") == "run_tests"}  # O(K)
     items: list[Item] = []  # O(1)
     for (file, line), e in newest.items():  # O(groups) iterations
-        if str(e.get("resolution", "")).lower() != "fixed" or not file or file in changed:  # O(1)
+        if str(e.get("resolution", "")).lower() != "fixed" or not file or file in changed or (file, line) in runs_decide:  # O(1)
             continue  # O(1)
+        if any(_rel(w, root) in changed for w in re.findall(r"[\w./-]+", str(e.get("context", "")))):  # the claim names a changed file | O(m)
+            continue  # O(m)
         agent = e.get("agent") or "unknown"  # O(1)
         items.append(Item("claimed", (3, "\uffff", file, line),  # O(1)
                           f"{file}:{line}  claimed fixed by {agent}, file unchanged since base",  # O(1)
@@ -2356,14 +2421,29 @@ def _started_before(summary: dict, entry: dict) -> bool:  # O(1) total
     return started is not None and logged is not None and started <= logged  # O(1)
 
 
+def _has_result(summary: dict) -> bool:  # O(1) total
+    """A run that ran tests: no `error`, and passed + failed + skipped above zero."""
+    return not summary.get("error") and sum(v for k in ("passed", "failed", "skipped") if isinstance((v := summary.get(k)), int)) > 0  # O(1)
+
+
 def stale_in_run(entry: dict, summaries: list[dict]) -> bool:  # O(S*F) total
     """The newest summary that covers the entry decides; none covers it: not stale. A summary covers an entry when
     it holds the entry's file or lists the failure; a full run also covers every `run_tests` failure, so a later
     full run closes each one it does not list, `-` entries from runners without JUnit included (#81). A run that
     started before the entry was logged covers nothing (#101)."""
-    if entry.get("kind") != "test-failure":  # O(1)
-        return False  # O(1)
+    kind = entry.get("kind")  # O(1)
     file = str(entry.get("file", ""))  # O(1)
+    if kind == "no-result" or (kind == "test-failure" and file == "-"):  # a later run with a result closes it | O(1)
+        task = entry.get("task")  # O(1)
+        for s in summaries:  # O(S)
+            if not isinstance(s, dict) or _started_before(s, entry) or not _has_result(s) or s.get("recorded"):  # O(1)
+                continue  # O(1)
+            if (task and s.get("task") == task) or (kind == "no-result" and s.get("mode") == "full"):  # the newest matching run decides | O(1)
+                return kind == "no-result" or (not s.get("failed") and not s.get("failures"))  # a `-` failure needs it green | O(1)
+        if kind == "no-result":  # O(1)
+            return False  # O(1)
+    if kind != "test-failure":  # O(1)
+        return False  # O(1)
     for s in summaries:  # O(S)
         if not isinstance(s, dict) or _started_before(s, entry):  # O(1)
             continue  # O(1)
@@ -2431,12 +2511,7 @@ def outdated_failure(root: Path, test_file: str, when: float, changed: set[str] 
     return changed_after(root, test_inputs(root, test_file, changed), when)  # O(B + F*d)
 
 
-def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | None = None) -> tuple[str, int]:  # O(file size + F*(B + d)) total
-    if not path.is_file():  # O(1)
-        return "- no test summary recorded (`run_tests.py --full` runs alongside this review)", 0  # O(1)
-    d = load_summary(path)  # O(file size)
-    if d is None:  # O(1)
-        return "- test summary unreadable", 0  # O(1)
+def _summary_rows(d: dict, root: Path | None, changed: set[str] | None) -> tuple[list[str], int]:  # O(F*(B + d)) total
     failed = d.get("failures") or d.get("failed_tests") or []  # O(1)
     skipped = d.get("skipped_tests") or []  # O(1)
     started = _num(d.get("started"))  # a summary without a start time is never outdated | O(1)
@@ -2460,6 +2535,31 @@ def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | 
     rows += [f"- OUTDATED: {t} ({f} changed after this run; the full suite decides)" for t, f in old[:OUTDATED_LINES]]  # O(min(30, old))
     rows += [f"- FAILING: {t}" for t in cur[:30]]  # O(min(30, cur))
     rows += [f"- SKIPPED: {t}" for t in skipped[:30]]  # O(min(30, skipped))
+    return rows, nfail  # O(1)
+
+
+def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | None = None,  # O(file size + F*(B + d)) total
+                      runs: list[dict] | None = None) -> tuple[str, int]:  # O(1)
+    if not path.is_file():  # O(1)
+        return "- no test summary recorded (`run_tests.py --full` runs alongside this review)", 0  # O(1)
+    d = load_summary(path)  # O(file size)
+    if d is None:  # O(1)
+        return "- test summary unreadable", 0  # O(1)
+    if root is not None:  # O(1)
+        d = norm_summary(d, root)  # O(F*m)
+    if not d.get("error"):  # a summary without `error` reads as before | O(1)
+        rows, nfail = _summary_rows(d, root, changed)  # O(F*(B + d))
+        return "\n".join(rows), nfail  # O(1)
+    err = str(d["error"])[:200]  # O(1)
+    if killed(d):  # O(1)
+        rows, nfail = [f"- killed run, no result: {err}"], 0  # O(1)
+    else:  # O(1)
+        rows, nfail = [f"- run without a result: {err}", f"- FAILING: {err}"], 1  # O(1)
+    best = next((r for r in (runs or []) if isinstance(r, dict) and _has_result(r)), None)  # the first run with a result, in run order | O(S)
+    if best is not None:  # O(1)
+        more, n2 = _summary_rows(best, root, changed)  # O(F*(B + d))
+        rows += ["- newest run with a result:"] + more  # O(F)
+        nfail += n2  # O(1)
     return "\n".join(rows), nfail  # O(1)
 
 
@@ -2468,7 +2568,7 @@ def outdated_incidents(root: Path, entries: list[dict], changed: set[str] | None
     out: list[tuple[dict, str]] = []  # O(1)
     for e in entries:  # O(K) iterations
         epoch = e.get("epoch")  # O(1)
-        if e.get("kind") != "test-failure" or e.get("agent") != "run_tests" or _num(epoch) is None or not e.get("file"):  # O(1)
+        if e.get("kind") != "test-failure" or e.get("agent") != "run_tests" or _num(epoch) is None or e.get("file") in ("", "-"):  # O(1)
             continue  # O(1)
         why = outdated_failure(root, str(e["file"]), float(epoch), changed)  # O(B + F*d)
         if why:  # O(1)
@@ -2625,9 +2725,15 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     wait_for_full(tests, a.wait_timeout)  # O(timeout / 0.5)
     tests = newest_summary_path(tests)  # O(1)
     summary = load_summary(tests)  # O(file size)
-    entries = read_incidents(log)  # O(file size)
+    entries = read_incidents(log, root)  # O(file size)
+    gone_files = [e for e in entries if not on_disk(root, e["file"])]  # incidents on files no longer on disk | O(K)
+    entries = [e for e in entries if on_disk(root, e["file"])]  # O(K)
+    rulings = ledger_rulings(Path(a.ledger) if getattr(a, "ledger", None) else sl / "progress.md")  # O(file size)
+    ruled_out = [e for e in entries if ruled(e, rulings)]  # O(K*R*m)
+    entries = [e for e in entries if not ruled(e, rulings)]  # O(K*R*m)
     n_all = len(entries)  # O(1)
     runs = run_summaries(Path(a.tests) if a.tests else sl / "test-summary.json") or ([summary] if summary else [])  # O(S log S)
+    runs = [norm_summary(r, root) for r in runs]  # O(S*F*m)
     base_ok = False  # O(1)
     if a.base:  # O(1)
         try:  # O(1)
@@ -2653,7 +2759,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
                           f"- {m.msg}", m.file, m.line, "pt_review contract check (tool)", True))  # O(1)
     items.sort(key=lambda i: i.rank)  # O(I log I)
     counts = {s: sum(1 for i in items if i.section == s) for s in ("incidents", "probes", "uncovered", "contract", "claimed")}  # O(5*I)
-    tests_text, nfail = read_test_summary(tests, root, changed)  # O(F*(B + d))
+    tests_text, nfail = read_test_summary(tests, root, changed, runs)  # O(F*(B + d))
     shown_old = tests_text.count("\n- OUTDATED: ") + tests_text.startswith("- OUTDATED: ")  # O(len)
     seen_loc: set[tuple] = set()  # O(1)
     for e, why in gone:  # O(K) iterations
@@ -2751,10 +2857,14 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
             "## 7. Review Focus", focus, "",  # O(1)
             *([render_section(root)] if render_section(root) else []),  # after the Review Focus section | O(n log n)
             "## 8. Source excerpts (changed hunks of the hot-spot files)", excerpts, ""]  # O(1)
+    names = list(dict.fromkeys(e["file"] for e in gone_files))  # O(K)
+    gone_names = ", ".join(names[:5]) + (f", +{len(names) - 5} more" if len(names) > 5 else "")  # O(1)
     sec_titles = {  # O(1)
         "incidents": "## 1. Open incidents (repeated file:line first, then unresolved, then low confidence)"  # O(1)
                      + (f"\ndropped {n_stale} stale test-failure incident(s)" if n_stale else "")  # O(1)
-                     + (f"\nmoved {n_gone} outdated test-failure incident(s) to section 4" if n_gone else ""),  # O(1)
+                     + (f"\nmoved {n_gone} outdated test-failure incident(s) to section 4" if n_gone else "")  # O(1)
+                     + (f"\nleft out {len(gone_files)} incident(s) on files no longer on disk: {gone_names}" if gone_files else "")  # O(1)
+                     + (f"\nleft out {len(ruled_out)} incident(s) a ledger Ruling: names" if ruled_out else ""),  # O(1)
         "probes": "## 2. Probe results: failures still open and unverified categories",  # O(1)
         "claimed": "## 3b. Claimed fixes not on disk (a reviewer logged these fixed, the file is unchanged since base)",  # O(1)
         "contract": ("## 3. Contract check: not run (inline build)" if inline else  # O(1)
@@ -2823,6 +2933,7 @@ def build_parser() -> argparse.ArgumentParser:  # O(1) total
         elif name == "packet":  # O(1)
             sp.add_argument("--log")  # O(1)
             sp.add_argument("--probes")  # O(1)
+            sp.add_argument("--ledger", help="plan ledger whose `- Ruling:` lines leave incidents out (default .superlite/progress.md)")  # O(1)
             sp.add_argument("--out")  # O(1)
             sp.add_argument("--max-tokens", type=_positive_int, default=None,  # O(1)
                             help="packet size cap; default 20000, grown to fit every changed file's hunks up to 60000")  # O(1)

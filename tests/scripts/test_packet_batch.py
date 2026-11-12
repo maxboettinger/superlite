@@ -254,6 +254,11 @@ def summ(path: Path, files: dict, failures=(), mtime: float | None = None):
 
 
 def log(proj: Path, entries):
+    for e in entries:
+        f = e.get("file", "")
+        if f and f != "-" and not (proj / f).exists():
+            (proj / f).parent.mkdir(parents=True, exist_ok=True)
+            (proj / f).write_text("# placeholder\n", encoding="utf-8")
     (proj / ".superlite" / "incidents.jsonl").write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
 
 
