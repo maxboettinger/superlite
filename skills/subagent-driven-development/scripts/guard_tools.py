@@ -135,8 +135,20 @@ _READ_ONLY = frozenset({"grep", "egrep", "fgrep", "rg", "echo", "printf", "test"
                         "tail", "wc", "ls", "pwd", "date"})  # commands whose words never run | O(1)
 
 
+_LIVE_DEPTH = 8  # nesting levels re-lexed by _live_text; deeper bodies count as raw text (the judge's MAX_DEPTH) | O(1)
+
+
+def _live_text(text: str) -> str:  # O(_LIVE_DEPTH * len(text)) | the text of `text` that can run; unreadable: the raw text
+    try:  # O(1)
+        return _live(text, 0)  # O(_LIVE_DEPTH * len(text))
+    except (RecursionError, Exception):  # a lexer error or a nest too deep to walk: the conservative reading, all of it  # O(1)
+        return text  # O(1)
+
+
 @functools.lru_cache(maxsize=64)  # O(1)
-def _live_text(text: str) -> str:  # O(len(text)) | the text of `text` that can run: a read-only command's words dropped
+def _live(text: str, depth: int) -> str:  # O(len(text)) per level | `text` without a read-only command's words
+    if depth >= _LIVE_DEPTH:  # too deep to read: the raw text, the conservative reading  # O(1)
+        return text  # O(1)
     out: list[str] = []  # O(1)
     for sg in guard_lex.split(text):  # O(segments)
         k = 0  # O(1)
@@ -149,9 +161,9 @@ def _live_text(text: str) -> str:  # O(len(text)) | the text of `text` that can 
             out.extend(sg.words[:k])  # O(words)
         out.extend(sg.heredocs)  # O(1)
         out.extend(r.target for r in sg.redirects)  # O(redirects)
-        out.extend(_live_text(b) for b in sg.bodies)  # O(bodies)
+        out.extend(_live(b, depth + 1) for b in sg.bodies)  # O(bodies)
         if sg.subshell:  # O(1)
-            out.append(_live_text(sg.subshell))  # O(1)
+            out.append(_live(sg.subshell, depth + 1))  # O(1)
     return "\n".join(out)  # O(len(text))
 
 

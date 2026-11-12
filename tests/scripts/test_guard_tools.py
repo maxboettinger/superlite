@@ -659,3 +659,16 @@ def test_rg_pre_runs_its_command_so_git_config_stays_live():
               "rg --hostname-bin 'git config alias.lfs x' foo; git lfs env"):
         assert _gt665.targets(["git", "lfs", "env"], text=t) == ["?"], t
     assert _gt665.targets(["git", "lfs", "env"], text="rg -e 'git config x' foo; git lfs env") == []
+
+
+def test_deeply_nested_substitutions_are_capped_and_stay_fast():
+    import time
+
+    deep = "git lfs env; " + "$(" * 400 + "git config alias.lfs x" + ")" * 400
+    t0 = time.monotonic()
+    assert targets(["git", "lfs", "env"], text=deep) == ["?"]  # the raw body past the cap still names git config
+    assert time.monotonic() - t0 < 1.5
+    calm = "git lfs env; " + "$(" * 400 + "echo " + ")" * 400
+    t0 = time.monotonic()
+    assert isinstance(targets(["git", "lfs", "env"], text=calm), list)  # no RecursionError
+    assert time.monotonic() - t0 < 1.5
