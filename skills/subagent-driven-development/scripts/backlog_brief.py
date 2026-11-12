@@ -152,8 +152,12 @@ def lead_brief(batch, ctx):  # O(i + f + a)
     out.append(f"First: `{sl} orchestrator set ai --plan .superlite`, then `{sl} fleet on --plan .superlite`.")  # O(1)
     out.append("Build: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, "
                "superlite:subagent-driven-development with fleet on, the final review (UI screenshots go in .superlite/render/, its packet lists them), the test layers. "
-               "Build inside your worktree: never pass -derivedDataPath outside it (your session scratchpad included); "
-               "sl run_tests builds each task tree in <tree>/.build/DerivedData and backlog cleanup removes scratchpad build folders when the worktree goes.")  # O(1)
+               "Builds: the verdict is `sl run_tests` (the project's test command; a project with `.maxapp` runs `maxapp test`, "
+               "which a build pool may place on another Mac, and a full run whose tree a green maxapp test stamp covers returns that "
+               "result without a run); task trees build in <tree>/.build/DerivedData and any build of your own goes under .build/ of the "
+               "worktree, never -derivedDataPath outside the worktree (your session scratchpad included; backlog cleanup removes "
+               "scratchpad build folders when the worktree goes); a product, simulator or device build stays on this machine and runs "
+               "only when an issue's acceptance asks for a running-app check; copy this sentence into every worker brief.")  # O(1)
     out.append(f"Never end your turn while your workers run: wait with `{sl} fleet wait --timeout 540000 --plan .superlite` "
                "in the foreground, never as a background command: under memory pressure Claude Code stops an idle session's "
                "background commands, and a restarted wait still reports every worker that finished meanwhile.")  # O(1)
@@ -176,6 +180,8 @@ def lead_brief(batch, ctx):  # O(i + f + a)
                    "then bump, then merge (backlog.md). Run each ship step as one bare command that starts with "
                    f"`{sl} backlog ship` or `maxapp ship`: no `cd` (you start in your worktree), no pipe, no `echo`, no `&&` chain; "
                    "the allow rules match nothing else. "
+                   "After `lock`, rerun the full suite only when it prints `LAYERS:` or `TREE: changed ... run the full suite`; "
+                   "`TREE: unchanged` or a not-code-only change ships the tested tree. "
                    + NOTES_RULE + prbody)  # O(1)
     else:  # O(1)
         out.append("Ship: NOT approved. Do not rebase, bump or ship; build and review, write .superlite/notes.md, "

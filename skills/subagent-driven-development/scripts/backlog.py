@@ -898,11 +898,30 @@ def refresh_open(root: Path) -> dict:
     return changed  # O(1)
 
 
+def machine_line(root) -> str:
+    try:  # O(1)
+        text = f"machine: {shutil.disk_usage(root).free / 1024 ** 3:.1f} GB free disk"  # O(1)
+    except OSError:  # O(1)
+        text = "machine: disk unknown"  # O(1)
+    if not shutil.which("maxapp-slot"):  # O(1)
+        return text  # O(1)
+    try:  # O(1)
+        r = subprocess.run(["maxapp-slot", "--busy"], capture_output=True, text=True, timeout=5)  # O(1)
+        busy, total = r.stdout.split()  # O(1)
+        if r.returncode != 0 or int(busy) < 0 or int(total) < 1:  # O(1)
+            return text  # O(1)
+        return f"{text}; build slots {int(busy)}/{int(total)} busy (maxapp-slot)"  # O(1)
+    except (OSError, ValueError, subprocess.SubprocessError):  # O(1)
+        return text  # O(1)
+
+
 def cmd_status(a) -> int:
     import backlog_state as bs  # O(1)
     refresh_open(_root())  # O(b * network)
     d = bs.load(bs.path(_root()))  # O(size)
     lines = bs.status_lines(d, all_=getattr(a, "all", False))  # O(b)
+    if any(b["state"] in ("planned", "running", "needs_decision") for b in d["batches"]):  # O(b) machine line only while leads run or start, before any next: line
+        lines.append(machine_line(_root()))  # O(1)
     if all(b["state"] == "shipped" for b in d["batches"]):  # O(b) no batch yet, or every batch shipped (#369)
         lines.append("next: sl backlog plan")  # O(1)
     nxt = parked_next(d)  # O(b)

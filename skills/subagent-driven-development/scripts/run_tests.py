@@ -62,6 +62,8 @@ A `--full` run holds a machine-wide lock per toolchain (`<superlite home>/locks/
 A run in an isolated tree builds there: an `xcodebuild` word in the command (not `-list`, not one that already has `-derivedDataPath`) gets `-derivedDataPath <tree>/.build/DerivedData`, so the build output (module cache included) goes with the tree (#574); the tree is marked busy while the run lasts.
 Before each run (the run process, not the `--background` parent) the disk is checked (`trees.disk_gate`): below the floor the run stops (exit 2, red summary `disk: ...`, no tree made), below the warn level it prints a `disk: WARNING` line. Each run also removes the trees nothing needs (committed tasks, stopped workers' trees; never its own or a busy one) and orphaned DerivedData of removed trees. An `ENOSPC` anywhere ends the run with one `run_tests: disk full (ENOSPC): ...` line, exit 2, no traceback.
 A tree run exports `SUPERLITE_DERIVED_DATA_PATH=<tree>/.build/DerivedData` to the test command and its setup (a test-cmd.json `env` entry of that name wins), so a project script can pass it to xcodebuild (#614).
+A full run (no --task, no --destination, no Tests cmd=) of a `maxapp test` or `maxapp test --ios` command whose tree a green `maxapp test` stamp covers (suite_stamp.green_base, also when only not_code paths changed since) returns that result without a run: one stderr line names the commit, tree, test count and changed paths, the summary carries a `stamp` key (#639). A maxapp test, build or smoke command takes the `xcode` full-suite lock, and a maxapp command gets no -derivedDataPath and no warning for it, because maxapp builds in its own pool (#627).
+
 A Swift project with an Xcode project whose command has no xcodebuild word to rewrite and names no script reading that variable prints one `run_tests: WARNING` line per command (remembered in `.superlite/derived-data-warned.json`) (#614).
 When the disk is below the warn level the run also removes module cache entries (`ModuleCache.noindex` under the DerivedData home) untouched for 24 h and prints `module cache: removed N entries` (#614).
 Stdlib only.
@@ -100,6 +102,7 @@ import _pyrun as pyrun  # noqa: E402  # O(1) module load
 import testcmd  # noqa: E402  # O(1) module load
 import full_queue  # noqa: E402  # O(1) module load
 import full_gate  # noqa: E402  # O(1) module load
+import suite_stamp  # noqa: E402  # O(1) module load
 import failure_sites  # noqa: E402  # O(1) module load
 import gui_session  # noqa: E402  # O(1) module load
 import commit_task as ct  # noqa: E402  # O(1) module load
@@ -120,6 +123,7 @@ DEFAULT_LOCK_WAIT = 3600.0  # O(1) seconds a full run waits for the lock; 0 = no
 CURRENT_TASK = None  # --task of this run; write_summary records it | O(1)
 WRITTEN = set()  # resolved summary paths this process wrote; main clears it | O(1)
 XCODE_OUT = re.compile(r"^\W*✘ Test |: error: -\[|^Test case '.*' failed on |\*\* TEST (?:FAILED|SUCCEEDED) \*\*", re.M)  # xcodebuild test output | O(1)
+STAMP = None  # the stamp a full run was answered from; write_summary records it, main clears it | O(1)
 WARNING = ""  # the platform warning of this full run; write_summary records it, main clears it | O(1)
 OUTPUT = ""  # the full-output log of this run; write_summary records it, main clears it | O(1)
 
@@ -144,7 +148,7 @@ def lock_toolchain(spec):  # O(len command) the toolchain a full run's lock is n
     if spec.get("python"):  # O(1)
         return "python"  # O(1)
     command = str(spec.get("command") or "")  # O(1)
-    if "xcodebuild" in command:  # O(len)
+    if "xcodebuild" in command or re.search(r"(?:^|[\s/])maxapp\s+(?:test|build|smoke)(?=\s|$)", command):  # a maxapp test, build or smoke runs xcodebuild in the pool | O(len)
         return "xcode"  # O(len)
     language = re.sub(r"[^a-z0-9]+", "-", str(spec.get("language") or "").lower()).strip("-")  # O(len)
     return language or "shell"  # O(1)
@@ -817,6 +821,8 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
         data["output"] = OUTPUT  # O(1)
     if WARNING:  # the platforms a full run did not build (#598) | O(1)
         data["warning"] = WARNING  # O(1)
+    if STAMP:  # the maxapp test stamp that answered this full run (#639) | O(1)
+        data["stamp"] = STAMP  # O(1)
     if started is not None:  # the packet closes only incidents logged before this run started (#101) | O(1)
         data["started"] = started  # O(1)
     p = Path(path)  # O(1)
@@ -1207,7 +1213,7 @@ def has_xcode_project(root):  # an .xcodeproj or .xcworkspace in root or one or 
 
 
 def wrapped_build_warning(command, tree, root, language):  # the warning line for a wrapped xcodebuild the tree path cannot reach, else None | O(len + files)
-    if language != "swift" or not has_xcode_project(root) or "SUPERLITE_DERIVED_DATA_PATH" in command:  # O(entries)
+    if language != "swift" or not has_xcode_project(root) or "SUPERLITE_DERIVED_DATA_PATH" in command or suite_stamp.maxapp_platforms(command) is not None:  # a maxapp command builds in the pool, with no -derivedDataPath (#627)  # O(entries)
         return None  # O(1)
     try:  # O(1)
         words = shlex.split(command)  # O(len)
@@ -1240,6 +1246,23 @@ def warn_once(command, line):  # print the line unless the command was warned ab
         path.write_text(json.dumps(seen + [command]), encoding="utf-8")  # O(warned)
     except OSError:  # O(1)
         pass  # O(1)
+
+
+def stamp_hit(a, spec, label):  # O(d + n) the exit code of a full run a green `maxapp test` stamp covers (no run), else None
+    global STAMP  # O(1)
+    if label != "full" or spec.get("python"):  # O(1)
+        return None  # O(1)
+    base = suite_stamp.green_base(Path.cwd(), str(spec.get("command") or ""), list(spec.get("not_code") or []))  # O(d + n)
+    if base is None:  # O(1)
+        return None  # O(1)
+    shown = base["changed"][:5]  # O(1)
+    more = f" (+{len(base['changed']) - 5} more)" if len(base["changed"]) > 5 else ""  # O(1)
+    changed = f"; changed since, not code: {', '.join(shown)}{more}" if shown else ""  # O(1)
+    print(f"run_tests: full suite green by the maxapp test stamp for {base['commit'][:12]} (tree {base['tree'][:12]}, "
+          f"{base['tests']} tests on {', '.join(base['platforms'])}){changed}; no run", file=sys.stderr)  # O(1)
+    STAMP = {k: base[k] for k in ("commit", "tree", "platforms", "changed")}  # O(1)
+    counts = {"passed": base["tests"], "failed": 0, "skipped": 0, "skipped_tests": []}  # O(1)
+    return finish_run(a, label, counts, [], {}, 0.0, 0)  # O(k + F + B)
 
 
 def free_disk(a, keep):  # O(T) + drops: reap, then gate; a removal or a low level sweeps DerivedData and gates again. The refusal line, else None
@@ -1362,8 +1385,9 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         print("run_tests: pass-through args (after --) need a test run", file=sys.stderr)  # O(1)
         return 2  # O(1)
     WRITTEN.clear()  # O(1)
-    global CURRENT_TASK, OUTPUT, WARNING  # O(1)
+    global CURRENT_TASK, OUTPUT, WARNING, STAMP  # O(1)
     OUTPUT = ""  # O(1)
+    STAMP = None  # O(1)
     WARNING = ""  # O(1)
     CURRENT_TASK = a.task or None  # O(1)
     a.limit = a.limit if a.limit > 0 else None  # <= 0 means no limit | O(1)
@@ -1949,6 +1973,10 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd(), spec["python"])  # O(p)
         if gone:  # O(1)
             return usage_error(a, label, gone)  # O(summary size)
+    if label == "full" and not a.task and not tspec and not getattr(a, "destination", None) and not spec["python"]:  # a green maxapp test stamp answers a full run (#639) | O(d + n)
+        hit = stamp_hit(a, spec, label)  # O(d + n)
+        if hit is not None:  # O(1)
+            return hit  # O(1)
     refused = free_disk(a, {k for k in (a.task, worker_tree_name()) if k})  # before any tree or build | O(T + c)
     if refused:  # O(1)
         return usage_error(a, label, refused)  # O(summary size)

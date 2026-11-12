@@ -5,14 +5,15 @@
     testcmd.py --propose [--root .]              print the proposed project test command, its target file and whether it exists
     testcmd.py --write [--test CMD] [--test-file T] [--language L] [--root .]   write the proposal to .superlite/test-cmd.json
 
-Order: (a) `.superlite/test-cmd.json` {"language","test","test_file","junit","setup","related"} (JSON; `test_file` is a template
+Order: (a0) a `.maxapp` file (`package` and `package_scheme` keys, `maxapp` on PATH) resolves to `maxapp test` below (a) and (a2), above (a3); (a) `.superlite/test-cmd.json` {"language","test","test_file","junit","setup","related"} (JSON; `test_file` is a template
 with {files}; `{junit}` in a command is replaced by the path run_tests wants the JUnit XML at; a literal `junit` path is read
 after the run; `related` is a template with `{src}` for source->test mapping); (a2) the main checkout's file when root is a linked worktree; (a3) the user-level default `~/.config/superlite/test-cmd.json`
 (override: SUPERLITE_USER_TEST_CMD), a JSON object keyed by language whose entry has the same fields as (a), read for the detected language
 when the project has no file of its own; (b) detection from the project's own marker files: package.json scripts.test (npm test; the JUnit flag when
 vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo.toml, Package.swift, *.sln / *.csproj, then Python
 (pyproject.toml, pytest.ini, setup.cfg, tox.ini, conftest.py, or test_*.py files); (c) otherwise None.
-`{only_testing}` expands to one shell-quoted -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing); the target comes from Xcode target membership and Package.swift test targets, else the folder name; a path in no test target runs the unfiltered `test` command.
+`not_code` in (a) is a list of globs of paths that are not code (read by not_code_globs, returned as spec["not_code"]).
+`{only_testing}` expands (to `--only <Target>/<Suite>` pairs in a `maxapp test` command) to one shell-quoted -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing); the target comes from Xcode target membership and Package.swift test targets, else the folder name; a path in no test target runs the unfiltered `test` command.
 Library: resolve, propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit). Stdlib only.
 """
 # Complexity notation:
@@ -24,6 +25,7 @@ import os  # O(1)
 import posixpath  # O(1)
 import re  # O(1)
 import shlex  # O(1)
+import shutil  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
 from pathlib import Path  # O(1)
@@ -33,6 +35,8 @@ SEEDED = ".superlite/test-cmd.seeded"  # the bytes the lead start copied into a 
 SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "target", "bin", "obj", "dist", "build", "__pycache__", ".superlite"}  # O(1)
 WALK_LIMIT = 400  # O(1)
 ISOLATE_LANGS = {"swift", "go", "rust", "csharp"}  # compiled stacks: a sibling's half-edit breaks the build | O(1)
+MAXAPP_FILE = ".maxapp"  # key=value lines declaring a Swift project the build pool serves (#627) | O(1)
+MAXAPP_TEST = re.compile(r"(?:^|[\s/])maxapp\s+test(?=\s|$)")  # O(1)
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")  # O(1)
 
 
@@ -154,6 +158,9 @@ def config_source(root: Path):  # -> (config | None, source, origin): project fi
     cfg = read_config(main) if main else None  # O(file)
     if cfg is not None:  # O(1)
         return cfg, "test-cmd.json", str(main / CONFIG)  # O(1)
+    mx = detect_maxapp(root)  # a .maxapp is the project's own declaration, ahead of the user entry | O(file)
+    if mx is not None:  # O(1)
+        return mx, "markers", MAXAPP_FILE  # O(1)
     det = detect(root)  # O(m + f)
     lang = det.get("language") if det is not None else None  # O(1)
     if lang is None and root.is_dir() and any(q.name.endswith((".xcodeproj", ".xcworkspace")) for q in root.iterdir()):  # Xcode: no detected command, still swift | O(entries)
@@ -798,6 +805,9 @@ def propose(root: Path):  # {"config", "from"} for the project's own test comman
         return None  # O(1)
     det = detect(root)  # O(m + f)
     lang = _language_for(root, det)  # O(entries)
+    mx = detect_maxapp(root)  # O(file)
+    if mx is not None:  # O(1)
+        return {"config": {k: v for k, v in mx.items() if v != ""}, "from": MAXAPP_FILE}  # O(1)
     found = _find_script(root)  # O(entries)
     if found is not None:  # O(1)
         rel, path = found  # O(1)
@@ -862,6 +872,42 @@ def _has_pytest_files(root: Path) -> bool:  # O(f)
     return False  # O(1)
 
 
+def read_maxapp(root: Path) -> dict:  # the key=value pairs of .maxapp; # comments and blank lines skipped, never sourced | O(file)
+    out: dict[str, str] = {}  # O(1)
+    try:  # O(1)
+        text = (Path(root) / MAXAPP_FILE).read_text(encoding="utf-8", errors="replace")  # O(file)
+    except OSError:  # O(1)
+        return out  # O(1)
+    for line in text.splitlines():  # O(lines)
+        line = line.strip()  # O(len)
+        if not line or line.startswith("#") or "=" not in line:  # O(1)
+            continue  # O(1)
+        k, _, v = line.partition("=")  # O(len)
+        out[k.strip()] = v.strip().strip("\"'")  # O(len)
+    return out  # O(lines)
+
+
+def detect_maxapp(root: Path):  # `maxapp test` when .maxapp holds package and package_scheme and maxapp is on PATH, else None | O(file)
+    kv = read_maxapp(root)  # O(file)
+    if not (kv.get("package") and kv.get("package_scheme")) or shutil.which("maxapp") is None:  # O(PATH)
+        return None  # O(1)
+    return {"language": "swift", "test": "maxapp test", "test_file": "maxapp test {only_testing}", "junit": "", "setup": ""}  # O(1)
+
+
+def is_maxapp_command(command: str) -> bool:  # a segment starting with the maxapp word followed by test | O(len)
+    return bool(MAXAPP_TEST.search(command or ""))  # O(len)
+
+
+def not_code_globs(cfg) -> list[str]:  # the config's "not_code" globs; anything but a list of strings is ignored with a note | O(g)
+    v = cfg.get("not_code") if isinstance(cfg, dict) else None  # O(1)
+    if v is None:  # O(1)
+        return []  # O(1)
+    if isinstance(v, list) and all(isinstance(g, str) for g in v):  # O(g)
+        return list(v)  # O(g)
+    print('test-cmd.json "not_code" must be a list of glob strings; ignored', file=sys.stderr)  # O(1)
+    return []  # O(1)
+
+
 def detect(root: Path):  # O(m + f)
     """{"language","test","test_file","junit","setup"} from marker files, or None. `python` returns the pytest marker."""
     pkg = _pkg(root)  # O(file)
@@ -881,6 +927,9 @@ def detect(root: Path):  # O(m + f)
         return {"language": "go", "test": "go test ./...", "test_file": "go test {files}", "junit": "", "setup": ""}  # O(1)
     if (root / "Cargo.toml").exists():  # O(1)
         return {"language": "rust", "test": "cargo test", "test_file": "cargo test {files}", "junit": "", "setup": ""}  # O(1)
+    mx = detect_maxapp(root)  # O(file)
+    if mx is not None:  # O(1)
+        return mx  # O(1)
     if (root / "Package.swift").exists():  # O(1)
         return {"language": "swift", "test": "swift test --xunit-output {junit}", "test_file": "swift test --xunit-output {junit} --filter {names}", "junit": "{junit}", "setup": ""}  # O(1)
     names = [p.name for p in root.iterdir()] if root.is_dir() else []  # O(entries)
@@ -1187,7 +1236,7 @@ def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
     lang = cfg.get("language") or "unknown"  # O(1)
     iso = cfg["isolate"] if isinstance(cfg.get("isolate"), bool) else lang in ISOLATE_LANGS  # explicit config wins | O(1)
     if cfg.get("test") is None and cfg.get("language") == "python":  # O(1)
-        return {"language": "python", "python": True, "command": None, "junit": "", "env": {}, "setup": "", "source": src, "origin": origin, "isolate": iso, "lock": lock_enabled(cfg), "destinations": destinations(cfg)}  # O(1)
+        return {"language": "python", "python": True, "command": None, "junit": "", "env": {}, "setup": "", "source": src, "origin": origin, "isolate": iso, "lock": lock_enabled(cfg), "destinations": destinations(cfg), "not_code": not_code_globs(cfg)}  # O(1)
     files = " ".join(f'"{p}"' if " " in p else p for p in paths)  # O(p)
     template = cfg.get("test_file") or cfg["test"]  # O(1)
     command = template.replace("{files}", files) if paths else cfg["test"]  # O(1)
@@ -1214,9 +1263,11 @@ def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
         if ids is None:  # a path outside every test target: the unfiltered test command | O(1)
             command = cfg["test"].replace("{names}", "").replace("{only_testing}", "")  # O(len)
         else:  # O(1)
+            if is_maxapp_command(command):  # maxapp takes --only Target/Suite pairs | O(p)
+                ids = " ".join("--only " + shlex.quote(t.split(":", 1)[1]) for t in shlex.split(ids))  # O(p)
             command = command.replace("{only_testing}", ids)  # O(p)
     return {"language": lang, "isolate": iso, "python": False, "command": command, "junit": cfg.get("junit") or "",  # O(1)
-            "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src, "origin": origin, "lock": lock_enabled(cfg), "destinations": destinations(cfg)}  # O(1)
+            "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src, "origin": origin, "lock": lock_enabled(cfg), "destinations": destinations(cfg), "not_code": not_code_globs(cfg)}  # O(1)
 
 
 NAME_PATTERNS = [r"^--- FAIL: (\S+)", r"^test (\S+) \.\.\. FAILED", r"^\s*(?:FAIL|✗|×|✕)\s+(.+?)\s*$", r"^\s*Failed\s+(\S+)",  # O(1)
