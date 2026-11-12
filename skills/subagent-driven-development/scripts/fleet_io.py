@@ -14,6 +14,9 @@ A batch's task message has one Verify Tn line per member, each with its own --ta
 report once (`claim`): a worker another wait collected prints `Wn T3 already collected: <json>`; `BUSY`/`TIMEOUT` end with
 `(reported: Wk <json>)` naming this call's finishers.
 
+`send`/`keys` to a stopped or dead worker exit 2 naming a fresh `sl fleet spawn`; an `agent_not_found` reply marks the worker dead; `send --brief` remembers the brief
+for the respawn. `wait` ends a busy worker whose agent herdr no longer lists (probed every 10 s) as `Wn Tn DEAD (its agent is gone; no report)`.
+
 `wait` prints one line per finished worker (`W1 T3 DONE findings=0 <report json>`; a layer worker: `W3 layer-headless
 GREEN exit=0 <log>` plus its last log line), `BLOCKED-UI` plus the screen for a blocked one, and `TIMEOUT W2 ...` for the
 rest. A stop record ends the wait in any Herdr state when it holds a status; one without a status on a done or idle
@@ -56,6 +59,7 @@ STALLED = "agent_prompt_stalled"  # the one Herdr prompt error a second send can
 STATUS_LINE = "Status: DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED"  # O(1)
 FINAL = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "APPROVED", "CHANGES_REQUESTED")  # a one-turn worker with one of these is stopped | O(1)
 SETTLE_MS = 10000  # a stop record must appear within this long after the state change | O(1)
+PROBE_MS = 10000  # an unlisted busy worker is probed for existence at most this often | O(1)
 READ_MS = 10000  # a transcript that lags its stop record is re-read this long before the report is UNKNOWN | O(1)
 ASK = ("Your last turn ended without your report. If your work is not done, finish it first: run any wait in the foreground and do not end your turn to wait. "  # O(1)
        "Then end your reply with your report.")  # O(1)
@@ -489,13 +493,13 @@ def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
     return label  # O(1)
 
 
-def _busy(sd, wid, label, sent):  # worker busy on LABEL since SENT, in the pool too (a worker the pool lacks is fine) | O(w + pool bytes)
+def _busy(sd, wid, label, sent, brief=None):  # worker busy on LABEL since SENT, in the pool too (a worker the pool lacks is fine); BRIEF is remembered for a respawn | O(w + pool bytes)
     pp = Path(sd) / "pool.json"  # O(1)
     with fs.locked(sd):  # serialise the fleet.json and pool.json read-change-save | O(1) plus wait
         data = fs.load(sd)  # O(w)
         if wid not in data["workers"]:  # O(1)
             raise KeyError(wid)  # O(1)
-        data["workers"][wid].update({"state": "busy", "task": label, "sent": sent})  # O(1)
+        data["workers"][wid].update({"state": "busy", "task": label, "sent": sent, **({"brief": brief} if brief else {})})  # O(1)
         fs.save(sd, data)  # O(w)
         if pp.exists():  # O(1)
             pdata = pool.load(pp)  # O(pool bytes)
@@ -520,7 +524,7 @@ def send_brief(sd, wid, brief, label="", full=False):  # O(w + len brief path + 
     sent = now_ms()  # O(1)
     name = fs.name_of(sd, wid, w)  # O(w)
     _prompt(name, msg)  # O(len msg)
-    _busy(sd, wid, label, sent)  # O(w + pool bytes)
+    _busy(sd, wid, label, sent, str(path))  # O(w + pool bytes)
     pane_label(sd, wid, pane_title(sd, wid, label))  # O(w)
     print(f"{wid} {label} sent")  # O(1)
     return label  # O(1)
@@ -669,6 +673,27 @@ def _take(sd, wid, w):  # claim WID's current send before its report is written;
     return claim(sd, wid, int(w.get("sent") or 0)) or not _collected(sd, wid, {**w, "state": "busy", "collected": int(w.get("sent") or 0)})  # O(w)
 
 
+def _fleet():  # the fleet module, loaded on demand | O(1)
+    return importlib.import_module("fleet")  # O(1)
+
+
+def _refusal(sd, wid):  # why a send or keys to WID is refused (a stopped or dead worker), else None; an unknown worker is None | O(w)
+    w = fs.load(Path(sd))["workers"].get(wid)  # O(w)
+    if w is None or w.get("state") != "stopped":  # O(1)
+        return None  # O(1)
+    last = w.get("last_task") or w.get("task") or "none"  # O(1)
+    why = f"dead (its agent is gone; last task {last})" if w.get("dead") else f"stopped ({w.get('role') or 'implementer'}, last task {last})"  # O(1)
+    return f"error: {wid} is {why}; start a fresh one: {_fleet().respawn_hint(sd, wid)}"  # O(w)
+
+
+def _dead(sd, wid, w):  # end a worker whose agent is gone: stopped, dead, off the pool; the result and its line | O(w)
+    task = w.get("task") or wid  # O(1)
+    fl = _fleet()  # O(1)
+    fl.mark_dead(sd, wid)  # O(w)
+    print(f"{wid} {task} DEAD (its agent is gone; no report); start a fresh one: {fl.respawn_hint(sd, wid)}")  # O(w)
+    return {"id": wid, "task": task, "status": "DEAD", "report": "", "source": "herdr", "findings": 0}  # O(1)
+
+
 def _reported(results):  # the suffix naming the finishers of this call | O(r)
     return " (reported: " + ", ".join(f"{r['id']} {r['report']}" for r in results) + ")" if results else ""  # O(r)
 
@@ -681,12 +706,14 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
     changed = {}  # wid -> ms the state first read done or idle | O(1)
     seen = {}  # wid -> {t: stop t, first: ms first seen, text, lag}; a flushed transcript is read once per stop record, a lagging one each poll | O(1)
     results = []  # O(1)
+    probed = {}  # wid -> ms its agent was last probed for existence | O(1)
     start = clock()  # O(1)
     while pending:  # O(timeout/poll) iterations
+        listed = True  # O(1)
         try:  # O(1)
             states = hc.agent_states()  # O(w)
         except hc.HerdrError:  # O(1)
-            states = {}  # O(1)
+            states, listed = {}, False  # O(1)
         now = clock()  # O(1)
         stops = _stops(sd)  # one metrics read per poll | O(m)
         for wid in list(pending):  # O(w) iterations
@@ -758,6 +785,12 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
                     pending.remove(wid)  # O(w)
             else:  # O(1)
                 changed.pop(wid, None)  # O(1)
+                name = fs.name_of(sd, wid, w)  # O(1)
+                if listed and rec is None and st is None and now - probed.get(wid, -PROBE_MS) >= PROBE_MS:  # listed workers exist; probe an unlisted one every PROBE_MS | O(1)
+                    probed[wid] = now  # O(1)
+                    if _fleet().agent_gone(name, hc):  # only herdr's agent_not_found counts | O(1)
+                        results.append(_dead(sd, wid, w))  # O(w)
+                        pending.remove(wid)  # O(w)
         if not pending:  # O(1)
             break  # O(1)
         if any_ and results:  # the first finished worker ends the round; the rest stay busy | O(1)
@@ -820,6 +853,9 @@ def main(argv=None):  # O(wait)
         if a.cmd == "send" and a.full and a.brief is None:  # O(1)
             print("error: --full needs --brief", file=sys.stderr)  # O(1)
             return 2  # O(1)
+        if a.cmd in ("send", "keys") and (why := _refusal(sd, a.wid)):  # before any herdr call | O(w)
+            print(why, file=sys.stderr)  # O(1)
+            return 2  # O(1)
         if a.cmd == "keys":  # O(1)
             hc.send_keys(fs.worker_name(sd, a.wid), a.keys)  # O(w + len keys)
             print(f"{a.wid} keys sent")  # O(1)
@@ -845,6 +881,10 @@ def main(argv=None):  # O(wait)
         print(f"error: unknown worker or task {e}", file=sys.stderr)  # O(1)
         return 2  # O(1)
     except hc.HerdrError as e:  # O(1)
+        if a.cmd in ("send", "keys") and getattr(e, "code", "") == "agent_not_found":  # the agent is gone: mark it, say so | O(w)
+            _fleet().mark_dead(sd, a.wid)  # O(w)
+            print(_refusal(sd, a.wid), file=sys.stderr)  # O(w)
+            return 2  # O(1)
         print(f"error: {e}", file=sys.stderr)  # O(1)
         return 1 if a.cmd != "wait" else 0  # O(1)
     return 0  # O(1)
