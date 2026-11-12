@@ -28,7 +28,7 @@ def _plain(n: object) -> str:
     return str(n) if isinstance(n, int) else _clean(n)  # O(1)
 
 
-def merged_refs(lines: list, jira: bool) -> dict:
+def merged_refs(lines: list[str], jira: bool) -> dict:
     """{issue: "PR #N" | "commit <sha>"} from `<sha>\\t<subject>` lines; the first subject naming an issue wins."""
     out: dict = {}
     for line in lines:  # O(lines * len)
@@ -46,7 +46,7 @@ def merged_refs(lines: list, jira: bool) -> dict:
     return out
 
 
-def split_shipped(trusted: list, batches: list, merged: dict, pin: list) -> tuple:
+def split_shipped(trusted: list[dict], batches: list[dict], merged: dict, pin: list) -> tuple[list[dict], list[dict], list[str]]:
     """(kept, dropped, lines): trusted issues that are not shipped, the merged-subject ones dropped, and one line per decision."""
     shipped: dict = {}
     for b in batches:  # O(batches * issues)
@@ -72,7 +72,7 @@ def split_shipped(trusted: list, batches: list, merged: dict, pin: list) -> tupl
     return kept, dropped, lines
 
 
-def named_files(body: str, tracked: list) -> list:
+def named_files(body: str, tracked: list[str]) -> list[str]:
     """Tracked files an issue body names by path or unique basename; sorted, unique."""
     by_base: dict = defaultdict(list)
     for t in tracked:  # O(tracked)
@@ -99,7 +99,7 @@ def _vt(v: str) -> tuple:
     return tuple(p + [0] * (3 - len(p)))  # O(1)
 
 
-def blocked_lines(prop: dict, pin: list, version: object) -> list:
+def blocked_lines(prop: dict, pin: list, version: str | None) -> list[str]:
     """One check line per pinned issue left out as blocked without naming a missing thing, or naming a version already reached."""
     reasons = bc.left_out_reasons(prop, set(pin))
     version = _clean(version) if version else None  # O(len)
@@ -121,7 +121,7 @@ def blocked_lines(prop: dict, pin: list, version: object) -> list:
     return out
 
 
-def pinned_rule(head: object, version: object) -> str:
+def pinned_rule(head: str | None, version: str | None) -> str:
     head, version = (_clean(head) if head else None), (_clean(version) if version else None)  # O(len)
     at = ", ".join(x for x in (f"at {head}" if head else "", f"version {version}" if version else "") if x)  # O(1)
     where = f" ({at})" if at else ""  # O(1)
@@ -130,7 +130,7 @@ def pinned_rule(head: object, version: object) -> str:
             f"work already on the default branch{where} is not missing.")  # O(1)
 
 
-def insert_before_rules(brief: str, lines: list) -> str:
+def insert_before_rules(brief: str, lines: list[str]) -> str:
     """Put lines before the first `Rules: ` line, else at the end before the final newline."""
     nl = brief.endswith("\n")
     parts = brief.split("\n")[:-1] if nl else brief.split("\n")  # O(len)

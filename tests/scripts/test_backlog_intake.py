@@ -133,3 +133,17 @@ def test_version_with_suffix_or_control_chars():
     got = bi.blocked_lines(prop, [1], "1.5.125\x1b[31m")
     assert got and "\x1b" not in got[0]
     assert "\x1b" not in bi.pinned_rule("ab\x1bcd", "1.5\x1b")
+
+
+def test_signatures_match_plan_produces():
+    import inspect
+    want = {
+        "merged_refs": "(lines: list[str], jira: bool) -> dict",
+        "split_shipped": "(trusted: list[dict], batches: list[dict], merged: dict, pin: list) -> tuple[list[dict], list[dict], list[str]]",
+        "named_files": "(body: str, tracked: list[str]) -> list[str]",
+        "blocked_lines": "(prop: dict, pin: list, version: str | None) -> list[str]",
+        "pinned_rule": "(head: str | None, version: str | None) -> str",
+        "insert_before_rules": "(brief: str, lines: list[str]) -> str",
+    }
+    for name, sig in want.items():
+        assert str(inspect.signature(getattr(bi, name))).replace("'", "") == sig, name
