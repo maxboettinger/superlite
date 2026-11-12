@@ -46,10 +46,10 @@ def test_test_result_full_newest_has_no_newer(tmp_path):
     assert res["mode"] == "full" and res["passed"] == 5777 and newer is None and n == 0
 
 
-def test_test_result_recorded_full_counts_as_full(tmp_path):
+def test_test_result_recorded_full_never_counts_as_full(tmp_path):
     res, newer, n = finish.test_result(ledger(tmp_path, FULL, REC, FAST))
-    assert res == {"mode": "full", "passed": 1333, "failed": 0, "skipped": 0, "seconds": 900.0, "recorded": True}
-    assert newer["passed"] == 12 and n == 1
+    assert res == {"mode": "full", "passed": 5777, "failed": 4, "skipped": 2, "seconds": 812.3, "recorded": False}
+    assert newer["passed"] == 12 and n == 2
 
 
 def test_test_result_without_full_run_is_the_newest_line(tmp_path):
