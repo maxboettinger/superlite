@@ -299,10 +299,19 @@ def project_root(start):  # O(d) stats, d = depth of start
 ALSO_RULING = "declared before the test run (run_tests --also)"  # the ledger text of an --also claim
 
 
+def root_relative(x, cwd, root):  # O(len x) x against cwd, unless only the root holds it: then x is already root-relative (#548)
+    mine = os.path.relpath(os.path.join(cwd, x), root)  # O(len)
+    bare = x.split("::", 1)[0]  # O(len)
+    if "..." in x or os.path.exists(os.path.join(root, mine.split("::", 1)[0])) or not os.path.exists(os.path.join(root, bare)):  # O(1) stats
+        return mine  # O(len)
+    print(f"run_tests: --fast {x} read from the root", file=sys.stderr)  # O(1)
+    return x  # O(1)
+
+
 def to_root(a, argv, cwd, root):  # O(len argv + p) rewrite --fast paths against cwd, then chdir to root
     """Relative --fast paths are rewritten (in a.fast and in argv) so they stay valid from the root."""
     def fix(chunk):  # O(len chunk)
-        parts = [x if os.path.isabs(x) else os.path.relpath(os.path.join(cwd, x), root) for x in chunk.split(",") if x]  # O(len chunk)
+        parts = [x if os.path.isabs(x) else root_relative(x, cwd, root) for x in chunk.split(",") if x]  # O(len chunk)
         return ",".join(parts)  # O(len chunk)
     eq = [j for j, x in enumerate(argv) if x.startswith("--fast=")]  # --fast=PATH spelling | O(len argv)
     if a.fast and eq:  # O(1)
@@ -749,12 +758,31 @@ def no_result_target(command, rc, log, cause=None):  # O(1) the feedback target 
     return (f"nothing collected: {cause}; " if cause else "") + f"exit {rc} from `{command[:200]}`; log {log or 'not written'}"  # O(1)
 
 
-def record_no_result(a, reason, command, rc, lines, tree=None, cause=None):  # O(L + c) log the stop's trace, print its path, log the incident
+def signal_name(rc):  # O(1) the signal a return code means (-9 or 128+9 -> SIGKILL), None for an ordinary exit code
+    num = -rc if rc < 0 else rc - 128 if 128 < rc <= 128 + 64 else 0  # O(1)
+    try:  # O(1)
+        return signal.Signals(num).name if num else None  # O(1)
+    except ValueError:  # O(1)
+        return None  # O(1)
+
+
+def killed_reason(sig, rc):  # O(1) the summary error of a run whose test processes a signal ended, with the machine snapshot when known
+    try:  # a snapshot failure never stops a run | O(registry + p)
+        import machine_load  # noqa: PLC0415  # O(module)
+        snap = machine_load.snapshot_text()  # O(registry + p)
+    except Exception:  # noqa: BLE001  # O(1)
+        snap = ""  # O(1)
+    return f"test run killed by {sig} (exit {rc}): its test processes were killed, not failed" + (f"; {snap}" if snap else "")  # O(1)
+
+
+def record_no_result(a, reason, command, rc, lines, tree=None, cause=None, sig=None):  # O(L + c) log the stop's trace, print its path, log the incident
     log = no_result_log(a.summary, command, str(tree) if tree else str(Path.cwd()), rc, lines)  # O(L)
     print(f"run_tests: no-result log {log}", file=sys.stderr)  # O(1)
     extra = {"target": no_result_target(command, rc, log, cause), "command": command[:300], "exit": rc, "log": log}  # O(1)
     if tree:  # O(1)
         extra["cwd"] = str(tree)  # O(1)
+    if sig:  # O(1)
+        extra["signal"] = sig  # O(1)
     add_incidents(a.log, [("-", 0, reason, "no-result", "open")], a.task, extra)  # a run with nothing to read is a stop, not a pass (#140) | O(c)
 
 
@@ -814,12 +842,15 @@ def resolve_passed(log, task, failures, files, green=False, full=False, started=
     add_incidents(log, items, task, raw=raw)  # O(total c) one append
 
 
-def missing_fast_paths(paths):  # O(p) the --fast paths that do not exist (a `::node` suffix is dropped)
-    return [p for p in paths if not Path(p.split("::", 1)[0]).exists()]  # O(p)
+NODE_TEST_SUFFIXES = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")  # O(1) --fast paths of a non-Python project that are checked for existence
 
 
-def missing_line(paths, cwd, root):  # O(p) the usage-error text for missing --fast paths, else None
-    gone = missing_fast_paths(paths)  # O(p)
+def missing_fast_paths(paths, python=True):  # O(p) the --fast paths that do not exist (a `::node` suffix is dropped; a `...` pattern is never checked; a non-Python project checks Node test files only)
+    return [p for p in paths if "..." not in p and (python or p.split("::", 1)[0].endswith(NODE_TEST_SUFFIXES)) and not Path(p.split("::", 1)[0]).exists()]  # O(p)
+
+
+def missing_line(paths, cwd, root, python=True):  # O(p) the usage-error text for missing --fast paths, else None
+    gone = missing_fast_paths(paths, python)  # O(p)
     if not gone:  # O(1)
         return None  # O(1)
     return f"test path not found: {', '.join(gone)} (cwd {cwd}, root {root})"  # O(p)
@@ -1218,7 +1249,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                 spec = fast_spec(fast, quiet=True)  # O(m + f)
             except FileNotFoundError:  # left to the child | O(1)
                 fast, spec = [], None  # O(1)
-            gone = missing_line(fast, a.cwd, Path.cwd()) if spec and spec["python"] and fast else None  # O(p)
+            gone = missing_line(fast, a.cwd, Path.cwd(), spec["python"]) if spec and fast else None  # O(p)
             gone = gone or node_install_line(Path.cwd(), spec)  # O(m + f)
             if gone:  # O(1)
                 print(f"run_tests: {gone}", file=sys.stderr)  # O(1)
@@ -1369,6 +1400,15 @@ def run_other(a, spec, paths, label, cwd=None):  # one runner command (any langu
             covered = None  # O(1)
             if p["counted"]:  # a counted run (it compiled; an XCTest failure line is no build error) covers its files: a full run all, a fast run the Swift files it was limited to (#499) | O(p)
                 covered = True if label == "full" else [f.replace("\\", "/") for f in paths if f.replace("\\", "/").endswith(".swift")] if label == "fast" else None  # O(p)
+            sig = signal_name(r.returncode) if r.returncode and not (p["counted"] or p["passed"] or p["skipped"] or p["names"]) else None  # a kill with no result at all | O(1)
+            if sig:  # the test processes were killed from outside: no result, not a failing test (#548) | O(1)
+                reason = killed_reason(sig, r.returncode)  # O(registry + p)
+                print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
+                write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
+                publish_summary(a)  # O(summary size)
+                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*p["tail"]], cwd, sig=sig)  # O(40 + c)
+                print(f"0 0 0 {seconds:.1f}")  # O(1)
+                return 2  # O(1)
             if r.returncode and not failures:  # a red exit with no names: name the command | O(1)
                 failures = [("-", 0, f"exit code {r.returncode} from `{spec['command']}`: {last}"[:200])]  # O(1)
             if r.returncode and p["error"]:  # a compile error leads the failures | O(1)
@@ -1618,8 +1658,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         if marked is not None:  # O(1)
             spec = {**spec, "command": marked}  # O(1)
             print(honoured[1], file=sys.stderr)  # O(1)
-    if spec["python"] and paths:  # a missing path is a usage error, not a no-result stop (#235) | O(p)
-        gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd())  # O(p)
+    if paths and (spec["python"] or label == "fast"):  # a missing path is a usage error, not a no-result stop (#235) | O(p)
+        gone = missing_line(paths, getattr(a, "cwd", Path.cwd()), Path.cwd(), spec["python"])  # O(p)
         if gone:  # O(1)
             return usage_error(a, label, gone)  # O(summary size)
     refused = free_disk(a, {k for k in (a.task, worker_tree_name()) if k})  # before any tree or build | O(T + c)
@@ -1710,13 +1750,14 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         if parsed is None and (r.returncode not in (0, 1) or not has_xml):  # O(1)
             tail = (r.stdout + r.stderr).strip().splitlines()[-5:]  # O(O)
             cause = nothing_collected(strip_ansi(r.stdout + r.stderr), paths, a.marker, Path(".")) if r.returncode == 5 else None  # O(O + file)
-            reason = f"pytest collected nothing (exit 5): {cause}" if cause else f"pytest produced no results (exit {r.returncode}): " + (" | ".join(tail) or "no output")  # O(1)
+            sig = signal_name(r.returncode) if parsed is None else None  # O(1)
+            reason = f"pytest collected nothing (exit 5): {cause}" if cause else killed_reason(sig, r.returncode) if sig else f"pytest produced no results (exit {r.returncode}): " + (" | ".join(tail) or "no output")  # O(1)
             print(reason, file=sys.stderr)  # O(1)
             write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0,  # O(1)
                                              "skipped_tests": []}, [], seconds,  # O(1)
                           error=reason)  # O(1)
             publish_summary(a)  # O(summary size)
-            record_no_result(a, reason, shlex.join(cmd), r.returncode, (r.stdout + r.stderr).splitlines(), cause=cause)  # O(O + c)
+            record_no_result(a, reason, shlex.join(cmd), r.returncode, (r.stdout + r.stderr).splitlines(), cause=cause, sig=sig)  # O(O + c)
             print(f"0 0 0 {seconds:.1f}")  # O(1)
             return 1 if r.returncode == 5 else 2  # O(1)
         counts, failures, files = parsed or parse_junit(xml_path)  # O(X + T*d)
