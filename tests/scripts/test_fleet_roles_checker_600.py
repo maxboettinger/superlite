@@ -25,8 +25,8 @@ def test_checker_takes_no_tier(tier):
 
 
 def test_unknown_role_lists_checker():
-    assert fr.ROLES[-1] == "checker"
-    with pytest.raises(ValueError, match="^unknown role lead; use implementer, fixer, package-reviewer, final-reviewer, research, checker$"):
+    assert fr.ROLES[-2:] == ("checker", "writer")
+    with pytest.raises(ValueError, match="^unknown role lead; use implementer, fixer, package-reviewer, final-reviewer, research, checker, writer$"):
         fr.launch("lead", None, CFG)
 
 
