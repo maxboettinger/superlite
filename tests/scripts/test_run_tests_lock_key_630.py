@@ -125,3 +125,14 @@ def test_sl_testcmd_shows_lock(tmp_path):
     project(tmp_path, lock=False)
     cp = subprocess.run([sys.executable, str(TESTCMD), "--root", str(tmp_path)], capture_output=True, text=True, timeout=60)
     assert json.loads(cp.stdout)["lock"] is False
+
+
+def test_with_args_keeps_redirects_and_quoted_pipe():
+    a = ["-test-iterations", "3"]
+    out = run_tests.with_args("xcodebuild test -scheme A 2>&1 | xcpretty", a)
+    assert "2>&1" in out and out.index("-test-iterations") < out.index("|")
+    assert "2> -" not in out
+    out = run_tests.with_args("xcodebuild test -scheme A &> out.log", a)
+    assert "&> out.log" in out and "-test-iterations 3" in out
+    out = run_tests.with_args("run-tests -only 'A|B' | tee o", ["-j2"])
+    assert out == "run-tests -only 'A|B' -j2 | tee o"
