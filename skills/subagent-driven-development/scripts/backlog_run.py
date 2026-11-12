@@ -19,6 +19,7 @@ A resumed batch's lead brief ends with the worktree state (commits, uncommitted 
 `remove_worktree` is the git-only worktree and branch removal (a PR head gets `-D`, #589); `_shipped(push=False)` uses it, never maxapp. A failed cleanup line carries git's error and the core.bare cause and is stored as the batch's `cleanup_owed`. `start` blocks a batch whose worktree.ensure raises or gives the main checkout.
 `sync_main` fast-forwards the main checkout to origin's default branch when it is on that branch, clean and behind (cmd_plan calls it, #590); every other state prints one `sync:` line and leaves HEAD alone.
 `run_end` turns main's fleet off when every batch is shipped or parked and only stopped workers remain, or names `sl fleet off` while a worker lives; every `wait` exit but TIMEOUT appends its line (#590).
+`start` starts no batch below the free-disk floor (trees.disk_gate, SUPERLITE_DISK_FLOOR_GB): it prints `BLOCKED: waiting for disk: ...` per batch, which keeps its state, and a warn level prints one line (#672). The ship cleanup shuts down and deletes every simulator the lead listed in `.superlite/simulators.txt` and records the ones it could not as the batch's `simulators_owed` (#672).
 `start` lets two batches share a file both list in `append_only` (#602). Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions so tests can swap them.
 """
 # Complexity notation: b = batches, w = workers, m = lines of metrics.jsonl
@@ -241,9 +242,18 @@ def cmd_start(a) -> int:
         f = sd / "backlog" / f"{b['id']}.md"  # O(1)
         if b["state"] == "shipped" and f.is_file():  # O(1)
             summaries.append(str(f))  # O(1)
-    fleet_on = False  # O(1)
+    import trees  # O(1) lazy
+    fleet_on, warned = False, False  # O(1)
     deadline = time.monotonic() + a.machine_wait  # one budget for the whole call | O(1)
     for bid in ids:  # O(ids)
+        level, dline = trees.disk_gate(root)  # O(1)
+        if level == "refuse":  # O(1)
+            print(f"BLOCKED: waiting for disk: {bid} not started: {dline.removeprefix('disk: ')} sl backlog start {bid} ({bid} keeps its state)")  # O(1)
+            code = 2  # O(1)
+            continue  # O(1)
+        if level == "warn" and not warned:  # O(1)
+            print(dline)  # O(1)
+            warned = True  # O(1)
         busy = machine_load.gate(f"backlog start {bid}", max(0.0, deadline - time.monotonic()), a.over_limit)  # O(wait)
         if busy:  # O(1)
             print(f"BLOCKED: {bid} not started: {busy}; rerun sl backlog start {bid}, or --over-limit")  # O(1)
@@ -268,7 +278,7 @@ def cmd_start(a) -> int:
         branch = "superlite/" + wt.name.replace("superlite-", "", 1)  # O(1)
         ctx = {"sl": str(HERE / "sl"), "backlog_md": str(HERE.parent / "backlog.md"), "repo": data.get("repo", ""),
                "approved": data.get("approved_ship"), "titles": data.get("titles", {}), "summaries": summaries,
-               "resume": batch["state"] == "parked" and bool(batch.get("worktree"))}  # O(1)
+               "resume": batch["state"] == "parked" and bool(batch.get("worktree")), "worktree": str(wt)}  # O(1)
         brief = wt / ".superlite" / "briefs" / "lead.md"  # O(1)
         brief.parent.mkdir(parents=True, exist_ok=True)  # O(1)
         text = backlog_brief.lead_brief(batch, ctx)  # O(size)
@@ -376,6 +386,43 @@ def cleanup_cmd(root: Path):  # O(size)
     return c  # O(1)
 
 
+def simulators_owed_line(bid: str, owed: list) -> str:  # O(owed)
+    items = ", ".join(f"{o['sim']} ({o['why']})" for o in owed)  # O(owed)
+    return f"{bid} simulators owed: {items}; delete each with xcrun simctl delete <udid>, then sl backlog status"  # O(owed)
+
+
+def _remove_sims(root: Path, wt: Path, bid: str):  # records simulators_owed; best effort | O(sims)
+    try:  # O(1)
+        import trees  # O(1) lazy
+        removed, gone, owed = trees.remove_simulators(wt)  # O(sims) + spawns
+    except Exception:  # O(1)
+        return None  # O(1)
+    if removed or gone:  # O(1)
+        print(f"{bid} simulators: removed {len(removed)}" + (f": {', '.join(removed)}" if removed else "") + (f"; already gone: {', '.join(gone)}" if gone else ""))  # O(sims)
+    if not (removed or gone or owed):  # O(1)
+        return None  # O(1)
+
+    def mark(d):  # O(b)
+        x = bs.batch(d, bid)
+        if owed:
+            x["simulators_owed"] = owed
+        else:
+            x.pop("simulators_owed", None)
+    try:  # O(1)
+        bs.update(bs.path(root), mark)  # O(size)
+    except Exception:  # no backlog.json or no such batch | O(1)
+        pass  # O(1)
+    return None  # O(1)
+
+
+def stored_owed_line(root: Path, bid: str):  # the owed line of the batch's stored simulators_owed, else None | O(size)
+    try:  # O(1)
+        owed = bs.batch(bs.load(bs.path(root)), bid).get("simulators_owed") or []  # O(size)
+    except Exception:  # O(1)
+        return None  # O(1)
+    return simulators_owed_line(bid, owed) if owed else None  # O(owed)
+
+
 def project_cleanup(root: Path, wt: Path, branch: str, bid: str):  # O(cmd)
     if str(wt) in ("", "."):  # O(1)
         return None  # O(1)
@@ -386,6 +433,11 @@ def project_cleanup(root: Path, wt: Path, branch: str, bid: str):  # O(cmd)
             print(f"{bid} scratch builds: removed {n} folder(s), {freed / 1024 ** 3:.1f} GB")  # O(1)
     except Exception:  # O(1)
         pass  # O(1)
+    _remove_sims(root, wt, bid)  # O(sims)
+    return _run_cleanup_cmd(root, wt, branch, bid)  # O(cmd)
+
+
+def _run_cleanup_cmd(root: Path, wt: Path, branch: str, bid: str):  # O(cmd)
     cmd = cleanup_cmd(root)  # O(size)
     if not cmd:  # O(1)
         return None  # O(1)
@@ -417,6 +469,9 @@ def drop_worktree(root: Path, b: dict) -> list:  # O(cmd)
     fail = project_cleanup(root, Path(wt), br, bid)  # O(cmd)
     if fail:  # O(1)
         out.append(fail)  # O(1)
+    owed = stored_owed_line(root, bid)  # O(size)
+    if owed:  # O(1)
+        out.append(owed)  # O(1)
     return out + remove_worktree(root, Path(wt), br, bid)  # O(cmd)
 
 
@@ -466,6 +521,9 @@ def _shipped(p, sd, root, b, wt, push: bool = True, head: str | None = None) -> 
         fail = project_cleanup(root, Path(b["worktree"]), b.get("branch") or "", bid)  # O(cmd)
         if fail:  # O(1)
             out.append(fail)  # O(1)
+    owed_line = stored_owed_line(root, bid)  # O(size)
+    if owed_line:  # O(1)
+        out.append(owed_line)  # O(1)
     if not b.get("worktree") or wt is None:  # O(1)
         return out  # O(1)
     if push:  # O(1)
