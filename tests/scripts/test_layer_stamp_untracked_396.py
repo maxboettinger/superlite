@@ -56,7 +56,7 @@ def test_unit_stamp_stays_green_across_autocommit_apply(tmp_path, monkeypatch):
     batch(repo, monkeypatch)
     assert layers(repo, "stamp", "unit", "--ruling", "r", state=state).returncode == 0
     before = layers(repo, "status", state=state).stdout
-    assert before.startswith("unit green ")
+    assert before.startswith("unit stamped ")
     r = run("autocommit", "apply", cwd=repo)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "tests/scripts/test_new.py" in git(repo, "ls-files").splitlines()

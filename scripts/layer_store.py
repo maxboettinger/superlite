@@ -108,7 +108,13 @@ def _locked(path: Path):  # O(1)
             os.close(fd)  # O(1)
 
 
-def record_green(store: Path, layer: str, digest: str, files: dict[str, str], checkout: str | None = None) -> None:  # O(1)
+def stamp_of(store: Path, layer: str, digest: str) -> dict | None:  # O(1)
+    stamps = layer_entry(store, layer).get("stamps")  # O(size)
+    rec = stamps.get(digest) if isinstance(stamps, dict) else None  # O(1)
+    return rec if isinstance(rec, dict) else None  # O(1)
+
+
+def record_green(store: Path, layer: str, digest: str, files: dict[str, str], checkout: str | None = None, stamp: dict | None = None) -> None:  # O(1)
     with _lock(store):  # O(wait)
         data = read_json(store)  # O(size)
         layers = data.get("layers") if isinstance(data.get("layers"), dict) else {}  # O(1)
@@ -118,6 +124,12 @@ def record_green(store: Path, layer: str, digest: str, files: dict[str, str], ch
         old_checkouts = entry.get("checkouts") if isinstance(entry.get("checkouts"), dict) else {}  # O(1)
         checkouts = {k: v for k, v in old_checkouts.items() if isinstance(v, dict) and os.path.isdir(k)}  # O(checkouts)
         new = {"green": green[-KEEP:]}  # O(1)
+        old_stamps = entry.get("stamps") if isinstance(entry.get("stamps"), dict) else {}  # O(1)
+        stamps = {d: v for d, v in old_stamps.items() if d in new["green"] and d != digest and isinstance(v, dict)}  # O(KEEP)
+        if stamp is not None:  # O(1)
+            stamps[digest] = stamp  # O(1)
+        if stamps:  # O(1)
+            new["stamps"] = stamps  # O(1)
         if checkout is None:  # O(1)
             new["files"] = dict(files)  # O(files)
         else:  # O(1)
