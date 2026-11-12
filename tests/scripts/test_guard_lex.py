@@ -221,3 +221,16 @@ def test_glob_and_brace_flags_per_word_and_redirect():  # O(1)
     assert split("[ -f x ]")[0].dyn == [False, False, False, False]  # a lone `[` is the test command, no glob
     assert split("echo 'a'{b,c} \"{a,b}\" x[ab]")[0].globs == ["", "u", "", "g"]
     assert split("cat <(rm x) 2>/dev/null y*")[0].globs == ["", "", "g"]
+
+
+# --- #665: per word, does an expansion sit outside double quotes? ----------------------------------------------
+def test_bare_marks_expansions_outside_double_quotes():
+    (s,) = split('cp "$S/x.pdf" $T/y "$A"$B \'$C\' "a b" `pwd`/z "`pwd`/q" ${D}/w "${E:-x}"')
+    assert s.bare == [False, False, True, True, False, False, True, False, True, False]
+    (s,) = split("echo $'a b' \\$x $(date) \"$(date)\"")
+    assert s.bare == [False, False, False, True, False]
+
+
+def test_redirect_bare_flag():
+    (s,) = split('echo hi > "$T/x.log" 2> $U/e >> plain')
+    assert [r.bare for r in s.redirects] == [False, True, False]
