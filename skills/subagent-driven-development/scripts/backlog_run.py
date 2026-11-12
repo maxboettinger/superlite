@@ -20,6 +20,7 @@ Exit 0 done, 2 refused, 3 BLOCKED. Fleet modules are imported inside functions s
 """
 # Complexity notation: b = batches, w = workers, m = lines of metrics.jsonl
 import argparse  # O(1)
+import contextlib  # O(1)
 import json  # O(1)
 import re  # O(1)
 import subprocess  # O(1)
@@ -264,7 +265,8 @@ def cmd_start(a) -> int:
             print(f"BLOCKED: {bid} lead did not start; {bid} keeps its state, rerun sl backlog start {bid}")  # O(1)
             code = 2  # O(1)
             continue  # O(1)
-        machine_load.register(rec["name"], "lead", str(root))  # O(1)
+        with contextlib.suppress(OSError):  # the machine count is advisory; an unwritable registry must not fail a started lead | O(1)
+            machine_load.register(rec["name"], "lead", str(root))  # O(1)
         try:  # O(1)
             fleet_io.send_brief(sd, rec["id"], str(brief), bid)  # O(w)
         except fleet.hc.HerdrError as e:  # O(1)

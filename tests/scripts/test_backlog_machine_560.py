@@ -61,3 +61,13 @@ def test_round_prepends_machine_line(bk, ml, capsys, monkeypatch):
     rc, out = run(capsys, "wait")
     assert out.splitlines() == ["machine: runner offline parks B3; fix the machine first, then sl backlog start B3",
                                 "B3 parked: runner offline"]
+
+
+def test_unwritable_registry_does_not_fail_started_lead(bk, ml, capsys):
+    def boom(name, role, root):
+        raise OSError("read-only")
+    ml.register = boom
+    put(bk, b("B1", ["a.py"]))
+    rc, out = run(capsys, "start", "B1")
+    assert rc == 0
+    assert get(bk, "B1")["state"] == "running"
