@@ -506,7 +506,7 @@ def _final(v: str) -> str:  # O(len(v)) | an unknown piece becomes a `?` compone
     cut = max(pre.rfind("/"), pre.rfind("\\"))  # O(len(pre))
     glob = v[len(pre) + 1:len(pre) + 2] == _FGLOB  # an f-string's unknown piece: a glob below its literal folder  # O(1)
     folder = pre[:cut + 1]  # O(len(pre))
-    deep = folder.startswith(".superlite/") and folder.count("/") >= 2 and ".." not in folder  # a piece with ../ cannot climb from here to code in one step  # O(len(folder))
+    deep = folder.startswith(".superlite/") and folder.count("/") >= 2 and ".." not in folder  # a glob needs a folder two levels below .superlite/; one level below is unknown  # O(len(folder))
     return folder + "?" if pre and cut >= 0 and ((glob and deep) or _is_abs(pre)) else "?"  # O(len(pre))
 
 
