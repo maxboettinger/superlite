@@ -31,7 +31,7 @@ class FakeStore:
     """In-memory stand-in for layer_store: the same nine functions, no files."""
 
     def __init__(self):
-        self.green, self.files, self.locks, self.stamps = {}, {}, {}, {}
+        self.green, self.files, self.locks, self.stamps, self.records = {}, {}, {}, {}, {}
 
     def store_path(self, root):
         return Path(root) / "fake-store.json"
@@ -56,14 +56,19 @@ class FakeStore:
     def has_manifest(self, store, layer, checkout=None):
         return (layer, checkout) in self.files
 
-    def start_run(self, store, layer, digest, pid):
+    def start_run(self, store, layer, digest, pid, wait=None):
         self.locks[layer] = digest
+        self.records[layer] = {"pid": pid, "digest": digest, **({"wait": wait} if wait else {})}
+
+    def pending(self, store, layer):
+        return self.records.get(layer, {})
 
     def running(self, store, layer, digest):
         return self.locks.get(layer) == digest
 
     def end_run(self, store, layer):
         self.locks.pop(layer, None)
+        self.records.pop(layer, None)
 
 
 @pytest.fixture
