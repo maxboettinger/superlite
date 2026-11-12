@@ -899,8 +899,15 @@ def refresh_open(root: Path) -> dict:
 
 
 def machine_line(root) -> str:
+    import trees  # O(1)
     try:  # O(1)
-        text = f"machine: {shutil.disk_usage(root).free / 1024 ** 3:.1f} GB free disk"  # O(1)
+        free = shutil.disk_usage(root).free / 1024 ** 3  # O(1)
+        floor, warn = trees.disk_levels()  # O(1)
+        text = f"machine: {free:.1f} GB free disk"  # O(1)
+        if floor > 0 and free < floor:  # O(1)
+            text += f", below the {floor:g} GB floor (sl backlog start starts no lead)"  # O(1)
+        elif warn > 0 and free < warn:  # O(1)
+            text += f", below the {warn:g} GB warn level"  # O(1)
     except OSError:  # O(1)
         text = "machine: disk unknown"  # O(1)
     if not shutil.which("maxapp-slot"):  # O(1)
@@ -915,12 +922,49 @@ def machine_line(root) -> str:
         return text  # O(1)
 
 
+def disk_low(root) -> bool:
+    import trees  # O(1)
+    try:  # O(1)
+        warn = trees.disk_levels()[1]  # O(1)
+        return warn > 0 and shutil.disk_usage(root).free / 1024 ** 3 < warn  # O(1)
+    except OSError:  # O(1)
+        return False  # O(1)
+
+
+def owed_lines(d, bs) -> list:
+    """One line per batch that still owes simulators; one `simctl list` re-read drops the gone ones (#672)."""
+    import backlog_run  # O(1)
+    import trees  # O(1)
+    owed = {b["id"]: list(b["simulators_owed"]) for b in d["batches"] if b.get("simulators_owed")}  # O(b)
+    if not owed:  # O(1)
+        return []  # O(1)
+    present = trees.present_simulators([o["sim"] for v in owed.values() for o in v])  # O(simctl)
+    if present is not None:  # O(1)
+        keep = set(present)  # O(owed)
+        kept = {k: [o for o in v if o["sim"] in keep] for k, v in owed.items()}  # O(owed)
+        changed = kept != owed  # O(owed)
+        owed = kept  # O(1)
+        if not changed:  # O(1)
+            return [backlog_run.simulators_owed_line(k, v) for k, v in owed.items() if v]  # O(owed)
+
+        def apply(data):
+            for b in data["batches"]:  # O(b)
+                if b["id"] in owed and b.get("simulators_owed"):  # O(1)
+                    if owed[b["id"]]:  # O(1)
+                        b["simulators_owed"] = owed[b["id"]]  # O(1)
+                    else:  # O(1)
+                        del b["simulators_owed"]  # O(1)
+        bs.update(bs.path(_root()), apply)  # O(size)
+    return [backlog_run.simulators_owed_line(k, v) for k, v in owed.items() if v]  # O(owed)
+
+
 def cmd_status(a) -> int:
     import backlog_state as bs  # O(1)
     refresh_open(_root())  # O(b * network)
     d = bs.load(bs.path(_root()))  # O(size)
     lines = bs.status_lines(d, all_=getattr(a, "all", False))  # O(b)
-    if any(b["state"] in ("planned", "running", "needs_decision") for b in d["batches"]):  # O(b) machine line only while leads run or start, before any next: line
+    lines += owed_lines(d, bs)  # O(b)
+    if any(b["state"] in ("planned", "running", "needs_decision") for b in d["batches"]) or disk_low(_root()):  # O(b) machine line while leads run or start, or the disk is low, before any next: line
         lines.append(machine_line(_root()))  # O(1)
     if all(b["state"] == "shipped" for b in d["batches"]):  # O(b) no batch yet, or every batch shipped (#369)
         lines.append("next: sl backlog plan")  # O(1)
