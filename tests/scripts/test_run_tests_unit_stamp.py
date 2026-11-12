@@ -132,14 +132,14 @@ def test_write_stamp_takes_digests(tmp_path):
     assert mod.layer_store.is_green(store, "unit", mod.hash_digests({"a.py": "1"}))
 
 
-def test_configured_test_command_does_not_stamp(tmp_path):
+def test_configured_full_run_stamps_unit(tmp_path):
     _, proj = make_repo(tmp_path)
     cmd = f'{sys.executable} -c "print(\'1 passed\')"'
     (proj / ".superlite" / "test-cmd.json").write_text(json.dumps({"language": "python", "test": cmd}), encoding="utf-8")
     cp = rt(proj, "--full")
     assert cp.returncode == 0, cp.stdout + cp.stderr
-    assert "unit layer stamped" not in cp.stderr
-    assert unit_line(proj).startswith("unit stale")
+    assert "unit layer stamped" in cp.stderr
+    assert not unit_line(proj).startswith("unit stale")
 
 
 def test_snapshot_leaves_sys_path_alone(tmp_path, monkeypatch):

@@ -7,7 +7,7 @@
     backlog_run.py tell B --text T          (send main's text to the running lead of B)
 
 `start` takes several ids: each refusal prints BLOCKED, the others start. A lead that does not start prints `BLOCKED: B lead did not start; ...` after its spawn's own line, sets exit 2 and the batches after it still start (#551). Each lead worktree gets a copy of the main
-checkout's `.superlite/test-cmd.json` before its brief, unless it already has one (#334). A lead whose stop text holds no
+checkout's `.superlite/test-cmd.json` before its brief, unless it already has one (#334); the copied bytes are recorded in `.superlite/test-cmd.seeded` so an unedited copy follows the main checkout's file, and a lead brief gets one `Test command:` line when the copy and the main file differ (#638). A lead whose stop text holds no
 Status line is re-prompted once (`reprompted`), then parked. A question.json is cut to the limits (header, label,
 description; each cut is reported as `shortened:`); one still invalid is sent back to the lead once
 (`question_reprompted`), then parked. A stop record whose transcript lags (blank, or
@@ -35,6 +35,7 @@ sys.path.insert(0, str(HERE))  # O(1)
 import backlog_answer as ba  # noqa: E402 | O(1)
 import backlog_checks as bc  # noqa: E402 | O(1)
 import backlog_state as bs  # noqa: E402 | O(1)
+import testcmd  # noqa: E402 | O(1)
 
 ACTIVE = ("running", "needs_decision")
 STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_DECISION|NEEDS_CONTEXT|BLOCKED)\b", re.I)
@@ -257,7 +258,8 @@ def cmd_start(a) -> int:
             print(f"BLOCKED: {bid} not started: worktree ensure gave {wt} ({state}), not a linked worktree under {root}/.claude/worktrees" + (f"; cause: {cause}" if cause else ""))  # O(1)
             code = 2  # O(1)
             continue  # O(1)
-        backlog.seed_test_cmd(root, wt)  # main's .superlite/test-cmd.json before the brief (#334) | O(size)
+        if backlog.seed_test_cmd(root, wt):  # main's .superlite/test-cmd.json before the brief (#334), recorded so it can follow main (#638) | O(size)
+            testcmd.record_seed(wt)  # O(size)
         branch = "superlite/" + wt.name.replace("superlite-", "", 1)  # O(1)
         ctx = {"sl": str(HERE / "sl"), "backlog_md": str(HERE.parent / "backlog.md"), "repo": data.get("repo", ""),
                "approved": data.get("approved_ship"), "titles": data.get("titles", {}), "summaries": summaries,
@@ -267,6 +269,9 @@ def cmd_start(a) -> int:
         text = backlog_brief.lead_brief(batch, ctx)  # O(size)
         if ctx["resume"]:  # O(1)
             text = text.rstrip("\n") + "\n" + "\n".join(_resume_state(batch, wt, branch)) + "\n"  # O(size) + spawns
+        note = testcmd.seed_note(wt)  # O(size) + spawn
+        if note:  # O(1)
+            text = text.rstrip("\n") + "\nTest command: " + note + "\n"  # O(size)
         brief.write_text(text, encoding="utf-8")  # O(size)
         if not fleet_on and not fleet_state.is_on(sd):  # O(w)
             fleet.main(["on", "--plan", str(sd)])  # O(w)

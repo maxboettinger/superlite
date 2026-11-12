@@ -1,0 +1,117 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-12T15:02:15",
+ "headline": {
+  "wall_min": {
+   "projected": 13.481,
+   "actual": 3.527
+  },
+  "cost_usd_agents": {
+   "projected": 0.390761,
+   "actual": 0.89941
+  },
+  "task_min": {
+   "projected": 26.7,
+   "actual": 6.18
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 5
+  }
+ },
+ "cost_split": {
+  "agents_usd": 0.89941,
+  "rework_usd": 0,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 0.89941
+ },
+ "concurrency": {
+  "peak": 2,
+  "projected_peak": 3
+ },
+ "critical_path": {
+  "actual": [
+   "T1",
+   "T2"
+  ],
+  "projected": [
+   "T1",
+   "T2"
+  ],
+  "projected_min": 13.481
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 4,
+   "cost_usd": 0.89941
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 7433,
+   "failed": 0,
+   "skipped": 9,
+   "seconds": 210.3,
+   "recorded": false
+  },
+  "tests_newer": null,
+  "tests_from": "progress.md",
+  "first_time_pass": 4,
+  "first_time_n": 4,
+  "rework_dispatches": 0,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 7.193,
+   "actual_min": 1.613,
+   "delta": {
+    "abs": -5.5797,
+    "pct": -77.6
+   },
+   "cost_usd": 0.247303,
+   "first_time_pass": true
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 7.14,
+   "actual_min": 1.733,
+   "delta": {
+    "abs": -5.4067,
+    "pct": -75.7
+   },
+   "cost_usd": 0.25901,
+   "first_time_pass": true
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 6.341,
+   "actual_min": 1.22,
+   "delta": {
+    "abs": -5.121,
+    "pct": -80.8
+   },
+   "cost_usd": 0.145794,
+   "first_time_pass": true
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 6.026,
+   "actual_min": 1.613,
+   "delta": {
+    "abs": -4.4127,
+    "pct": -73.2
+   },
+   "cost_usd": 0.247303,
+   "first_time_pass": true
+  }
+ ]
+}
