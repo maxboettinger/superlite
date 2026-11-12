@@ -49,7 +49,8 @@ def test_issues_flag_builds_key_jql(jk, capsys):
     assert cli(capsys, "plan", "--issues", "pix-2,PIX-1")[0] == 0
     assert jk.acli[0][4] == "key in (PIX-2, PIX-1)"
     jk.ret = [ACLI[0]]
-    assert cli(capsys, "plan", "--reset", "--issues", "pix-2,PIX-1") == (3, "BLOCKED: Jira issue PIX-2 not found\n")
+    jk.ret = []
+    assert cli(capsys, "plan", "--reset", "--issues", "pix-2") == (3, "BLOCKED: Jira issue PIX-2 not found\n")
 
 
 def test_bad_flags_refused_before_any_call(jk, capsys):

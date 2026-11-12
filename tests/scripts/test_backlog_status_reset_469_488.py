@@ -1,7 +1,7 @@
 import os, sys
 import pytest
 from test_backlog_cli import bk, cli, load, bs, bl  # noqa: F401
-import backlog_ship  # noqa: E402
+import backlog_tracker  # noqa: E402
 import backlog_run  # noqa: E402
 
 REAL = os.environ.get("SUPERLITE_REAL") == "1"
@@ -19,31 +19,31 @@ def shipped(bid, issues, open_):
 
 def fake_open(monkeypatch, fn):
     if not REAL:
-        monkeypatch.setattr(backlog_ship, "open_issues", fn, raising=False)
+        monkeypatch.setattr(backlog_tracker, "open_now", fn, raising=False)
 
 def test_status_drops_closed_markers_and_keeps_failed_reads(bk, capsys, monkeypatch):
     seed(bk, [shipped("B1", [5, 6], [5, 6])])
     calls = []
-    def f(repo, issues, root, retry=True):
-        calls.append((repo, list(issues), retry))
+    def f(repo, issues, root):
+        calls.append((repo, list(issues)))
         return [5]
     fake_open(monkeypatch, f)
     rc, out = cli(capsys, "status")
     assert rc == 0 and "OPEN #5" in out and "#6" not in out.split("OPEN")[1]
     assert load(bk)["batches"][0]["open_issues"] == [5]
-    assert calls == [("o/r", [5, 6], False)]
+    assert calls == [("o/r", [5, 6])]
 
 def test_status_all_refreshes_earlier_rounds(bk, capsys, monkeypatch):
     seed(bk, [shipped("B1", [1], [1]), shipped("B2", [2], [2])])
     data = load(bk); data["round"] = ["B2"]
     bs.update(bs.path(bk.root), lambda d: d.update(round=["B2"]))
-    fake_open(monkeypatch, lambda repo, issues, root, retry=True: [])
+    fake_open(monkeypatch, lambda repo, issues, root: [])
     cli(capsys, "status", "--all")
     assert [b["open_issues"] for b in load(bk)["batches"]] == [[], []]
 
 def test_refresh_skips_a_list_changed_meanwhile(bk, monkeypatch):
     seed(bk, [shipped("B1", [5, 6], [5, 6])])
-    def f(repo, issues, root, retry=True):
+    def f(repo, issues, root):
         bs.update(bs.path(bk.root), lambda d: d["batches"][0].update(open_issues=[7]))
         return []
     fake_open(monkeypatch, f)
@@ -52,13 +52,13 @@ def test_refresh_skips_a_list_changed_meanwhile(bk, monkeypatch):
 
 def test_refresh_without_markers_imports_nothing(bk, monkeypatch):
     seed(bk, [shipped("B1", [5], [])])
-    monkeypatch.delitem(sys.modules, "backlog_ship", raising=False)
+    monkeypatch.delitem(sys.modules, "backlog_tracker", raising=False)
     assert bl.refresh_open(bk.root) == {}
-    assert "backlog_ship" not in sys.modules
+    assert "backlog_tracker" not in sys.modules
 
 def test_refresh_returns_changed_batches(bk, monkeypatch):
     seed(bk, [shipped("B1", [5, "PIX-9"], [5, "PIX-9"])])
-    fake_open(monkeypatch, lambda repo, issues, root, retry=True: [])
+    fake_open(monkeypatch, lambda repo, issues, root: [])
     assert bl.refresh_open(bk.root) == {"B1": []}
 
 def parked(bid, wt=None):
