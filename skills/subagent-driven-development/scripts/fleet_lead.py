@@ -4,6 +4,7 @@ Not a CLI. `backlog_run` calls `spawn_lead`. A lead gets no prime and no pool en
 A lead starts with `--autocompact` set to main's window (`main_window`, #464). A start that stays slow is retried once on another account (#454).
 A pane still no shell after that retry is closed and the lead starts once more in a fresh pane (#551).
 A folder trust dialog still open after a successful start is accepted (#514).
+The lead's fleet.json record carries `launch` ({argv, env, cwd}: the exact start, #577) and `session` (its Claude session id, when herdr reports one) so `fleet restore` can resume it.
 """
 import json  # O(1)
 import os  # O(1)
@@ -72,6 +73,22 @@ def lead_env(main_sd, lead_sd, wid, config_dir, base_env, accounts):  # O(a)
     return env  # O(1)
 
 
+def _session(name):  # O(1) the agent's Claude session id, or None; never raises (older herdr clients lack agent_session)
+    try:  # O(1)
+        fn = getattr(fleet.hc, "agent_session", None)  # O(1)
+        return fn(name) if fn else None  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return None  # O(1)
+
+
+def _record_session(main_sd, wid, session):  # O(w)
+    with fleet.fs.locked(main_sd):  # O(1)
+        data = fleet.fs.load(main_sd)  # O(w)
+        if wid in data["workers"]:  # O(1)
+            data["workers"][wid]["session"] = session  # O(1)
+            fleet.fs.save(main_sd, data)  # O(w)
+
+
 def spawn_lead(main_sd, worktree, model="opus", env=None):  # O(a * e + w) plus herdr calls
     base = dict(os.environ) if env is None else env  # O(env)
     try:  # O(1)
@@ -97,8 +114,10 @@ def _spawn_lead(main_sd, worktree, model, base, after):  # O(a * e + w) plus her
     lsd.mkdir(parents=True, exist_ok=True)  # O(1)
     wt, lsd_s = str(worktree.resolve()), str(lsd.resolve())  # O(1)
     wenv = lead_env(main_sd, lsd, wid, cdir, base, fs.load(main_sd).get("accounts") or [])  # O(w)
+    sl = str(Path(__file__).resolve().parent / "sl")  # O(1)
+    argv = lead_argv(sl, model, main_window(base, model))  # O(k)
     record = {"name": name, "account": account, "agent": "lead", "tier": model, "state": "starting", "task": None, "role": "lead",  # O(1)
-              "one_turn": False, "lead_sd": lsd_s, "worktree": wt}
+              "one_turn": False, "lead_sd": lsd_s, "worktree": wt, "launch": {"argv": argv, "env": wenv, "cwd": wt}}
     try:  # O(1)
         pane = fleet.open_pane(main_sd, wid, wt, wenv, record)  # O(w + p)
         try:  # O(1)
@@ -107,7 +126,6 @@ def _spawn_lead(main_sd, worktree, model, base, after):  # O(a * e + w) plus her
             pass  # O(1)
     except hc.HerdrError as e:  # O(1)
         fleet._blocked(main_sd, wid, account, f"startup: {e.message or e.code}{tail}")  # O(1)
-    sl = str(Path(__file__).resolve().parent / "sl")  # O(1)
 
     def fail(why, screen=None, slow=False, shell=False):  # O(s + w)
         fs.set_state(main_sd, wid, "blocked")  # O(w)
@@ -125,7 +143,7 @@ def _spawn_lead(main_sd, worktree, model, base, after):  # O(a * e + w) plus her
 
     try:  # O(1)
         try:  # O(1)
-            retried = fleet.start_on_shell(name, pane, lead_argv(sl, model, main_window(base, model)))  # O(1)
+            retried = fleet.start_on_shell(name, pane, argv)  # O(1)
         except hc.HerdrError as e:  # O(1)
             screen = ""  # O(1)
             try:  # O(1)
@@ -149,6 +167,9 @@ def _spawn_lead(main_sd, worktree, model, base, after):  # O(a * e + w) plus her
     except hc.HerdrError as e:  # O(1)
         fail(f"startup: {e}", slow=fleet._slow(e))  # O(1)
     fs.set_state(main_sd, wid, "ready")  # O(w)
+    sid = _session(name)  # O(1)
+    if sid:  # O(1)
+        _record_session(main_sd, wid, sid)  # O(w)
     fleet._launch_line(main_sd, wid, "lead", model, account, pane)  # O(1)
     print(f"{wid} account={account} pane={pane} agent=lead role=lead")  # O(1)
     return {"id": wid, "name": name, "account": account, "pane_id": pane, "agent": "lead", "model": model, "role": "lead", "lead_sd": lsd_s}  # O(1)

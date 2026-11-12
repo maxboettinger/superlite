@@ -2,7 +2,7 @@
 """Fleet roles: which agent, model and effort a worker of each superlite role starts with.
 
 Library: launch(role, tier, cfg, agents_dir) -> the claude argv and flags for one worker; env(role) -> the env a
-worker of that role gets. Roles: implementer (the default), fixer, package-reviewer, final-reviewer, research, checker.
+worker of that role gets. Roles: implementer (the default), fixer, package-reviewer, final-reviewer, research, checker, writer.
 Effort comes from the agent file's frontmatter, since frontmatter `effort` is ignored in a main-thread session
 (`--effort` is passed instead). Stdlib only.
 """
@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import routing  # noqa: E402 | O(1)
 
 AGENTS = Path(__file__).resolve().parents[3] / "agents"  # O(1)
-ROLES = ("implementer", "fixer", "package-reviewer", "final-reviewer", "research", "checker")  # O(1)
+ROLES = ("implementer", "fixer", "package-reviewer", "final-reviewer", "research", "checker", "writer")  # O(1)
 FIXER_AGENTS = {"1": "superlite:fixer-sonnet", "sonnet": "superlite:fixer-sonnet",  # O(1) tiers of fixing.md
                 "2": "superlite:fixer-sonnet-high", "sonnet-high": "superlite:fixer-sonnet-high",
                 "3": "superlite:fixer-opus", "opus": "superlite:fixer-opus"}
@@ -43,7 +43,8 @@ def frontmatter(agent: str, agents_dir: Path) -> dict:  # O(f)
     return out  # O(f)
 
 
-def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS) -> dict:  # O(f)
+def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS, output: str | None = None) -> dict:  # O(f)
+    """The agent, flags and argv of one worker; `output` (an absolute path) is read by the writer role only."""
     if role not in ROLES:  # O(1)
         raise ValueError("unknown role %s; use %s" % (role, ", ".join(ROLES)))  # O(1)
     pin = None  # the model the flags pin; None leaves it to the agent file | O(1)
@@ -57,6 +58,13 @@ def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS) ->
     elif role == "research":  # O(1)
         agent = "superlite:researcher"  # O(1)
         pin = tier or "sonnet"  # O(1) researchers default to sonnet
+    elif role == "writer":  # O(1)
+        if not output:  # O(1)
+            raise ValueError("writer needs an output file (the brief's Output: line)")  # O(1)
+        if tier is not None and tier not in ("sonnet", "opus", "haiku"):  # O(1)
+            raise ValueError("writer tier must be sonnet, opus or haiku")  # O(1)
+        agent = "superlite:writer"  # O(1)
+        pin = tier or "sonnet"  # O(1)
     elif role == "checker":  # O(1)
         if tier is not None:  # O(1)
             raise ValueError("checker takes no --tier")  # O(1)
@@ -68,6 +76,9 @@ def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS) ->
     fm = frontmatter(agent, agents_dir)  # O(f)
     effort = fm.get("effort") or None  # O(1)
     argv = ["--agent", agent] + (["--model", pin] if pin else []) + (["--effort", effort] if effort else []) + (RESEARCH_TAIL if role == "research" else TAIL)  # O(1)
+    if role == "writer":  # only the one output file is writable; every other write is a dialog the fleet hook refuses | O(1)
+        argv = argv[:-len(TAIL)] + ["--permission-mode", "default", "--allowedTools", "Edit(/" + Path(output).as_posix() + ")",  # O(1)
+                                    "--disallowedTools", "AskUserQuestion", "Bash", "NotebookEdit"]
     one_turn = role != "implementer"  # O(1)
     return {"role": role, "agent": agent, "model": pin or fm.get("model") or None, "effort": effort, "argv": argv,  # O(1)
             "prime": role == "implementer", "pool": role == "implementer", "one_turn": one_turn}

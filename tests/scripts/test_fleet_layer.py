@@ -1,5 +1,5 @@
 # tests/scripts/test_fleet_layer.py
-import json, sys, types
+import json, shlex, sys, types
 from pathlib import Path
 import pytest
 from test_herdr_client import fake  # noqa: F401  (fixture)
@@ -42,7 +42,7 @@ def test_run_opens_a_shell_pane_with_the_account_and_no_superlite_env(run_world)
     (pane, command), = run_world.pane.calls
     log = run_world.sd / "fleet" / "layers" / "W5-headless.log"; ex = run_world.sd / "fleet" / "layers" / "W5-headless.exit"
     assert pane == "w6:p2" and "-u scripts/test_layers.py run headless" in command and "echo $?" in command
-    assert str(log) in command and str(ex) in command and command.startswith("cd ")
+    assert str(log) in command and str(ex) in command and command.startswith("echo $$ > %s; cd " % shlex.quote(str(log.with_suffix(".pid"))))
     assert r == {"id": "W5", "account": "claude3", "pane_id": "w6:p2", "layer": "headless", "log": str(log), "exit": str(ex)}
 
 def test_main_lines_and_refusals(run_world, monkeypatch, capsys):

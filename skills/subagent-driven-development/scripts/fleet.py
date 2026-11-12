@@ -8,8 +8,9 @@
     fleet.py report IDS... [--plan P]    (print a worker's last report, or a report by label; read-only)
     fleet.py send | keys | wait     (delegated to fleet_io)
     fleet.py run --layer headless|tui|evals     (delegated to fleet_layer)
+    fleet.py restore [--plan P]     (after a Herdr restart: delegated to fleet_restore)
 
-Roles: implementer (default), fixer, package-reviewer, final-reviewer, research (see fleet_roles). Exit 2 with
+Roles: implementer (default), fixer, package-reviewer, final-reviewer, research, checker, writer (see fleet_roles). Exit 2 with
 `error: ...` on stderr for an unknown role or tier.
 Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-dispatch` prints one
 `Wn Tn[,Tm] sent` line per worker, `BLOCKED: Tn[,Tm] not sent (<reason>)` for a line that got no worker
@@ -31,6 +32,9 @@ A primed worker whose pane shows the folder trust dialog gets Down, Enter and th
 While the run's fleet.json says off, `spawn` (both forms) starts nothing: `BLOCKED: fleet is off in <state dir>; run sl fleet on [--plan P] first ...`, exit 3 (#355).
 `stop` drops the worker's tree `worker-<id>` unless a live process marks it busy (#614).
 `spawn` (not `--for-dispatch`, which dispatch gates itself) refuses on a nearly full disk: `BLOCKED: fleet spawn: disk: ...`, exit 3; below the warn level it warns on stderr (#614).
+`sl fleet restore` re-launches every worker and lead of the run after a Herdr restart, each resuming its own Claude session; `status` names it after a worker found dead (#577).
+`spawn --for-review|--package ... --note FILE` appends FILE to the generated review brief under `## Coordinator notes` (#604).
+`spawn --role writer --brief F` needs an `Output: <file>` line in F: the writer may write only that file, inside the project or the run folder (#604).
 """
 
 # Complexity notation:
@@ -68,6 +72,45 @@ SCREEN_ROWS = 1000  # O(1) spawn reads the whole pane: the fullscreen TUI pins t
 
 def _pause(s):  # tests swap it | O(s)
     time.sleep(s)  # O(s)
+
+
+def _hc_call(name, *args):  # a herdr_client function an older double may lack: its result, None when missing or failing | O(1)
+    fn = getattr(hc, name, None)  # O(1)
+    if fn is None:  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        return fn(*args)  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return None  # O(1)
+
+
+def _store_session(sd, wid, name):  # the agent's Claude session id into its fleet.json record; never raises | O(w)
+    try:  # O(1)
+        sid = _hc_call("agent_session", name)  # O(1)
+        if not sid:  # O(1)
+            return  # O(1)
+        with fs.locked(sd):  # O(1) plus wait
+            data = fs.load(sd)  # O(w)
+            if wid in data["workers"]:  # O(1)
+                data["workers"][wid]["session"] = sid  # O(1)
+                fs.save(sd, data)  # O(w)
+    except Exception:  # noqa: BLE001 | O(1)
+        pass  # O(1)
+
+
+def writer_output(brief, root, sd):  # the one file a writer brief names on its `Output:` line, as an absolute path inside root or sd | O(file)
+    text = Path(brief).read_text(encoding="utf-8")  # O(file)
+    m = re.search(r"^\s*Output:\s*`?([^`\s]+)`?\s*$", text, re.M)  # O(file)
+    if not m:  # O(1)
+        raise ValueError(f"writer brief {Path(brief).resolve()} names no Output: <file> line")  # O(1)
+    raw = m.group(1)  # O(1)
+    out = Path(os.path.normpath(Path(raw) if os.path.isabs(raw) else Path(root) / raw))  # O(len)
+    real = out.resolve()  # O(len)
+    for base in (Path(root), Path(sd)):  # O(1)
+        b = base.resolve()  # O(len)
+        if real == b or b in real.parents:  # resolved containment only: a symlink cannot lead out | O(len)
+            return real  # O(1)
+    raise ValueError(f"writer output {out} is outside {root} and {sd}")  # O(1)
 
 
 def start_on_shell(name, pane, argv):  # one start; a freed pane is not a shell yet: one pause, one more start | O(1)
@@ -299,7 +342,7 @@ def _live_names():  # names of the live herdr agents on this machine; no agent l
         return set()  # O(1)
 
 
-def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0):  # O(a * e + w) plus herdr calls
+def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0, output=None):  # O(a * e + w) plus herdr calls
     """One worker; a start that stays slow is retried once on another account.
     Every worker starts lean (#377): no MCP servers, Chrome, skills or slash commands; Artifact, ListAgents, ReadNotifications and ReportFindings denied (LEAN_FLAGS, LEAN_DENY)."""
     busy = ml.gate(f"fleet spawn ({role})", machine_wait, over)  # the first attempt only; the retry below is the same spawn | O(wait)
@@ -307,17 +350,17 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=
         print(f"BLOCKED: fleet spawn: {busy}; rerun later, or pass --over-limit")  # O(1)
         raise SystemExit(3)  # O(1) before any pane
     try:  # O(1)
-        return _spawn(sd, plan, tier, project, cfg, env, role, None)  # O(a * e + w)
+        return _spawn(sd, plan, tier, project, cfg, env, role, None, output)  # O(a * e + w)
     except (_Slow, NoShell) as first:  # O(1)
-        return _spawn(sd, plan, tier, project, cfg, env, role, first)  # O(a * e + w)
+        return _spawn(sd, plan, tier, project, cfg, env, role, first, output)  # O(a * e + w)
 
 
-def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus herdr calls
+def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a * e + w) plus herdr calls
     import fleet_roles  # noqa: E402 | O(1)
     sd = Path(sd)  # O(1)
     base = dict(os.environ) if env is None else env  # O(env)
     cfg = cfg or routing.load_cfg()  # O(file)
-    launch = fleet_roles.launch(role, tier, cfg)  # a ValueError (unknown role or tier) reaches `main` | O(file)
+    launch = fleet_roles.launch(role, tier, cfg, output=output)  # a ValueError (unknown role or tier) reaches `main` | O(file)
     agent, model = launch["agent"], launch["model"]  # O(1)
     prime = "prime-haiku.md" if model == "haiku" else "prime.md"  # O(1)
     if launch["prime"] and not (sd / prime).is_file():  # no pane, account or worker id for a worker that cannot read its prime | O(1)
@@ -335,18 +378,19 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus
     name = fs.agent_name(sd, wid, taken=_live_names())  # herdr rejects `W1`; every herdr agent call below uses this name | O(a)
     wenv = {**worker_env(sd, wid, agent, cdir, base), **fleet_roles.env(role)}  # O(1)
     cwd = str(project)  # O(1)
-    record = {"name": name, "account": account, "agent": agent, "tier": tier or model, "state": "starting", "task": None, "role": role, "one_turn": launch["one_turn"]}  # O(1)
+    argv = lean_argv(launch["argv"])  # O(n)
+    try:  # a state dir outside the project (a worktree run) is not readable by default | O(1)
+        sd.resolve().relative_to(Path(project).resolve())  # O(len)
+    except ValueError:  # O(1)
+        argv += ["--add-dir", str(sd.resolve())]  # O(1)
+    record = {"name": name, "account": account, "agent": agent, "tier": tier or model, "state": "starting", "task": None, "role": role, "one_turn": launch["one_turn"],  # O(1)
+              "launch": {"argv": argv, "env": wenv, "cwd": cwd}}
     try:  # O(1)
         pane = open_pane(sd, wid, cwd, wenv, record)  # O(w + p)
         with contextlib.suppress(OSError):  # the registry only spreads accounts; an unwritable one must not stop a spawn | O(1)
             fs.register_agent(name, shared)  # other sessions count this worker on its claude-profile account | O(1)
     except hc.HerdrError as e:  # O(1)
         _blocked(sd, wid, account, f"startup: {e.message or e.code}{tail}")  # O(1)
-    argv = lean_argv(launch["argv"])  # O(n)
-    try:  # a state dir outside the project (a worktree run) is not readable by default | O(1)
-        sd.resolve().relative_to(Path(project).resolve())  # O(len)
-    except ValueError:  # O(1)
-        argv += ["--add-dir", str(sd.resolve())]  # O(1)
     def fail(why, screen=None, named=True, slow=False, shell=False):  # O(s + w)
         fs.set_state(sd, wid, "blocked")  # O(w)
         try:  # O(1)
@@ -415,6 +459,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after):  # O(a * e + w) plus
         fail("no READY" + size + gone, screen, named=False)  # O(s)
     if launch["pool"]:  # the pool entry first: a concurrent round must not see a ready worker outside the pool | O(1)
         _register_pool(sd, wid, model, account)  # O(w)
+    _store_session(sd, wid, name)  # O(w)
     fs.set_state(sd, wid, "ready")  # O(w)
     _launch_line(sd, wid, agent, model, account, pane)  # O(1)
     print(f"{wid} account={account} pane={pane} agent={agent}" + ("" if role == "implementer" else f" role={role}"))  # O(1)
@@ -527,7 +572,7 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0):  # O(R * (s
     return 3 if blocked else 0  # O(1)
 
 
-def for_review(sd, plan, project, tasks, package=None, over=False, machine_wait=100.0):  # O(L + e + spawn + send): a package-reviewer for TASKS (or PACKAGE's committed tasks), brief written and sent
+def for_review(sd, plan, project, tasks, package=None, over=False, machine_wait=100.0, note=None):  # O(L + e + spawn + send): a package-reviewer for TASKS (or PACKAGE's committed tasks), brief written and sent
     import fleet_io as fio  # noqa: E402 | O(1) lazy
     sd = Path(sd)  # O(1)
     pp = sd / "pool.json"  # O(1)
@@ -566,7 +611,10 @@ def for_review(sd, plan, project, tasks, package=None, over=False, machine_wait=
     label = "review-" + (re.sub(r"[^a-z0-9]+", "-", package.lower()).strip("-") if package else ",".join(tasks))  # O(len)
     f = sd / "briefs" / (label.replace(",", "-") + ".md")  # O(1)
     f.parent.mkdir(parents=True, exist_ok=True)  # O(1)
-    f.write_text(fio.review_brief(sd, plan, tasks, str(fio.HERE / "sl"), str(fio.HERE.parents[2]), package), encoding="utf-8")  # O(L + e + B)
+    body = fio.review_brief(sd, plan, tasks, str(fio.HERE / "sl"), str(fio.HERE.parents[2]), package)  # O(L + e + B)
+    if note and note.strip():  # O(len)
+        body = body.rstrip("\n") + "\n\n## Coordinator notes\n\nThese notes add to the review above; review every task and file it lists all the same.\n\n" + note.strip() + "\n"  # O(B)
+    f.write_text(body, encoding="utf-8")  # O(B)
     w = spawn(sd, plan, None, project, role="package-reviewer", over=over, machine_wait=machine_wait)  # prints its own Wn or BLOCKED line; exit 3 stays | O(a * e + w)
     try:  # O(1)
         fio.send_brief(sd, w["id"], str(f), label)  # prints `Wn review-.. sent` | O(w + len)
@@ -667,7 +715,7 @@ def mark_dead(sd, wid):  # stopped, dead, off the pool; no pane is closed | O(w)
         w = data["workers"].get(wid)  # O(1)
         if w is None:  # O(1)
             return  # O(1)
-        w.update({"state": "stopped", "dead": True, "last_task": w.get("task") or w.get("last_task"), "task": None})  # O(1)
+        w.update({"state": "stopped", "dead": True, "was": w.get("was") if w.get("dead") else w.get("state"), "last_task": w.get("task") or w.get("last_task"), "task": None})  # O(1)
         fs.save(sd, data)  # O(w)
         _pool_drop(sd, wid)  # O(w)
 
@@ -765,6 +813,8 @@ def main(argv=None):  # O(w) plus command cost
         return importlib.import_module("fleet_io").main(argv)  # O(1) delegated
     if argv and argv[0] == "run":  # a layer run: a shell pane per layer | O(1)
         return importlib.import_module("fleet_layer").main(argv[1:])  # O(1) delegated
+    if argv and argv[0] == "restore":  # after a Herdr restart: every pane again | O(1)
+        return importlib.import_module("fleet_restore").main(argv[1:])  # O(1) delegated
     p = argparse.ArgumentParser(prog="fleet.py")  # O(1)
     sub = p.add_subparsers(dest="cmd", required=True)  # O(1)
     s = sub.add_parser("on", help="turn fleet mode on")  # O(1)
@@ -780,6 +830,7 @@ def main(argv=None):  # O(w) plus command cost
     s.add_argument("--plan")  # O(1)
     s.add_argument("--for-review", nargs="*", default=None)  # O(1) task ids, commas or spaces
     s.add_argument("--package")  # O(1) alone it means --for-review of the package's committed tasks
+    s.add_argument("--note")  # O(1) a file of coordinator notes appended to the review brief
     s.add_argument("--brief")  # O(1) a plain spawn sends this brief file to the new worker
     s.add_argument("--label", default="")  # O(1) the brief's task label
     s.add_argument("--wait", action="store_true")  # O(1) then waits for its report
@@ -798,7 +849,8 @@ def main(argv=None):  # O(w) plus command cost
     s.add_argument("ids", nargs="+")  # O(1)
     s.add_argument("--plan")  # O(1)
     for n, h in (("send", "send tasks, a brief or text to a worker"), ("keys", "send keys to a worker's pane"),  # O(1) delegated before parsing: these feed --help only
-                 ("wait", "wait for busy workers to report"), ("run", "run a test layer in a shell pane")):  # O(1)
+                 ("wait", "wait for busy workers to report"), ("run", "run a test layer in a shell pane"),  # O(1)
+                 ("restore", "re-launch every worker after a Herdr restart")):  # O(1)
         sub.add_parser(n, help=h)  # O(1)
     a = p.parse_args(argv)  # O(n)
     sd = _sd(a)  # O(d)
@@ -855,6 +907,8 @@ def main(argv=None):  # O(w) plus command cost
             print(f"{wid} {shown} account={w.get('account')} pane={w.get('pane_id')} task={w.get('task') or '-'}" + (f" role={role}" if role and role != "implementer" else "") + tail)  # O(1)
         for wid in newly:  # O(w)
             print(f"dead: {wid} (its agent is gone); start a fresh one: {respawn_hint(sd, wid, str(sd))}")  # O(w)
+        if newly:  # O(1)
+            print(f"restore: after a Herdr restart, sl fleet restore --plan {sd} resumes the workers in their own sessions")  # O(1)
         for wid in ended:  # O(w)
             print(f"reported: {wid}; collect: sl fleet wait {wid} --plan {sd}")  # O(1)
         _machine_line()  # O(p)
@@ -876,6 +930,25 @@ def main(argv=None):  # O(w) plus command cost
         if a.brief and (a.for_dispatch or a.for_review is not None or a.package):  # O(1)
             print("error: --brief is for a plain spawn", file=sys.stderr)  # O(1)
             return 2  # O(1)
+        if a.note is not None and a.for_review is None and not a.package:  # O(1)
+            print("error: --note is for --for-review or --package", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        note = None  # O(1)
+        if a.note is not None:  # before any pane | O(1)
+            if not Path(a.note).is_file():  # O(1)
+                print(f"error: note not found: {Path(a.note).resolve()}", file=sys.stderr)  # O(1)
+                return 2  # O(1)
+            note = Path(a.note).read_text(encoding="utf-8")  # O(file)
+        if a.role == "writer" and not a.brief:  # O(1)
+            print("error: --role writer needs --brief naming its Output: file", file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        output = None  # O(1)
+        if a.role == "writer" and a.brief and Path(a.brief).is_file():  # a missing brief is reported below | O(file)
+            try:  # O(1)
+                output = str(writer_output(a.brief, state.git_root(sd) or sd.parent, sd))  # O(file)
+            except ValueError as e:  # O(1)
+                print(f"error: {e}", file=sys.stderr)  # O(1)
+                return 2  # O(1) before any pane
         tmo = 540000  # O(1)
         if a.brief:  # before any pane: a missing brief or a bad timeout spawns nothing | O(1)
             if not Path(a.brief).is_file():  # O(1)
@@ -905,9 +978,9 @@ def main(argv=None):  # O(w) plus command cost
             return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent, a.over_limit, a.machine_wait)  # O(R * (spawn + send))
         if a.for_review is not None or a.package:  # O(1)
             ids = [x for v in a.for_review or [] for x in re.split(r"[,\s]+", v) if x]  # O(len)
-            return for_review(sd, a.plan, state.git_root(sd) or sd.parent, ids, a.package, a.over_limit, a.machine_wait)  # O(L + e + spawn + send)
+            return for_review(sd, a.plan, state.git_root(sd) or sd.parent, ids, a.package, a.over_limit, a.machine_wait, note)  # O(L + e + spawn + send)
         try:  # O(1)
-            w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait)  # O(w)
+            w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output)  # O(w)
         except ValueError as e:  # an unknown role or tier | O(1)
             print(f"error: {e}", file=sys.stderr)  # O(1)
             return 2  # O(1)

@@ -11,6 +11,8 @@ The prime kind is the tier's `prime` value in config/routing.json (sonnet: `slim
   mini  (haiku) into .superlite/prime-haiku.md: constraints, stub spec and the interfaces of that tier's tasks.
 
 `--plan` may be the run folder: stable.json, pool.json or plan.md names the plan file, else exit 2 (#508).
+A plan header line `**Read first:** a, b` and the test-cmd.json list `read_first` put a `## Read first`
+section into every prime kind: files each agent reads in full before its first task.
 Prints `sha256 size`. No timestamps; CRLF becomes LF, trailing spaces are
 stripped, and spec sections go in document order whatever order they are
 listed in. Stdlib only.
@@ -224,6 +226,41 @@ def launch_section(root):  # O(file + p*n)
     return LAUNCH_HEAD + "\n\n" + "\n".join(items) if items else ""  # O(p*n)
 
 
+READ_FIRST_HEAD = ("## Read first\n\nRead each of these files in full before your first task; they are not in this prime.")  # O(1)
+READ_FIRST_NOTE = 'test-cmd.json "read_first" must be a list of paths; ignored'  # O(1)
+
+
+def read_first_section(plan, root):  # O(L + file + r)
+    """`## Read first` from the plan header's `**Read first:**` line (before the first `## ` heading) and test-cmd.json `read_first`; "" when none."""
+    import testcmd  # O(1)
+    raw = []  # O(1)
+    for ln in plan.replace("\r\n", "\n").split("\n"):  # O(L) iterations
+        if ln.startswith("## "):  # O(1)
+            break  # O(1)
+        m = re.match(r"^\*\*Read first:\*\*(.*)$", ln)  # O(w)
+        if m:  # O(1)
+            raw += [x.strip().strip("`").strip() for x in m.group(1).split(",")]  # O(w)
+    cfg, source, _ = testcmd.config_source(Path(root))  # O(file)
+    extra = cfg.get("read_first") if source == "test-cmd.json" and isinstance(cfg, dict) else None  # O(1)
+    if extra is not None:  # O(1)
+        if isinstance(extra, list) and all(isinstance(x, str) for x in extra):  # O(r)
+            raw += [x.strip() for x in extra]  # O(r)
+        else:  # O(1)
+            print(READ_FIRST_NOTE, file=sys.stderr)  # O(1)
+    paths = []  # O(1)
+    for x in raw:  # O(r) iterations
+        if not x:  # O(1)
+            continue  # O(1)
+        q = Path(x).expanduser()  # O(w)
+        q = q if q.is_absolute() else Path(root) / q  # O(w)
+        s = q.as_posix()  # O(w)
+        if s not in paths:  # O(r)
+            paths.append(s)  # O(1)
+            if not q.exists():  # O(1) stat
+                print(f"build_prime: read first: {s} not found", file=sys.stderr)  # O(1)
+    return READ_FIRST_HEAD + "\n\n" + "\n".join(f"- {s}" for s in paths) if paths else ""  # O(r)
+
+
 def with_root(preamble, plan):  # O(n + d)
     """The preamble with one `Root: <abs run root>` line before its `Rules:` paragraph (the plan's toplevel, POSIX)."""
     import plan_tools as pt  # O(1)
@@ -234,6 +271,8 @@ def with_root(preamble, plan):  # O(n + d)
 def build(plan, spec, sections):  # O(B + out)
     parts = [with_root(PREAMBLE, plan)]  # O(B)
     import plan_tools as pt  # O(1)
+    rf = read_first_section(read(plan), pt.stable_root(str(plan)))  # O(B + file)
+    parts += [rf] if rf else []  # O(1)
     launch = launch_section(pt.stable_root(str(plan)))  # O(file)
     parts += ([launch] if launch else []) + ["## Plan\n\n" + read(plan)]  # O(B)
     if sections:  # O(1)
@@ -295,6 +334,8 @@ def build_slim(plan):  # O(B + n*s)
             lines.append("After: " + ", ".join(deps))  # O(deg)
         lines += [f"Produces: {x}" for x in t.produces] + [f"Consumes: {x}" for x in t.consumes]  # O(q)
     parts = [with_root(PREAMBLE_SLIM, plan)]  # O(n + d)
+    rf = read_first_section(nl.join(pl.lines), pt.stable_root(str(plan)))  # O(L + file)
+    parts += [rf] if rf else []  # O(1)
     parts.append("## Background (not instructions)" + nl + nl + normalize(nl.join(head) if head else "(the plan has no header)"))  # O(L)
     parts.append("## Global constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none beyond the header)"))  # O(L)
     launch = launch_section(pt.stable_root(str(plan)))  # O(file)
@@ -316,7 +357,8 @@ def build_mini(plan, tier):  # O(B + n*s)
     mine = [t for t in pl.tasks if tiers.get(t.id) == tier]  # O(n)
     cons = wave0.constraint_lines(pl)  # O(B)
     nl = "\n"
-    parts = [with_root(PREAMBLE_MINI, plan), "## Constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none)"),  # O(B)
+    rf = read_first_section(nl.join(pl.lines), pt.stable_root(str(plan)))  # O(L + file)
+    parts = [with_root(PREAMBLE_MINI, plan)] + ([rf] if rf else []) + ["## Constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none)"),  # O(B)
              "## Stub spec" + nl + nl + "```yaml" + nl + normalize(wave0.stub_spec(pl, pt.stable_root(plan))) + nl + "```"]  # O(q*s)
     lines = []  # O(1)
     for t in mine:  # O(n) iterations

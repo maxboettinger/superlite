@@ -115,6 +115,32 @@ def agents():  # O(a)
     return [x for x in _pick(call(["agent", "list"]), "agents") if isinstance(x, dict) and x.get("name")]  # O(a)
 
 
+def session_of(agent):  # O(1)
+    """The agent's session id (`agent_session.value`), or None."""
+    sess = agent.get("agent_session") if isinstance(agent, dict) else None  # O(1)
+    val = sess.get("value") if isinstance(sess, dict) else None  # O(1)
+    return val if isinstance(val, str) and val else None  # O(1)
+
+
+def agent_session(name):  # O(1)
+    return session_of(_pick(call(["agent", "get", name]), "agent"))  # O(1)
+
+
+def all_agents():  # O(a)
+    """Every agent herdr lists, named or not; non-dict rows are dropped."""
+    return [x for x in _pick(call(["agent", "list"]), "agents") if isinstance(x, dict)]  # O(a)
+
+
+def pane_exists(pane_id):  # O(1)
+    try:  # O(1)
+        call(["pane", "get", pane_id])  # O(1)
+    except HerdrError as e:  # O(1)
+        if e.code in ("missing", "timeout"):  # herdr itself is not reachable: say nothing about the pane | O(1)
+            raise  # O(1)
+        return False  # O(1)
+    return True  # O(1)
+
+
 def agent_states():  # O(a)
     return {x["name"]: _pick(x, "agent_status") for x in agents()}  # O(a)
 

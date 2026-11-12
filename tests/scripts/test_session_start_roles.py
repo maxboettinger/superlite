@@ -16,7 +16,7 @@ def test_implementer_note_is_unchanged(sd):
 
 @pytest.mark.parametrize("role,agent", [("fixer", "superlite:fixer-opus"), ("package-reviewer", "superlite:package-reviewer"),
                                         ("final-reviewer", "superlite:final-reviewer"), ("research", "superlite:researcher"),
-                                        ("checker", "superlite:checker")])
+                                        ("checker", "superlite:checker"), ("writer", "superlite:writer")])
 def test_brief_roles_get_the_brief_note(sd, role, agent):
     assert note(sd, SUPERLITE_FLEET_ROLE=role, SUPERLITE_FLEET_AGENT=agent) == (
         f"You are superlite fleet worker W1 ({role}, {agent}). The coordinator sends one brief file: "
