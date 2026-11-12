@@ -16,11 +16,13 @@ def test_argv_tuple_unpack(proj):
     assert bash(proj, cmd2).returncode == 2
 
 
-def test_fstring_target_is_glob(proj):
-    ok = "python3 - <<'EOF'\nfrom pathlib import Path\nx='a'\nPath(f\".superlite/plan-parts/{letter}.md\").write_text(x)\nEOF"
-    bad = "python3 - <<'EOF'\nfrom pathlib import Path\nx='a'\nPath(f\"src/{n}.py\").write_text(x)\nEOF"
-    assert bash(proj, ok).returncode == 0
-    assert bash(proj, bad).returncode == 2
+def test_fstring_with_unknown_piece_stays_blocked(proj):
+    def code(target: str) -> str:
+        return "python3 - <<'EOF'\nfrom pathlib import Path\nx='../../src/a'\n" + target + ".write_text(x)\nEOF"
+
+    assert bash(proj, code('Path(f".superlite/plan-parts/{letter}.md")')).returncode == 2
+    assert bash(proj, code('Path(f"src/{n}.py")')).returncode == 2
+    assert bash(proj, code("Path(f'.superlite/plan-parts/{x}')")).returncode == 2
 
 
 def test_pins_that_pass_today(proj):

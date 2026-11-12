@@ -489,7 +489,6 @@ _ASSIGN = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*([-+*/%|&^@]|//|\*\*|<<|>
 _TUP = re.compile(r"(?m)^[ \t]*([A-Za-z_]\w*(?:[ \t]*,[ \t]*[A-Za-z_]\w*)+)[ \t]*=(?![=>])[ \t]*")  # O(1) | a, b = x, y
 _FOR = re.compile(r"(?<![\w.])for\s+([A-Za-z_][\w\s,()]*?)\s+in\s+")  # O(1)
 _UNK = "\x00"  # an unknown piece inside a composed path
-_FGLOB = "\x01"  # follows _UNK for an f-string's unknown piece
 _TEMP: list[str | None] = [None]  # O(1) | the temp root of the code in hand (None: unknown)
 _TEMP_ENV = re.compile(r"\$(?:TMPDIR|TEMP|TMP)\b|\$\{(?:TMPDIR|TEMP|TMP)\}")  # O(1)
 _TEMP_NAMED = re.compile(r"\b(?:TMPDIR|TEMP|TMP|tempdir)\b")  # O(1)
@@ -504,10 +503,8 @@ def _final(v: str) -> str:  # O(len(v)) | an unknown piece becomes a `?` compone
         return v  # O(1)
     pre = v[:v.index(_UNK)]  # O(len(v))
     cut = max(pre.rfind("/"), pre.rfind("\\"))  # O(len(pre))
-    glob = v[len(pre) + 1:len(pre) + 2] == _FGLOB  # an f-string's unknown piece: a glob below its literal folder  # O(1)
     folder = pre[:cut + 1]  # O(len(pre))
-    deep = folder.startswith(".superlite/") and folder.count("/") >= 2 and ".." not in folder  # a glob needs a folder two levels below .superlite/; one level below is unknown  # O(len(folder))
-    return folder + "?" if pre and cut >= 0 and ((glob and deep) or _is_abs(pre)) else "?"  # O(len(pre))
+    return folder + "?" if pre and cut >= 0 and _is_abs(pre) else "?"  # O(len(pre))
 
 
 def _scan_close(code: str, i: int) -> int:  # O(len(code)) | index of the bracket closing the one at i (len(code) if none)
@@ -573,8 +570,6 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
     def top(self, atom_only: bool) -> list[str] | None:  # O(len(s))
         r = self.term() if atom_only else self.expr()  # O(len(s))
         self.ws()  # O(len(s))
-        if r is not None and not self.ctor:  # only an f-string inside Path(...) / os.path.join(...) is a glob  # O(64)
-            r = [v.replace(_UNK + _FGLOB, _UNK) for v in r]  # O(64)
         return r if r is not None and self.i == len(self.s) else None  # O(1)
 
     @staticmethod
@@ -750,7 +745,7 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
             elif c == "{":  # O(1)
                 e = _scan_close(body, k)  # O(len(body))
                 expr = body[k + 1:e].strip()  # O(len(body))
-                piece = self._cap(self.names[expr]) if _IDENT.fullmatch(expr) and expr in self.names else [_UNK + _FGLOB]  # O(64)
+                piece = self._cap(self.names[expr]) if _IDENT.fullmatch(expr) and expr in self.names else [_UNK]  # O(64)
                 k = e + 1  # O(1)
             else:  # O(1)
                 m = re.compile(r"[^{}\\]+|\\.?", re.S).match(body, k)  # O(len(body))
