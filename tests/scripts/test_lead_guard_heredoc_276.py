@@ -93,11 +93,12 @@ def child_cpu():
 def test_large_heredoc_is_quick(sd):
     # #353: CPU time of the hook's process tree, not wall clock, which parallel suites stretch.
     # time.process_time() would count only this test process, not the hook.
+    # 10 s: about 2 s on a Mac, up to 5.3 s on the server's 4-worker full run; a quadratic scan (#353) takes far longer.
     cmd = "cat > docs/big.md <<'EOF'\n" + "Run `sl backlog start B1` from the main session.\n" * 3000 + "EOF"
     t = child_cpu()
     r = call(sd, cmd)
     cpu = child_cpu() - t
-    assert r.returncode == 0 and cpu < 5, (cpu, r.stderr)
+    assert r.returncode == 0 and cpu < 10, (cpu, r.stderr)
 
 
 def test_description_alone_passes(sd):
