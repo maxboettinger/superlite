@@ -77,3 +77,12 @@ def test_other_substitutions_block(wt):
 
 def test_git_env_keeps_unknown(wt):
     assert run(wt, 'export GIT_DIR=src; echo x >> "$(git rev-parse --git-path info/exclude)"') == 2
+
+
+def test_single_quoted_literal_blocks(wt):
+    assert run(wt, "cd src 2>/dev/null; echo x >> '$(git rev-parse --git-path info/exclude)'") == 2
+
+
+def test_git_shadow_keeps_unknown(wt):
+    assert run(wt, 'git() { echo src/a.py; }; echo x >> "$(git rev-parse --git-path info/exclude)"') == 2
+    assert run(wt, 'PATH=src:$PATH; echo x >> "$(git rev-parse --git-path info/exclude)"') == 2
