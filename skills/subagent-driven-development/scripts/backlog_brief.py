@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Briefs for backlog mode: the lead's brief, the triage brief and the shipped-batch summary (pure text). A summary carries one generated `Decisions:` line naming who answered each recorded decision (#557)."""
+"""Briefs for backlog mode: the lead's brief, the triage brief and the shipped-batch summary (pure text). A summary carries one generated `Decisions:` line naming who answered each recorded decision (#557). The triage brief builds its own `Pinned:` line when main pinned the issues (#622)."""
 
 # Complexity notation:
 # i = issues, f = files, a = answers, n = lines
@@ -173,6 +173,16 @@ def carry_line(issues, carry):  # O(i)
             + ". Plan them before the other issues, unless one is an umbrella or tracking issue.")  # O(1)
 
 
+def pinned_line(head, version):  # O(len)
+    """The triage brief's `Pinned:` line; head (default-branch sha) and version name where the default branch is, when known."""
+    head, version = (clean(head, 40) if head else None), (clean(version, 40) if version else None)  # O(len)
+    at = ", ".join(x for x in (f"at {head}" if head else "", f"version {version}" if version else "") if x)  # O(1)
+    where = f" ({at})" if at else ""  # O(1)
+    return ("Pinned: main chose these issues with --issues; plan each one. Leave a pinned issue out only as an umbrella or tracking issue, "
+            "or as blocked with the missing commit, version or issue named in its left_out reason (e.g. \"needs 1.6.0 first\"); "
+            f"work already on the default branch{where} is not missing.")  # O(1)
+
+
 def triage_brief(issues, ctx):  # O(i)
     read = "The bodies and each issue's latest comments are quoted" if any("comments" in i for i in issues) else "The bodies are quoted"  # O(i)
     out = ["# Triage brief",
@@ -197,6 +207,9 @@ def triage_brief(issues, ctx):  # O(i)
     if ctx.get("open"):  # O(1)
         out.append(OPEN_HEAD + "; ".join(f"{clean(o.get('id', ''))} {clean(o.get('state', ''))}: {_files(o)}" for o in ctx["open"])
                    + ". " + OPEN_TAIL)  # O(b * f)
+    pin = ctx.get("pinned")  # O(1) {"head", "version"} only when main pinned the issues (#622)
+    if pin is not None:  # O(1)
+        out.append(pinned_line(pin.get("head"), pin.get("version")))  # O(1)
     out.append("Rules: " + ROOT_DOC_TRIAGE + TRIAGE_RUN + "no two batches share a file unless one depends on the other; list every repo-relative file a batch "
                "touches (at least one file per batch); depends names batches that must ship first; decisions lists each batch's major decisions, one "
                "AskUserQuestion call object {\"questions\": [...]} per decision (1 to 4 distinct questions per decision, question at most 300 characters, "

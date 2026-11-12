@@ -112,19 +112,6 @@ def test_no_version_known():
     assert bl("needs 1.6.0 first", None) == []
 
 
-def test_pinned_rule():
-    r = bi.pinned_rule("48888dd", "1.5.125")
-    assert r.startswith("Pinned: main chose these issues with --issues; plan each one.")
-    assert r.endswith('(e.g. "needs 1.6.0 first"); work already on the default branch (at 48888dd, version 1.5.125) is not missing.')
-    assert bi.pinned_rule(None, None).endswith("work already on the default branch is not missing.")
-
-
-def test_insert_before_rules():
-    assert bi.insert_before_rules("# T\nx\nRules: a\nEnd\n", ["P"]) == "# T\nx\nP\nRules: a\nEnd\n"
-    assert bi.insert_before_rules("# T\nx\n", ["P", "Q"]) == "# T\nx\nP\nQ\n"
-    assert bi.insert_before_rules("# T", ["P"]) == "# T\nP"
-
-
 def test_version_with_suffix_or_control_chars():
     prop = {"left_out": [{"issues": [1], "reason": "needs 1.5.1 first"}]}
     assert len(bi.blocked_lines(prop, [1], "1.5.125-rc1")) == 1
@@ -132,7 +119,6 @@ def test_version_with_suffix_or_control_chars():
     assert bi.blocked_lines(prop, [1], "dev") == []
     got = bi.blocked_lines(prop, [1], "1.5.125\x1b[31m")
     assert got and "\x1b" not in got[0]
-    assert "\x1b" not in bi.pinned_rule("ab\x1bcd", "1.5\x1b")
 
 
 def test_signatures_match_plan_produces():
@@ -142,8 +128,6 @@ def test_signatures_match_plan_produces():
         "split_shipped": "(trusted: list[dict], batches: list[dict], merged: dict, pin: list) -> tuple[list[dict], list[dict], list[str]]",
         "named_files": "(body: str, tracked: list[str]) -> list[str]",
         "blocked_lines": "(prop: dict, pin: list, version: str | None) -> list[str]",
-        "pinned_rule": "(head: str | None, version: str | None) -> str",
-        "insert_before_rules": "(brief: str, lines: list[str]) -> str",
     }
     for name, sig in want.items():
         assert str(inspect.signature(getattr(bi, name))).replace("'", "") == sig, name

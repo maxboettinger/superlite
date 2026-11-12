@@ -1,7 +1,7 @@
 """sl backlog plan --issues takes GitHub numbers, and issues an earlier cap left out are ranked first (#433)."""
 import pytest
 
-from test_backlog_cli import bk, cli, load, BATCH, bl, bs  # noqa: F401  bk is the CLI fixture
+from test_backlog_cli import bk, briefed, cli, load, BATCH, bl, bs  # noqa: F401  bk is the CLI fixture
 import backlog_brief as bb  # noqa: E402
 from test_backlog_jira_208 import jk  # noqa: F401  jk is the acli fixture
 
@@ -15,7 +15,7 @@ def brief(ns):
 
 
 def nums(ns):
-    return [i["number"] for i in ns.issues]
+    return [i["number"] for i in briefed(ns)]
 
 
 def seed(ns, **kw):
@@ -85,12 +85,10 @@ def test_cap_carry_over_ranked_first_and_counted(bk, capsys, monkeypatch):
     assert cli(capsys, "plan")[0] == 0
     assert nums(bk) == [1, 2, 3] and "Carry-over" not in brief(bk)
     assert load(bk)["outside"] == [{"number": 2, "title": "Two", "reason": CAP}, {"number": 3, "title": "Three", "reason": CAP}]
-    bk.issues.clear()
     assert cli(capsys, "plan", "--reset")[0] == 0
     assert nums(bk) == [2, 3, 1] and HEAD + "#2 (1 round), #3 (1 round)" + TAIL in brief(bk)
     assert load(bk)["outside"] == [{"number": 2, "title": "Two", "reason": CAP, "rounds": 2},
                                    {"number": 3, "title": "Three", "reason": CAP, "rounds": 2}]
-    bk.issues.clear()
     bk.batches = [{**BATCH, "issues": [2]}]
     assert cli(capsys, "plan", "--reset")[0] == 0
     assert nums(bk) == [2, 3, 1] and HEAD + "#2 (2 rounds), #3 (2 rounds)" + TAIL in brief(bk)
@@ -154,3 +152,37 @@ def test_help_names_github_numbers(capsys):
     with pytest.raises(SystemExit):
         bl.main(["plan", "--help"])
     assert "GitHub numbers (362,#433) or Jira keys" in " ".join(capsys.readouterr().out.split())
+
+
+PIN_HEAD = "Pinned: main chose these issues with --issues; plan each one."
+PIN_AT = "work already on the default branch (at 48888dd, version 1.5.125) is not missing."
+
+
+def test_pinned_line_text_622():
+    r = bb.pinned_line("48888dd", "1.5.125")
+    assert r.startswith(PIN_HEAD) and r.endswith('(e.g. "needs 1.6.0 first"); ' + PIN_AT)
+    assert bb.pinned_line(None, None).endswith("work already on the default branch is not missing.")
+    assert bb.pinned_line(None, "1.5.125").endswith("work already on the default branch (version 1.5.125) is not missing.")
+    assert "\x1b" not in bb.pinned_line("ab\x1bcd", "1.5\x1b")
+
+
+def test_triage_brief_puts_the_pinned_line_before_rules_622():
+    issues = [{"number": 1, "title": "t", "body": "b"}]
+    lines = bb.triage_brief(issues, {"repo": "r", "max_batches": 3, "pinned": {"head": "48888dd", "version": "1.5.125"}}).splitlines()
+    i = next(k for k, x in enumerate(lines) if x.startswith("Pinned: "))
+    assert lines[i] == bb.pinned_line("48888dd", "1.5.125") and lines[i + 1].startswith("Rules: ")
+    assert "Pinned:" not in bb.triage_brief(issues, {"repo": "r", "max_batches": 3})
+
+
+def test_pinned_plan_writes_one_line_built_by_the_brief_622(bk, capsys, no_acli, monkeypatch):
+    import inspect
+    import backlog_intake as bi
+    import backlog_ship
+    monkeypatch.setattr(bl, "_subjects", lambda root, ref: ["48888dd\tsubject"])
+    monkeypatch.setattr(backlog_ship, "_current_version", lambda root: "1.5.125")
+    assert cli(capsys, "plan", "--issues", "2,#1")[0] == 0
+    lines = brief(bk).splitlines()
+    pins = [k for k, x in enumerate(lines) if x.startswith("Pinned: ")]
+    assert len(pins) == 1 and lines[pins[0]] == bb.pinned_line("48888dd", "1.5.125") and lines[pins[0] + 1].startswith("Rules: ")
+    assert not hasattr(bi, "pinned_rule") and not hasattr(bi, "insert_before_rules")
+    assert "extra" not in inspect.signature(bl._triage).parameters

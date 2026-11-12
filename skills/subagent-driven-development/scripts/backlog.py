@@ -310,7 +310,7 @@ def _author(i: dict) -> str:
     return (a.get("login", "") if isinstance(a, dict) else str(a or ""))  # O(1)
 
 
-def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None, cap=None, open_=None, extra=None):
+def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_min: int, carry=None, cap=None, open_=None, pinned=None):
     """Run the triage worker; returns (proposal, None) or (None, error line list)."""
     import backlog_brief  # O(1)
     import fleet  # O(1)
@@ -318,11 +318,10 @@ def _triage(sd: Path, root: Path, trusted: list, repo: str, tier: str, timeout_m
     import fleet_state  # O(1)
     brief = sd / "briefs" / "triage.md"
     brief.parent.mkdir(parents=True, exist_ok=True)
-    text = backlog_brief.triage_brief(trusted, {"repo": repo, "max_batches": cap or MAX_BATCHES, "carry": carry or {}, "open": open_ or []})  # O(i)
-    if extra:  # O(1)
-        import backlog_intake  # O(1)
-        text = backlog_intake.insert_before_rules(text, extra)  # O(size)
-    brief.write_text(text)  # O(size)
+    ctx = {"repo": repo, "max_batches": cap or MAX_BATCHES, "carry": carry or {}, "open": open_ or []}  # O(1)
+    if pinned is not None:  # O(1) the brief builds its own Pinned: line (#622)
+        ctx["pinned"] = pinned  # O(1)
+    brief.write_text(backlog_brief.triage_brief(trusted, ctx))  # O(i)
     if not fleet_state.is_on(sd):  # O(w)
         fleet.main(["on", "--plan", str(sd)])
     w = fleet.spawn(sd, sd, tier, root, role="research")
@@ -563,7 +562,7 @@ def cmd_plan(a) -> int:
                                                                           "issues": [n], "files": files, "depends": [], "decisions": []}]}  # O(1)
             notes.append(f"fast path: {bs.ref(n)} names {', '.join(files)}; no triage worker")  # O(files)
     if prop is None:
-        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap, **({"open_": open_batches(d)} if add else {}), **({"extra": [bi.pinned_rule(head, version)]} if pin is not None else {}))  # O(i)
+        prop, err = _triage(sd, root, trusted, info["nameWithOwner"], a.tier, a.timeout_min, carry, cap, **({"open_": open_batches(d)} if add else {}), **({"pinned": {"head": head, "version": version}} if pin is not None else {}))  # O(i)
         if err:
             print("\n".join(err))
             return 3

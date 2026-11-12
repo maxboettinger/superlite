@@ -89,7 +89,7 @@ def test_max_batches_sets_cap(bk, capsys):
     assert cli(capsys, "plan", "--max-batches", "1")[0] == 0
     d = load(bk)
     assert [o["reason"] for o in d["outside"] if o["number"] == 2] == ["not planned (cap)"]
-    assert d["max_batches"] == 1 and bk.ctx["max_batches"] == 1
+    assert d["max_batches"] == 1 and "Propose at most 1 batches" in (bk.sd / "briefs" / "triage.md").read_text()
 
 
 def test_rejected_plan_keeps_source(jk, capsys):
@@ -101,4 +101,4 @@ def test_rejected_plan_keeps_source(jk, capsys):
 
 def test_carry_always_passed(bk, capsys):
     assert cli(capsys, "plan")[0] == 0
-    assert bk.ctx["carry"] == {}
+    assert "Carry-over" not in (bk.sd / "briefs" / "triage.md").read_text()
