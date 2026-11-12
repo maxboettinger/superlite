@@ -10,6 +10,9 @@ import shutil  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # O(1) sibling modules
+import worktree  # noqa: E402  O(1)
+
 
 def tracked_stats(root):  # O(F + N) + process spawn
     out = subprocess.run(  # O(F) output + process spawn
@@ -51,13 +54,25 @@ def decide(root, min_files, min_loc):  # O(F + N) + process spawn
     return res  # O(1)
 
 
+def exclude_output(root):  # O(e) + spawns
+    """Keep graphify-out/ out of git: one line in the common dir's info/exclude. -> True when it is ignored after."""
+    probe = "graphify-out/graph.json"  # O(1) a dir pattern matches a path below it
+    try:  # O(1)
+        worktree.add_exclude(root, "graphify-out", probe)  # O(e) + spawns
+        return worktree.git(root, "check-ignore", "-q", probe)[0] == 0  # O(1) + spawn
+    except OSError:  # O(1)
+        return False  # O(1)
+
+
 def main():  # O(F + N) + process spawn
     ap = argparse.ArgumentParser()  # O(1)
     ap.add_argument("--root", default=".")  # O(1)
     ap.add_argument("--min-files", type=int, default=50)  # O(1)
     ap.add_argument("--min-loc", type=int, default=10000)  # O(1)
     a = ap.parse_args()  # O(1)
-    print(json.dumps(decide(a.root, a.min_files, a.min_loc)))  # O(F + N) + process spawn
+    res = decide(a.root, a.min_files, a.min_loc)  # O(F + N) + process spawn
+    res["excluded"] = exclude_output(a.root) if res["use"] else False  # O(e) + spawns
+    print(json.dumps(res))  # O(1)
     return 0  # O(1)
 
 

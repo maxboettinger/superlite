@@ -48,7 +48,7 @@ import guard_files  # noqa: E402  O(1)
 import guard_lex  # noqa: E402  O(1)
 import guard_tools  # noqa: E402  O(1)
 
-__all__ = ["Verdict", "judge", "main"]  # O(1)
+__all__ = ["Verdict", "inline_owns", "judge", "main"]  # O(1)
 
 MAX_DEPTH = 8  # nested bodies judged before the rest counts as an unknown target | O(1)
 MAX_DIRS = 12  # directories tracked at once before the shell's directory counts as unknown | O(1)
@@ -78,6 +78,8 @@ TILDE_FORM = {"HOME": "~", "PWD": "~+", "OLDPWD": "~-"}  # variable -> the tilde
 KNOWN = frozenset({"PWD", "CLAUDE_PROJECT_DIR", "HOME", "IFS", "TMPDIR"})  # names whose value before the command the guard reads itself | O(1)
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")  # O(1)
 VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")  # O(1)
+EXCLUDE_SUB = re.compile(r"^(?:\$\(\s*git\s+rev-parse\s+--git-path\s+info/exclude\s*\)|`\s*git\s+rev-parse\s+--git-path\s+info/exclude\s*`|\$\(\s*git\s+rev-parse\s+--git-common-dir\s*\)/info/exclude|`\s*git\s+rev-parse\s+--git-common-dir\s*`/info/exclude)$")  # git's own answer for the local exclude file | O(1)
+SHADOW = re.compile(r"\bgit\s*\(\)|\bfunction\s+git\b|\balias\s+git\b|\bPATH\+?=|\bGIT_")  # a command that may redirect or replace git itself | O(1)
 STAYS = (".superlite/*",)  # folders a write may name from an unknown directory: it sits at the root or not at all | O(1)
 REFUSED = "Refused command: {} (none of this Bash call ran; run its other commands again without it)"  # O(1)
 MAX_TREE = 2000  # entries a folder may hold for rm -r to pass as housekeeping | O(1)
@@ -109,7 +111,32 @@ class Verdict:  # O(1)
     cmd: str = field(default="", compare=False)  # the command (segment text) the verdict came from | O(1)
 
 
+def inline_owns(sd):  # O(plan) | (realpath of the plan's root, Owns) when the run's plan holds exactly one local task, else None
+    try:  # O(1)
+        with open(os.path.join(sd, "stable.json"), encoding="utf-8") as f:  # no stable.json: no import | O(1)
+            plan = json.load(f)["plan"]  # O(1)
+        import plan_tools  # lazy | O(1)
+        tasks = plan_tools.Plan.load(plan).tasks  # O(plan)
+        if len(tasks) != 1 or tasks[0].repo:  # O(1)
+            return None  # O(1)
+        owns = [o for o in tasks[0].owns if isinstance(o, str) and o]  # O(owns)
+        return (os.path.realpath(plan_tools.stable_root(plan)), owns) if owns else None  # O(d)
+    except Exception:  # noqa: BLE001  any doubt: no inline Owns | O(1)
+        return None  # O(1)
+
+
+def _inline_for(sd):  # O(plan) | (plan root, Owns) of the run's inline build, wherever the run lives (a linked worktree of the project too), else none
+    got = inline_owns(sd) if sd else None  # O(plan)
+    return got or ()  # O(1)
+
+
 class _Ctx:  # O(p)
+    @property
+    def inline(self):  # O(plan) once | Owns of the one task of an inline build; loaded at most once, only when a verdict needs it
+        if self._inline is None:  # O(1)
+            self._inline = _inline_for(self.sd) if self.mode == "active" else ()  # O(plan)
+        return self._inline  # O(1)
+
     def __init__(self, command, project, mode, sds=()):  # O(n + p)
         self.mode = mode  # O(1)
         self.sd = next((d for d in sds if isinstance(d, str) and d), None)  # first state folder | O(s)
@@ -139,6 +166,7 @@ class _Ctx:  # O(p)
         self.caches = {d.rstrip("/") + "/python" for d in self.cache_dirs}  # protected in every mode | O(1)
         folders = [_clean(_winpath(d)) for d in sds if isinstance(d, str) and d and "\0" not in d]  # O(s * p)
         self.render = _render_files(self.sd) if mode == "active" else frozenset()  # files `sl render_edit start` recorded | O(f)
+        self._inline = None  # the inline Owns, loaded on first use | O(1)
         self.prot_abs = {x.lower() for d in folders for n in NAMES for x in (d.rstrip("/") + "/" + n, os.path.realpath(d).rstrip("/") + "/" + n)}  # run files of state folders, by absolute path | O(s * p)
 
 
@@ -272,6 +300,14 @@ def _hardlinked(real):  # O(1) | an existing regular file with more than one nam
     return stat.S_ISREG(st.st_mode) and st.st_nlink > 1  # O(1)
 
 
+def _owned(real, ctx):  # O(owns) | does the inline task own the real path, taken relative to the plan's root?
+    rel = _rel(real, ctx.inline[0])  # never "" and never outside the root | O(p)
+    if not rel:  # O(1)
+        return False  # O(1)
+    import next_tasks  # lazy | O(1)
+    return next_tasks.owns_match(rel, ctx.inline[1])  # O(owns)
+
+
 def _judge_path(path, base, ctx, name=None, stays=True):  # O(p + depth) | the policy's verdict for one path from directory base
     p = _winpath(path)  # O(p)
     if p == "" or p.startswith("/dev/"):  # O(1)
@@ -339,6 +375,8 @@ def _judge_path(path, base, ctx, name=None, stays=True):  # O(p + depth) | the p
     if not ctx.enforce or _allowed(rel, ctx.mode):  # O(patterns)
         return None  # O(1)
     if wt is not None and _allowed(wt, ctx.mode):  # judged from the worktree's root | O(patterns)
+        return None  # O(1)
+    if ctx.inline and _owned(real, ctx):  # the one task of an inline build: its Owns, loaded only now | O(owns)
         return None  # O(1)
     return Verdict(rel, absolute, ctx.kind)  # O(1)
 
@@ -506,9 +544,30 @@ def _check_flagged(t, inn, st, ctx, name, flag):  # O(MAX_BRACE * d * p) | a glo
     return found  # O(1)
 
 
+def _exclude_sub_ok(text):  # O(len(text)) | True when the text has no `$(` or backtick inside single quotes (there it is a literal file name) and nothing that may redirect or replace git
+    if SHADOW.search(text):  # O(len(text))
+        return False  # O(1)
+    q = ""  # the open quote
+    i = 0
+    while i < len(text):  # O(len(text))
+        c = text[i]
+        if q == "'" and c in "$`":  # a substitution sign inside single quotes: a literal name | O(1)
+            return False  # O(1)
+        if c == "\\" and q != "'":  # an escaped character | O(1)
+            i += 1
+        elif q == c:  # the quote closes | O(1)
+            q = ""
+        elif not q and c in "'\"":  # a quote opens | O(1)
+            q = c
+        i += 1
+    return True  # O(1)
+
+
 def _check(t, inn, st, ctx, name=None, flag=""):  # O(d * (p + depth)) | verdict for one target from every possible directory
     if _tilde_user(t):  # `~name/x`: a folder the guard cannot name | O(1)
         return _unknown(ctx, t)  # O(1)
+    if EXCLUDE_SUB.match(t) and _exclude_sub_ok(ctx.text):  # git's own answer for the local exclude file (#599), unless GIT_* may redirect it | O(p)
+        return None  # O(1)
     t = _expand(t, st, ctx)  # O(p + v)
     if not flag and ctx.vglob:  # a glob a variable's value gave | O(v)
         flag = _flag_of(t, {w: "g" for w in ctx.vglob})  # O(v * p)
@@ -1627,6 +1686,7 @@ MESSAGES = {  # O(1)
              "- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
              "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file or folder git "
              "does not track and no task Owns.",
+             "- An inline build (the run's plan holds exactly one task): you may write that task's Owns yourself.",
              "- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; "
              "`sl render_edit restore` undoes it.",
              "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
@@ -1650,17 +1710,29 @@ def _incident(sd, kind, tool, target, rule=None, cwd=None):  # O(1) | append one
         pass  # O(1)
 
 
-def _args(argv):  # O(a) | (mode, project, sd)
+def _args(argv):  # O(a) | (mode, project, sd, owns or None)
     opts = {}  # O(1)
     it = iter(argv)  # O(1)
     for a in it:  # O(a)
-        if a in ("--mode", "--project", "--sd"):  # O(1)
+        if a in ("--mode", "--project", "--sd", "--owns"):  # O(1)
             opts[a[2:]] = next(it)  # O(1)
         else:  # O(1)
             raise ValueError("unknown argument " + a)  # O(1)
     if opts.get("mode") not in ("idle", "active", "human") or "project" not in opts or "sd" not in opts:  # O(1)
         raise ValueError("--mode, --project and --sd are required")  # O(1)
-    return opts["mode"], opts["project"], opts["sd"]  # O(1)
+    return opts["mode"], opts["project"], opts["sd"], opts.get("owns")  # O(1)
+
+
+def _owns_ok(path, project, sd):  # O(p + owns) | may the coordinator write this file as the inline task's Owns? any doubt is no
+    try:  # O(1)
+        ctx = _Ctx("", project, "active", (sd,))  # O(p)
+        if not ctx.inline or "\0" in path:  # O(1)
+            return False  # O(1)
+        full = _clean(path if path.startswith("/") else ctx.projn + "/" + path)  # O(p)
+        real = _real(full)  # O(p)
+        return bool(_rel(real, ctx.projreal)) and _owned(real, ctx) and _judge_path(path, ctx.projn, ctx) is None  # O(p + owns)
+    except Exception:  # noqa: BLE001  O(1)
+        return False  # O(1)
 
 
 def _err(text):  # O(len) | print on stderr whatever the stream's encoding
@@ -1677,9 +1749,14 @@ def _ack():  # O(1) | the allow line the hook waits for: an exit 0 without it wa
 
 def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every internal error
     try:  # O(1)
-        mode, project, sd = _args(sys.argv[1:] if argv is None else argv)  # O(a)
+        mode, project, sd, owns = _args(sys.argv[1:] if argv is None else argv)  # O(a)
     except (ValueError, StopIteration):  # O(1)
         return 0  # O(1)
+    if owns is not None:  # --owns PATH: exit 0 and the ack only for an active run's inline Owns file, else 1 | O(p)
+        if mode == "active" and _owns_ok(owns, project, sd):  # O(p)
+            _ack()  # O(1)
+            return 0  # O(1)
+        return 1  # O(1)
     tool, cmd = "", ""  # O(1)
     try:  # O(1)
         data = json.loads(sys.stdin.read())  # O(n)

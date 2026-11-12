@@ -11,7 +11,7 @@ First message, no mode, not trivial: `/superlite:start`.
 
 **Skills** (`superlite:`): build `brainstorming`, plan `writing-plans`, run `subagent-driven-development`, bug `systematic-debugging`, TDD `test-driven-development`, done `verification-before-completion`, finish `finishing-a-development-branch`.
 
-**2+ tasks: `subagent-driven-development`,** loaded before the plan; no `general-purpose` agents; inline only if small (few files, one chain; say so). Non-trivial: end with fresh `superlite:final-reviewer`. Fleet: `sl fleet on` before the first dispatch; taskgraph implementers only; inline starts no worker.
+**2+ tasks: `subagent-driven-development`,** loaded before the plan; no `general-purpose` agents; inline only if small (one task, few files; say so). Non-trivial: end with fresh `superlite:final-reviewer`. Fleet: `sl fleet on` before the first dispatch; taskgraph implementers only; inline starts no worker.
 
 **Tools.** `<skill-dir>/../subagent-driven-development/scripts/sl <tool>`, never `python`. Graphify only if `sl graphify_gate` allows.
 

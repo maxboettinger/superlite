@@ -12,9 +12,9 @@
 #     general-purpose and sl dispatch/assign/wave0/commit_task/finish/build_prime/run_tests are denied.
 #  3. Active run (.superlite/stable.json, prime.md or pool.json exists): project code is not written
 #     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg,
-#     jpeg, gif, svg, webp), any docs.md, .superlite/** and .git/info/exclude (a stray untracked file or folder may also be removed with rm), in the project or a linked worktree in it. `sl orchestrator end` closes the run.
+#     jpeg, gif, svg, webp), any docs.md, .superlite/** and .git/info/exclude (a stray untracked file or folder may also be removed with rm), in the project or a linked worktree in it; an Edit/Write of the Owns of an inline build (the run's plan holds exactly one task) passes too, judged by guard_judge.py --owns. `sl orchestrator end` closes the run.
 #  4. Fleet on (.superlite/fleet.json says "on": true): an Agent call of a superlite role (implementer, implementer-haiku,
-#     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher) is denied with the
+#     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher, checker) is denied with the
 #     `sl fleet spawn --role` hint, as the role is a fleet worker then. The message says the block repeats on every call (no retry);
 #     a researcher's message gives the research path (brief under <state folder>/briefs/, spawn, send, `fleet wait Wn`,
 #     report under <state folder>/fleet/reports/). Other agents (Explore, general-purpose) fall through.
@@ -342,6 +342,16 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
   fi
   jstr subagent_type
   fstale=0
+  # a fleet that moved ("moved_to": absolute folder, fleet off here) is read at its target, up to 5 moves (#580)
+  FSD0="$FSD"; re_mv='"moved_to"[[:space:]]*:[[:space:]]*"([^"]*)"'; re_fon0='"on"[[:space:]]*:[[:space:]]*true'
+  for _mv in 1 2 3 4 5; do
+    [ -f "$FSD/fleet.json" ] || break
+    IFS= read -r -d '' fj < "$FSD/fleet.json"
+    [[ $fj =~ $re_fon0 ]] && break
+    [[ $fj =~ $re_mv ]] || break
+    mvt="${BASH_REMATCH[1]//\\\\//}"
+    case "$mvt" in /*|[A-Za-z]:/*) FSD="${mvt%/}" ;; *) break ;; esac
+  done
   if [ -f "$FSD/fleet.json" ]; then   # rule 4: fleet on, so a superlite role is a worker, never an in-process Agent
     IFS= read -r -d '' fj < "$FSD/fleet.json"
     re_fon='"on"[[:space:]]*:[[:space:]]*true'
@@ -372,15 +382,18 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         fixer-sonnet|fixer-sonnet-high|fixer-opus) frole="fixer --tier ${fname#fixer-}" ;;
         package-reviewer|final-reviewer) frole="$fname" ;;
         researcher) frole="research" ;;
+        checker) frole="checker" ;;
       esac
       if [ -n "$frole" ]; then
         printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)","rule":"fleet","cwd":"%s"}\n' "$tool" "$REPLY" "$cwdv" \
           >> "$FSD/incidents.jsonl" 2>/dev/null
         again="It is blocked on every call while fleet is on: do not retry it."
+        fread=" Fleet state read: $FSD0/fleet.json."
+        [ "$FSD" = "$FSD0" ] || fread=" Fleet state read: $FSD0/fleet.json, moved to $FSD/fleet.json."
         if [ "$frole" = research ]; then
-          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $FSD/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $FSD/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $FSD/fleet/reports/<name>.md. PLAN is the plan file, or $FSD before a plan exists. sl fleet off goes back to in-process agents." >&2
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $FSD/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $FSD/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $FSD/fleet/reports/<name>.md. PLAN is the plan file, or $FSD before a plan exists. sl fleet off goes back to in-process agents.$fread" >&2
         else
-          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents." >&2
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents.$fread" >&2
         fi
         exit 2
       fi
@@ -709,6 +722,17 @@ fi
 
 [ -n "$hit" ] || exit 0
 
+# #599: an Edit/Write the rules block in an active run still passes when it names a file the run's inline (one-task) plan
+# owns; the judge decides (`--owns`), and any doubt, error or missing ack keeps the block.
+if [ "$active" = 1 ] && [ "$human" = 0 ] && [ "$prot" = 0 ] && [ -n "$tgt" ] && { [ "$tool" = Edit ] || [ "$tool" = Write ]; }; then
+  judge="${BASH_SOURCE[0]%/*}/../skills/subagent-driven-development/scripts/guard_judge.py"
+  if [ -f "$judge" ] && find_py; then
+    nonce="$RANDOM$RANDOM$$$RANDOM"
+    out="$(SUPERLITE_GUARD_NONCE="$nonce" "${PY[@]}" -I -X utf8 "$judge" --mode active --project "$proj" --sd "$sd" --owns "$tgt" </dev/null 2>/dev/null)"
+    [ $? = 0 ] && [[ $out == *"guard: ok $nonce"* ]] && exit 0
+  fi
+fi
+
 hit="${hit:0:120}"; hit="${hit//[\"\\$'\n\r\t']/}"
 rule=code
 [ "$human" = 1 ] && rule=human
@@ -731,6 +755,7 @@ else
     '- Fix: give a fixer a finding id F-<Tn>-<n> and the note path .superlite/fixes/<id>.md, tiered per skills/subagent-driven-development/fixing.md: known cause, one module -> fixer-sonnet; cross-module -> fixer-sonnet-high; unknown cause -> fixer-opus.' \
     '- Wave 0 skeleton/stub/config files belong to an implementer-haiku task.' \
     '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, and rm a file or folder git does not track and no task Owns.' \
+    "- An inline build (the run's plan holds exactly one task): you may write that task's Owns yourself." \
     '- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; `sl render_edit restore` undoes it.' \
     '- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete .superlite by hand.' >&2
 fi
