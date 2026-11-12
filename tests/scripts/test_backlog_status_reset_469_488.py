@@ -20,6 +20,9 @@ def shipped(bid, issues, open_):
 def fake_open(monkeypatch, fn):
     if not REAL:
         monkeypatch.setattr(backlog_tracker, "open_now", fn, raising=False)
+    else:  # the real open_now runs; only its two outside reads are faked
+        monkeypatch.setattr(backlog_tracker, "_gh_closed", lambda repo, nums, root: set(nums) - set(fn(repo, nums, root)))
+        monkeypatch.setattr(backlog_tracker, "_jira_done", lambda keys: set(keys) - set(fn("", keys, None)))
 
 def test_status_drops_closed_markers_and_keeps_failed_reads(bk, capsys, monkeypatch):
     seed(bk, [shipped("B1", [5, 6], [5, 6])])

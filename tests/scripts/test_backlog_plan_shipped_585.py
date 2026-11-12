@@ -23,7 +23,7 @@ def test_issue_of_shipped_batch_is_not_triaged(bk, capsys):
     bs.update(bs.path(bk.root), lambda d: d["batches"].append({**BATCH, "id": "B7", "issues": [1], "state": "shipped"}))
     bk.batches = [TWO]
     rc, out = cli(capsys, "plan")
-    assert rc == 0 and "- #1 One" not in brief(bk) and "- #2 Two" in brief(bk)
+    assert rc == 0 and "#1 One" not in brief(bk) and "#2 Two" in brief(bk)
     assert "already shipped: #1 in B7" in out
 
 
@@ -31,7 +31,7 @@ def test_merged_subject_leaves_issue_out(bk, capsys, monkeypatch):
     monkeypatch.setattr(bl, "_subjects", lambda root, ref: ["abc1234\tFix two (#2) (#40)"])
     bk.batches = [{**BATCH, "issues": [1]}]
     rc, out = cli(capsys, "plan")
-    assert rc == 0 and "- #2 Two" not in brief(bk)
+    assert rc == 0 and "#2 Two" not in brief(bk)
     assert {"number": 2, "title": "Two", "reason": "not planned (shipped: PR #40)"} in [
         {k: o[k] for k in ("number", "title", "reason")} for o in load(bk)["outside"] if "reason" in o]
     assert "not planned (shipped: PR #40): #2" in out
