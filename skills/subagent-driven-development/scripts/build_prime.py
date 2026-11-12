@@ -261,11 +261,26 @@ def read_first_section(plan, root):  # O(L + file + r)
     return READ_FIRST_HEAD + "\n\n" + "\n".join(f"- {s}" for s in paths) if paths else ""  # O(r)
 
 
+def verdict_line(root):  # O(file)
+    """The `- Verdict:` rule for a Swift project (the resolved test command, 80 characters at most); "" otherwise or when resolve fails."""
+    import testcmd  # O(1)
+    try:  # O(1)
+        spec = testcmd.resolve(root)  # O(file)
+    except Exception:  # a broken config adds no line | O(1)
+        return ""  # O(1)
+    if not spec or spec.get("language") != "swift" or not spec.get("command"):  # O(1)
+        return ""  # O(1)
+    return (f"- Verdict: sl run_tests runs the project's test command ({spec['command'][:80]}); a build pool may run it on another Mac. "
+            "A product build, simulator or device run stays on this machine and is no proof unless your task names it.")  # O(1)
+
+
 def with_root(preamble, plan):  # O(n + d)
     """The preamble with one `Root: <abs run root>` line before its `Rules:` paragraph (the plan's toplevel, POSIX)."""
     import plan_tools as pt  # O(1)
     root = pt.stable_root(str(plan)).resolve().as_posix()  # O(d)
-    return normalize(preamble).replace("\n\nRules:", f"\n\nRoot: {root}\n\nRules:", 1)  # O(n)
+    text = normalize(preamble).replace("\n\nRules:", f"\n\nRoot: {root}\n\nRules:", 1)  # O(n)
+    line = verdict_line(root)  # O(file)
+    return text.replace(FG + "\n", FG + "\n" + line + "\n", 1) if line else text  # O(n)
 
 
 def build(plan, spec, sections):  # O(B + out)
