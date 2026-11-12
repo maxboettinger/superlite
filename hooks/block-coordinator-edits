@@ -14,7 +14,7 @@
 #     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg,
 #     jpeg, gif, svg, webp), any docs.md, .superlite/** and .git/info/exclude (a stray untracked file or folder may also be removed with rm), in the project or a linked worktree in it; an Edit/Write of the Owns of an inline build (the run's plan holds exactly one task) passes too, judged by guard_judge.py --owns. `sl orchestrator end` closes the run.
 #  4. Fleet on (.superlite/fleet.json says "on": true): an Agent call of a superlite role (implementer, implementer-haiku,
-#     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher) is denied with the
+#     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher, checker) is denied with the
 #     `sl fleet spawn --role` hint, as the role is a fleet worker then. The message says the block repeats on every call (no retry);
 #     a researcher's message gives the research path (brief under <state folder>/briefs/, spawn, send, `fleet wait Wn`,
 #     report under <state folder>/fleet/reports/). Other agents (Explore, general-purpose) fall through.
@@ -382,6 +382,7 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         fixer-sonnet|fixer-sonnet-high|fixer-opus) frole="fixer --tier ${fname#fixer-}" ;;
         package-reviewer|final-reviewer) frole="$fname" ;;
         researcher) frole="research" ;;
+        checker) frole="checker" ;;
       esac
       if [ -n "$frole" ]; then
         printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)","rule":"fleet","cwd":"%s"}\n' "$tool" "$REPLY" "$cwdv" \

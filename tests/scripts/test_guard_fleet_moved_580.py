@@ -73,3 +73,11 @@ def test_backslash_moved_to_read_as_slash(sd):
     (sd / "fleet.json").write_text('{"on": false, "moved_to": "' + str(other).replace("/", "\\\\") + '"}')
     put(other, on=True)
     assert guard(sd, "superlite:implementer").returncode == 2
+
+
+def test_checker_blocked_with_fleet_on(sd):
+    put(sd, on=True)
+    for name in ("superlite:checker", "Superlite:Checker"):
+        r = guard(sd, name)
+        assert r.returncode == 2
+        assert "sl fleet spawn --role checker" in r.stderr
