@@ -14,9 +14,17 @@ RUN_TESTS = Path(run_tests.__file__)
 RUNNER = 'echo "$@" > .superlite/args.txt\necho "FOO=$FOO" > .superlite/env.txt\necho "1 passed"\n'
 
 
-def run(tmp_path, *args):
+def child_env(tmp_path):
     env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_") and k != "FOO"}
-    env.update(SUPERLITE_HOME=str(tmp_path / "home"), PYTHONIOENCODING="utf-8")
+    env.update(SUPERLITE_HOME=os.environ.get("SUPERLITE_HOME") or str(tmp_path / "home"), PYTHONIOENCODING="utf-8")
+    env.update(SUPERLITE_DISK_FLOOR_GB="0", SUPERLITE_DISK_WARN_GB="0", SUPERLITE_MACHINE_LIMIT="0")
+    if "SUPERLITE_USER_TEST_CMD" in os.environ:
+        env["SUPERLITE_USER_TEST_CMD"] = os.environ["SUPERLITE_USER_TEST_CMD"]
+    return env
+
+
+def run(tmp_path, *args):
+    env = child_env(tmp_path)
     sl = tmp_path / ".superlite"
     cp = subprocess.run([sys.executable, str(RUN_TESTS), "--log", str(sl / "incidents.jsonl"),
                          "--ledger", str(sl / "ledger.md"), "--summary", str(sl / "test-summary.json"), *map(str, args)],
@@ -127,3 +135,12 @@ def test_passthrough_background_keeps_args(tmp_path):
     seen = read(tmp_path, "args.txt")
     assert "--flag" in seen
     assert "--summary" not in seen and "--run-id" not in seen
+
+
+def test_helper_env_pins_disk_guard(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_DISK_FLOOR_GB", "100000")
+    monkeypatch.setenv("SUPERLITE_OTHER", "x")
+    env = child_env(tmp_path)
+    assert env["SUPERLITE_DISK_FLOOR_GB"] == "0" and env["SUPERLITE_DISK_WARN_GB"] == "0"
+    assert env["SUPERLITE_MACHINE_LIMIT"] == "0" and "SUPERLITE_OTHER" not in env
+    assert env["SUPERLITE_HOME"]
