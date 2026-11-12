@@ -32,3 +32,9 @@ def test_docs_b131_exit_127_stop_text():
     text = row("run_tests")
     assert "test command could not run" in text
     assert "or exits 127" not in text
+
+
+def test_docs_b131_run_tests_names_not_basenames():
+    text = row("run_tests")
+    assert "test file basenames joined" not in text
+    assert "shell-quoted" in text
