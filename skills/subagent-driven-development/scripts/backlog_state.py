@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 import backlog_checks
+import backlog_brief  # imported here, so a test's stub of lead_brief in sys.modules leaves cut_note real
 
 SHIP_Q = ("Approve that every batch lead ships its own batch (rebase, version bump, maxapp ship into the default "
           "branch) under the ship lock?")
@@ -287,6 +288,14 @@ def in_round(data: dict, b: dict) -> bool:
     return not titles or any(str(i) in titles for i in b.get("issues", []))  # O(issues)
 
 
+def _word40(text):  # O(len)
+    t = " ".join(str(text).split())  # O(len)
+    if len(t) <= 40:  # O(1)
+        return t  # O(1)
+    cut = t[:41].rsplit(" ", 1)[0] if " " in t[:41] else t[:40]  # O(1)
+    return cut[:40]  # O(1)
+
+
 def status_lines(data: dict, all_: bool = False) -> list:
     bs = data.get("batches", [])
     run = sum(1 for b in bs if b["state"] in ACTIVE)
@@ -315,15 +324,18 @@ def status_lines(data: dict, all_: bool = False) -> list:
         elif s == "needs_decision":
             nxt = f"sl backlog decide --print --batch {b['id']}"
         elif s == "parked":
-            nxt = (b.get("reason") or "-")[:40]
+            nxt = _word40(b.get("reason") or "-")  # O(len)
         else:
-            nxt = (b.get("version") or "-") + "".join(f" {k}={len(b[k])}" for k in ("followups", "undone") if b.get(k)) + (" OPEN " + " ".join(ref(i) for i in b["open_issues"]) if b.get("open_issues") else "")
+            nxt = ("no-change" if b.get("no_change") else b.get("version") or "-") + "".join(f" {k}={len(b[k])}" for k in ("followups", "undone", "unverified") if b.get(k)) + (" design: awaits plan approval" if b.get("kind") == "design" else "") + (" OPEN " + " ".join(ref(i) for i in b["open_issues"]) if b.get("open_issues") else "")
         issues = " ".join(ref(i) for i in b.get("issues", []))
         nxt += " cleanup owed" if s == "shipped" and owed(b) else ""  # O(1)
         lines.append(f"{b['id']} | {issues} | {s} | {b.get('lead') or '-'} | {'#%s' % b['pr'] if b.get('pr') else '-'} | {nxt}")
     for b in rows:  # O(batches)
         if b["state"] == "shipped" and owed(b):  # O(1)
             lines.append(f"cleanup owed: {b['id']} {b['worktree']}: {b['cleanup_owed']}; fix it, then maxapp ship -C {b['worktree']}")  # O(1)
+    for b in rows:  # O(batches)
+        if b["state"] == "parked" and len(str(b.get("reason") or "")) > 40:  # O(1)
+            lines.append(f"reason {b['id']}: {backlog_brief.cut_note(' '.join(str(b['reason']).split()), b['id'])}")  # O(len)
     lines.extend(left_out_lines(data))
     if nl:
         lines.append(nl)

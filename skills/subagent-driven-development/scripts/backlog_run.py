@@ -32,12 +32,16 @@ from pathlib import Path  # O(1)
 HERE = Path(__file__).resolve().parent  # O(1)
 sys.path.insert(0, str(HERE))  # O(1)
 import backlog_answer as ba  # noqa: E402 | O(1)
+import backlog_brief as bb  # noqa: E402 | O(1) imported here, so a test's stub of lead_brief in sys.modules leaves cut_note and summary real
 import backlog_checks as bc  # noqa: E402 | O(1)
 import backlog_state as bs  # noqa: E402 | O(1)
 import testcmd  # noqa: E402 | O(1)
 
 ACTIVE = ("running", "needs_decision")
 STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_DECISION|NEEDS_CONTEXT|BLOCKED)\b", re.I)
+NO_CHANGE = re.compile(r"(?i)\bStatus:\s*\**\s*DONE\**\s+no[- ]change\s*:\s*(\S[^\n]*)")  # O(1)
+CTRL = re.compile(r"[\x00-\x1f\x7f]")  # O(1)
+REASON_MAX = 2000  # O(1) characters of a parked or no-change reason kept whole
 REPROMPT = ("superlite: your last turn ended without a status line. Go on with the batch; end your turn only with "
             "Status: DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED, or write .superlite/question.json and end with "
             "Status: NEEDS_DECISION.")
@@ -299,6 +303,29 @@ def cmd_start(a) -> int:
     return code  # O(1)
 
 
+def _flat(t: str) -> str:  # O(len)
+    return " ".join(CTRL.sub(" ", str(t)).split())[:REASON_MAX]  # O(len)
+
+
+def status_reason(text: str, last: str) -> str:  # O(len)
+    """The last Status line of text from `Status:` on, else last; whole up to 2000 characters, one line."""
+    hit = None  # O(1)
+    for ln in str(text).splitlines():  # O(lines)
+        m = STATUS.search(ln)  # O(len)
+        if m:  # O(1)
+            hit = ln[ln.lower().rfind("status:", 0, m.end()):]  # O(len)
+    return _flat(hit if hit is not None else last) or "lead stopped"  # O(len)
+
+
+def no_change_reason(text: str):  # O(len)
+    m = NO_CHANGE.search(str(text))  # O(len)
+    return (_flat(m.group(1).strip("* ")) or None) if m else None  # O(len)
+
+
+def _cut(reason, bid):  # O(len)
+    return bb.cut_note(reason, bid, 200)  # O(len)
+
+
 def _lags(text, last) -> bool:
     return not STATUS.search(text) and (not text.strip() or bool(STATUS.search(last)))  # O(len)
 
@@ -328,7 +355,7 @@ def _park(p, sd, repo, b, reason, out):  # O(size)
     except (OSError, ValueError):  # O(1)
         pass  # O(1)
     _stop(sd, lead)  # O(w)
-    out.append(f"{bid} parked: {reason}")  # O(1)
+    out.append(f"{bid} parked: {_cut(reason, bid)}")  # O(len)
 
 
 def cleanup_cmd(root: Path):  # O(size)
@@ -420,10 +447,17 @@ def _shipped(p, sd, root, b, wt, push: bool = True, head: str | None = None) -> 
     pr = f" PR #{b['pr']}" if b.get("pr") else ""
     ver = f" {b['version']}" if b.get("version") else ""
     fu, un = list(b.get("followups") or []), list(b.get("undone") or [])  # O(k)
-    cnt = (f" followups={len(fu)}" if fu else "") + (f" undone={len(un)}" if un else "")  # O(1)
-    out = [f"{bid} shipped{pr}{ver} summary={sd / 'backlog' / (bid + '.md')}{cnt}"]
+    uv = list(b.get("unverified") or [])  # O(k)
+    cnt = (f" followups={len(fu)}" if fu else "") + (f" undone={len(un)}" if un else "") + (f" unverified={len(uv)}" if uv else "")  # O(1)
+    cnt += " design: awaits plan approval" if b.get("kind") == "design" else ""  # O(1)
+    summ = sd / "backlog" / (bid + ".md")  # O(1)
+    if b.get("no_change"):  # O(1)
+        out = [f"{bid} no-change: {bb.cut_note(b['no_change'], bid, 200)} summary={summ}"]  # O(len)
+    else:  # O(1)
+        out = [f"{bid} shipped{pr}{ver} summary={summ}{cnt}"]  # O(1)
     out.extend(f"{bid} follow-up: {t}" for t in fu)  # O(k)
     out.extend(f"{bid} left undone: {t}" for t in un)  # O(k)
+    out.extend(f"{bid} UNVERIFIED: {t}" for t in uv)  # O(k)
     if b.get("open_issues"):  # O(k)
         out.append(f"{bid} OPEN " + " ".join(bs.ref(n) for n in b["open_issues"]))  # O(k)
     if not b.get("cleaned") and b.get("worktree"):  # O(1)
@@ -476,7 +510,7 @@ def _round(root, sd, p, states) -> list:
             except (OSError, ValueError):  # O(1)
                 pass  # O(1)
             _stop(sd, b["lead"])  # O(w)
-            out.append(f"{b['id']} parked: {' '.join(str(b.get('reason') or 'parked by its lead').split())[:120]}")  # O(len)
+            out.append(f"{b['id']} parked: {_cut(_flat(b.get('reason') or 'parked by its lead'), b['id'])}")  # O(len)
     for b in [x for x in data["batches"] if x["state"] == "running"]:  # O(b)
         bid, wt, since = b["id"], Path(b.get("worktree") or ""), b.get("since", 0)  # O(1)
         rec = fleet_io.latest_stop(sd, b["lead"], since)  # O(m)
@@ -526,16 +560,31 @@ def _round(root, sd, p, states) -> list:
                 text = str(fleet_io.report_text(rec["transcript"]) or "")  # O(size)
             except Exception:  # O(1)
                 text = ""  # O(1)
-            lastc = " ".join(str(rec.get("last") or "lead stopped").split())[:120]  # O(len)
+            lastc = status_reason(text, str(rec.get("last") or "lead stopped"))  # O(len)
             if _lags(text, str(rec.get("last") or "")):  # O(len)
                 if _now_ms() - rec.get("t", 0) < fleet_io.READ_MS:  # O(1)
                     continue  # O(1)
                 if STATUS.search(str(rec.get("last") or "")):  # O(len)
                     _park(p, sd, data.get("repo", ""), b, f"{lastc} (transcript unread)", out)  # O(size)
                     continue  # O(1)
-        if STATUS.search(_stop_text(rec)):  # O(len)
-            last = " ".join(str(rec.get("last") or "lead stopped").split())[:120]  # O(len)
-            _park(p, sd, data.get("repo", ""), b, last, out)  # O(size)
+        stop = _stop_text(rec)  # O(size)
+        nc = no_change_reason(stop)  # O(len)
+        if nc:  # O(1)
+            import backlog_ship
+            try:  # O(1)
+                notes = (wt / ".superlite" / "notes.md").read_text(encoding="utf-8", errors="replace")  # O(size)
+            except OSError:  # O(1)
+                notes = ""  # O(1)
+            items = backlog_ship._keep_notes(sd, bid, notes)  # O(len)
+            summ = sd / "backlog" / f"{bid}.md"  # O(1)
+            summ.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+            summ.write_text(bb.summary({**b, "no_change": nc, **items}, notes), encoding="utf-8")  # O(len)
+            fields = {"no_change": nc, "open_issues": list(b.get("issues") or []), **items}  # O(i)
+            bs.update(p, lambda d, bid=bid, fields=fields: bs.batch(d, bid).update(fields))  # O(size)
+            out.extend(_shipped(p, sd, root, {**b, **fields}, wt, push=False))  # O(size)
+            continue  # O(1)
+        if STATUS.search(stop):  # O(len)
+            _park(p, sd, data.get("repo", ""), b, status_reason(stop, str(rec.get("last") or "lead stopped")), out)  # O(size)
             continue  # O(1)
         cut = " ".join(str(rec.get("last") or "").split())[:120] or "-"  # O(len)
         reason = f"no status in stop text: {cut}"  # O(1)
