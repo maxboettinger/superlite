@@ -431,3 +431,18 @@ def test_relative_exclude_file_on_a_tracked_gitignore_elsewhere_does_not_count(G
     assert v is not None and v.why.startswith("not git-ignored"), v
     assert jg(G, "echo x > tmp/new.log") is None  # the root .gitignore still counts
     assert jg(G, "echo x > tests/keep/new.txt") is None  # a folder holding that .gitignore
+
+
+def test_link_made_earlier_in_the_command_blocks_later_writes(G):
+    (G / ".build").mkdir()
+    for cmd in ("ln -s ../src .build/s && echo hi > .build/s/a.py",
+                "cp -s src/a.py .build/l && echo hi > .build/l",
+                "ln -s ../src .build/s && rm -rf .build/s/",
+                "python3 -c \"import os; os.symlink('../src', '.build/s'); open('.build/s/a.py', 'w')\""):
+        v = jg(G, cmd)
+        assert v is not None and v.kind == "code", cmd
+    assert jg(G, "mkdir -p .build/logs && echo hi > .build/logs/b.log") is None
+    assert jg(G, "ln -s ../src .build/s") is None
+    os.symlink("../src", G / ".build" / "s")
+    v = jg(G, "echo hi > .build/s/a.py")
+    assert v is not None and v.rel == "src/a.py"
