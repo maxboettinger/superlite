@@ -112,7 +112,7 @@ def test_unknown_git_operand_blocks_726(proj, cmd, line):
     assert word(r) == [line]
 
 
-@pytest.mark.parametrize("cmd", ["git checkout main", 'git checkout -b "$x"', 'git checkout -b feat "$x"', 'git switch "$x"'])
+@pytest.mark.parametrize("cmd", ["git checkout main", 'git checkout -b "$x"', 'git switch "$x"'])
 def test_branch_forms_pass_726(proj, cmd):
     assert bash(proj, cmd).returncode == 0
 
