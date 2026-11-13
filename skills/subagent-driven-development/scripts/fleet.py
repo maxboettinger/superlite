@@ -358,7 +358,7 @@ def _live_names():  # names of the live herdr agents on this machine; no agent l
 def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0, output=None, brief=False, plain=True):  # O(a * e + w) plus herdr calls
     """One worker; a start that stays slow is retried once on another account.
     Implementers, fixers and package reviewers keep the MCP servers their project names or the stack default (`xcode` for an Xcode project), each checked first (#576).
-    Every worker starts lean (#377): no MCP servers, Chrome, skills or slash commands; Artifact, ListAgents, ReadNotifications and ReportFindings denied (LEAN_FLAGS, LEAN_DENY)."""
+    Every worker starts lean (#377): no MCP server (`--strict-mcp-config`; the exception is the line above), Chrome, skills or slash commands; Artifact, ListAgents, ReadNotifications and ReportFindings denied (LEAN_FLAGS, LEAN_DENY)."""
     busy = ml.gate(f"fleet spawn ({role})", machine_wait, over)  # the first attempt only; the retry below is the same spawn | O(wait)
     if busy:  # O(1)
         print(f"BLOCKED: fleet spawn: {busy}; rerun later, or pass --over-limit")  # O(1)

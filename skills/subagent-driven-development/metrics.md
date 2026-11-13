@@ -1,5 +1,7 @@
 # Metrics, history and budget
 
+A reference for maintainers and the docs: no brief, command or worker loads this file.
+
 Reference for `sl metrics`, `sl history`, `sl budget` (D37). Language-neutral; stdlib Python only.
 
 ## Capture
