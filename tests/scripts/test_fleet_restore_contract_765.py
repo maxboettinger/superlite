@@ -25,6 +25,12 @@ def test_batch_implementer_continue_asks_red_per_task(w):
     assert prompt_of(w) == fr.CONTINUE + "\n\n" + fleet_report.WORK_BATCH
 
 
+def test_dead_batch_implementer_continue_asks_red_per_task(w):
+    w.save({"W1": worker(state="stopped", dead=True, was="busy", task=None, last_task="T5,T6")})
+    w.run()
+    assert prompt_of(w) == fr.CONTINUE + "\n\n" + fleet_report.WORK_BATCH
+
+
 def test_single_task_implementer_keeps_work(w):
     w.fake.agents = [idle_agent()]
     w.run()

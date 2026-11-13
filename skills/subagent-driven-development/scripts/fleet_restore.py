@@ -233,7 +233,7 @@ def _one(sd, c, wid, w, rearm_of_lead, prefix):  # (line, blocked) for one worke
     if role == "lead":  # O(1)
         text = "\n".join([LEAD_CONTINUE] + rearm_of_lead + [LEAD_TAIL]) + "\n\n" + fio.report_contract(w)  # O(r + size of the brief)
     else:  # O(1)
-        text = CONTINUE + "\n\n" + fio.report_contract(w)  # REVIEW, WORK_BATCH for a batch label, else WORK | O(1)
+        text = CONTINUE + "\n\n" + fio.report_contract({**w, "task": task})  # REVIEW, WORK_BATCH for a batch label (a dead worker's last_task), else WORK | O(1)
     try:  # O(1)
         c.prompt(name, text, ["working"], 15000)  # O(len)
     except Exception as e:  # noqa: BLE001 | O(1)
