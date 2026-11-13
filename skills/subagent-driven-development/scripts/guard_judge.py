@@ -34,6 +34,7 @@ A function definition is the literal `function` command word or a one-word `NAME
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
+import shlex  # O(1)
 import stat  # O(1)
 import sys  # O(1)
 import time  # O(1)
@@ -436,7 +437,7 @@ def _expand(text, st, ctx, split=True, quoted=False):  # O(p + v) | ~ and the va
         val = ctx.projn if name == "CLAUDE_PROJECT_DIR" else st.here[0] if (name == "PWD" and len(st.here) == 1 and st.here[0]) else ctx.tmpdir if name == "TMPDIR" else _home_env() if name == "HOME" else None  # O(1)
         if val is None:  # O(1)
             return m.group(0)  # O(1)
-        if cut and (name == "HOME" or ifs != DEFAULT_IFS) and (ifs is None or any(ch in val for ch in ifs)):  # an unquoted $HOME splits like any value, the default IFS included | O(p)
+        if cut and (ifs is None or any(ch in val for ch in ifs)):  # an unquoted $HOME, $PWD, $TMPDIR, $CLAUDE_PROJECT_DIR splits like any value, the default IFS included | O(p)
             return m.group(0)  # O(1)
         return val  # O(1)
     out = VAR.sub(sub, text)  # O(p)
@@ -886,9 +887,66 @@ def _shell(words, dyn, c, st, ctx, depth):  # O(n) | a shell's -c body, stdin pr
     return _unknown(ctx, f"program piped into {words[0]}") if c.piped else None  # a program piped in: unknown | O(1)
 
 
+EVAL_SUBST = re.compile(r"\$\(([^()$`]*)\)|`([^`$()]*)`")  # a command substitution without a nested $ or backtick | O(1)
+EVAL_UNSAFE = re.compile(r"[$`*?\[<>|&;(){}\n]")  # a character that makes a substitution not plainly literal | O(1)
+
+
+def _printf_text(words):  # O(w * p) | the output of printf F W... for %s, %%, \n, \t, \\; None for anything else
+    fmt, args, out, i = words[0], words[1:], [], 0  # O(1)
+    while True:  # the format is reused while words remain | O(w)
+        j, used = 0, False  # O(1)
+        while j < len(fmt):  # O(p)
+            ch = fmt[j]  # O(1)
+            if ch == "%" and fmt[j + 1:j + 2] == "s":  # O(1)
+                out.append(args[i] if i < len(args) else "")  # O(1)
+                i, used, j = i + 1, True, j + 2  # O(1)
+            elif ch == "%" and fmt[j + 1:j + 2] == "%":  # O(1)
+                out.append("%")  # O(1)
+                j += 2  # O(1)
+            elif ch == "\\" and fmt[j + 1:j + 2] in ("n", "t", "\\"):  # O(1)
+                out.append({"n": "\n", "t": "\t", "\\": "\\"}[fmt[j + 1]])  # O(1)
+                j += 2  # O(1)
+            elif ch in "%\\":  # O(1)
+                return None  # O(1)
+            else:  # O(1)
+                out.append(ch)  # O(1)
+                j += 1  # O(1)
+        if not used or i >= len(args):  # O(1)
+            return "".join(out)  # O(p)
+
+
+def _subst_output(inner):  # O(p) | the text of `echo W...` or `printf F W...` with literal words, else None
+    if EVAL_UNSAFE.search(inner):  # a variable, glob, redirect or control operator: not plainly literal | O(p)
+        return None  # O(1)
+    try:  # O(1)
+        w = shlex.split(inner)  # O(p)
+    except ValueError:  # O(1)
+        return None  # O(1)
+    if not w:  # O(1)
+        return None  # O(1)
+    if w[0] == "echo":  # O(1)
+        a = w[1:]  # O(1)
+        if a[:1] == ["-n"]:  # O(1)
+            a = a[1:]  # O(1)
+        if a and re.fullmatch(r"-[A-Za-z]+", a[0]):  # any other option: not resolvable | O(1)
+            return None  # O(1)
+        return " ".join(a)  # O(w)
+    if w[0] == "printf" and len(w) > 1:  # O(1)
+        return _printf_text(w[1:])  # O(w * p)
+    return None  # O(1)
+
+
+def _eval_resolve(part):  # O(p) | the part with each resolvable echo/printf substitution replaced by its output
+    def sub(m):  # O(p)
+        out = _subst_output(m.group(1) if m.group(1) is not None else m.group(2))  # O(p)
+        return m.group(0) if out is None else out.rstrip("\n")  # a substitution cuts trailing newlines | O(p)
+    return EVAL_SUBST.sub(sub, part)  # O(p)
+
+
 def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and source/. run in the shell's own state
     if base == "eval":  # O(1)
         parts = [_expand(w, st, ctx, False) if d else w for w, d in zip(words[1:], dyn[1:])]  # O(w * p)
+        parts = [_eval_resolve(p) if ("$(" in p or "`" in p) else p for p in parts]  # O(w * p)
         st2 = st.fork_for(c)  # O(v)
         v = _walk_text(" ".join(parts), st2, ctx, depth + 1)  # O(n)
         if v is not None:  # O(1)
@@ -896,8 +954,12 @@ def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and sou
         c.ok = c.fail = st2.dirs  # O(1)
         if c.persist:  # O(1)
             _copy_back(st, st2)  # O(v)
-        if any("$" in p or "`" in p for p in parts):  # a body the guard cannot read: it may cd, and may read the heredocs | O(w * p)
+        dynamic = [p for p in parts if "$" in p or "`" in p]  # O(w * p)
+        if dynamic:  # a body the guard cannot read: it may cd, and may read the heredocs | O(w)
             c.ok = c.fail = (None,)  # O(1)
+            for p in dynamic:  # O(w)
+                if not (STDIN_READ.search(p) or re.fullmatch(r"\$\(\s*ssh-agent\b[^()]*\)|`\s*ssh-agent\b[^`]*`", p.strip())):  # O(p)
+                    return _unknown(ctx, "eval " + _flat(p) + ": text the guard cannot resolve")  # O(p)
             return _walk_docs(c.docs, c, st, ctx, depth)  # O(docs)
         return None  # O(1)
     operand = words[1] if len(words) > 1 else None  # source / . | O(1)
@@ -1946,6 +2008,15 @@ MESSAGES = {  # O(1)
 }  # O(1)
 
 
+def _scratch_hint(project, sd):  # O(p) | the line that names the coordinator's throwaway-script folder: project-relative when the state folder lies in the project
+    scratch = sd + "/scratch"  # O(p)
+    if sd.startswith(project + "/"):  # O(p)
+        scratch = sd[len(project) + 1:] + "/scratch"  # O(p)
+    return ("- A throwaway script (count lines, compare outputs, time a command): write it under " + scratch + "/ and run it from there. "
+            "The folder is git-ignored and `sl orchestrator end` removes it; a run of a script there is judged like a heredoc script, "
+            "so it may read the project but not write project code.")  # O(p)
+
+
 def _flat(s, limit=120):  # O(len) | one line, no control characters
     s = re.sub(r"[\r\n\t]", " ", s)  # O(len)
     return re.sub(r"[\x00-\x1f\x7f]", "", s)[:limit].strip()  # O(len)
@@ -2033,6 +2104,8 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
     target = v.rel if named and not v.word else f"unresolved {_flat(v.word)} in: {cmd}" if v.word else cmd  # the word first: the incident cuts the rest | O(len)
     _incident(sd, "rule-block", tool, target, rule=v.kind, cwd=cwd or project)  # O(len)
     for line in MESSAGES[v.kind]:  # O(1)
+        if v.kind == "code" and line.startswith("- After the run, "):  # the scratch folder line (#690) comes right before it | O(1)
+            _err(_scratch_hint(project, sd))  # O(p)
         _err(line)  # O(len)
     if v.cmd:  # the one command of the chain that was refused | O(1)
         _err(REFUSED.format(_flat(v.cmd, 300)))  # O(len)

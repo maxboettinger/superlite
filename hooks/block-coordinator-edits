@@ -731,18 +731,14 @@ scratch_inline() {
 # Never returns.
 run_judge() {
   local judge="${BASH_SOURCE[0]%/*}/../skills/subagent-driven-development/scripts/guard_judge.py" out rc try
-  local nonce="$RANDOM$RANDOM$$$RANDOM" head nlh=$'\n' fc bc tail
+  local nonce="$RANDOM$RANDOM$$$RANDOM" nlh=$'\n' fc bc tail
   [ -f "$judge" ] || { guard_error "guard_judge.py not found"; exit 0; }
   find_py || { guard_error "no Python 3.10+ found"; exit 0; }
   for try in 1 2; do
     out="$(printf '%s' "$jin" | SUPERLITE_GUARD_NONCE="$nonce" "${PY[@]}" -I -X utf8 -W ignore "$judge" --mode "$1" --project "$proj" --sd "$sd" 2>&1)"   # -W ignore: one SyntaxWarning per invalid escape of an inlined script would fill the message
     rc=$?
     case "$rc" in
-      2) if [[ $out == *"$nlh- After the run, "* ]]; then   # #690: the judge's code message gets the scratch line too
-           head="${out%%"$nlh- After the run, "*}"
-           out="$head$nlh$(scratch_hint)$nlh- After the run, ${out#*"$nlh- After the run, "}"
-         fi
-         if [ "$jin" != "$input" ] && [[ $out == *"${nlh}Blocked command: "* ]]; then   # the judge read the inlined heredocs: name the typed command
+      2) if [ "$jin" != "$input" ] && [[ $out == *"${nlh}Blocked command: "* ]]; then   # the judge read the inlined heredocs: name the typed command
            fc="${cmd:0:4096}"; fc="${fc//$'\r'/ }"; fc="${fc//$'\n'/ }"; fc="${fc//$'\t'/ }"; fc="${fc//[[:cntrl:]]/}"; fc="${fc:0:120}"
            fc="${fc#"${fc%%[! ]*}"}"; fc="${fc%"${fc##*[! ]}"}"
            bc="${out##*"${nlh}Blocked command: "}"; tail=""
