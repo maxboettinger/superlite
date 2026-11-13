@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BRAINSTORM = (ROOT / "skills/brainstorming/SKILL.md").read_text()
-WRITING = (ROOT / "skills/writing-plans/SKILL.md").read_text()
+WRITING = "\n".join(p.read_text() for p in sorted((ROOT / "skills/writing-plans").glob("*.md")))
 REVIEW = (ROOT / "skills/writing-plans/review-plan.md").read_text()
 
 
@@ -23,8 +23,8 @@ def test_writing_plans_names_coverage():
 
 def test_review_plan_has_coverage_section():
     decisions = REVIEW.index("`## Decisions you can change`")
-    coverage = REVIEW.index("`## Coverage`")
-    risks = REVIEW.index("`## Risks`")
+    coverage = REVIEW.index("`## Coverage`", decisions)
+    risks = REVIEW.index("`## Risks`", decisions)
     assert decisions < coverage < risks
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MVP = (ROOT / "commands" / "mvp.md").read_text(encoding="utf-8")
-PLANS = (ROOT / "skills" / "writing-plans" / "SKILL.md").read_text(encoding="utf-8")
+PLANS = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "skills" / "writing-plans").glob("*.md")))
 
 
 def test_mvp_has_no_standalone_orchestrator_question():

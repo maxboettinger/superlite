@@ -23,8 +23,8 @@ WP_FLAG = ("| \"Last task: integration and simulator check\" | Not a task: `## R
 LIMITS_TAIL = (
     "## SwiftUI previews: no command-line renderer\n\n"
     "Seen: superlite 1.5.123, in fleet package reviews ([#600](https://github.com/maxboettinger/superlite/issues/600)).\n\n"
-    "Xcode renders `#Preview` blocks only inside Xcode: the Xcode MCP `RenderPreview` tool needs a running Xcode, and fleet "
-    "workers start without MCP servers. Two reviewers rendered PNGs with throwaway hosted tests instead and left them in the tree.\n\n"
+    "Xcode renders `#Preview` blocks only inside Xcode: the Xcode MCP `RenderPreview` tool needs a running Xcode, and "
+    "a fleet worker starts with no MCP server except an implementer, fixer or package-reviewer of a project that needs one (the servers its test-cmd.json `\"mcp\"` list names, else `xcode` for a Swift or Xcode project on macOS). Two reviewers rendered PNGs with throwaway hosted tests instead and left them in the tree.\n\n"
     "What to do: a checker renders a view no running state reaches with a throwaway `ImageRenderer` snapshot test, recorded "
     "with `sl render_edit start <file>` and undone with `sl render_edit restore` (`agents/checker.md`).\n\n"
     "## macOS: no simulator for a render check\n\n"
@@ -56,12 +56,13 @@ def test_sdd_runs_the_checks_before_the_packet():
 
 
 def test_writing_plans_names_running_app_checks():
-    t = (ROOT / "skills" / "writing-plans" / "SKILL.md").read_text(encoding="utf-8")
+    t = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "skills" / "writing-plans").glob("*.md")))
     ls = t.split("\n")
     assert "9. **Running-app checks:** a UI, widget, app extension or browser target (Review Focus rules)." in ls
     assert "10. **Self-review.**" in ls and "9. **Self-review.**" not in ls
     assert ls.count(WP_RULE) == 1 and "RenderPreview" in ls[ls.index(WP_RULE) - 1]
-    assert "since in-process agents inherit the session's MCP tools (fleet workers start without them);" in t
+    assert "when the project needs that MCP server: an implementer, fixer or package-reviewer of such a project starts with the servers its test-cmd.json `\"mcp\"` list names, else `xcode`" in t
+    assert "fleet workers start without them" not in t
     assert ls.count(WP_FLAG) == 1 and ls[ls.index(WP_FLAG) - 1].startswith("| ")
 
 

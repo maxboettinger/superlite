@@ -2,7 +2,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-WP = (ROOT / "skills" / "writing-plans" / "SKILL.md").read_text(encoding="utf-8")
+WP = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "skills" / "writing-plans").glob("*.md")))
 SDD = (ROOT / "skills" / "subagent-driven-development" / "SKILL.md").read_text(encoding="utf-8")
 PR = (ROOT / "agents" / "package-reviewer.md").read_text(encoding="utf-8")
 SCRIPTS = ROOT / "skills" / "subagent-driven-development" / "scripts"

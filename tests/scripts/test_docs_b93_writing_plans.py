@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-TEXT = (Path(__file__).resolve().parents[2] / "skills" / "writing-plans" / "SKILL.md").read_text(encoding="utf-8")
+TEXT = "\n".join(p.read_text(encoding="utf-8") for p in sorted((Path(__file__).resolve().parents[2] / "skills" / "writing-plans").glob("*.md")))
 
 
 def test_header_names_edges_hard():

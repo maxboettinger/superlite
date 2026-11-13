@@ -36,14 +36,14 @@ def test_setup_launch_example_parses():
 
 
 def test_writing_plans_texts():
-    s = _t("skills/writing-plans/SKILL.md")  # O(n)
+    s = _t("skills/writing-plans/SKILL.md") + _t("skills/writing-plans/probe-plan.md")  # O(n)
     assert REACH in s and REACH_TAIL in s  # O(n)
     assert FLAG in s  # O(n)
     assert s.rstrip().index(FLAG) > s.index("## Red flags")  # O(n)
 
 
 def test_reach_rule_after_running_app_checks():
-    lines = _t("skills/writing-plans/SKILL.md").splitlines()  # O(n)
+    lines = _t("skills/writing-plans/probe-plan.md").splitlines()  # O(n)
     i = next(n for n, l in enumerate(lines) if l.startswith("- **Running-app checks.**"))  # O(n)
     assert lines[i + 1].startswith("- **Reach.**")  # O(1)
 

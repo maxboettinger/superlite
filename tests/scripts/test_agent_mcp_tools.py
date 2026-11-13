@@ -39,9 +39,9 @@ def test_agents_never_get_agent_tool():
 
 def test_plans_may_name_mcp_checks():
     """writing-plans: an MCP-only check is a task step only when the project configures that server."""
-    t = (ROOT / "skills/writing-plans/SKILL.md").read_text(encoding="utf-8")
+    t = (ROOT / "skills/writing-plans/probe-plan.md").read_text(encoding="utf-8")
     line = next((x for x in t.splitlines() if "RenderPreview" in x), "")
-    assert "MCP-only check" in line and "task step" in line and "configures that MCP server" in line
+    assert "MCP-only check" in line and "task step" in line and "needs that MCP server" in line
     assert "coordinator's step" in line
 
 
