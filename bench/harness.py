@@ -37,6 +37,10 @@ if os.name == "nt":  # every child (claude, bash, uv, git, pytest) gets a hidden
     subprocess.Popen = _NoWindowPopen
 
 ROOT = Path(__file__).resolve().parent.parent
+_SCRIPTS = str(ROOT / "skills" / "subagent-driven-development" / "scripts")
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+import guard_lex  # noqa: E402
 # The superlite arm loads this plugin directory (default: this repo); SUPERLITE_PLUGIN_DIR points it at e.g.
 # a git worktree of an older commit, so a frozen baseline can be compared with the working tree.
 PLUGIN_DIR = Path(os.environ.get("SUPERLITE_PLUGIN_DIR") or ROOT)
@@ -374,10 +378,96 @@ def load_prices(path: Path = MODELS_JSON) -> dict[str, tuple]:
 
 PRICES = load_prices()
 ROUTING_JSON = RESULTS / "routing-recommendation.json"  # `rules` there give tier_planned when a dispatch line has no tier=
-# Same patterns as hooks/block-unsafe-kill: kill by image name or pattern.
-UNSAFE_KILL = re.compile(
-    r"(?:^|[\s;&|(`])(?:taskkill\b[^\n]*?\s//?im(?!\w)|(?:pkill|killall)(?![\w-])"
-    r"|stop-process\b[^\n]*?\s-name(?!\w)|kill\s+-9\s+-1(?!\d))", re.I)
+_WRAPPERS = {"env", "sudo", "doas", "nohup", "time", "exec", "command", "builtin", "nice", "timeout", "xargs",
+             "stdbuf", "setsid", "caffeinate", "watch"}
+_SHELLS = {"sh", "bash", "zsh", "dash", "pwsh", "powershell", "cmd"}
+_VALUE_OPTS = {"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U"}
+_ASSIGN_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
+
+
+def _command_word(words: list[str]) -> int:
+    """Index of the command word after assignments, wrappers and their options, or len(words)."""
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if _ASSIGN_WORD.match(w):
+            i += 1
+        elif w.lower() in _WRAPPERS:
+            i += 1
+            if w.lower() == "command" and i < len(words) and words[i] in ("-v", "-V"):
+                return len(words)  # `command -v x` looks x up, it does not run it
+            while i < len(words) and (words[i].startswith("-") or _ASSIGN_WORD.match(words[i])
+                                      or re.fullmatch(r"\d+(?:\.\d+)?[smhd]?", words[i])):
+                if w.lower() in ("sudo", "doas") and words[i] in _VALUE_OPTS:
+                    i += 1  # the option's value (`sudo -u root`) is not the command
+                i += 1
+        else:
+            break
+    return i
+
+
+def _shell_body(name: str, args: list[str], low: list[str]) -> str | None:
+    """The command string a shell is told to run (-c, -lc, -Command, /c), or None when it reads stdin."""
+    for j, a in enumerate(low):
+        if name == "cmd":
+            hit = a in ("/c", "/k", "/r")
+        elif name in ("pwsh", "powershell"):
+            hit = a in ("-c", "-command", "/c", "/command")
+        else:
+            hit = re.fullmatch(r"-[a-z]*c[a-z]*", a) is not None
+        if hit:
+            return " ".join(args[j + 1:]) if name in ("cmd", "pwsh", "powershell") else (args[j + 1] if j + 1 < len(args) else "")
+    return None
+
+
+def _unsafe_text(cmd: str, depth: int = 0) -> bool:
+    if depth > 8:
+        return False
+    prev_pipe_from_process = False
+    for seg in guard_lex.split(cmd):
+        for body in list(seg.bodies) + ([seg.subshell] if seg.subshell is not None else []):
+            if _unsafe_text(body, depth + 1):
+                return True
+        words = list(seg.words)
+        k = _command_word(words)
+        name = words[k].lower() if k < len(words) else ""
+        if name.endswith(".exe"):
+            name = name[:-4]
+        args = words[k + 1:]
+        low = [a.lower() for a in args]
+        if name in ("pkill", "killall"):
+            return True
+        if name == "taskkill" and any(re.fullmatch(r"(?:/{1,2}|-{1,2})(?:im|fi)", a) for a in low):
+            return True
+        if name in ("stop-process", "spps"):
+            if "-name" in low or (prev_pipe_from_process and "-id" not in low):
+                return True
+        if name == "kill":
+            if "-1" in args and (args.index("-1") > 0 or len(args) == 1):  # `kill -1 PID` is SIGHUP
+                return True
+            if prev_pipe_from_process and "-id" not in low:
+                return True
+        if name in _SHELLS:
+            body = _shell_body(name, args, low)
+            if body is not None:
+                if _unsafe_text(body, depth + 1):
+                    return True
+            elif any(_unsafe_text(h, depth + 1) for h in seg.heredocs):
+                return True
+        if name == "eval" and _unsafe_text(" ".join(args), depth + 1):
+            return True
+        prev_pipe_from_process = seg.sep == "|" and name in ("get-process", "gps")
+    return False
+
+
+def unsafe_kill(cmd: str) -> bool:
+    """A kill by image name or pattern, or of every process, read by command word (not by text in quotes or data)."""
+    try:
+        return _unsafe_text(cmd)
+    except Exception:
+        return False
+
+
 _PRIME_RE = re.compile(r"do not act yet|\bREADY\b")
 _POLL_RE = re.compile(r"relevance\s*(?:score\s*)?0\s*(?:-|–|—|to)\s*10", re.I)
 _QUEUE_RE = re.compile(r"\bdo (?:this |it |these )?after\b|\bqueued? (?:behind|after)\b"
@@ -617,7 +707,7 @@ def flow_metrics(events: list[dict], t0: float, last_t: float | None, coordinato
             inp, name = b.get("input") or {}, b.get("name")
             if name in ("Bash", "PowerShell"):
                 cmd = str(inp.get("command") or "")
-                unsafe += bool(UNSAFE_KILL.search(cmd))
+                unsafe += unsafe_kill(cmd)
                 graphify += bool(re.search(r"\bgraphify\b", cmd, re.I))
                 if _INCIDENT_ADD_RE.search(cmd):
                     k = re.search(r"--kind[ =]+['\"]?([\w-]+)", cmd)
