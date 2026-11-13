@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""suite_stamp: reads the green-test stamp a `maxapp test` run leaves in the git common dir (`maxapp/test/<tree id>.<platform>`, lines tree=, platform=, commit=, tests=; counts only when tree= and platform= match and tests is an integer above 0; for maxapp test --ios a stamp holding only= (a run narrowed to named suites) counts as none; superlite reads it and never writes it), finds the commit whose tree a stamp covers (green_base: HEAD first, else the first stamped first-parent ancestor when every path changed since is not code), tells for the ship sync whether the tree changed in code or only in not-code paths (sync_change), and matches paths against the not_code globs (#627, #639, #718)."""
+"""suite_stamp: reads the green-test stamp a `maxapp test` run leaves in the git common dir (`maxapp/test/<tree id>.<platform>`, lines tree=, platform=, commit=, tests=; counts only when tree= and platform= match and tests is an integer above 0; for maxapp test --ios a stamp holding only= (a run narrowed to named suites) counts as none; superlite reads it and never writes it), finds the commit whose tree a stamp covers (green_base: HEAD first, else the first stamped first-parent ancestor when every path changed since is not code), tells for the ship sync whether the tree changed in code or only in not-code paths (sync_change), and matches paths against the not_code globs; plain maxapp test follows the .maxapp test_full at the git top: an iOS part there needs the iOS stamp too (whole for iOS, only= holding the same suites for iOS=<list>), and a malformed test_full counts as none (#627, #639, #718, #720)."""
 # Complexity notation: n = changed paths, d = ancestor depth, g = globs
 import re  # O(1)
 import shlex  # O(1)
@@ -59,7 +59,44 @@ def _changed(root, base: str) -> "list[str]":
     return paths  # O(1)
 
 
-def _read_stamp(f: Path, tree: str, platform: str, whole: bool = False) -> "int | None":
+def test_full_ios(root) -> "frozenset[str] | None":
+    top = Path(_git(root, "rev-parse", "--show-toplevel").strip())  # O(repo)
+    f = top / ".maxapp"  # O(1)
+    if not f.is_file():  # O(1)
+        return None  # O(1)
+    kv: "dict[str, str]" = {}  # O(1)
+    for line in f.read_text().splitlines():  # O(lines)
+        line = line.strip()  # O(len)
+        if not line or line.startswith("#") or "=" not in line:  # O(1)
+            continue  # O(1)
+        key, value = line.split("=", 1)  # O(len)
+        key, value = key.rstrip(), value.lstrip()  # O(len)
+        if value[:1] in ('"', "'") or key in kv:  # O(1)
+            raise ValueError(f".maxapp: invalid line for {key}")  # O(1)
+        kv[key] = value  # O(1)
+    words = kv.get("test_full", "").split()  # O(len)
+    if not words:  # O(1)
+        return None  # O(1)
+    seen: "set[str]" = set()  # O(1)
+    ios: "frozenset[str] | None" = None  # O(1)
+    for w in words:  # O(words)
+        part = "iOS" if w == "iOS" or w.startswith("iOS=") else w  # O(1)
+        if part not in ("macOS", "iOS", "lint") or part in seen:  # O(1)
+            raise ValueError(f"test_full: invalid word {w}")  # O(1)
+        seen.add(part)  # O(1)
+        if w == "iOS":  # O(1)
+            ios = frozenset()  # O(1)
+        elif part == "iOS":  # O(1)
+            lst = w[4:]  # O(1)
+            if not lst or lst.startswith(",") or lst.endswith(",") or ",," in lst:  # O(len)
+                raise ValueError(f"test_full: invalid iOS list {w}")  # O(1)
+            ios = frozenset(lst.split(","))  # O(len)
+    if "macOS" not in seen:  # O(1)
+        raise ValueError("test_full: macOS missing")  # O(1)
+    return ios  # O(1)
+
+
+def _read_stamp(f: Path, tree: str, platform: str, whole: bool = False, suites: "frozenset[str] | None" = None) -> "int | None":
     try:  # O(1)
         text = f.read_text()  # O(size)
     except OSError:  # O(1)
@@ -68,6 +105,8 @@ def _read_stamp(f: Path, tree: str, platform: str, whole: bool = False) -> "int 
     if kv.get("tree") != tree or kv.get("platform") != platform:  # O(1)
         return None  # O(1)
     if whole and "only" in kv:  # O(1) a suite-narrowed stamp covers part of the suite (#718)
+        return None  # O(1)
+    if suites and ("only" not in kv or frozenset(x for x in kv["only"].split(",") if x) != suites):  # O(len) narrowed run: same suites (#720)
         return None  # O(1)
     try:  # O(1)
         n = int(kv.get("tests", ""))  # O(1)
@@ -80,8 +119,15 @@ def green_base(root, command: str, not_code: "list[str]", depth: int = 50) -> "d
     platforms = maxapp_platforms(command)  # O(1)
     if platforms is None:  # O(1)
         return None  # O(1)
-    whole = "iOS" in platforms  # O(1) maxapp test --ios runs the whole iOS suite
+    mac_whole = ios_whole = "iOS" in platforms  # O(1) maxapp test --ios runs the whole iOS suite
+    suites = None  # O(1)
     try:  # O(1)
+        if platforms == ["macOS"]:  # O(1) a plain run follows the .maxapp test_full (#720)
+            ios = test_full_ios(root)  # O(repo)
+            if ios is not None:  # O(1)
+                platforms = ["macOS", "iOS"]  # O(1)
+                ios_whole = not ios  # O(1)
+                suites = ios or None  # O(1)
         common = Path(_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())  # O(repo)
         commits = _git(root, "rev-list", "--first-parent", f"--max-count={depth}", "HEAD").split()  # O(d)
         for c in commits:  # O(d)
@@ -89,7 +135,7 @@ def green_base(root, command: str, not_code: "list[str]", depth: int = 50) -> "d
             files = [common / "maxapp" / "test" / f"{tree}.{p}" for p in platforms]  # O(1)
             if not any(f.exists() for f in files):  # O(1) not stamped: try the next ancestor
                 continue  # O(1)
-            counts = [_read_stamp(f, tree, p, whole) for f, p in zip(files, platforms)]  # O(1)
+            counts = [_read_stamp(f, tree, p, ios_whole if p == "iOS" else mac_whole, suites if p == "iOS" else None) for f, p in zip(files, platforms)]  # O(1)
             if any(n is None for n in counts):  # O(1) the first stamped commit is the base
                 return None  # O(1)
             changed = _changed(root, c)  # O(n)
@@ -97,7 +143,7 @@ def green_base(root, command: str, not_code: "list[str]", depth: int = 50) -> "d
                 return None  # O(1)
             return {"commit": c, "tree": tree, "tests": sum(counts), "platforms": platforms,
                     "stamps": [str(f) for f in files], "changed": changed}  # O(1)
-    except (subprocess.CalledProcessError, OSError):  # O(1)
+    except (subprocess.CalledProcessError, OSError, ValueError):  # O(1)
         return None  # O(1)
     return None  # O(1)
 
