@@ -194,3 +194,36 @@ def test_review_dev_dotdot_is_not_dev():
 def test_review_rsync_remove_source_files_names_sources():
     assert targets(["rsync", "--remove-source-files", "a", "d/"]) == ["a", "d/"]
     assert targets(["rsync", "-a", "a", "d/"]) == ["d/"]
+
+
+def test_unknown_option_word_may_be_a_writing_option_727():
+    assert targets(["sed", "?", "s/a/b/", "src/a.py"]) == ["src/a.py"]  # ? may be -i
+    assert targets(["sed", "$F", "s/a/b/", "src/a.py"], [False, True, False, False]) == ["src/a.py"]
+    assert targets(["sed", "$F", "s/a/b/", "src/a.py"]) == []  # no dyn flags: a literal word
+    assert targets(["sed", "-n", "?", "?", "src/a.py"]) == ["src/a.py"]  # one is -i, the other -e SCRIPT
+    assert targets(["sed", "-n", "?", "src/a.py"]) == []  # read as -i, src/a.py is the script
+    assert targets(["sed", "-n", "?", "?"]) == []
+    assert targets(["sed", "?", "s/a/b/", "?"]) == ["?", "s/a/b/"]
+    assert targets(["sed", "--", "?", "s/a/b/", "src/a.py"]) == []  # after --: an operand
+    assert targets(["sed", "-e", "?", "src/a.py"]) == []  # the value of -e, not an option
+    assert targets(["sed", "-$X", "s/a/b/", "f"], [False, True, False, False]) == ["f"]
+    assert targets(["sed", "--expression=$S", "f"], [False, True, False]) == []
+    assert targets(["sed", "-n", "1p", "src/$X.py"], [False, False, False, True]) == []  # literal first character
+    assert targets(["perl", "?", "-pe", "s/a/b/", "src/a.py"]) == ["src/a.py"]
+    assert targets(["perl", "-pe", "s/a/b/", "src/a.py", "?"]) == []  # after perl's first operand: an argument
+    assert targets(["sed"] + ["?"] * 9 + ["f"]) == ["?"]  # over 8 unknown option words
+
+
+def test_unknown_option_word_of_copy_commands_727():
+    assert targets(["cp", "?", "src", "n.py"]) == ["n.py", "src/"]  # ? may be -t
+    assert targets(["cp", "?", ".superlite/scratch/"]) == [".superlite/scratch/"]
+    assert targets(["install", "?", "a", "b"]) == ["b", "a/", "a"]  # -t a, or -d
+    assert targets(["mv", "?", "d", "f"]) == ["?", "d", "f", "d/"]
+    assert targets(["ln", "?", "src", "x"]) == ["x", "src/"]
+    assert targets(["rsync", "-a", "?", "src/", "/tmp/b/"]) == ["/tmp/b/", "src/"]  # may remove its sources
+    assert targets(["rm", "?", "a"]) == ["?", "a"]
+    assert targets(["tee", "a", "a"]) == ["a", "a"]  # no unknown word: unchanged
+    assert guard_files.link_sources(["cp", "?", "src/a.py", "l.py"]) == ["src/a.py"]  # ? may be -s
+    assert guard_files.link_sources(["cp", "?", "?", "d", "src/a.py"]) == ["?", "d", "src/a.py"]  # -s with -t
+    assert guard_files.link_sources(["ln", "?", "src", "x"]) == ["?", "src", "x"]
+    assert guard_files.link_sources(["cp", "-s", "src/a.py", "l.py"], [False] * 4) == ["src/a.py"]
