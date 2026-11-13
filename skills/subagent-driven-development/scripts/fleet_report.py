@@ -2,7 +2,7 @@
 """Fleet worker reports: parse a worker's reply into one dict, and build the one-line brief message.
 
     fleet_report.parse(text, label="", allow_json=True) -> {"status", "files", "tests", "red", "findings", "summary", "concerns", "valid"}
-    fleet_report.brief_message(role, path, full=False) -> one line telling a worker to read PATH and how to end its reply
+    fleet_report.brief_message(role, path, full=False) -> one line telling a worker to read PATH and how to end its reply (a lead's follows its brief's End line; O(size of the brief), as it reads the brief file)
 
 `parse` never raises. Only a valid last fenced json block sets `valid` True. The fallbacks (a `Verdict:` line with
 finding lines, then a `Status:` line, then a status token) read the labelled form outside fenced blocks: `Files changed:`,
@@ -37,6 +37,8 @@ WORK = ("End your reply with the line `Status: <DONE|DONE_WITH_CONCERNS|NEEDS_CO
         '"red": "<the summary line of the run that saw your new tests fail, or none - no test>", '
         '"findings": [{"file": "<path>", "line": <int>, "problem": "<text>", "fix": "<text>", "tier": <1|2|3>}], '
         '"summary": "<one line>"}. `findings` lists only the findings still open; `tier` is the integer 1, 2 or 3 (fixing.md).')  # O(1)
+PLANNED = WORK.replace("`Status: <DONE|", "`Status: <DONE planned: <plan path>|DONE|", 1)  # O(1)
+PLANNED_END = "End: Status: DONE planned:"  # O(1)
 REVIEW = ("After the `Checked:` lines (outside the 300-word cap), end with one fenced json block: "
           '{"status": "<APPROVED|CHANGES_REQUESTED>", "files": [], "tests": "", '
           '"findings": [{"file": "<path>", "line": <int>, "problem": "<text>", "fix": "<text>", "tier": <1|2|3>}], '
@@ -179,9 +181,21 @@ def parse(text: str, label: str = "", allow_json: bool = True) -> dict:  # O(s)
     return {**base, "status": status or "UNKNOWN", "findings": lab["findings"]}  # O(1)
 
 
-def brief_message(role: str, path: str, full: bool = False) -> str:  # O(1)
+def _planning(path: str) -> bool:  # O(size of the brief)
+    """True when the brief at PATH holds a line starting with PLANNED_END (a plan-phase lead brief)."""
+    try:  # O(1)
+        with open(path, encoding="utf-8", errors="replace") as fh:  # O(1)
+            return any(line.startswith(PLANNED_END) for line in fh)  # O(size of the brief)
+    except OSError:  # O(1)
+        return False  # O(1)
+
+
+def brief_message(role: str, path: str, full: bool = False) -> str:  # O(size of the brief)
     """The one line a worker gets for a brief file: read PATH, then how to end the reply (the final reviewer has its
-    own, a packet and a json block after its `Checked:` lines). FULL asks a final reviewer for a full review."""
+    own, a packet and a json block after its `Checked:` lines; a lead whose brief holds the plan-phase End line gets
+    PLANNED, naming `DONE planned: <plan path>`). FULL asks a final reviewer for a full review."""
     if role == "final-reviewer":  # O(1)
         return f"Review the packet {path} as your instructions say. {FULL + ' ' if full else ''}{REVIEW}"  # O(1)
+    if role == "lead" and _planning(path):  # O(size of the brief)
+        return f"Read {path} and do what it says. {PLANNED}"  # O(1)
     return f"Read {path} and do what it says. {WORK}"  # O(1)
