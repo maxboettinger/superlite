@@ -225,7 +225,33 @@ def head_lines(sl_path: str, plan: Path, note: list[str], wt) -> list[str]:  # t
 
 
 
-def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, note=(), wt=None, extras=()) -> str:  # O(k + o)
+def checkpoint_line(st: dict | None, task_id: str | None = None) -> str:  # the reviewed-version line of a fix brief | O(e)
+    entries = st.get("entries") if isinstance(st, dict) and st.get("run") else None  # O(1)
+    entries = [e for e in entries if isinstance(e, dict) and e.get("task") and e.get("sha")] if isinstance(entries, list) else []  # O(e)
+    if not entries:  # O(1)
+        return ("Reviewed version: no checkpoint yet; save `git diff -- <file>` as a patch under .superlite/ before an experiment "  # O(1)
+                "and revert with `git apply -R` of that patch, never with `git checkout --` in the shared tree.")  # O(1)
+    own = next((e for e in reversed(entries) if e["task"] == task_id), None) if task_id else None  # a task's last entry | O(e)
+    e = own or entries[-1]  # O(1)
+    ref = f"{commit_task.autocommit.REF_ROOT}/{st['run']}/{e['task']}"  # O(1)
+    what = f"{e['task']}'s checkpoint {e['sha']}" if own else f"newest checkpoint {e['sha']} ({e['task']}"  # O(1)
+    what += f" (ref {ref})" if own else f", ref {ref})"  # O(1)
+    return (f"Reviewed version: {what}: `git show {e['sha']}:<path>` prints a file as reviewed; "  # O(1)
+            "restore from it or from your own saved patch, never with `git checkout --` in the shared tree.")  # O(1)
+
+
+CURRENT = object()  # checkpoints default: the current checkout's state | O(1)
+
+
+def run_checkpoints(plan: Path):  # the checkpoint state commit_task writes for this plan's checkout, or None | O(d + file)
+    gr = state.git_root(plan)  # O(d)
+    try:  # O(1)
+        return json.loads((Path(gr) / commit_task.autocommit.STATE).read_text(encoding="utf-8")) if gr else None  # O(file)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+
+
+def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, note=(), wt=None, extras=(), checkpoints=CURRENT) -> str:  # O(k + o)
     ids = ", ".join(i["id"] for i in items)  # O(k)
     owns = task.owns  # O(o)
     outside = sorted({i["file"] for i in items if not nt.owns_match(i["file"], owns)})  # files no Owns of this task lists | O(k)
@@ -233,7 +259,8 @@ def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, not
     extra_outside = sorted(e for e in extras if e not in found and not nt.owns_match(e, owns))  # O(e*o)
     lines = [f"# Fix {ids} · tier {tier} · task {task.id}",  # O(1)
              *head_lines(sl_path, plan, note, wt),  # O(1)
-             f"Task: {task.id} · Owns: {', '.join(owns)}"]  # O(o)
+             f"Task: {task.id} · Owns: {', '.join(owns)}",  # O(o)
+             checkpoint_line(commit_task.autocommit.load_state() if checkpoints is CURRENT else checkpoints, task.id)]  # O(e)
     if extras:  # O(1)
         lines.append(f"Extra files (findings route --also; the fix may edit them too): {', '.join(extras)}")  # O(e)
     lines += ["", *note, "", "Findings:"] if note else ["", "Findings:"]  # O(note)
@@ -252,12 +279,13 @@ def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, not
     return "\n".join(lines) + "\n"  # O(k)
 
 
-def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, running: list[str], note=(), wt=None) -> str:  # O(k)
+def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, running: list[str], note=(), wt=None, checkpoints=CURRENT) -> str:  # O(k)
     ids = ", ".join(i["id"] for i in items)  # O(k)
     held = ", ".join(running) or "-"  # O(n)
     lines = [f"# Fix {ids} · tier {tier} · coordinator commit",  # O(1)
              *head_lines(sl_path, plan, note, wt),  # O(1)
-             f"Task: none · running: {held}"]  # O(1)
+             f"Task: none · running: {held}",  # O(1)
+             checkpoint_line(commit_task.autocommit.load_state() if checkpoints is CURRENT else checkpoints, None)]  # O(e)
     lines += ["", *note, "", "Findings:"] if note else ["", "Findings:"]  # O(note)
     lines += [f"- {i['id']} {i['file']}:{i['line']} - {i['problem']} - {i['fix']} (tier {i['tier']}, from {i['label']})"  # O(k)
               for i in items]  # O(k)
@@ -277,6 +305,7 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str, also: list[str
     tasks = pt.Plan.load(str(plan)).tasks  # O(C+L)
     if not tasks:  # O(1)
         raise pt.PlanError(f"plan has no tasks: {plan}")  # O(1)
+    cps = run_checkpoints(plan)  # O(d + file)
     committed = commit_task.committed_tasks(sd / "progress.md")  # O(c)
     running = running_tasks(sd)  # O(file)
     held = [t.id for t in tasks if t.id in running]  # plan order | O(n)
@@ -330,8 +359,8 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str, also: list[str
         ex = extras.get(tid, [])  # O(1)
         found = [f["file"] for f in items]  # O(k_t)
         wt = fleet_io.worktree_sl(root, sroot, [*(t.owns if t else []), *found, *ex])  # O(k_t)
-        text = (brief_text(sl_path, plan, t, items, tier, note, wt, ex) if t  # O(k_t)
-                else coordinator_text(sl_path, plan, items, tier, held, note, wt))  # O(k_t)
+        text = (brief_text(sl_path, plan, t, items, tier, note, wt, ex, cps) if t  # O(k_t)
+                else coordinator_text(sl_path, plan, items, tier, held, note, wt, cps))  # O(k_t)
         brief.write_text(text, encoding="utf-8")  # O(k_t) I/O
         files = ",".join(sorted({*found, *ex}))  # O(k_t log k_t)
         lines.append(f"fixer tier={TIERS[tier]} brief={brief} files={files} task={t.id if t else 'coordinator'}")  # O(1)

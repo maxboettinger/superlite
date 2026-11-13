@@ -23,7 +23,7 @@ def test_spawn_without_prime_refuses_before_pane(world, capsys):
     with pytest.raises(SystemExit) as e:
         fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
     assert e.value.code == 3
-    assert capsys.readouterr().out.splitlines() == [f"BLOCKED: no {world.sd.resolve()}/prime.md; run build_prime --plan PLAN first"]
+    assert capsys.readouterr().out.splitlines() == [f"BLOCKED: no {world.sd.resolve()}/prime.md; run build_prime --plan PLAN first, or pass --brief FILE for a brief-only task outside a plan run"]
     assert world.fh.calls == [] and _next(world.sd) == before
 
 
@@ -32,7 +32,7 @@ def test_haiku_spawn_names_prime_haiku(world, capsys):
     with pytest.raises(SystemExit) as e:
         fleet.spawn(world.sd, world.plan, "haiku", world.proj)
     assert e.value.code == 3
-    assert capsys.readouterr().out.splitlines() == [f"BLOCKED: no {world.sd.resolve()}/prime-haiku.md; run build_prime --tier haiku --plan PLAN first"]
+    assert capsys.readouterr().out.splitlines() == [f"BLOCKED: no {world.sd.resolve()}/prime-haiku.md; run build_prime --tier haiku --plan PLAN first, or pass --brief FILE for a brief-only task outside a plan run"]
 
 
 def test_for_dispatch_without_prime_blocks_each_line(dwld, capsys):
@@ -114,3 +114,17 @@ def test_status_and_dispatch_survive_pool_without_agents_key(world, capsys):
     (world.sd / "pool.json").write_text("{}")
     assert fleet.main(["status"]) == 0
     assert "W1" in capsys.readouterr().out
+
+
+def test_spawn_passes_new_flags_only_as_keywords_when_set(world, monkeypatch):
+    seen = []
+
+    def old(sd, plan, tier, project, cfg, env, role, after, output=None):  # the signature before brief and plain
+        seen.append(after)
+        return {"id": "W1"}
+    monkeypatch.setattr(fleet, "_spawn", old)
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["id"] == "W1"
+    kw = []
+    monkeypatch.setattr(fleet, "_spawn", lambda *a, **k: kw.append(k) or {"id": "W2"})
+    fleet.spawn(world.sd, world.plan, "sonnet", world.proj, brief=True, plain=False)
+    assert kw == [{"brief": True, "plain": False}]

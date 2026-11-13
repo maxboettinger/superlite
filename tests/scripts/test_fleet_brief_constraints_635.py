@@ -6,6 +6,7 @@ from test_plan_tools import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 import fleet  # noqa: E402
 import fleet_io  # noqa: E402
+import orchestrator  # noqa: E402
 import fleet_state as fs  # noqa: E402
 
 HEAD = "# Plan\n**Goal:** test.\n\nGlobal constraints:\n- Every check runs on the build machine.\n\n"
@@ -36,16 +37,16 @@ def test_with_constraints_no_plan_or_none_stated(tmp_path):
 
 def test_plan_file_order(tmp_path, plan):
     sd = tmp_path / "proj" / ".superlite"; sd.mkdir(parents=True)
-    assert fleet.plan_file(sd, None) is None
+    assert orchestrator.plan_file(sd, None) is None
     (sd / "pool.json").write_text("not json")
-    assert fleet.plan_file(sd, str(tmp_path / "missing.md")) is None
+    assert orchestrator.plan_file(sd, str(tmp_path / "missing.md")) is None
     (sd.parent / "docs").mkdir(); (sd.parent / "docs" / "p.md").write_text(HEAD)
     (sd / "pool.json").write_text(json.dumps({"plan": "docs/p.md"}))
-    assert fleet.plan_file(sd, None) == sd.parent / "docs" / "p.md"
+    assert orchestrator.plan_file(sd, None) == sd.parent / "docs" / "p.md"
     (sd / "stable.json").write_text(json.dumps({"plan": str(plan)}))
-    assert fleet.plan_file(sd, None) == plan
+    assert orchestrator.plan_file(sd, None) == plan
     other = tmp_path / "other.md"; other.write_text(HEAD)
-    assert fleet.plan_file(sd, str(other)) == other
+    assert orchestrator.plan_file(sd, str(other)) == other
 
 
 def test_add_constraints_reports_change_and_survives_errors(plan, tmp_path):

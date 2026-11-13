@@ -100,7 +100,7 @@ def test_run_folder_without_plan_is_exit_2(world, monkeypatch, capsys):
     (world.sd / "prime.md").unlink(missing_ok=True)
     assert fleet.main(["spawn", "--for-dispatch", "--plan", str(world.sd)]) == 2
     err = capsys.readouterr().err
-    assert (f"error: --plan {world.sd} is a run folder with no plan file (stable.json, pool.json or plan.md name none); "
+    assert (f"error: --plan {world.sd} is a run folder with no plan file (stable.json, pool.json and plan.md name none); "
             "pass the plan file") in err
     assert not [c for c in world.fh.calls if c[0] == "start_agent"]
     assert not json.loads((world.sd / "fleet.json").read_text()).get("workers")

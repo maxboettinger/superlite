@@ -104,7 +104,12 @@ def main(argv=None):  # O(L + a*o*F*len) + process spawn
     pool_path = Path(a.pool)  # O(1)
     pool = json.loads(pool_path.read_text(encoding="utf-8")) if pool_path.exists() \
         else {"agents": []}  # O(1)
-    plan = a.plan or pool.get("plan") or nt.DEFAULT_PLAN  # O(1)
+    import plan_tools as pt  # O(1)
+    try:  # O(1)
+        plan = str(pt.resolve_plan(a.plan)) if a.plan else str(pt.run_plan(pool_path.parent) or nt.DEFAULT_PLAN)  # O(d)
+    except pt.PlanError as e:  # O(1)
+        print(f"error: {e}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
     graph = nt.taskgraph(plan)  # O(n + e) + process spawn
     info = nt.parse_plan(plan)  # O(L)
     if a.task not in graph and a.task not in info:  # O(1)
