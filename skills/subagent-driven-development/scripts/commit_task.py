@@ -38,7 +38,7 @@ task owns are left uncommitted; when its owner is committed and not running and 
 checkpoint, `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` says so. A file another task claims (`--also` or `--claim` ruling) prints nothing when its claimer is in this call or the file equals the newest checkpoint, else `left uncommitted (claimed by T2, changed after its checkpoint; run commit_task T2): F` (claimer committed, not running) or `left uncommitted (claimed by T2; commit_task T2 commits it once T2 is done): F`. Each stderr note
 prints once per call, not once per task). A file this task owns that a running sibling (busy in pool.json, outside this call) also owns and that
 differs from the newest checkpoint is held out: one `left uncommitted (shared with running T2; commit_task T1 again once it is done): F` note per task;
-a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held, py_compile plus an import check on each touched .py file, commit
+a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held, py_compile plus an import check on each touched .py file (a file under a `fixtures/` folder is a data script and is skipped, noted `import check skipped (fixture): F`; a ModuleNotFoundError for a package found in the repo outside the import roots names the `"pythonpath"` fix), commit
 with the task title, append the SHA to the progress ledger, then launch in the
 background `sl probe_run --commit SHA [--plan P]` and, for every seam of the task graph
 (`sl plan_tools taskgraph --format full`) that involves this task and whose both
@@ -77,7 +77,7 @@ import re  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
 import tempfile  # O(1)
-from pathlib import Path  # O(1)
+from pathlib import Path, PurePosixPath  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import next_tasks as nt  # noqa: E402 | O(1)
@@ -100,7 +100,7 @@ IMPORT_DRIVER = r"""
 import importlib, importlib.util, json, os, sys, traceback
 sys.dont_write_bytecode = True
 root = os.path.abspath(sys.argv[1])
-roots = sorted((os.path.abspath(r) for r in json.loads(sys.argv[2])), key=len, reverse=True)
+roots = sorted((os.path.abspath(os.path.join(root, r)) for r in json.loads(sys.argv[2])), key=len, reverse=True)
 files = sys.argv[3:]
 sys.path.insert(0, root)
 if os.path.isdir(os.path.join(root, "src")):
@@ -284,14 +284,24 @@ def import_errors(files, roots=None, root=".", notes=None):  # O(m_py * import c
             if notes is not None:  # O(1)
                 notes.append(("warn", f["file"], f["line"], f["error"]))  # O(1)
             continue  # O(1)
-        errors.append((f["file"], f["line"], f["error"]))  # O(1)
+        err = f["error"]  # O(1)
+        if m:  # a package that sits in the repo outside the import roots: name the pythonpath fix (#712) | O(1)
+            d = pyroots.hint(root, m.group(1), list(roots or []), f["file"])  # O(d)
+            if d:  # O(1)
+                err = err + "; " + pyroots.advice(root, [d])  # O(1)
+        errors.append((f["file"], f["line"], err))  # O(1)
     return errors  # O(failures)
+
+
+def is_fixture(path):  # a script under a fixtures/ folder is data for a test, not a module | O(len path)
+    return "fixtures" in PurePosixPath(path.replace("\\", "/")).parts[:-1]  # O(len path)
 
 
 def is_module(path):  # O(len path)
     name = Path(path).name  # O(1)
     return (path.endswith(".py") and not name.startswith("test_")  # O(1)
-            and not name.endswith("_test.py") and name != "conftest.py")  # O(1)
+            and not name.endswith("_test.py") and name != "conftest.py"  # O(1)
+            and not is_fixture(path))  # O(len path)
 
 
 def append_ledger(ledger, line):  # O(1) file I/O
@@ -863,6 +873,9 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     problems = syntax_errors(py)  # O(size of py files)
     if not problems:  # O(1)
         gate = []  # skip and warn notes from the import check | O(1)
+        for f in py:  # O(m_py) iterations
+            if is_fixture(f):  # O(1)
+                print(f"import check skipped (fixture): {f}", file=sys.stderr)  # O(1)
         problems = import_errors([f for f in py if is_module(f)], a.roots, notes=gate)  # O(m_py * import cost) + process spawn
         for kind, f, line, msg in gate:  # O(notes) iterations
             if kind == "skip":  # O(1)
