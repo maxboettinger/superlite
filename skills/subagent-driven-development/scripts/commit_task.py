@@ -1084,9 +1084,8 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
         try:  # review hints for the tasks this call committed, only while fleet is on (#455) | O(1)
             import fleet_state, fleet_io  # O(1) lazy
             if committed and fleet_state.is_on(sd):  # O(w)
-                for rtid, reasons in fleet_io.review_hints(sd, a.plan):  # O(n) iterations
-                    if rtid in committed:  # O(t)
-                        print(f"review: {rtid} ({'; '.join(reasons)}); run {nt.SCRIPTS / 'sl'} fleet spawn --for-review {rtid} --plan {a.plan}")  # O(k)
+                for line in fleet_io.hint_lines(sd, a.plan, nt.SCRIPTS / "sl", set(committed)):  # O(n) iterations
+                    print(line)  # O(k)
         except Exception as e:  # O(1)
             print(f"warning: no review hints ({e})", file=sys.stderr)  # O(1)
     return worst  # O(1)
