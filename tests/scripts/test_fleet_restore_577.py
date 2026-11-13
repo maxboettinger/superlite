@@ -224,7 +224,7 @@ def test_lead_fleet_first_and_lead_prompt(w):
     assert not blocked
     assert lines[0].startswith("W1 W2 restored pane=") and lines[0].endswith("busy, continued")
     assert lines[1].startswith("W1 restored pane=") and lines[1].endswith("busy, continued")
-    assert lines[-1] == f"re-arm: {SL} backlog wait" and f"--plan {lsd}" not in " ".join(lines)
+    assert lines[-1] == f"re-arm: {SL} backlog run" and f"--plan {lsd}" not in " ".join(lines)
     lead_prompt = next(c for c in w.fake.calls if c[0] == "prompt" and c[1] == "sl-a-lead")[2]
     assert lead_prompt.startswith(fr.LEAD_CONTINUE) and f"re-arm: {SL} fleet wait --wave --timeout 540000 --plan {lsd}" in lead_prompt
     assert lead_prompt.endswith("Then continue your brief where you stopped.")

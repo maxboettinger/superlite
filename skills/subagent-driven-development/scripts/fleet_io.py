@@ -12,7 +12,7 @@ A batch's task message has one Verify Tn line per member, each with its own --ta
 
 `wait` honours `--timeout` as ms, a bare number under 1000 read as seconds (`540s`, `9m`, `1500ms` work); it returns each
 report once (`claim`): a worker another wait collected prints `Wn T3 already collected: <json>`; `BUSY`/`TIMEOUT` end with
-`(reported: Wk <json>)` naming this call's finishers.
+`(reported: Wk <json>)` naming this call's finishers. `--timeout 0` waits without a limit (run it as a background command).
 `--wave` returns once every pending worker and `--tests PATH` run (a background `run_tests` summary) finished, or right after the first failure (a status outside DONE, DONE_WITH_CONCERNS, APPROVED, GREEN, findings, a partial APPROVED, a RED or DIED run); `--any` and `--wave` exclude each other.
 
 `send`/`keys` to a stopped or dead worker exit 2 naming a fresh `sl fleet spawn`; an `agent_not_found` reply marks the worker dead; `send --brief` remembers the brief
@@ -945,7 +945,7 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False, wave=False, te
         if (any_ and results) or (wave and any(wave_failure(r) for r in results)):  # the first finisher (any_) or failure (wave) ends the round; the rest stay busy | O(r)
             print("BUSY " + rest + _reported(results))  # O(w)
             break  # O(1)
-        if clock() - start >= timeout_ms:  # O(1)
+        if timeout_ms and clock() - start >= timeout_ms:  # a 0 timeout waits without a limit | O(1)
             print("TIMEOUT " + rest + _reported(results))  # O(w)
             break  # O(1)
         sleep(poll_s)  # O(poll_s)
@@ -999,6 +999,8 @@ def main(argv=None):  # O(wait)
             return 2  # O(1)
         if str(a.timeout).strip().isdigit() and 0 < int(a.timeout) < 1000:  # O(1)
             print(f"note: --timeout {a.timeout} read as {a.timeout} s (--timeout is in ms)", file=sys.stderr)  # O(1)
+        if t_ms == 0:  # O(1)
+            print("note: --timeout 0 waits without a limit; run it as a background command (a foreground Bash call ends at 600000 ms)", file=sys.stderr)  # O(1)
     sd = state.resolve(a.plan) if getattr(a, "plan", None) else state.resolve()  # O(d)
     try:  # O(1)
         if a.cmd == "send" and sum([bool(a.tasks), a.text is not None, a.brief is not None]) > 1:  # before any herdr call or file check | O(1)
