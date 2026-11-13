@@ -296,6 +296,28 @@ def _word40(text):  # O(len)
     return cut[:40]  # O(1)
 
 
+def step_lines(rows: list) -> list:
+    """One `step <id>: <who> runs this: <command> (<source>)` line per stored main step of an unshipped batch."""
+    out = []  # O(1)
+    for b in rows:  # O(batches * steps)
+        if b.get("state") == "shipped":  # O(1)
+            continue
+        for x in b.get("main_steps") or []:  # O(steps)
+            if not (isinstance(x, dict) and x.get("runs") in ("main", "user") and isinstance(x.get("command"), str)):  # O(1)
+                continue
+            why = backlog_checks._word(str(x["why"]), 80) if x.get("why") else ""  # O(len)
+            nums = " ".join(ref(n) for n in x.get("issues") or [])  # O(i)
+            if nums:  # O(1)
+                src = nums + (": " + why if why else "")  # O(len)
+            elif x.get("question"):  # O(1)
+                src = "decision: " + backlog_checks._word(str(x["question"]), 60) + (": " + why if why else "")  # O(len)
+            else:  # O(1)
+                src = why  # O(1)
+            line = f"step {b['id']}: {backlog_checks.step_line(x)}" + (f" ({src})" if src else "")  # O(len)
+            out.append(" ".join(re.sub(r"[\x00-\x1f\x7f]", " ", line).split()))  # O(len)
+    return out
+
+
 def status_lines(data: dict, all_: bool = False) -> list:
     bs = data.get("batches", [])
     run = sum(1 for b in bs if b["state"] in ACTIVE)
@@ -336,6 +358,7 @@ def status_lines(data: dict, all_: bool = False) -> list:
     for b in rows:  # O(batches)
         if b["state"] == "parked" and len(str(b.get("reason") or "")) > 40:  # O(1)
             lines.append(f"reason {b['id']}: {backlog_brief.cut_note(' '.join(re.sub(r'[\x00-\x1f\x7f]', ' ', str(b['reason'])).split()), b['id'])}")  # O(len)
+    lines.extend(step_lines(rows))  # O(batches * steps)
     lines.extend(left_out_lines(data))
     if nl:
         lines.append(nl)
