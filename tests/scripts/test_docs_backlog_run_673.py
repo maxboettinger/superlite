@@ -8,7 +8,7 @@ def _read(rel):
 
 
 def test_backlog_md_run():
-    t = _read("skills/subagent-driven-development/backlog.md")
+    t = _read("skills/subagent-driven-development/backlog-main.md")
     for s in ("backlog run", "--window", "fleet restore", "re-arm"):
         assert s in t, s
 
@@ -40,7 +40,7 @@ _OLD_BG_WAIT = '`"$SL" backlog wait` as a background command'
 
 
 def test_handover_names_run():
-    for rel in ("commands/backlog.md", "skills/subagent-driven-development/backlog.md"):
+    for rel in ("commands/backlog.md", "skills/subagent-driven-development/backlog-main.md"):
         t = _read(rel)
         assert _NEW_HANDOVER in t, rel
         assert _OLD_HANDOVER not in t, rel
@@ -49,6 +49,6 @@ def test_handover_names_run():
 
 
 def test_run_exit_codes_documented():
-    t = _read("skills/subagent-driven-development/backlog.md")
+    t = _read("skills/subagent-driven-development/backlog-main.md")
     assert "Exit codes 0 (run end, needs_decision, parked and TIMEOUT), 2 (start refusal), 3 (Herdr missing)" in t
     assert "2 (refusal or a batch needs main)" not in t

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-REF = (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8")
+REF = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
 TOOLS = (ROOT / "docs" / "tools.md").read_text(encoding="utf-8")
 
 MAIN2 = ("A step a lead cannot run (installing a tool, changing global git or system config, writing to an outside service) is a batch's `main_steps` entry from triage "
@@ -33,7 +33,7 @@ def test_backlog_md_main_steps():
 
 
 def test_tools_md_main_steps():
-    last = [l for l in TOOLS.splitlines() if l.strip()][-1]
+    last = next(l for l in TOOLS.splitlines() if l.startswith("Main steps (#674):"))
     assert last.startswith("Main steps (#674):")
     for s in ("main_steps", "`runs` and `command`", "`steps` map", "decide --print", "Left undone: main runs this: <command>"):
         assert s in last, s

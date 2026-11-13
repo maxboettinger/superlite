@@ -9,7 +9,7 @@ def row(name):
 
 
 def test_docs_name_the_main_side_merge():
-    ref = (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8")
+    ref = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
     fleet = (ROOT / "docs" / "fleet.md").read_text(encoding="utf-8")
     assert '"$SL" backlog ship B merge --from-main' in CMD
     assert '"$SL" backlog ship B merge --from-main' in ref

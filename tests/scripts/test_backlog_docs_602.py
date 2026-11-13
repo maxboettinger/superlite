@@ -2,7 +2,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-BACKLOG = (ROOT / "skills/subagent-driven-development/backlog.md").read_text()
+BACKLOG = ((ROOT / "skills/subagent-driven-development/backlog-main.md").read_text() + "\n" + (ROOT / "skills/subagent-driven-development/backlog.md").read_text())
 
 S1 = ("A batch's `append_only` (in the triage proposal) lists the files of its `files` it only adds lines to, such as a strings catalog, "
       "a changelog or a module doc; a file two batches both list there does not serialise them: the proposal needs no `depends` for it, "

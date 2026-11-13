@@ -3,7 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FLEET = (ROOT / "docs" / "fleet.md").read_text(encoding="utf-8")
-BACKLOG = (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8")
+BACKLOG = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
 CMD = (ROOT / "commands" / "backlog.md").read_text(encoding="utf-8")
 SCRIPTS = ROOT / "skills" / "subagent-driven-development" / "scripts"
 

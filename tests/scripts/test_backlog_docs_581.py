@@ -1,6 +1,6 @@
 from pathlib import Path
 
-DOC = (Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "backlog.md").read_text()
+DOC = ((Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "backlog-main.md").read_text() + "\n" + (Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "backlog.md").read_text())
 
 
 def test_lead_end_states_and_acceptance_are_documented():

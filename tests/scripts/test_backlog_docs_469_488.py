@@ -18,7 +18,7 @@ CMD = [
 ]
 
 def test_sdd_backlog_doc_names_jira_close_status_reread_and_cleanup():
-    t = norm("skills/subagent-driven-development/backlog.md")
+    t = norm("skills/subagent-driven-development/backlog-main.md") + " " + norm("skills/subagent-driven-development/backlog.md")
     for x in SDD:
         assert x in t
     assert "A `B OPEN #N` line names an issue the merge left open" in t and "its worktree kept" in t
