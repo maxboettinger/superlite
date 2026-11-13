@@ -28,7 +28,7 @@ A report with concerns adds ` concerns=N` to the wait line. `send WID --brief FI
 `send --brief` resends the brief once when Herdr reports agent_prompt_stalled; a second stall is the error.
 `send`, `send --brief` and `send --text` resend once after a stall, and after a slow Herdr reply ("timed out waiting for app response") unless the worker already shows `working`.
 A lead's stop records written by its own child sessions (a transcript outside the lead's worktree project folder) never count as the lead's stop.
-`send --text` to a lead whose newest own stop said only READY resends the brief file instead of the text.
+`send --text` to a lead whose newest own stop said only READY resends its own brief (the record's `brief`, else `<lead_sd>/briefs/lead.md`) instead of the text; every text ends with the worker's report contract (`report_contract`: a lead whose brief holds the plan-phase End line gets `fleet_report.PLANNED`) (#732).
 A review brief has a `Red runs (task reports):` section for each task whose newest implementer report (`fleet/reports/*.json`) shows no red run (`red_gap`), so its reviewer proves each new test can fail (#606).
 A review brief has a `Plan contract outside Tn's Produces` section: the other plan lines (table rows, later tasks' lines) that name the task's types (`contract_mentions`), for the reviewer to hold the build against (#606).
 `review_hints` adds the hint `no red run` to a committed task whose report has a red-run gap.
@@ -648,6 +648,27 @@ def send_brief(sd, wid, brief, label="", full=False, preface=""):  # O(w + len b
     return label  # O(1)
 
 
+def lead_brief(wrec):  # the brief file a lead was sent (record's brief, else <lead_sd>/briefs/lead.md), or None | O(1)
+    b = str(wrec.get("brief") or "")  # O(1)
+    if b and Path(b).is_file():  # O(1)
+        return Path(b)  # O(1)
+    lsd = str(wrec.get("lead_sd") or "")  # O(1)
+    p = Path(lsd) / "briefs" / "lead.md" if lsd else None  # O(1)
+    return p if p is not None and p.is_file() else None  # O(1)
+
+
+def report_contract(wrec):  # the contract a worker's texts end with | O(size of the brief)
+    role = wrec.get("role") or "implementer"  # O(1)
+    if role == "layer":  # O(1)
+        return ""  # O(1)
+    if role == "final-reviewer":  # O(1)
+        return fleet_report.REVIEW  # O(1)
+    brief = lead_brief(wrec) if role == "lead" else None  # O(1)
+    if brief is not None and fleet_report._planning(str(brief)):  # O(size of the brief)
+        return fleet_report.PLANNED  # O(size of the brief)
+    return fleet_report.WORK  # O(1)
+
+
 def send_text(sd, wid, text):  # O(w + len text)
     """Answer a worker with free text. It is busy again on its last task, so a bare `wait` waits for the answer; the pool stays as it was."""
     sd = Path(sd)  # O(1)
@@ -655,10 +676,10 @@ def send_text(sd, wid, text):  # O(w + len text)
     sent = now_ms()  # O(1)
     wrec = fs.load(sd)["workers"].get(wid, {})  # O(w)
     role = wrec.get("role") or "implementer"  # O(1)
-    contract = "" if role == "layer" else (fleet_report.REVIEW if role == "final-reviewer" else fleet_report.WORK)  # O(1)
+    contract = report_contract(wrec)  # O(size of the brief)
     msg = f"{text}\n\n{contract}" if contract else text  # O(len text)
-    brief = Path(str(wrec.get("lead_sd") or "")) / "briefs" / "lead.md"  # O(1)
-    last = latest_stop(sd, wid, int(wrec.get("sent") or 0)) if role == "lead" and wrec.get("lead_sd") and brief.is_file() else None  # O(m + w)
+    brief = lead_brief(wrec) if role == "lead" else None  # O(1)
+    last = latest_stop(sd, wid, int(wrec.get("sent") or 0)) if brief is not None else None  # O(m + w)
     if last is not None and " ".join(str(last.get("last") or "").split()) == "READY":  # the lead stopped after READY alone: its brief never ran | O(len)
         msg = fleet_report.brief_message("lead", str(brief.resolve()))  # O(1)
         print(f"{wid} brief resent (its last stop said only READY)")  # O(1)

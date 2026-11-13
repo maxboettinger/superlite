@@ -5,7 +5,7 @@
 
 Per worker: the pane that holds its session (Herdr agent list) or its recorded pane gives the place; a fresh pane is split
 off it with the recorded env, the old pane is closed, the recorded agent starts with `--resume <session>`. A busy worker
-whose turn the restart cut gets a continue prompt. Leads' own fleets come first. Prints one line per worker, then the waits
+whose turn the restart cut gets a continue prompt (a lead's ends with its phase's report contract, fleet_io.report_contract). Leads' own fleets come first. Prints one line per worker, then the waits
 to re-arm and the test runs that ended meanwhile. Exit 3 when a line says BLOCKED, else 0.
 """
 
@@ -232,7 +232,7 @@ def _one(sd, c, wid, w, rearm_of_lead, prefix):  # (line, blocked) for one worke
     if fio.latest_stop(sd, wid, sent):  # the turn ended with a report before the restart | O(m + w)
         return line + ", reported", False  # O(m + w)
     if role == "lead":  # O(1)
-        text = "\n".join([LEAD_CONTINUE] + rearm_of_lead + [LEAD_TAIL])  # O(r)
+        text = "\n".join([LEAD_CONTINUE] + rearm_of_lead + [LEAD_TAIL]) + "\n\n" + fio.report_contract(w)  # O(r + size of the brief)
     else:  # O(1)
         text = CONTINUE + "\n\n" + (fleet_report.REVIEW if role in REVIEW_ROLES else fleet_report.WORK)  # O(1)
     try:  # O(1)
