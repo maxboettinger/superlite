@@ -17,6 +17,7 @@ Prints a short summary (default) or the full text (--full); always writes the fu
 import argparse  # O(1)
 import hashlib  # O(1)
 import json  # O(1)
+import random  # O(1)
 import sys  # O(1)
 from datetime import datetime  # O(1)
 from pathlib import Path  # O(1)
@@ -359,7 +360,9 @@ def batches_text(rows) -> str:  # O(n log n)
                 f"wall {(ld.get('wall_s', 0) or 0) / 60:.1f} min, waits {(ld.get('blocked_wait_s', 0) or 0) / 60:.1f} min | "
                 f"workers ${wt.get('cost_usd', 0) or 0:.2f}" + (f" ({ws})" if ws else ""))  # O(1)
         k = _kinds(ld.get("kinds"))  # O(k log k)
-        out.append(line + (f" | lead by kind: {k}" if k else ""))  # O(1)
+        tail = (f" | config {r['config']}" if r.get("config") else "") + (
+            f" | experiment {r['experiment']} arm {r.get('arm') or '?'}" if r.get("experiment") else "")  # O(1)
+        out.append(line + (f" | lead by kind: {k}" if k else "") + tail)  # O(1)
     t = j["total"]  # O(1)
     out.append(f"total: {t['batches']} batches, lead ${t['lead_usd']:.2f} ({t['lead_share'] * 100:.0f}% of lead + workers), "
                f"workers ${t['workers_usd']:.2f}; main ${t['main_usd']:.2f} over {t['rounds']} rounds")  # O(1)
@@ -368,6 +371,142 @@ def batches_text(rows) -> str:  # O(n log n)
         out.append(f"main {','.join(map(str, r.get('round') or []))}: ${r.get('cost_usd', 0) or 0:.2f}, "
                    f"{r.get('turns', 0) or 0} turns" + (f" ({k})" if k else ""))  # O(1)
     return "\n".join(out) + "\n"  # O(n)
+
+
+TOKENS = ("input", "cache_read", "cache_write", "output", "thinking")  # O(1)
+
+
+def quality_of(row) -> float | None:  # O(1)
+    """Quality 0..100 of a batch row: its `quality` key, else 100 - 10 x grade points (an assumption), else None."""
+    q = row.get("quality")  # O(1)
+    if isinstance(q, (int, float)) and not isinstance(q, bool):  # O(1)
+        return float(q)  # O(1)
+    p = (row.get("grade") or {}).get("points")  # O(1)
+    if isinstance(p, (int, float)) and not isinstance(p, bool):  # O(1)
+        return float(min(100.0, max(0.0, 100.0 - 10.0 * p)))  # O(1)
+    return None  # O(1)
+
+
+def _mean(xs) -> float:  # O(n)
+    return sum(xs) / len(xs) if xs else 0.0  # O(n)
+
+
+def bootstrap_diff(a, b, seed, n=2000) -> tuple:  # O(n * (len(a) + len(b)))
+    """(mean(b) - mean(a), lo, hi): a 95% percentile interval from n resamples of both lists."""
+    if not a or not b:  # O(1)
+        return (0.0, 0.0, 0.0)  # O(1)
+    rng = random.Random(seed)  # O(1)
+    ds = sorted(_mean(rng.choices(b, k=len(b))) - _mean(rng.choices(a, k=len(a))) for _ in range(n))  # O(n * (len(a) + len(b)))
+    return (_mean(b) - _mean(a), ds[int(0.025 * n)], ds[max(0, int(0.975 * n) - 1)])  # O(1)
+
+
+def _row_cost(r) -> float:  # O(1)
+    return float((r.get("lead") or {}).get("cost_usd", 0) or 0) + float((r.get("workers_total") or {}).get("cost_usd", 0) or 0)  # O(1)
+
+
+def _row_tokens(r) -> dict:  # O(1)
+    lt, wt = (r.get("lead") or {}).get("tokens") or {}, (r.get("workers_total") or {}).get("tokens") or {}  # O(1)
+    return {k: (lt.get(k, 0) or 0) + (wt.get(k, 0) or 0) for k in TOKENS}  # O(1)
+
+
+def _arm_stats(rs) -> dict:  # O(n)
+    qs = [q for q in (quality_of(r) for r in rs) if q is not None]  # O(n)
+    letters = {}  # O(1)
+    for r in rs:  # O(n)
+        lt = (r.get("grade") or {}).get("letter")  # O(1)
+        if lt:  # O(1)
+            letters[lt] = letters.get(lt, 0) + 1  # O(1)
+    toks = [_row_tokens(r) for r in rs]  # O(n)
+    return {"n": len(rs), "cost_usd": _mean([_row_cost(r) for r in rs]),
+            "tokens": {k: _mean([t[k] for t in toks]) for k in TOKENS},
+            "wall_min": _mean([float((r.get("lead") or {}).get("wall_s", 0) or 0) / 60 for r in rs]),
+            "quality": _mean(qs) if qs else None, "n_quality": len(qs), "letters": letters}  # O(n)
+
+
+def _arm_values(rs, metric) -> list:  # O(n)
+    if metric == "cost_usd":  # O(1)
+        return [_row_cost(r) for r in rs]  # O(n)
+    if metric == "wall_min":  # O(1)
+        return [float((r.get("lead") or {}).get("wall_s", 0) or 0) / 60 for r in rs]  # O(n)
+    return [q for q in (quality_of(r) for r in rs) if q is not None]  # O(n)
+
+
+def experiment_report(rows, exp) -> dict:  # O(arms * 3 * 2000 * n)
+    """Per-arm means, bootstrap differences against the first arm and a verdict for one experiment."""
+    arms, configs = list(exp["arms"]), exp.get("configs") or {}  # O(1)
+    margin, need = float(exp.get("margin", 10.0)), int(exp.get("min_per_arm", 5))  # O(1)
+    groups, excluded = {a: [] for a in arms}, []  # O(1)
+    newest = {}  # O(1)
+    for r in rows:  # O(n)
+        if r.get("row") in ("batch", "replay"):  # O(1)
+            newest[(r.get("batch"), r.get("arm"))] = r  # O(1)
+    for r in newest.values():  # O(n)
+        arm, cfg = r.get("arm"), r.get("config") or ""  # O(1)
+        if r.get("experiment") != exp["id"] or arm not in groups or r.get("end") == "skipped":  # O(1)
+            continue  # O(1)
+        if cfg and not (cfg == arm or cfg.startswith(f"{arm}-") or cfg == configs.get(arm)):  # O(1)
+            excluded.append({"batch": r.get("batch"), "arm": arm, "config": cfg})  # O(1)
+            continue  # O(1)
+        groups[arm].append(r)  # O(1)
+    base = arms[0]  # O(1)
+    stats = {a: _arm_stats(groups[a]) for a in arms}  # O(n)
+    seed = int(hashlib.sha256(str(exp["id"]).encode()).hexdigest()[:8], 16)  # O(1)
+    enough = all(stats[a]["n"] >= need for a in arms)  # O(arms)
+    diffs, verdicts = {}, []  # O(1)
+    for a in arms[1:]:  # O(arms)
+        diffs[a] = {}  # O(1)
+        for m in ("cost_usd", "wall_min", "quality"):  # O(1)
+            x, y = _arm_values(groups[base], m), _arm_values(groups[a], m)  # O(n)
+            if x and y:  # O(1)
+                d, lo, hi = bootstrap_diff(x, y, seed)  # O(2000 * n)
+                diffs[a][m] = {"diff": d, "lo": lo, "hi": hi}  # O(1)
+            else:  # O(1)
+                diffs[a][m] = None  # O(1)
+    if not enough:  # O(1)
+        counts = ", ".join(f"{a} {stats[a]['n']} of {need}" for a in arms)  # O(arms)
+        verdict = f"not enough data: {counts} batches; no winner yet"  # O(1)
+    else:  # O(1)
+        for a in arms[1:]:  # O(arms)
+            q, c = diffs[a]["quality"], diffs[a]["cost_usd"]  # O(1)
+            if q is not None and not q["lo"] > -margin:  # O(1)
+                verdicts.append(f"keep {base}: {a} quality may be worse by more than {margin:g} points")  # O(1)
+            elif q is None:  # O(1)
+                verdicts.append(f"no winner: {a} or {base} has no quality data")  # O(1)
+            elif c is None:  # O(1)
+                verdicts.append(f"no winner: {a} or {base} has no cost data")  # O(1)
+            elif c["hi"] < 0:  # O(1)
+                verdicts.append(f"{a}: cheaper by ${-c['diff']:.2f} per batch at no clear quality loss")  # O(1)
+            elif c["lo"] > 0:  # O(1)
+                verdicts.append(f"keep {base}: {a} costs ${c['diff']:.2f} more per batch")  # O(1)
+            else:  # O(1)
+                verdicts.append(f"no winner: {a} has no clear cost difference to {base}")  # O(1)
+        verdict = "; ".join(verdicts)  # O(arms)
+    return {"experiment": exp["id"], "baseline": base, "enough": enough, "verdict": verdict,
+            "arms": stats, "diffs": diffs, "excluded": excluded}  # O(1)
+
+
+def _ci(d, fmt) -> str:  # O(1)
+    return "n/a" if d is None else f"{d['diff']:{fmt}} [{d['lo']:{fmt}}, {d['hi']:{fmt}}]"  # O(1)
+
+
+def experiment_text(rep) -> str:  # O(arms)
+    out = [f"experiment {rep['experiment']} (baseline {rep['baseline']})"]  # O(1)
+    for a, s in rep["arms"].items():  # O(arms)
+        q = f"{s['quality']:.1f}" if s["quality"] is not None else "n/a"  # O(1)
+        ls = " ".join(f"{k}{v}" for k, v in sorted(s["letters"].items())) or "none"  # O(1)
+        out.append(f"{a}: {s['n']} batches, ${s['cost_usd']:.2f} per batch, {s['wall_min']:.1f} min, quality {q}, grades {ls}")  # O(1)
+    for a, d in rep["diffs"].items():  # O(arms)
+        out.append(f"{a} vs {rep['baseline']}: cost {_ci(d['cost_usd'], '+.2f')} $, wall {_ci(d['wall_min'], '+.1f')} min, "
+                   f"quality {_ci(d['quality'], '+.1f')}")  # O(1)
+        q = d["quality"]  # O(1)
+        if q is not None and abs(q["diff"]) < 3:  # O(1)
+            out.append(f"{a}: quality differs by under 3 points: noise")  # O(1)
+    if rep["excluded"]:  # O(1)
+        out.append("excluded (config does not match the arm): " + ", ".join(
+            f"{e['batch']} ({e['arm']}, {e['config']})" for e in rep["excluded"]))  # O(e)
+    out.append("quality = 100 - 10 x grade points (assumption)")  # O(1)
+    out.append(f"verdict: {rep['verdict']}")  # O(1)
+    return "\n".join(out) + "\n"  # O(arms)
 
 
 def main(argv=None):  # O(M + B + n*(n + e))
