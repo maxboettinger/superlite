@@ -77,3 +77,8 @@ def test_batch_line_names_the_per_task_form(world):
     batch = [ln for ln in msg.splitlines() if ln.startswith("Batch:")]
     assert len(batch) == 1 and batch[0].endswith(
         " Report each task's red run on its own line, `Red run Tn: <summary line>`, and give the json block's `red` as an object keyed by task id.")
+
+
+def test_module_docstring_names_the_batch_and_also_edit_behaviour():
+    for word in ("WORK_BATCH", "reds", "Also edit:"):
+        assert word in io.__doc__

@@ -9,6 +9,8 @@
     fleet_io.py stopped WID --sd DIR [--t MS]       (the worker stop hook: relabel the pane)
 
 A batch's task message has one Verify Tn line per member, each with its own --task, and a Batch line: one run per task (#556).
+`task_message` adds the `Also edit:` line (task.also_line) and keeps those files out of `Do not touch`; the `Batch:` line asks for per-task red runs.
+`report_contract` gives a batch implementer (task label with a comma) fleet_report.WORK_BATCH, and `_ask` uses `report_contract`; `red_gap` reads a report's `reds[tid]` before `red`.
 
 `wait` honours `--timeout` as ms, a bare number under 1000 read as seconds (`540s`, `9m`, `1500ms` work); it returns each
 report once (`claim`): a worker another wait collected prints `Wn T3 already collected: <json>`; `BUSY`/`TIMEOUT` end with
