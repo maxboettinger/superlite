@@ -280,7 +280,7 @@ def test_unknown_git_target_names_its_token(H):
     assert v is not None and v.rel == "?"
     assert v.word == "? (from git: lfs: no git command, read as an alias while the command names git config)"
     v = jh("perl -e 'alarm 30; system @ARGV' echo hi", H)
-    assert v.word == "? (from perl)"
+    assert v.word == "? (from perl: subprocess program is not a string literal)"
 
 
 # --- only a tracked .gitignore makes a path housekeeping (F-T1-1) and every non-git writer is covered (F-T1-2) ---
