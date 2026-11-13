@@ -10,6 +10,7 @@ import ast
 import functools
 import io
 import os
+import posixpath
 import re
 import shlex
 import tempfile
@@ -604,6 +605,26 @@ def _stmt_end(code: str, i: int, commas: bool = False) -> int:  # O(len(code)) |
     return n  # O(1)
 
 
+_OSPATH = frozenset({"dirname", "abspath", "realpath", "normpath"})  # O(1)
+
+
+def _parent(x: str) -> str:  # O(len(x)) | Path(x).parent, no file system; an unknown piece makes it unknown
+    if _UNK in x:  # O(len(x))
+        return _UNK  # O(1)
+    d = posixpath.dirname(x.rstrip("/") or x)  # O(len(x))
+    return d or "."  # O(1)
+
+
+def _ospath(fn: str, x: str) -> str:  # O(len(x)) | os.path.dirname / abspath / realpath / normpath of a value, no file system
+    if _UNK in x:  # O(len(x))
+        return _UNK  # O(1)
+    if fn == "dirname":  # O(1)
+        return posixpath.dirname(x)  # O(len(x))
+    if fn == "normpath":  # O(1)
+        return posixpath.normpath(x)  # O(len(x))
+    return posixpath.normpath(x) if _is_abs(x) else _UNK  # abspath, realpath: a relative value needs the process directory  # O(len(x))
+
+
 def _join1(x: str, y: str) -> str:  # O(len(x) + len(y)) | os.path.join / Path division of two literals
     if _UNK in x:  # an unknown piece swallows what follows  # O(len(x))
         return x  # O(1)
@@ -676,18 +697,32 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
                     return None  # O(1)
                 self.i = m.end()  # O(1)
                 if self.s[self.i:self.i + 1] == "(":  # O(1)
-                    if self.args() is None:  # O(len(s))
+                    a = self.args()  # O(len(s))
+                    if a is None:  # O(1)
                         return None  # O(1)
-                    if m.group(0) not in ("resolve", "absolute", "as_posix"):  # O(1)
-                        v = [_UNK]  # O(1)
+                    v = self._method(m.group(0), v, a)  # O(64)
                 else:  # O(1)
-                    v = [_UNK]  # O(1)
+                    v = [_parent(x) for x in v] if m.group(0) == "parent" else [_UNK]  # O(64)
             elif c == "[":  # O(1)
                 self.i = min(_scan_close(self.s, self.i) + 1, len(self.s))  # O(len(s))
                 v = [_UNK]  # O(1)
             else:  # O(1)
                 break  # O(1)
         return v  # O(1)
+
+    @staticmethod
+    def _method(name: str, v: list[str], a: list[list[str]]) -> list[str]:  # O(64) | the values after `.name(args)` on a Path value
+        if name in ("resolve", "absolute"):  # an absolute value is its normalised path; a relative one stays as written  # O(64)
+            return [posixpath.normpath(x) if _is_abs(x) and _UNK not in x else x for x in v]  # O(64)
+        if name == "as_posix":  # O(1)
+            return v  # O(1)
+        if name == "with_name" and len(a) == 1:  # O(1)
+            return _Comp._cross(v, a[0], lambda x, y: _join1(_parent(x), y))  # O(64)
+        if name == "joinpath":  # O(1)
+            for x in a:  # O(len(a))
+                v = _Comp._cross(v, x, _join1)  # O(64)
+            return v  # O(64)
+        return [_UNK]  # O(1)
 
     def args(self) -> list[list[str]] | None:  # O(len(s)) | the positional arguments of the call at self.i (a `(`)
         self.i += 1  # O(1)
@@ -753,6 +788,8 @@ class _Comp:  # O(len(text)) | a Python path expression: literals, f-strings, na
             return acc  # O(1)
         if name in ("str", "os.fspath", "fspath") and len(args) == 1:  # O(1)
             return args[0]  # O(1)
+        if last in _OSPATH and name.rsplit(".", 1)[0] in ("os.path", "posixpath", "path", name) and len(args) == 1:  # O(1)
+            return [_ospath(last, x) for x in args[0]]  # O(64)
         return [_UNK]  # O(1)
 
     @staticmethod
@@ -1513,7 +1550,7 @@ def temp_root(text: str | None) -> str | None:  # O(len(text)) | tempfile's temp
     return root if root.startswith("/") and "\x00" not in root else None  # O(1)
 
 
-def _code(code: str, lang: str, root: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
+def _code(code: str, lang: str, root: str | None = None, file: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
     prev, prev_t = _NAMES[0], _TEMP[0]  # O(1)
     _TEMP[0] = root  # O(1)
     scan = code  # O(1)
@@ -1528,6 +1565,8 @@ def _code(code: str, lang: str, root: str | None = None) -> list[str]:  # O(len(
             params = _params(code, _NAMES[0])  # O(len(code))
             if params:  # O(1)
                 _NAMES[0] = _assigned(code, lang, scan, params)  # O(len(code))
+        if lang == "py" and file is not None and not re.search(r"(?<![\w.])__file__\s*(?:[-+*/%|&^@]|//|\*\*|<<|>>)?=(?!=)|\bfor\s+__file__\b|\bas\s+__file__\b", code):  # O(len(code))
+            _NAMES[0] = {**_NAMES[0], "__file__": [file]}  # O(len(names))
         return _code1(code, lang, scan)  # O(len(code) * |patterns|)
     finally:  # O(1)
         _NAMES[0], _TEMP[0] = prev, prev_t  # O(1)
@@ -1670,16 +1709,17 @@ def why(words: list[str], cwd: str | None = None, env=None, top: str | None = No
 
 
 def targets(words: list[str], cwd: str | None = None, env=None, top: str | None = None,
-            text: str | None = None) -> list[str]:  # O(len(words) * |options|)
+            text: str | None = None, file: str | None = None) -> list[str]:  # O(len(words) * |options|)
     """The paths one simple command writes. The optional context only sharpens git: cwd is the directory the shell sits
     in (an operand of `git checkout` counts as a path when it exists there; None: the process's), env the shell
     variables in force for the command (GIT_WORK_TREE; a None value is unknown), top the directory a `!` alias runs in
-    (the project root), text the whole command line (a git config or git dir named anywhere makes the config unknown)."""
-    return _targets(words, cwd, env, top, text)  # O(len(words) * |options|)
+    (the project root), text the whole command line (a git config or git dir named anywhere makes the config unknown),
+    file the path of the script whose text a Python `-c` argument is (`__file__`; None: unknown)."""
+    return _targets(words, cwd, env, top, text, file)  # O(len(words) * |options|)
 
 
 def _targets(words: list[str], cwd: str | None = None, env=None, top: str | None = None,
-             text: str | None = None) -> list[str]:  # O(len(words) * |options|)
+             text: str | None = None, file: str | None = None) -> list[str]:  # O(len(words) * |options|)
     if not words:  # O(1)
         return []  # O(1)
     cmd = _cmd(words[0])  # O(len(words[0]))
@@ -1698,5 +1738,5 @@ def _targets(words: list[str], cwd: str | None = None, env=None, top: str | None
         return _ps(cmd, args)  # O(len(args))
     found = _eval_code(cmd, args)  # O(len(args))
     if found:  # O(1)
-        return _code(found[1], found[0], temp_root(text))  # O(len(code))
+        return _code(found[1], found[0], temp_root(text), file)  # O(len(code))
     return []  # O(1)
