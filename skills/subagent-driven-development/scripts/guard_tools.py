@@ -173,10 +173,21 @@ def _is_abs(p: str) -> bool:  # O(1)
     return p.startswith("/") or re.match(r"^[A-Za-z]:[/\\]", p) is not None  # O(1)
 
 
+def _dyn(w: str) -> bool:  # O(len(w)) | a word whose value the guard cannot read: "?" (a non-literal argument), a $ or a backtick (#726)
+    return w == "?" or "$" in w or "`" in w  # O(len(w))
+
+
+_CALL_DIR: list[str | None] = [""]  # the folder the subprocess call being read runs in, from the shell's folder ("": the shell's own, None: unknown) (#728)
+
+
 def _exists(cwd: str | None, base: str, p: str) -> bool:  # O(len(base) + len(p)) | does p exist below base (from cwd)?
     if "$" in base or "$" in p or base.startswith("~") or p.startswith("~"):  # an unknown folder: nothing to look at  # O(1)
         return False  # O(1)
     full = _join(base, p)  # O(len(base) + len(p))
+    if not _is_abs(full):  # a subprocess call's cwd= folder (#728)  # O(1)
+        if _CALL_DIR[0] is None:  # O(1)
+            return False  # O(1)
+        full = _join(_CALL_DIR[0], full)  # O(len(full))
     return os.path.exists(full if _is_abs(full) or cwd is None else os.path.join(cwd, full))  # O(1)
 
 
@@ -255,6 +266,10 @@ def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = N
         i += 1  # O(1)
     if not sub:  # O(1)
         return []  # O(1)
+    if _dyn(sub):  # a subcommand that is not a literal may be checkout, restore, apply or clean (#726)  # O(len(sub))
+        if why is not None:  # O(1)
+            why.append(f"subcommand {sub} is not a literal")  # O(len(sub))
+        return ["?"]  # O(1)
     blob = _live_text(text) if text is not None else " ".join(words)  # O(len(blob))
     low = blob.lower()  # O(len(blob))
     for tok, hit in (("GIT_CONFIG", "GIT_CONFIG" in blob), ("GIT_DIR", "GIT_DIR" in blob), ("--git-dir", "--git-dir" in low),
@@ -363,10 +378,15 @@ def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = N
         if not dd:  # O(1)
             if len(ops) >= 2:  # O(1)
                 paths = ops[1:]  # O(len(ops))
-            if ops and (_exists(cwd, base, ops[0]) or any(  # --ours/--theirs/--conflict take only paths
+            start = any(_git_flag(args, s, lg, sub) for s, lg in (("b", ""), ("B", ""), ("", "orphan"), ("", "detach")))  # the operand is a commit  # O(len(args))
+            if ops and (ops[0].startswith("~") or _exists(cwd, base, ops[0]) or any(  # --ours/--theirs/--conflict take only paths
                     _git_flag([x], "", "ours", sub) or _git_flag([x], "", "theirs", sub)
                     or _git_flag([x], "", "conflict", sub) for x in args)):  # O(len(args))
                 paths.append(ops[0])  # O(1)
+            elif ops and _dyn(ops[0]) and not start:  # an operand that is not a literal may be a path (#726)  # O(len(ops[0]))
+                if why is not None:  # O(1)
+                    why.append(f"checkout operand {ops[0]} may be a path; git switch takes only a branch")  # O(len(ops[0]))
+                paths.append("?")  # O(1)
         if _git_flag(args, "p", "patch", sub) and not paths:  # O(len(args))
             paths = ["."]  # O(1)
     out: list[str] = []  # O(1)
@@ -1266,14 +1286,44 @@ def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(ra
     cause = f"subprocess argument {k + 1} is not a string literal"  # the program is argument 1  # O(1)
     if 2 in kinds:  # an unpacked list or a `+` tail: any words, -c CODE too  # O(w)
         return _why(cause)  # O(1)
+    named, d = _call_dir(args, lang)  # O(len(args))
+    prev = _CALL_DIR[0]  # O(1)
+    if named:  # O(1)
+        _CALL_DIR[0] = None if prev is None or d is None else _join(prev, d)  # O(len(d))
     _depth[0] += 1  # O(1)
     try:  # O(1)
         out = _shell(words[0]) if len(words) == 1 else _argv(words)  # O(len(raw))
     finally:  # O(1)
         _depth[0] -= 1  # O(1)
+        _CALL_DIR[0] = prev  # O(1)
     if "?" in out and k >= 0:  # O(len(out))
         _why(cause)  # O(1)
+    if named:  # O(len(out))
+        moved = [_in_dir(d, t) for t in out]  # O(len(out))
+        if any(m == "?" and t != "?" for m, t in zip(moved, out)):  # O(len(out))
+            _why("subprocess cwd= is not a string literal")  # O(1)
+        out = _uniq(moved)  # O(len(out))
     return out  # O(1)
+
+
+def _call_dir(args: list[Arg], lang: str) -> tuple[bool, str | None]:  # O(len(args)) | does a Python call name cwd=, and its folder (None: not a literal) (#728)
+    if lang != "py":  # O(1)
+        return False, ""  # O(1)
+    for k, v in args:  # O(len(args))
+        if k == "cwd":  # O(1)
+            if not isinstance(v, str) or not v or _UNK in v or v.startswith("~"):  # O(len(v))
+                return True, None  # O(1)
+            return True, v  # O(1)
+    return False, ""  # O(1)
+
+
+def _in_dir(d: str | None, t: str) -> str:  # O(len(d) + len(t)) | target t of a call that runs in folder d (None: unknown) (#728)
+    if t == "?" or _is_abs(t) or t.startswith("~") or "$" in t or "`" in t:  # O(len(t))
+        return t  # O(1)
+    if d is None:  # O(1)
+        return "?"  # O(1)
+    r = _join(d, t)  # O(len(d) + len(t))
+    return _dirp(r) if t.endswith("/") else r  # an extraction folder keeps its slash  # O(len(r))
 
 
 def _a_sh_rb(args: list[Arg], raw: str) -> list[str]:  # O(len(raw))
