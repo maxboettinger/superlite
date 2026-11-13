@@ -362,6 +362,10 @@ def batches_text(rows) -> str:  # O(n log n)
         k = _kinds(ld.get("kinds"))  # O(k log k)
         tail = (f" | config {r['config']}" if r.get("config") else "") + (
             f" | experiment {r['experiment']} arm {r.get('arm') or '?'}" if r.get("experiment") else "")  # O(1)
+        ls = r.get("leads") or []  # O(1)
+        if len(ls) >= 2:  # O(1)
+            line += " | leads: " + ", ".join(f"{x.get('phase')} {x.get('model')} ${x.get('cost_usd', 0) or 0:.2f} "
+                                             f"{(x.get('wall_s', 0) or 0) / 60:.1f} min" for x in ls)  # O(l)
         out.append(line + (f" | lead by kind: {k}" if k else "") + tail)  # O(1)
     t = j["total"]  # O(1)
     out.append(f"total: {t['batches']} batches, lead ${t['lead_usd']:.2f} ({t['lead_share'] * 100:.0f}% of lead + workers), "
