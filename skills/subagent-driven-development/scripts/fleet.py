@@ -58,6 +58,7 @@ import herdr_client as hc  # noqa: E402 | O(1)
 import machine_load as ml  # noqa: E402 | O(1)
 import pool  # noqa: E402 | O(1)
 import routing  # noqa: E402 | O(1)
+import run_config  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
 
 TRUST = "Yes, I trust this folder"  # O(1)
@@ -368,6 +369,18 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=
         return _spawn(sd, plan, tier, project, cfg, env, role, first, output)  # O(a * e + w)
 
 
+def with_model(argv, model):  # a copy of argv pinned to `model`: replace the value of --model, else insert after --agent NAME, else prepend | O(n)
+    out = list(argv)  # O(n)
+    if "--model" in out and out.index("--model") + 1 < len(out):  # O(n)
+        out[out.index("--model") + 1] = model  # O(1)
+    elif "--agent" in out and out.index("--agent") + 1 < len(out):  # O(n)
+        i = out.index("--agent") + 2  # O(1)
+        out[i:i] = ["--model", model]  # O(n)
+    else:  # O(1)
+        out[:0] = ["--model", model]  # O(n)
+    return out  # O(1)
+
+
 def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a * e + w) plus herdr calls
     import fleet_roles  # noqa: E402 | O(1)
     sd = Path(sd)  # O(1)
@@ -382,6 +395,10 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a 
         raise SystemExit(3)  # O(1)
     fresh = isinstance(after, NoShell)  # O(1)
     tail = "" if after is None else f"; retried in a fresh pane after {after.wid}" if fresh else f"; retried after {after.wid} on {after.account}"  # O(1)
+    rcfg = run_config.active(sd, project)  # the run's snapshot, else the layered default | O(file)
+    pin = rcfg["workers"].get(role)  # a per-role model of the run config | O(1)
+    if pin:  # O(1)
+        model = pin  # O(1) the prime file above was chosen from the tier's own model
     account, cdir, shared = choose_account(sd, model, base) if after is None or fresh else _retry_account(sd, model, base, after.account)  # O(a * e + w)
     if fresh:  # O(1)
         print(f"{after.wid} {after.why}; retrying in a fresh pane", file=sys.stderr)  # O(1)
@@ -390,6 +407,8 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a 
     wid = fs.next_id(sd)  # O(w)
     name = fs.agent_name(sd, wid, taken=_live_names())  # herdr rejects `W1`; every herdr agent call below uses this name | O(a)
     wenv = {**worker_env(sd, wid, agent, cdir, base), **fleet_roles.env(role)}  # O(1)
+    if rcfg["cache_ttl"].get("workers"):  # O(1)
+        wenv["CLAUDE_CODE_PROMPT_CACHE_TTL"] = rcfg["cache_ttl"]["workers"]  # O(1)
     cwd = str(project)  # O(1)
     kept, names, path = {}, [], None  # O(1)
     try:  # a lookup or check error never stops a spawn: the worker stays lean (#576) | O(1)
@@ -409,7 +428,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a 
     except Exception as e:  # noqa: BLE001 | O(1)
         kept, names, path = {}, [], None  # O(1)
         print(f"{wid} mcp: none: {e}", file=sys.stderr)  # O(1)
-    argv = lean_argv(launch["argv"], path, fleet_mcp.deny(names) if names else ())  # O(n)
+    argv = lean_argv(with_model(launch["argv"], pin) if pin else launch["argv"], path, fleet_mcp.deny(names) if names else ())  # O(n)
     if names and fleet_mcp.usage_note(names):  # O(k)
         argv += ["--append-system-prompt", fleet_mcp.usage_note(names)]  # O(1)
     try:  # a state dir outside the project (a worktree run) is not readable by default | O(1)
@@ -417,7 +436,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a 
     except ValueError:  # O(1)
         argv += ["--add-dir", str(sd.resolve())]  # O(1)
     record = {"name": name, "account": account, "agent": agent, "tier": tier or model, "state": "starting", "task": None, "role": role, "one_turn": launch["one_turn"],  # O(1)
-              "launch": {"argv": argv, "env": wenv, "cwd": cwd}}
+              "run_config": rcfg["id"], "launch": {"argv": argv, "env": wenv, "cwd": cwd}}
     if names:  # O(1)
         record["mcp"] = names  # O(1)
     try:  # O(1)
@@ -912,6 +931,7 @@ def main(argv=None):  # O(w) plus command cost
     s = sub.add_parser("on", help="turn fleet mode on")  # O(1)
     s.add_argument("--accounts", default="")  # O(1)
     s.add_argument("--plan")  # O(1)
+    s.add_argument("--config")  # O(1) a named run config (#681); written as the run's snapshot
     sub.add_parser("off", help="stop every worker and turn fleet mode off").add_argument("--plan")  # O(1)
     s = sub.add_parser("status", help="list the workers")  # O(1)
     s.add_argument("--plan")  # O(1)
@@ -952,6 +972,14 @@ def main(argv=None):  # O(w) plus command cost
     if a.cmd == "on":  # O(1)
         raw = a.accounts or os.environ.get("SUPERLITE_FLEET_ACCOUNTS", "")  # O(1) flag wins over env
         accts = [x.strip() for x in raw.split(",") if x.strip()]  # O(a)
+        if a.config:  # O(1)
+            try:  # O(1)
+                cfg_rc = run_config.resolve(a.config, Path(sd).resolve().parent)  # O(file)
+            except run_config.ConfigError as e:  # O(1)
+                print(f"error: {e}", file=sys.stderr)  # O(1)
+                return 2  # O(1)
+            run_config.write_active(sd, cfg_rc)  # O(1)
+            print(f"fleet: run config {cfg_rc['id']}", file=sys.stderr)  # O(1)
         fs.set_on(sd, fs.full_name(sd), accts)  # O(w)
         if any(not ac.is_path(x) and x != "current" for x in accts) and not ac.read_listing().get("accounts"):  # O(a) plus subprocess time
             print("fleet: warning: claude-profile list unavailable; account names cannot be resolved, pass config dir paths instead", file=sys.stderr)  # O(1)
