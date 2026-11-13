@@ -713,7 +713,17 @@ def cmd_decide(a) -> int:
             return 0
         try:
             b = bs.batch(d, a.batch)
+        except (KeyError, TypeError, ValueError) as e:
+            print(f"BLOCKED: unknown batch {a.batch}" if isinstance(e, KeyError) else f"BLOCKED: {a.batch} question.json unreadable: {e}")
+            return 3
+        if not b.get("worktree"):
+            print(f"{a.batch} has no open question")
+            return 0
+        try:
             q = json.loads((Path(b["worktree"]) / ".superlite" / "question.json").read_text())
+        except FileNotFoundError:
+            print(f"{a.batch} has no open question")
+            return 0
         except (KeyError, TypeError, OSError, ValueError, RecursionError) as e:
             print(f"BLOCKED: {a.batch} question.json unreadable: {e}")
             return 3
@@ -804,6 +814,42 @@ def set_standing(root: Path) -> dict:
     return backlog_brief.STANDING  # O(1)
 
 
+def _arg_val(rest: list, flag: str):
+    """The value of --flag V or --flag=V in rest, else None."""
+    for i, x in enumerate(rest):  # O(args)
+        if x == flag and i + 1 < len(rest):  # O(1)
+            return rest[i + 1]  # O(1)
+        if x.startswith(flag + "="):  # O(1)
+            return x[len(flag) + 1:]  # O(1)
+    return None  # O(1)
+
+
+def _cap_line(root: Path, rest: list) -> tuple:
+    """(cap, line) of the lead cap for a start without --cap; (None, "") when it does not apply."""
+    if os.environ.get("SUPERLITE_FLEET_WORKER") or any(x in ("-h", "--help") or x == "--cap" or x.startswith("--cap=") for x in rest):  # O(args)
+        return None, ""  # O(1)
+    import backlog_cap  # O(1)
+    import backlog_state as bs  # O(1)
+    data = bs.load(bs.path(root))  # O(size)
+    tier = _arg_val(rest, "--model")  # O(args)
+    if tier is None:  # O(1)
+        try:  # O(1)
+            import run_config  # O(1)
+            tier = run_config.resolve(_arg_val(rest, "--config"), root)["lead"]["model"]  # O(L)
+        except Exception:  # any failure: no tier
+            tier = None  # O(1)
+    return backlog_cap.lead_cap(data, root, held=len(bs.holds(data)), tier=tier)  # O(b + a*l)
+
+
+def _with_cap(cmd: str, rest: list, root: Path) -> list:
+    """The argv for backlog_run: cmd and rest, plus --cap N (and its cap: line on stdout) when rest names no cap."""
+    cap, line = _cap_line(root, rest)  # O(b)
+    if cap is None:  # O(1)
+        return [cmd] + rest  # O(args)
+    print(line)  # O(1)
+    return [cmd] + rest + ["--cap", str(cap)]  # O(args)
+
+
 def _start(argv: list) -> int:
     """Route start: strip --note FILE, store it, hand the note and the open batches' files to the lead brief, then run it."""
     import backlog_run  # O(1)
@@ -838,7 +884,7 @@ def _start(argv: list) -> int:
                     print(f"note: {b['id']} lead {b['lead']} started before this note; sl backlog tell {b['id']} --text \"$(cat {shlex.quote(src)})\" tells it")  # O(1)
     set_standing(_root())  # O(b)
     try:  # O(1)
-        return backlog_run.main(["start"] + rest)  # O(start)
+        return backlog_run.main(_with_cap("start", rest, _root()))  # O(start)
     except SystemExit:  # O(1)
         if any(x in ("-h", "--help") for x in rest):  # O(args)
             print(NOTE_HELP)  # O(1)
@@ -996,6 +1042,10 @@ def cmd_status(a) -> int:
     nxt = parked_next(d)  # O(b)
     if nxt is not None:  # O(1)
         lines.append(nxt)  # O(1)
+    if any(b["state"] == "planned" for b in d["batches"]):  # O(b) the cap a start would take; _cap_line skips a fleet worker
+        cap_line = _cap_line(_root(), [])[1]  # O(b + a*l)
+        if cap_line:  # O(1)
+            lines.append(cap_line)  # O(1)
     print("\n".join(lines))  # O(lines)
     return 0  # O(1)
 
@@ -1014,6 +1064,8 @@ def main(argv=None) -> int:
         return _start(argv[1:])
     if argv and argv[0] in ROUTED:
         import backlog_run  # O(1)
+        if argv[0] == "run":  # O(1)
+            return backlog_run.main(_with_cap("run", argv[1:], _root()))  # O(run)
         return backlog_run.main(argv)
     if argv and argv[0] == "ship":
         import backlog_ship  # O(1)
@@ -1043,7 +1095,7 @@ def main(argv=None) -> int:
     pl.add_argument("--max-batches", type=int, metavar="N", help="batches one plan round holds, 1 to 20 (default 7)")  # O(1)
     src.add_argument("--issues", metavar="LIST", help="pin the plan to these issues: GitHub numbers (362,#433) or Jira keys (PIX-1,PIX-2); the first item picks the source")  # O(1)
     pl.set_defaults(fn=cmd_plan)
-    for name, text in (("start", "start the planned batches' leads (--note FILE stores a standing note)"),
+    for name, text in (("start", "start the planned batches' leads (--note FILE stores a standing note); without --cap: the cap: line's limit (machine room, accounts, overlap)"),
                        ("wait", "wait for running batches to finish or ask"),
                        ("run", "start, wait and start again until a batch needs main"),
                        ("answer", "answer a lead's question: answer B --file FILE"),

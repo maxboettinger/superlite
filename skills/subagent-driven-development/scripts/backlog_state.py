@@ -108,6 +108,21 @@ def startable(data: dict, cap: int = 2) -> list:
     return out
 
 
+def holds(data: dict) -> dict:
+    bs = data.get("batches", [])  # O(1)
+    active = [b for b in bs if b["state"] in ACTIVE]  # O(batches)
+    chosen, out = [], {}  # O(1)
+    for b in sorted((b for b in bs if b["state"] == "planned"), key=lambda b: _id_key(b["id"])):  # O(b log b)
+        if not all(_shipped(data, d) for d in b.get("depends", [])) or _unanswered(b):  # O(batches)
+            continue  # O(1)
+        c = _clash(b, active + chosen)  # O(batches * files)
+        if c:  # O(1)
+            out[b["id"]] = c["id"]  # O(1)
+        else:  # O(1)
+            chosen.append(b)  # O(1)
+    return out  # O(1)
+
+
 def _title(t) -> str:
     return re.sub(r"[\x00-\x1f\x7f]", " ", str(t))[:80]  # O(len)
 
@@ -335,12 +350,14 @@ def status_lines(data: dict, all_: bool = False) -> list:
         lines.append(f"earlier rounds: {len(bs) - len(rows)} shipped (sl backlog status --all lists them)")  # O(1)
     if rows:  # O(1)
         lines.append("batch | issues | state | lead | PR | next")  # O(1)
+    held = holds(data)  # O(batches^2 * files)
     for b in rows:  # O(batches)
         s = b["state"]
         if s == "planned":
             dep = next((d for d in b.get("depends", []) if not _shipped(data, d)), None)
-            c = _clash(b, [o for o in active if o is not b])
-            nxt = f"waits {dep}" if dep else "decide" if _unanswered(b) else f"clash {c['id']}" if c else "start"
+            h = held.get(b["id"])  # O(1)
+            hold = f"clash {h}" if any(o["id"] == h for o in active) else f"start, or after {h}"  # O(batches)
+            nxt = f"waits {dep}" if dep else "decide" if _unanswered(b) else hold if h else "start"
         elif s == "running":
             nxt = "sl backlog wait"
         elif s == "needs_decision":

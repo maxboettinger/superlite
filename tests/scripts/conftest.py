@@ -30,5 +30,6 @@ def _isolated_superlite_home(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERLITE_MACHINE_LIMIT", "0")  # 0 = no count cap; no test reaches the real ps or sysctl (#560, #643)
     monkeypatch.setenv("SUPERLITE_MACHINE_FLOOR", "0")  # 0 = no memory floor: the gate measures nothing (#560, #643)
     monkeypatch.setenv("SUPERLITE_MCP_CHECK", "0")  # no test reaches a real MCP server (#576)
+    monkeypatch.setenv("SUPERLITE_LEAD_CAP_LIVE", "0")  # no test reaches the real claude-profile or herdr through the lead cap (#748)
     for var in HOST_VARS:
         monkeypatch.delenv(var, raising=False)
