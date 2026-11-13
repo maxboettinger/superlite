@@ -34,7 +34,8 @@ def bk(tmp_path, monkeypatch):
              "worktree": types.SimpleNamespace(ensure=ensure, PARENT=".claude/worktrees", bare_flag=lambda start: "", BareCheckout=type("BareCheckout", (Exception,), {}), Taken=type("Taken", (Exception,), {}), BadBranch=type("BadBranch", (Exception,), {})), "fleet_lead": types.SimpleNamespace(spawn_lead=spawn_lead),
              "ship_lock": types.SimpleNamespace(lock_path=lambda repo, home=None: tmp_path / "x.lock", release=lambda p, batch: log("release", batch) or True)}
     if os.environ.get("SUPERLITE_REAL") != "1":
-        fakes["backlog_brief"] = types.SimpleNamespace(lead_brief=lambda batch, ctx: f"brief {batch['id']} resume={ctx['resume']}")
+        fakes["backlog_brief"] = types.SimpleNamespace(lead_brief=lambda batch, ctx: f"brief {batch['id']} resume={ctx['resume']}",
+                                                      pick_summaries=lambda batch, shipped: ([x["path"] for x in shipped], 0))
     for k, v in fakes.items():
         monkeypatch.setitem(sys.modules, k, v)
     monkeypatch.setattr(br, "_root", lambda: root); monkeypatch.setattr(br, "_now_ms", lambda: 5000)
@@ -126,7 +127,7 @@ def test_answer_sends_the_file_and_resumes_the_lead(bk, capsys, tmp_path):
 
 def test_start_passes_summary_paths_not_contents(bk, capsys, monkeypatch):
     seen = []
-    monkeypatch.setitem(sys.modules, "backlog_brief", types.SimpleNamespace(lead_brief=lambda batch, ctx: seen.append(ctx["summaries"]) or "brief"))
+    monkeypatch.setitem(sys.modules, "backlog_brief", types.SimpleNamespace(lead_brief=lambda batch, ctx: seen.append(ctx["summaries"]) or "brief", pick_summaries=lambda batch, shipped: ([x["path"] for x in shipped], 0)))
     f = bk.sd / "backlog" / "B1.md"; f.parent.mkdir(parents=True); f.write_text("# ruling text\nbody")
     put(bk, b("B1", ["a.py"], "shipped"), b("B2", ["c.py"]))
     assert run(capsys, "start")[0] == 0 and seen == [[str(f)]]

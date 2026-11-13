@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Named run configs (#681): lead model, effort, autocompact window, cache TTL, denied tools, MCP servers, worker models.
+"""Named run configs (#681): lead model, build lead model, effort, autocompact window, cache TTL, denied tools, MCP servers, worker models.
 
     run_config.py show [--config NAME] [--project P]
     run_config.py list [--project P]
@@ -24,7 +24,7 @@ VARIANTS = ("default", "lean")  # lead brief text ids | O(1)
 TTLS = (None, "5m", "1h")  # O(1)
 ROLES = ("implementer", "fixer", "package-reviewer", "final-reviewer", "research", "checker", "writer")  # O(1)
 SECTIONS = ("lead", "cache_ttl", "workers")  # O(1)
-LEAD_KEYS = ("model", "effort", "autocompact", "deny", "mcp", "text")  # O(1)
+LEAD_KEYS = ("model", "effort", "autocompact", "deny", "mcp", "text", "build_model", "build_effort")  # O(1)
 
 
 class ConfigError(ValueError):  # O(1)
@@ -47,6 +47,10 @@ def _lead(src, name, lead):  # O(k)
         if k == "model" and not (isinstance(v, str) and v and not any(ch.isspace() for ch in v)):  # O(len)
             _bad(src, name, w, "must be a non-empty string without whitespace")  # O(1)
         elif k == "effort" and v not in EFFORTS:  # O(1)
+            _bad(src, name, w, f"{v} is not one of {', '.join(EFFORTS)}")  # O(1)
+        elif k == "build_model" and v is not None and not (isinstance(v, str) and v and not any(ch.isspace() for ch in v)):  # O(len)
+            _bad(src, name, w, "must be null or a model string without whitespace")  # O(1)
+        elif k == "build_effort" and v is not None and v not in EFFORTS:  # O(1)
             _bad(src, name, w, f"{v} is not one of {', '.join(EFFORTS)}")  # O(1)
         elif k == "autocompact" and v is not None and (isinstance(v, bool) or not isinstance(v, int) or not 100000 <= v <= 1000000):  # O(1)
             _bad(src, name, w, f"{v} must be null or an integer from 100000 to 1000000")  # O(1)
@@ -203,3 +207,15 @@ def main(argv=None) -> int:  # O(L)
 
 if __name__ == "__main__":  # O(1)
     sys.exit(main())  # O(1)
+
+
+def build_lead(rc: dict) -> dict | None:  # O(k)
+    """Copy of a resolved config with the lead on build_model (and build_effort when set); None without build_model."""
+    lead = rc.get("lead", {})  # O(1)
+    if not lead.get("build_model"):  # O(1)
+        return None  # O(1)
+    out = copy.deepcopy(rc)  # O(k)
+    out["lead"]["model"] = lead["build_model"]  # O(1)
+    if lead.get("build_effort"):  # O(1)
+        out["lead"]["effort"] = lead["build_effort"]  # O(1)
+    return out  # O(1)

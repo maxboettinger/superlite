@@ -1,5 +1,5 @@
 {
- "_comment": "Built-in run configs (#681). Layers on top: $SUPERLITE_HOME/run-configs.json (machine), <project>/.superlite/run-configs.json (project); later wins per key. Config: lead{model,effort,autocompact,deny,mcp,text}, cache_ttl{lead,workers}, workers{role: model|null}.",
+ "_comment": "Built-in run configs (#681). Layers on top: $SUPERLITE_HOME/run-configs.json (machine), <project>/.superlite/run-configs.json (project); later wins per key. Config: lead{model,effort,autocompact,deny,mcp,text,build_model,build_effort}, cache_ttl{lead,workers}, workers{role: model|null}. build_model set: a build lead on that model runs the plan the planning lead wrote (#699).",
  "default": "default",
  "configs": {
   "default": {

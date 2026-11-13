@@ -45,6 +45,7 @@ def test_start_text_from_default_config(cfg, capsys, monkeypatch):
     got = []
     monkeypatch.setitem(sys.modules, "backlog_brief", type(sys)("bb"))
     sys.modules["backlog_brief"].lead_brief = lambda batch, ctx: got.append(ctx.get("text")) or "brief"
+    sys.modules["backlog_brief"].pick_summaries = lambda batch, shipped, last=5: ([e["path"] for e in shipped], 0)  # O(n)
     put(cfg, b("B1", ["a.py"]))
     assert run(capsys, "start", "B1")[0] == 0
     assert got == [run_config.resolve(None, cfg.root)["lead"].get("text")]

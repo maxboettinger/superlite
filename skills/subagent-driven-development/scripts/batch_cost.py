@@ -99,8 +99,7 @@ def _effort(worker):  # O(a)
     return None  # O(1)
 
 
-def _lead(sd, batch) -> dict:  # O(m + T)
-    wid = batch.get("lead")  # O(1)
+def _one(sd, batch, wid, recorded=None) -> dict:  # O(m + T)
     try:  # O(1)
         worker = fs.load(sd)["workers"].get(wid) or {}  # O(w)
     except (OSError, ValueError, KeyError, AttributeError):  # O(1)
@@ -126,8 +125,46 @@ def _lead(sd, batch) -> dict:  # O(m + T)
         blocked += w.get("blocked_wait_s") or 0.0  # O(1)
         for k, n in (w.get("wakeups") or {}).items():  # O(1)
             wake[k] = wake.get(k, 0) + n  # O(1)
-    return {"model": best_model or worker.get("tier"), "effort": _effort(worker), "turns": turns, "tokens": tokens,
+    return {"model": best_model or recorded or worker.get("tier"), "effort": _effort(worker), "turns": turns, "tokens": tokens,
             "cost_usd": round(cost, 6), "wall_s": round(wall, 3), "blocked_wait_s": round(blocked, 3), "wakeups": wake, "kinds": kinds}  # O(1)
+
+
+def _leads(batch) -> list:  # the batch's lead records, distinct ids in order | O(l)
+    out = []  # O(1)
+    for x in batch.get("leads") or [{"id": batch.get("lead"), "phase": "single"}]:  # O(l)
+        if isinstance(x, dict) and x.get("id") and all(x["id"] != y["id"] for y in out):  # O(l)
+            out.append(x)  # O(1)
+    return out or [{"id": batch.get("lead"), "phase": "single"}]  # O(1)
+
+
+def _lead(sd, batch) -> dict:  # sum over the distinct lead ids; model and effort of the first | O(l * (m + T))
+    parts = [_one(sd, batch, x["id"], x.get("model")) for x in _leads(batch)]  # O(l * (m + T))
+    out = dict(parts[0], tokens=dict.fromkeys(TOKENS, 0), kinds={}, wakeups={})  # O(1)
+    out["cost_usd"] = round(sum(p["cost_usd"] for p in parts), 6)  # O(l)
+    out["turns"] = sum(p["turns"] for p in parts)  # O(l)
+    out["wall_s"] = round(sum(p["wall_s"] for p in parts), 3)  # O(l)
+    out["blocked_wait_s"] = round(sum(p["blocked_wait_s"] for p in parts), 3)  # O(l)
+    for p in parts:  # O(l)
+        for k in TOKENS:  # O(1)
+            out["tokens"][k] += p["tokens"][k]  # O(1)
+        for k, n in p["wakeups"].items():  # O(1)
+            out["wakeups"][k] = out["wakeups"].get(k, 0) + n  # O(1)
+        for kind, v in p["kinds"].items():  # O(kinds)
+            c = out["kinds"].setdefault(kind, {"turns": 0, "cost_usd": 0.0})  # O(1)
+            c["turns"] += v["turns"]  # O(1)
+            c["cost_usd"] = round(c["cost_usd"] + v["cost_usd"], 6)  # O(1)
+    if len(parts) == 1:  # the single result is today's, unchanged | O(1)
+        return parts[0]  # O(1)
+    return out  # O(1)
+
+
+def _lead_rows(sd, batch) -> list:  # one summary per lead | O(l * (m + T))
+    rows = []  # O(1)
+    for x in _leads(batch):  # O(l)
+        u = _one(sd, batch, x["id"], x.get("model"))  # O(m + T)
+        rows.append({"id": x["id"], "phase": x.get("phase") or "single", "model": u["model"], "effort": x.get("effort") or u["effort"],
+                     "turns": u["turns"], "tokens": u["tokens"], "cost_usd": u["cost_usd"], "wall_s": u["wall_s"]})  # O(1)
+    return rows  # O(l)
 
 
 def build_row(root, batch, end) -> dict:  # O(m + T + w)
@@ -149,7 +186,7 @@ def build_row(root, batch, end) -> dict:  # O(m + T + w)
         pass  # O(1)
     return {"v": 1, "row": "batch", "t": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "batch": batch["id"],
             "issues": batch.get("issues"), "config": batch.get("run_config") or "default", "end": end, "pr": batch.get("pr"), "version": batch.get("version"),
-            "lead": _lead(sd, batch), "workers": workers, "workers_total": total, "tests": snap.get("tests") or {},
+            "lead": _lead(sd, batch), "leads": _lead_rows(sd, batch), "workers": workers, "workers_total": total, "tests": snap.get("tests") or {},
             "grade": batch_grade.grade(snap.get("quality") or {}, batch), "experiment": arm["experiment"], "arm": arm["arm"]}  # O(m + T + w)
 
 
