@@ -78,7 +78,7 @@ def test_scratch_script_block_names_cause(proj):
 def test_checkout_same_verdict_as_shell_word(proj):
     sub = bash(proj, heredoc('subprocess.run(["git", "checkout", f"{p}"])'))
     sh = bash(proj, heredoc("os.system('git checkout \"$x\"')"))
-    assert sub.returncode == sh.returncode == 0
+    assert sub.returncode == sh.returncode == 2
 
 
 def test_unknown_open_keeps_plain_word(proj):
@@ -99,3 +99,35 @@ def test_scratch_hint_names_non_literal_program(proj):
         assert r.returncode == 2
         lines = [ln for ln in r.stderr.splitlines() if ln.startswith("- A throwaway script")]
         assert len(lines) == 1 and lines[0].endswith(NOTE)
+
+
+@pytest.mark.parametrize("cmd,line", [
+    ('git checkout "$x"', "Unresolved word: ? (from git: checkout operand $x may be a path; git switch takes only a branch)"),
+    ('git "$s" src/a.py', "Unresolved word: ? (from git: subcommand $s is not a literal)"),
+    ('git restore "$x"', "Unresolved word: $x"),
+])
+def test_unknown_git_operand_blocks_726(proj, cmd, line):
+    r = bash(proj, cmd)
+    assert r.returncode == 2
+    assert word(r) == [line]
+
+
+@pytest.mark.parametrize("cmd", ["git checkout main", 'git checkout -b "$x"', 'git checkout -b feat "$x"', 'git switch "$x"'])
+def test_branch_forms_pass_726(proj, cmd):
+    assert bash(proj, cmd).returncode == 0
+
+
+def test_subprocess_cwd_resolves_relative_target_728(proj):
+    r = bash(proj, heredoc('subprocess.run(["rm", "a.py"], cwd="src")'))
+    assert r.returncode == 2
+    assert r.stderr.splitlines()[-1] == "Blocked target: src/a.py"
+
+
+def test_subprocess_cwd_into_state_folder_passes_728(proj):
+    assert bash(proj, heredoc('subprocess.run(["rm", "x.json"], cwd=".superlite/scratch")')).returncode == 0
+
+
+def test_subprocess_unknown_cwd_names_cause_728(proj):
+    r = bash(proj, heredoc('subprocess.run(["rm", "a.py"], cwd=p)'))
+    assert r.returncode == 2
+    assert word(r) == ["Unresolved word: ? (from python3: subprocess cwd= is not a string literal)"]
