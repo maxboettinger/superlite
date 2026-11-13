@@ -14,10 +14,10 @@
 #     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg,
 #     jpeg, gif, svg, webp), any docs.md, .superlite/** and .git/info/exclude (a stray untracked file or folder may also be removed with rm, and a git-ignored path no task Owns may be written or removed), in the project or a linked worktree in it; an Edit/Write of the Owns of an inline build (the run's plan holds exactly one task) passes too, judged by guard_judge.py --owns. `sl orchestrator end` closes the run. <state folder>/scratch/ is the coordinator's throwaway-script folder: a Bash run of a script there is judged with its text inlined as a heredoc (scratch_inline), and the code block names it (scratch_hint).
 #  4. Fleet on (.superlite/fleet.json says "on": true): an Agent call of a superlite role (implementer, implementer-haiku,
-#     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher, checker) is denied with the
+#     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher, checker, writer) is denied with the
 #     `sl fleet spawn --role` hint, as the role is a fleet worker then. The message says the block repeats on every call (no retry);
 #     a researcher's message gives the research path (brief under <state folder>/briefs/, spawn, send, `fleet wait Wn`,
-#     report under <state folder>/fleet/reports/). Other agents (Explore, general-purpose) fall through.
+#     report under <state folder>/fleet/reports/). A writer's names spawn --role writer --brief; the brief's Output: line names its one file. Other agents (Explore, general-purpose) fall through.
 #     Reads the run's own fleet.json: from a linked worktree its .superlite, not a binding's folder in another checkout;
 #     a fleet another session turned on (owner_session, owner_pid) is skipped unless that session is still bound there.
 #     The message names the state folder as PLAN for a build without a plan.
@@ -43,21 +43,29 @@ IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
 # between simple commands); the quoted text and heredoc bodies into BLT (text only) or BLS (text that may run:
 # an assignment's quoted value, an unquoted-delimiter heredoc body holding $( or a backtick). A $( or backtick
 # opens its own words, inside double quotes too. BLLONG=1 when a line is over 4096 characters (the scan stops).
+# Per BLT entry j: BLTC[j] the index of its simple command (the number of separators before it), BLTN[j]=1 inside
+# $( ) or backticks, BLTK[j] its description for the block line. Per command c: BLO[c]=1 when it redirects its stdout
+# to a file, BLF[c] those targets (newline-ended).
 # Bash builtins only; one line at a time, so no step copies the whole command.
 bl_scan() {
   local LC_ALL=C
-  local rest="$1" ln n i c d w="" wt="" wa=0 mt="" stk="" m dl dq ds j seg cmp body k more=1
-  local -a dep=() pd=() pq=() pt=()
-  BLW=(); BLT=(); BLS=(); BLLONG=0
+  local rest="$1" ln n i c d w="" wt="" wa=0 mt="" stk="" m dl dq ds j seg cmp body k more=1 sc=0 tg=0 fd bn tk
+  local -a dep=() pd=() pq=() pt=() pc=() pn=()
+  BLW=(); BLT=(); BLS=(); BLLONG=0; BLTC=(); BLTN=(); BLTK=(); BLO=(); BLF=(); BLCN=()
   bl_emit() {
     if [ "$wa" = 1 ]; then
       BLW[${#BLW[@]}]="$w"
+      [[ $stk == *[SB]* ]] && BLCN[sc]=1
+      if [ "$tg" = 1 ]; then BLF[sc]="${BLF[sc]}$w"$'\n'; tg=0; fi
       if [[ $w =~ ^[A-Za-z_][A-Za-z0-9_]*\+?= ]]; then BLS[${#BLS[@]}]="${w#*=}"   # the whole value, escaped spaces too
-      elif [ -n "$wt" ]; then BLT[${#BLT[@]}]="$wt"; fi
+      elif [ -n "$wt" ]; then
+        j=${#BLT[@]}; BLT[j]="$wt"; BLTC[j]=$sc; bn=0; [[ $stk == *[SB]* ]] && bn=1; BLTN[j]=$bn
+        tk="${wt:0:60}"; BLTK[j]="the quoted text \"${tk//$'\n'/ }\""
+      fi
     fi
     w=""; wt=""; wa=0
   }
-  bl_sep() { bl_emit; BLW[${#BLW[@]}]=$'\001'; }
+  bl_sep() { bl_emit; BLW[${#BLW[@]}]=$'\001'; sc=$((sc + 1)); tg=0; }
   bl_line() {   # next line of rest into ln; more=0 after the last one
     ln="${rest%%$'\n'*}"
     if [ ${#ln} -gt 4096 ]; then BLLONG=1; more=0; ln=""; rest=""; return; fi
@@ -145,9 +153,14 @@ bl_scan() {
                    *) dl+="$d"; i=$((i + 1)) ;;
                  esac
                done
-               pd[${#pd[@]}]="$dl"; pq[${#pq[@]}]="$dq"; pt[${#pt[@]}]="$ds"
+               pd[${#pd[@]}]="$dl"; pq[${#pq[@]}]="$dq"; pt[${#pt[@]}]="$ds"; pc[${#pc[@]}]=$sc
+               bn=0; [[ $stk == *[SB]* ]] && bn=1; pn[${#pn[@]}]=$bn
              else bl_emit; i=$((i + 1)); fi ;;
-        '>') bl_emit; i=$((i + 1)) ;;
+        '>') fd=1; [ "$wa" = 1 ] && [[ $w =~ ^[0-9]+$ ]] && fd="$w"
+             bl_emit; i=$((i + 1))
+             while [ "${ln:i:1}" = '>' ]; do i=$((i + 1)); done
+             while [[ ${ln:i:1} == [' '$'\t'] ]]; do i=$((i + 1)); done
+             if [ "$fd" = 1 ]; then case "${ln:i:1}" in '('|'&'|'') ;; *) BLO[sc]=1; tg=1 ;; esac; fi ;;
         '#') if [ "$wa" = 0 ]; then i=$n; else w+='#'; i=$((i + 1)); fi ;;
         *) seg="${ln:i}"; seg="${seg%%[[:space:]\\\'\"\$\`\(\)\;\&\|\<\>]*}"
            [ -z "$seg" ] && seg="$c"
@@ -171,19 +184,23 @@ bl_scan() {
         body+="$ln"$'\n'
       done
       if [ "${pq[k]}" = 0 ] && [[ $body == *'$('* || $body == *'`'* ]]; then BLS[${#BLS[@]}]="$body"
-      else BLT[${#BLT[@]}]="$body"; fi
+      else j=${#BLT[@]}; BLT[j]="$body"; BLTC[j]=${pc[k]}; BLTN[j]=${pn[k]}; BLTK[j]="the heredoc <<${pd[k]}"; fi
     done
-    pd=(); pq=(); pt=()
+    pd=(); pq=(); pt=(); pc=(); pn=()
   done
   bl_emit
 }
 
 # bl_judge CMD: succeeds, the subcommand in BLHIT, when the Bash command CMD runs sl backlog decide|answer|start|plan:
 # the two words in a row, or the text of a quote or heredoc that may run (a runner word in the command, an assignment).
+# A text that a cat, tee, printf or echo only writes to plain files no other command of the call runs is data and does
+# not count (#706). BLWHY: the sentence that says which text matched and why (empty for a two-word hit).
 # A line over 4096 characters succeeds without a scan, BLHIT unchanged (the caller's raw match stands).
 bl_judge() {
-  local k nx v b cp run=0 envw=0 envs=0 t re='backlog(\.py)?[[:space:]]+(decide|answer|start|plan)([^[:alnum:]_-]|$)'
-  local -a texts=()
+  local k nx v b cp rw run=0 envw=0 envs=0 t re='backlog(\.py)?[[:space:]]+(decide|answer|start|plan)([^[:alnum:]_-]|$)'
+  local c=0 cwd=0 cenv=0 cens=0 hasmake=0 frw="" j wd why re_as='^[A-Za-z_][A-Za-z0-9_]*\+?='
+  local -a CW=() CA=() CR=() CRW=()
+  BLWHY=""
   bl_scan "$1"
   [ "$BLLONG" = 1 ] && return 0
   shopt -s nocasematch
@@ -192,28 +209,97 @@ bl_judge() {
     if [[ $v == *backlog || $v == *backlog.py ]] && [[ $nx == decide || $nx == answer || $nx == start || $nx == plan ]]; then
       shopt -u nocasematch; BLHIT="$nx"; return 0
     fi
+    if [ "$v" = $'\001' ]; then c=$((c + 1)); cwd=0; cenv=0; cens=0; continue; fi
     b="${v##*/}"; b="${b##*\\}"; b="${b%.exe}"
     cp=0   # command position: first word, or after a separator or a reserved word
     if [ "$k" = 0 ]; then cp=1; else
       case "${BLW[k-1]}" in $'\001'|then|do|else|elif|if|while|until|'{'|'!'|time) cp=1 ;; esac
     fi
-    [ "$cp" = 1 ] && [[ $v == \$* && $nx == -*c* ]] && run=1   # $SHELL -c '...'
+    if [ "$cwd" = 0 ]; then   # the command word: after reserved words and NAME=value assignments
+      case "$v" in
+        then|do|else|elif|if|while|until|'{'|'!'|time) ;;
+        *) if [[ ! $v =~ $re_as ]]; then CW[c]="$b"; cwd=1; fi ;;
+      esac
+    else CA[c]+="$v"$'\n'; fi
+    rw=""
+    [ "$cp" = 1 ] && [[ $v == \$* && $nx == -*c* ]] && { run=1; rw="$v"; }   # $SHELL -c '...'
     case "$b" in
-      sh|bash|zsh|dash|ksh|ash|mksh|yash|fish|csh|tcsh|busybox|eval|trap|xargs|ssh|su|watch|script|tmux|screen|herdr|pwsh|powershell|cmd|iex|invoke-expression|python*|pypy*|node|nodejs|deno|bun|perl|ruby|php|lua|osascript|expect|awk|gawk|mawk|nawk|make) run=1 ;;
-      source|.|exec) [ "$cp" = 1 ] && run=1 ;;
-      env) envw=1 ;;
-      --split-string*|-S*) envs=1 ;;
+      sh|bash|zsh|dash|ksh|ash|mksh|yash|fish|csh|tcsh|busybox|eval|trap|xargs|ssh|su|watch|script|tmux|screen|herdr|pwsh|powershell|cmd|iex|invoke-expression|python*|pypy*|node|nodejs|deno|bun|perl|ruby|php|lua|osascript|expect|awk|gawk|mawk|nawk|make) run=1; rw="$b" ;;
+      source|.|exec) [ "$cp" = 1 ] && { run=1; rw="$b"; } ;;
+      env) envw=1; cenv=1 ;;
+      --split-string*|-S*) envs=1; cens=1 ;;
     esac
+    [ "$b" = make ] && hasmake=1
+    [ -z "$rw" ] && [ "$cenv" = 1 ] && [ "$cens" = 1 ] && rw="env -S"   # env -S in one command
+    if [ -n "$rw" ] && [ "${CR[c]}" != 1 ]; then CR[c]=1; CRW[c]="$rw"; [ -z "$frw" ] && frw="$rw"; fi
   done
+  BLNC=$c
   [ "$envw" = 1 ] && [ "$envs" = 1 ] && run=1
-  texts=("${BLS[@]}")
-  [ "$run" = 1 ] && texts+=("${BLT[@]}")
-  for t in "${texts[@]}"; do
+  [ "$run" = 1 ] && [ -z "$frw" ] && frw="env -S"
+  for t in "${BLS[@]}"; do
     t="${t//\\/}"; t="${t//\"/}"; t="${t//\'/}"
-    if [[ $t =~ $re ]]; then BLHIT="${BASH_REMATCH[2]}"; shopt -u nocasematch; return 0; fi
+    if [[ $t =~ $re ]]; then
+      BLHIT="${BASH_REMATCH[2]}"; shopt -u nocasematch
+      BLWHY=" Matched: an assigned value or an unquoted heredoc holding \$( or a backtick; the shell runs it."
+      return 0
+    fi
   done
+  if true; then
+    for ((j = 0; j < ${#BLT[@]}; j++)); do
+      t="${BLT[j]}"; t="${t//\\/}"; t="${t//\"/}"; t="${t//\'/}"
+      [[ $t =~ $re ]] || continue
+      BLHIT="${BASH_REMATCH[2]}"
+      bl_data "$j" "$hasmake"; wd=$?
+      [ "$wd" = 0 ] && continue
+      [ "$run" = 1 ] || [ "$wd" = 2 ] || continue   # no runner word: only a written file the call runs counts
+      shopt -u nocasematch
+      c="${BLTC[j]}"
+      if [ "${CR[c]}" = 1 ]; then BLWHY=" Matched: ${BLTK[j]}, which ${CRW[c]} in the same command runs."
+      elif [ "$wd" = 2 ]; then BLWHY=" Matched: ${BLTK[j]}; it writes $BLDF, which this call then runs ($BLDW)."
+      else BLWHY=" Matched: ${BLTK[j]}; the runner word $frw elsewhere in this call makes it runnable. Write the file in one Bash call and run $frw in another: that passes."; fi
+      return 0
+    done
+  fi
   shopt -u nocasematch
   return 1
+}
+
+# bl_data J HASMAKE: for BLT entry J, in bl_judge's scope (CW, CA, CR, CRW): 0 when the text is written data (Design:
+# not inside $( ), a cat/tee/printf/echo with stdout redirected to plain files, none of them run by another command),
+# 2 when only a file run by another command spoils it (BLDF the file, BLDW the command or runner word), else 1.
+bl_data() {
+  local j="$1" c f bn x w c2 nc="${#CW[@]}" fs; local -a files=()
+  c="${BLTC[j]}"
+  [ "${BLTN[j]}" = 1 ] && return 1
+  case "${CW[c]}" in cat|tee|printf|echo) ;; *) return 1 ;; esac
+  [ "${BLO[c]}" = 1 ] || return 1
+  fs="${BLF[c]}"
+  if [ "${CW[c]}" = tee ]; then
+    while IFS= read -r w; do [ -n "$w" ] && [[ $w != -* ]] && fs+="$w"$'\n'; done <<< "${CA[c]}"
+  fi
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    case "$f" in
+      *'$'*|*'`'*|*'*'*|*'?'*|*'['*) return 1 ;;
+      /dev/null) ;;
+      /dev/*|/proc/*) return 1 ;;
+    esac
+    files[${#files[@]}]="$f"
+  done <<< "$fs"
+  [ "${#files[@]}" -gt 0 ] || return 1
+  for f in "${files[@]}"; do
+    bn="${f##*/}"
+    [ "$f" = /dev/null ] && continue
+    case "$bn" in Makefile|makefile|GNUmakefile|*.mk) [ "$2" = 1 ] && { BLDF="$f"; BLDW=make; return 2; } ;; esac
+    for ((c2 = 0; c2 <= BLNC; c2++)); do
+      [ "$c2" = "$c" ] && continue
+      if [ "${CW[c2]}" = "$bn" ]; then BLDF="$f"; BLDW="${CW[c2]}"; return 2; fi
+      if [ "${CR[c2]}" = 1 ] && [[ ${CA[c2]} == *"$bn"* ]]; then BLDF="$f"; BLDW="${CRW[c2]}"; return 2; fi
+      # a command inside $( ) or backticks naming the file hands its text to the call's runner (eval "$(cat f)")
+      if [ "$run" = 1 ] && [ "${BLCN[c2]}" = 1 ] && [[ ${CA[c2]} == *"$bn"* ]]; then BLDF="$f"; BLDW="$frw"; return 2; fi
+    done
+  done
+  return 0
 }
 
 # Fleet session (any role, a lead too; the env is the session's, so a command's `env -u` cannot change it): `sl backlog
@@ -243,7 +329,7 @@ if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then
         bl_judge "$blc" || bl_block=0
       fi
       if [ "$bl_block" = 1 ]; then
-        printf '%s\n' "Blocked: sl backlog ${BLHIT} runs only in the main session (Max's session), never in a fleet worker or lead. Use sl backlog status or wait, and report NEEDS_DECISION instead." >&2
+        printf '%s\n' "Blocked: sl backlog ${BLHIT} runs only in the main session (Max's session), never in a fleet worker or lead. Use sl backlog status or wait, and report NEEDS_DECISION instead.${BLWHY}" >&2
         exit 2
       fi
     fi
@@ -383,6 +469,7 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         package-reviewer|final-reviewer) frole="$fname" ;;
         researcher) frole="research" ;;
         checker) frole="checker" ;;
+        writer) frole="writer" ;;
       esac
       if [ -n "$frole" ]; then
         printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)","rule":"fleet","cwd":"%s"}\n' "$tool" "$REPLY" "$cwdv" \
@@ -392,6 +479,8 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         [ "$FSD" = "$FSD0" ] || fread=" Fleet state read: $FSD0/fleet.json, moved to $FSD/fleet.json."
         if [ "$frole" = research ]; then
           printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $FSD/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $FSD/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $FSD/fleet/reports/<name>.md. PLAN is the plan file, or $FSD before a plan exists. sl fleet off goes back to in-process agents.$fread" >&2
+        elif [ "$frole" = writer ]; then
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role writer --brief <abs brief file> --plan PLAN (fleet.md); the brief's Output: line names the one file the writer may write. PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents.$fread" >&2
         else
           printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents.$fread" >&2
         fi
