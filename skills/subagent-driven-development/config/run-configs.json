@@ -1,0 +1,18 @@
+{
+ "_comment": "Built-in run configs (#681). Layers on top: $SUPERLITE_HOME/run-configs.json (machine), <project>/.superlite/run-configs.json (project); later wins per key. Config: lead{model,effort,autocompact,deny,mcp,text}, cache_ttl{lead,workers}, workers{role: model|null}.",
+ "default": "default",
+ "configs": {
+  "default": {
+   "lead": {
+    "model": "opus",
+    "effort": "xhigh",
+    "autocompact": null,
+    "deny": ["AskUserQuestion", "Artifact", "ArtifactComments", "ArtifactData", "ListAgents", "ReadNotifications", "ReportFindings", "ScheduleWakeup", "Workflow"],
+    "mcp": "project",
+    "text": "default"
+   },
+   "cache_ttl": {"lead": "1h", "workers": "1h"},
+   "workers": {"implementer": null, "fixer": null, "package-reviewer": null, "final-reviewer": null}
+  }
+ }
+}
