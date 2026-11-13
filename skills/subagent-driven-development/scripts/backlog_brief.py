@@ -4,6 +4,7 @@
 # Complexity notation:
 # i = issues, f = files, a = answers, n = lines
 import re  # O(1)
+from pathlib import Path  # O(1)
 
 import backlog_checks as bc  # O(1)
 
@@ -92,6 +93,44 @@ def _files(o):  # O(f)
     app = o.get("append_only") or []  # O(1)
     return ", ".join(clean(f) + (" (append-only)" if f in app else "") for f in o.get("files") or [])  # O(f * a)
 
+LEAN_BUILD = ("Build (lean path: one issue and no batch decision): when your issue's body names the files to change and asks no design "
+              "question, skip superlite:brainstorming and superlite:writing-plans and write a short plan yourself in "
+              "docs/plans/<date>-<topic>.md (docs/superpowers/plans/ when that folder exists): header `**Goal:**`, `**Tech stack:**`, "
+              "`**Spec:**` the issue, `**Wave0:** none`, `**Worktree:** none`, `**Coverage:** off`; a mermaid flowchart with a "
+              "`%% taskgraph` line; per task a `### Tn <title>` block with `**Owns:**`, `**Components:**`, `**LOC owned:**`, "
+              "`**Tests:**`, `**Kind:**`, `**Model:**` and named tests with exact inputs and outputs; lint it with "
+              "`{sl} plan_tools lint --plan <plan> --spec <plan> --stable`; an issue that names no files or asks a design question "
+              "takes the full path: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, ")  # O(1)
+CODE_RULE = ("Code questions go to a researcher worker, one pointed brief per question (the question, the files or symbols to start "
+             "from, the answer you need): `{sl} fleet spawn --role research --brief <abs file> --label R<n> --wait --timeout 540000 "
+             "--plan .superlite` (several at once: spawn each with --brief, then one wave wait); read a file yourself only when you "
+             "are about to rule on it.")  # O(1)
+WAVE_WAIT = ("Never end your turn while your workers run: wait once per wave with `{sl} fleet wait --wave --timeout 540000 --plan "
+             ".superlite` in the foreground (it returns when every busy worker reported, or at the first failure; add `--tests "
+             "<summary path>` for a `run_tests --background` run, so one wait covers both; on TIMEOUT run it again), never as a "
+             "background command: under memory pressure Claude Code stops an idle session's background commands, and a restarted "
+             "wait still reports every worker that finished meanwhile. A shell loop that polls (`sleep`, `until grep`) is a defect: "
+             "wait with `fleet wait` or `run_tests --wait`.")  # O(1)
+
+
+def lead_variant(batch, ctx):  # O(L)
+    """`lean` for a lean config text, one issue and no batch decision; else `default`. Text: ctx["text"], else the layered run config."""
+    text = ctx.get("text")  # O(1)
+    if text is None:  # O(1)
+        try:  # O(1)
+            import run_config  # lazy: only the lean choice needs it | O(1)
+            root = None  # O(1)
+            wt = ctx.get("worktree")  # O(1)
+            if wt:  # O(1)
+                w = Path(wt)  # O(1)
+                if len(w.parents) > 2 and w.parent.name == "worktrees" and w.parents[1].name == ".claude":  # O(1)
+                    root = w.parents[2]  # O(1)
+            text = run_config.resolve(None, root)["lead"].get("text")  # O(L)
+        except (run_config.ConfigError, OSError):  # O(1)
+            text = None  # O(1)
+    one = len(batch.get("issues") or []) == 1 and not batch.get("decisions")  # O(1)
+    return "lean" if text == "lean" and one else "default"  # O(1)
+
 
 def lead_brief(batch, ctx):  # O(i + f + a)
     ctx = {**STANDING, **ctx}  # O(1)
@@ -150,7 +189,9 @@ def lead_brief(batch, ctx):  # O(i + f + a)
         out.append(f"Rulings from shipped batches: {paths} (read each; at most 10 lines).")  # O(1)
     out.append("Your run: the worktree you start in, state in .superlite/; pass --plan .superlite to every sl call.")  # O(1)
     out.append(f"First: `{sl} orchestrator set ai --plan .superlite`, then `{sl} fleet on --plan .superlite`.")  # O(1)
-    out.append("Build: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, "
+    out.append(CODE_RULE.format(sl=sl))  # O(1)
+    head = LEAN_BUILD.format(sl=sl) if lead_variant(batch, ctx) == "lean" else "Build: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, "  # O(1)
+    out.append(head +
                "superlite:subagent-driven-development with fleet on, the final review (UI screenshots go in .superlite/render/, its packet lists them), the test layers. "
                "Builds: the verdict is `sl run_tests` (the project's test command; a project with `.maxapp` runs `maxapp test`, "
                "which a build pool may place on another Mac, and a full run whose tree a green maxapp test stamp covers returns that "
@@ -162,9 +203,7 @@ def lead_brief(batch, ctx):  # O(i + f + a)
     out.append("Simulators: append the UDID of each simulator you or a worker creates (`xcrun simctl create` or `clone`; a checker's "
                f"`Simulators:` line marks its created ones) as one line to {sim}; never list one you did not create; ship cleanup "
                "shuts down and deletes each listed one; copy this sentence into every worker brief.")  # O(1)
-    out.append(f"Never end your turn while your workers run: wait with `{sl} fleet wait --timeout 540000 --plan .superlite` "
-               "in the foreground, never as a background command: under memory pressure Claude Code stops an idle session's "
-               "background commands, and a restarted wait still reports every worker that finished meanwhile.")  # O(1)
+    out.append(WAVE_WAIT.format(sl=sl))  # O(1)
     out.append("Escalate a new major decision: let running workers finish, write .superlite/question.json in the "
                "AskUserQuestion shape, end your turn with Status: NEEDS_DECISION.")  # O(1)
     out.append("Evals layer red on a case your batch's files do not touch: never stamp it yourself (no `test_layers.py stamp`); "

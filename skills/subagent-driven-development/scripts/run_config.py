@@ -20,7 +20,7 @@ from pathlib import Path  # O(1)
 
 BUILTIN = Path(__file__).resolve().parent.parent / "config" / "run-configs.json"  # O(1)
 EFFORTS = ("low", "medium", "high", "xhigh", "max")  # O(1)
-VARIANTS = ("default",)  # lead brief text ids | O(1)
+VARIANTS = ("default", "lean")  # lead brief text ids | O(1)
 TTLS = (None, "5m", "1h")  # O(1)
 ROLES = ("implementer", "fixer", "package-reviewer", "final-reviewer", "research", "checker", "writer")  # O(1)
 SECTIONS = ("lead", "cache_ttl", "workers")  # O(1)
