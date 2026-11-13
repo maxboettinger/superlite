@@ -15,7 +15,7 @@ GH_LEAD = ('# Lead brief: B1 (t)\nYou are the lead of batch B1 in o/r. Read /x/b
            + 'Files this batch may touch: a.py. Another lead may own any other file.\n'
            + bb.ROOT_DOC_RULE + "\n"
            "Tracker: change no issue state yourself (merge and main close and move issues); the one exception is a comment with evidence (a duplicate's link, a measurement) when your issue or a standing note asks for one.\n"
-           "Max's decisions: none\n" + bb.ATTRIBUTION + "\nRulings from shipped batches: none\n"
+           "Max's decisions: none\n" + bb.STEPS_RULE + "\n" + bb.ATTRIBUTION + "\nRulings from shipped batches: none\n"
            'Your run: the worktree you start in, state in .superlite/; pass --plan .superlite to every sl call.\n'
            'First: `/x/sl orchestrator set ai --plan .superlite`, then `/x/sl fleet on --plan .superlite`.\n'
            + bb.CODE_RULE.format(sl="/x/sl") + "\n"
