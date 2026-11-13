@@ -17,6 +17,8 @@ echo "{OUT}"
 
 def fixture(tmp_path, env=None):
     plan = setup(tmp_path)
+    with (tmp_path / ".git" / "info" / "exclude").open("a", encoding="utf-8") as fh:
+        fh.write("_sl_home/\n")  # the test's superlite home is no project file
     (tmp_path / "src" / "b.txt").write_text("ok", encoding="utf-8")
     (tmp_path / "src" / "d.txt").write_text("d", encoding="utf-8")
     sl = tmp_path / ".superlite"
