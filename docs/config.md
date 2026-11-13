@@ -4,11 +4,27 @@ In `skills/subagent-driven-development/config/`:
 
 - `models.json`: prices (USD per million tokens) and output speed per model. Edit it when they change.
 - `predictor.json`: the time and context coefficients and the size band `predict` uses. Refit with `sl predict --refit`.
-- `routing.json`: task features to tier (`haiku` or `sonnet`), tier agents and limits, and the stats gate. A critical-path task never gets haiku.
+- `routing.json`: task features to tier (`haiku` or `sonnet`), tier agents and limits, and the stats gate. With `baseline: default_tier` the gate holds a cheap tier's band when its first-time pass rate is below the default tier's rate on the same band (that band needs `min_n` samples), else below the fixed `min_first_time_pass`. A critical-path task never gets haiku.
+- `run-configs.json`: named run configs for the lead and the workers (see Run config below).
 
 ## Permissions (Claude Code)
 
 - `Bash(*/skills/subagent-driven-development/scripts/sl commit_task *)` in `permissions.allow` of the user settings (`~/.claude/settings.json`): lets fixer agents run `sl commit_task` in auto mode, whose classifier otherwise denies the call from a subagent. Allow rules are checked before the classifier and apply to subagents; a plugin cannot ship permission rules, so `/superlite:setup` offers it. Without it a fixer reports `commit: denied` and the coordinator commits.
+
+## Run config
+
+A run config is a named set of launch choices for a backlog lead and its fleet workers. `config/run-configs.json` is the built-in file; `$SUPERLITE_HOME/run-configs.json` is the machine layer; `.superlite/run-configs.json` in the project is the project layer. A file is `{"default": NAME or null, "configs": {NAME: partial config}}`; keys starting `_` are ignored. NAME resolves as the built-in `default` config, then each layer's `configs[NAME]` section by section (built-in, machine, project), then `--model`. The default NAME is the project file's `default`, else the machine's, else `default`.
+
+Fields and built-in defaults:
+
+- `lead.model`: `opus`. `lead.effort`: `xhigh` (`low|medium|high|xhigh|max`). `lead.autocompact`: `null`, which uses main's window.
+- `lead.deny`: tools the lead does not get: `AskUserQuestion Artifact ArtifactComments ArtifactData ListAgents ReadNotifications ReportFindings ScheduleWakeup Workflow`. `lead.mcp`: `project`, the MCP servers kept. `lead.text`: `default`, the lead brief text variant id.
+- `cache_ttl.lead` and `cache_ttl.workers`: `1h` (or `5m`).
+- `workers`: a model per role; `null` keeps the agent file's model.
+
+The config id is `NAME-` plus 8 hex of the sha256 over the canonical JSON of lead, cache_ttl and workers. A run's active config is the snapshot `<state dir>/run-config.json`. `sl run_config show|list` prints a resolved config or the known names.
+
+`sl backlog start --config NAME` resolves once and starts the lead with `--model`, `--effort`, `--autocompact`, `--strict-mcp-config` (with `--mcp-config` for the kept servers), `--no-chrome` and the deny list; the lead keeps the Skill tool. `CLAUDE_CODE_PROMPT_CACHE_TTL` is set from `cache_ttl.lead`. `sl fleet on --config NAME` writes the snapshot for a run outside the backlog; `fleet spawn` then sets `CLAUDE_CODE_PROMPT_CACHE_TTL` from `cache_ttl.workers` and pins `--model` for a role the config names.
 
 ## Environment
 
