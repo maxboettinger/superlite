@@ -13,6 +13,7 @@ from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import fleet  # noqa: E402 | O(1)
+import run_config  # noqa: E402 | O(1)
 
 
 NoShell = fleet.NoShell  # moved to fleet.py: workers retry in a fresh pane too | O(1)
@@ -51,18 +52,23 @@ def main_window(env, model):  # O(k) main's auto-compact window: env variable, u
     return DEFAULT_WINDOW  # O(1)
 
 
-def lead_argv(sl_path, model, window=None):  # O(1)
-    argv = ["--model", model, "--permission-mode", "auto", "--allowedTools", "Bash(maxapp ship *)",  # O(1)
-            f"Bash({sl_path} backlog ship *)", "--disallowedTools", "AskUserQuestion"]
+def lead_argv(sl_path, model, window=None, effort=None, deny=None, mcp_config=None):  # O(d)
+    argv = ["--model", model] + (["--effort", effort] if effort else [])  # O(1)
+    argv += ["--permission-mode", "auto", "--allowedTools", "Bash(maxapp ship *)", f"Bash({sl_path} backlog ship *)"]  # O(1)
+    if deny is not None or mcp_config:  # a lean start: only the servers named, no browser bridge | O(1)
+        argv += ["--strict-mcp-config"] + (["--mcp-config", str(mcp_config)] if mcp_config else []) + ["--no-chrome"]  # O(1)
+    argv += ["--disallowedTools", "AskUserQuestion", *dict.fromkeys(d for d in (deny or []) if d != "AskUserQuestion")]  # O(d)
     if window is not None:  # O(1)
         argv += ["--autocompact", f"{window // 1000}k" if window % 1000 == 0 else str(window)]  # O(1)
     return argv  # O(1)
 
 
-def lead_env(main_sd, lead_sd, wid, config_dir, base_env, accounts):  # O(a)
+def lead_env(main_sd, lead_sd, wid, config_dir, base_env, accounts, ttl=None):  # O(a)
     env = {"SUPERLITE_FLEET_WORKER": wid, "SUPERLITE_FLEET_AGENT": "lead", "SUPERLITE_FLEET_ROLE": "lead",  # O(1)
            "SUPERLITE_STATE_DIR": str(Path(lead_sd).resolve()), "SUPERLITE_FLEET_PARENT_DIR": str(Path(main_sd).resolve()),
            "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "0"}
+    if ttl:  # the lead's main-conversation cache TTL, set explicitly | O(1)
+        env["CLAUDE_CODE_PROMPT_CACHE_TTL"] = ttl  # O(1)
     if accounts:  # O(1)
         env["SUPERLITE_FLEET_ACCOUNTS"] = ",".join(accounts)  # O(a)
     if not fleet.ac.is_default_dir(config_dir, base_env):  # O(1)
@@ -71,6 +77,30 @@ def lead_env(main_sd, lead_sd, wid, config_dir, base_env, accounts):  # O(a)
         if base_env.get(k):  # O(1)
             env[k] = base_env[k]  # O(1)
     return env  # O(1)
+
+
+def _lead_mcp(rc, wid, worktree, lsd, cdir, base):  # O(n + f) the --mcp-config path for the servers the lead keeps, or None; never raises
+    want = rc["lead"].get("mcp")  # O(1)
+    if not want:  # O(1)
+        return None  # O(1)
+    try:  # an MCP error never stops a lead: it starts lean | O(1)
+        import fleet_mcp  # noqa: E402 | O(1)
+        import mcp_check  # noqa: E402 | O(1)
+        cj = fleet.claude_json(cdir, base)  # O(1)
+        found, notes = fleet_mcp.servers("implementer", worktree, cj) if want == "project" else fleet_mcp.named(list(want), worktree, cj)  # O(n + f)
+        kept = {}  # O(1)
+        for n, d in found.items():  # O(k)
+            why = mcp_check.check(n, d, lsd, worktree)  # O(1)
+            if why:  # O(1)
+                notes.append(f"mcp: {n} left out: {why}")  # O(1)
+            else:  # O(1)
+                kept[n] = d  # O(1)
+        for note in notes:  # O(k)
+            print(f"{wid} {note}", file=sys.stderr)  # O(1)
+        return fleet_mcp.write_config(lsd, kept) if kept else None  # O(k)
+    except Exception as e:  # noqa: BLE001 | O(1)
+        print(f"{wid} mcp: none: {e}", file=sys.stderr)  # O(1)
+        return None  # O(1)
 
 
 def _session(name):  # O(1) the agent's Claude session id, or None; never raises (older herdr clients lack agent_session)
@@ -89,15 +119,17 @@ def _record_session(main_sd, wid, session):  # O(w)
             fleet.fs.save(main_sd, data)  # O(w)
 
 
-def spawn_lead(main_sd, worktree, model="opus", env=None):  # O(a * e + w) plus herdr calls
+def spawn_lead(main_sd, worktree, model=None, env=None, rc=None):  # O(a * e + w) plus herdr calls
     base = dict(os.environ) if env is None else env  # O(env)
+    rc = rc or run_config.resolve()  # O(f)
+    model = model or rc["lead"]["model"]  # O(1)
     try:  # O(1)
-        return _spawn_lead(main_sd, worktree, model, base, None)  # O(a * e + w)
+        return _spawn_lead(main_sd, worktree, model, base, None, rc)  # O(a * e + w)
     except (fleet._Slow, NoShell) as first:  # O(1)
-        return _spawn_lead(main_sd, worktree, model, base, first)  # O(a * e + w)
+        return _spawn_lead(main_sd, worktree, model, base, first, rc)  # O(a * e + w)
 
 
-def _spawn_lead(main_sd, worktree, model, base, after):  # O(a * e + w) plus herdr calls
+def _spawn_lead(main_sd, worktree, model, base, after, rc):  # O(a * e + w) plus herdr calls
     fs, hc = fleet.fs, fleet.hc  # O(1)
     main_sd, worktree = Path(main_sd), Path(worktree)  # O(1)
     fresh = isinstance(after, NoShell)  # O(1)
@@ -113,11 +145,14 @@ def _spawn_lead(main_sd, worktree, model, base, after):  # O(a * e + w) plus her
     lsd = worktree / ".superlite"  # O(1)
     lsd.mkdir(parents=True, exist_ok=True)  # O(1)
     wt, lsd_s = str(worktree.resolve()), str(lsd.resolve())  # O(1)
-    wenv = lead_env(main_sd, lsd, wid, cdir, base, fs.load(main_sd).get("accounts") or [])  # O(w)
+    lead = rc["lead"]  # O(1)
+    wenv = lead_env(main_sd, lsd, wid, cdir, base, fs.load(main_sd).get("accounts") or [], (rc.get("cache_ttl") or {}).get("lead"))  # O(w)
     sl = str(Path(__file__).resolve().parent / "sl")  # O(1)
-    argv = lead_argv(sl, model, main_window(base, model))  # O(k)
+    mcp = _lead_mcp(rc, wid, worktree, lsd, cdir, base)  # O(n + f)
+    argv = lead_argv(sl, model, lead.get("autocompact") or main_window(base, model), lead.get("effort"), list(lead.get("deny") or []), mcp)  # O(k)
+    run_config.write_active(lsd, rc)  # the run's config snapshot, read by the lead's workers | O(f)
     record = {"name": name, "account": account, "agent": "lead", "tier": model, "state": "starting", "task": None, "role": "lead",  # O(1)
-              "one_turn": False, "lead_sd": lsd_s, "worktree": wt, "launch": {"argv": argv, "env": wenv, "cwd": wt}}
+              "one_turn": False, "lead_sd": lsd_s, "worktree": wt, "run_config": rc.get("id"), "launch": {"argv": argv, "env": wenv, "cwd": wt}}
     try:  # O(1)
         pane = fleet.open_pane(main_sd, wid, wt, wenv, record)  # O(w + p)
         try:  # O(1)
@@ -172,7 +207,7 @@ def _spawn_lead(main_sd, worktree, model, base, after):  # O(a * e + w) plus her
         _record_session(main_sd, wid, sid)  # O(w)
     fleet._launch_line(main_sd, wid, "lead", model, account, pane)  # O(1)
     print(f"{wid} account={account} pane={pane} agent=lead role=lead")  # O(1)
-    return {"id": wid, "name": name, "account": account, "pane_id": pane, "agent": "lead", "model": model, "role": "lead", "lead_sd": lsd_s}  # O(1)
+    return {"id": wid, "name": name, "account": account, "pane_id": pane, "agent": "lead", "model": model, "role": "lead", "lead_sd": lsd_s, "config": rc.get("id")}  # O(1)
 
 
 def backlog_hint(sd, cwd):  # O(b)
