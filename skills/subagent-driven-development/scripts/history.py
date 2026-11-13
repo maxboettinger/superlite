@@ -17,7 +17,8 @@ ROW SCHEMA (v1), one JSON object per line:
   imports), slack_min (predicted slack in minutes, or actual slack_s / 60 for imports),
   tier (haiku|sonnet), agent_type, model, prime_bytes, duration_s, tokens {in,out,cache_read,cache_write},
   cost_usd, tool_calls, first_time_pass (true|false|null), rework_s, rework_cost, pred_min,
-  experiment (the `sl experiment` id the run claimed, else null; source=run only).
+  experiment (the `sl experiment` id the run claimed, else null; source=run only), run_config (the run config id the
+  run ran under, from its run-config.json, else null; source=run only).
 STATS (stats.json): {v, updated, rows, bands: {band: S}, tiers: {tier: S}, bands_by_tier: {tier|band: S}} with
   S = {n, ftp_n, ftp_rate, mean_s, p90_s, mean_cost}. Same rows, same stats (sorted keys, no clock in S).
 Stdlib only.
@@ -193,6 +194,10 @@ def run_rows(plan_path, sl_dir=".superlite", run_id=None) -> list:  # O(M + B + 
     rid = run_id or datetime.now().strftime("%Y%m%d-%H%M%S")  # O(1)
     import experiment  # O(1)
     exp = (experiment.for_plan(plan_path, sl) or {}).get("id")  # the experiment this run claimed (#53) | O(f)
+    try:  # the run config this run ran under (#682) | O(f)
+        rc_id = json.loads((sl / "run-config.json").read_text(encoding="utf-8"))["id"]  # O(f)
+    except (OSError, ValueError, KeyError, TypeError):  # O(1)
+        rc_id = None  # O(1)
     rows = []  # O(1)
     for r in recs:  # O(n)
         task = plan.by_id.get(r["task"])  # O(1)
@@ -209,7 +214,7 @@ def run_rows(plan_path, sl_dir=".superlite", run_id=None) -> list:  # O(M + B + 
                      "tokens": {"in": tk["in"], "out": tk["out"], "cache_read": tk["cache_read"], "cache_write": tk["cache_write"]},
                      "cost_usd": r["cost_usd"], "tool_calls": r["tool_calls"], "first_time_pass": r["first_time_pass"],
                      "rework_s": r["rework_s"], "rework_cost": r["rework_cost"], "pred_min": f.get("pred_min"),
-                     "experiment": exp})  # O(1)
+                     "experiment": exp, "run_config": rc_id})  # O(1)
     return rows  # O(n)
 
 
