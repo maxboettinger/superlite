@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -273,3 +274,184 @@ def test_escaped_quote_blocked(proj):
 
 def test_multiline_quote_blocked(proj):
     assert bash(proj, 'echo "multi\nline" > src/a.py').returncode == 2
+
+
+# ---- #690: the coordinator's scratch folder -------------------------------------------------------------------------
+
+def _srun(proj, tool, tool_input, home, env_extra=None, bash_exe=None):
+    env = {k: v for k, v in os.environ.items() if k != "SUPERLITE_STATE_DIR" and not k.startswith("SUPERLITE_FLEET_")}
+    env.update({"CLAUDE_PROJECT_DIR": str(proj), "SUPERLITE_HOME": str(home), **(env_extra or {})})
+    raw = json.dumps({"tool_name": tool, "tool_input": tool_input})
+    return subprocess.run([bash_exe or BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env)
+
+
+@pytest.fixture
+def sproj(proj, tmp_path_factory):
+    (proj / "src").mkdir()
+    (proj / "src" / "a.py").write_text("a\nb\nc\n")
+    (proj / ".superlite" / "scratch").mkdir()
+    home = tmp_path_factory.mktemp("slhome")
+
+    class P:
+        path = proj
+        home_dir = home
+        scratch = proj / ".superlite" / "scratch"
+
+        def put(self, name, text):
+            (self.scratch / name).write_text(text)
+
+        def sh(self, cmd, **kw):
+            return _srun(proj, "Bash", {"command": cmd}, home, **kw)
+
+        def tool(self, tool, ti, **kw):
+            return _srun(proj, tool, ti, home, **kw)
+
+    return P()
+
+
+BAD = "open('src/a.py','w').write('y')"
+
+
+def test_scratch_write_passes(sproj):
+    assert sproj.tool("Write", {"file_path": str(sproj.path / ".superlite" / "scratch" / "m.py")}).returncode == 0
+    assert sproj.sh("cat > .superlite/scratch/m.py <<'EOF'\nprint(1)\nEOF").returncode == 0
+
+
+def test_scratch_read_only_script_runs(sproj):
+    sproj.put("m.py", "print(sum(1 for _ in open('src/a.py')))")
+    sproj.put("t.sh", "wc -l src/a.py")
+    assert sproj.sh("python3 .superlite/scratch/m.py").returncode == 0
+    assert sproj.sh("python3 .superlite/scratch/m.py > .superlite/scratch/out.txt").returncode == 0
+    assert sproj.sh("bash .superlite/scratch/t.sh").returncode == 0
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 .superlite/scratch/bad.py",
+    "python3 {proj}/.superlite/scratch/bad.py",
+    "cd src && python3 ../.superlite/scratch/bad.py",
+])
+def test_scratch_code_writer_blocked(sproj, cmd):
+    sproj.put("bad.py", BAD)
+    r = sproj.sh(cmd.format(proj=sproj.path))
+    assert r.returncode == 2
+    # the script writes src/a.py relative to the working directory: after `cd src` the judge resolves src/src/a.py
+    assert r.stderr.rstrip("\n").splitlines()[-1] == ("Blocked target: src/src/a.py" if "cd src" in cmd else "Blocked target: src/a.py")
+    assert "SL_SCRATCH_" not in r.stderr
+
+
+def test_scratch_shell_code_writer_blocked(sproj):
+    sproj.put("t.sh", "echo y > src/a.py")
+    assert sproj.sh("bash .superlite/scratch/t.sh").returncode == 2
+
+
+def test_scratch_writer_to_scratch_passes(sproj):
+    sproj.put("w.py", "open('.superlite/scratch/o.txt','w').write('1')")
+    assert sproj.sh("python3 .superlite/scratch/w.py").returncode == 0
+
+
+def test_scratch_escaping_reaches_judge(sproj):
+    head = "print(\"a\tb\", '\\\\', \"\\\"x\\\"\")\n"
+    sproj.put("q.py", head + BAD + "\n")
+    assert sproj.sh("python3 .superlite/scratch/q.py").returncode == 2
+    sproj.put("q.py", head)
+    assert sproj.sh("python3 .superlite/scratch/q.py").returncode == 0
+    inc = sproj.path / ".superlite" / "incidents.jsonl"
+    assert "guard-error" not in (inc.read_text() if inc.exists() else "")
+
+
+def test_scratch_delimiter_line_in_body(sproj):
+    sproj.put("d.py", "SL_SCRATCH_1\n" + BAD + "\n")
+    assert sproj.sh("python3 .superlite/scratch/d.py").returncode == 2
+
+
+def test_scratch_data_file_not_inlined(sproj):
+    sproj.put("notes.txt", BAD)
+    assert sproj.sh("cat .superlite/scratch/notes.txt").returncode == 0
+
+
+def test_scratch_symlink_and_oversize_skipped(sproj):
+    sproj.put("bad.py", BAD)
+    try:
+        os.symlink(sproj.scratch / "bad.py", sproj.scratch / "link.py")
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlinks")
+    assert sproj.sh("python3 .superlite/scratch/link.py").returncode == 0
+    sproj.put("big.py", "# x\n" * 17500 + BAD + "\n")
+    assert sproj.sh("python3 .superlite/scratch/big.py").returncode == 0
+
+
+def test_scratch_large_script_is_quick(sproj):
+    # ~60000 characters in ~2000 lines, each with a double quote and a backslash: the escaping must stay linear
+    line = 'x = "ab\\cd"  # ' + "p" * 14
+    body = (line + "\n") * 2000
+    assert 55000 < len(body) < 65536
+    sproj.put("big2.py", body + BAD + "\n")
+    start = time.monotonic()
+    r = sproj.sh("python3 .superlite/scratch/big2.py")
+    assert r.returncode == 2
+    assert time.monotonic() - start < 3
+
+
+def test_scratch_unresolved_block_names_original_command(sproj):
+    sproj.put("u.py", "from pathlib import Path\n(Path(__file__).parent / 'o.txt').write_text('1')")
+    r = sproj.sh("python3 .superlite/scratch/u.py")
+    assert r.returncode == 2
+    assert "Blocked command: python3 .superlite/scratch/u.py" in r.stderr.splitlines()
+    assert "SL_SCRATCH_" not in r.stderr
+
+
+def test_scratch_idle_not_judged(sproj):
+    (sproj.path / ".superlite" / "pool.json").unlink()
+    sproj.put("bad.py", BAD)
+    assert sproj.sh("python3 .superlite/scratch/bad.py").returncode == 0
+
+
+HINT_START = "- A throwaway script (count lines, compare outputs, time a command): write it under "
+
+
+def _hint_before_after_run(stderr):
+    lines = stderr.splitlines()
+    hints = [i for i, ln in enumerate(lines) if "throwaway script" in ln]
+    assert len(hints) == 1
+    assert lines[hints[0] + 1].startswith("- After the run")
+    assert ".superlite/scratch/" in lines[hints[0]]
+    return lines
+
+
+def test_scratch_hint_in_write_block(sproj):
+    r = sproj.tool("Write", {"file_path": str(sproj.path / "src" / "x.py")})
+    assert r.returncode == 2
+    _hint_before_after_run(r.stderr)
+
+
+def test_scratch_hint_in_bash_block(sproj):
+    r = sproj.sh("cat > src/x.py <<'EOF'\nprint(1)\nEOF")
+    assert r.returncode == 2
+    lines = _hint_before_after_run(r.stderr)
+    assert lines[-1] == "Blocked target: src/x.py"
+
+
+def test_scratch_hint_not_in_protected_block(sproj):
+    r = sproj.tool("Write", {"file_path": str(sproj.path / ".superlite" / "orchestrator.json")})
+    assert r.returncode == 2
+    assert "throwaway script" not in r.stderr
+
+
+def test_scratch_hint_names_outside_state_dir(sproj):
+    st = sproj.home_dir / "sessions" / "s1"   # a private state folder: paths are judged against the launch directory
+    st.mkdir(parents=True)
+    (st / "pool.json").write_text("{}")
+    r = sproj.tool("Write", {"file_path": str(sproj.path / "src" / "x.py")},
+                   env_extra={"SUPERLITE_STATE_DIR": str(st)})
+    assert r.returncode == 2
+    assert f"under {st}/scratch/ and" in r.stderr
+
+
+def test_scratch_inline_quote_in_state_path(sproj):
+    st = sproj.home_dir / "sessions" / "it's"   # a quote in the state folder path must survive the heredoc line
+    (st / "scratch").mkdir(parents=True)
+    (st / "pool.json").write_text("{}")
+    (st / "scratch" / "bad.py").write_text(BAD)
+    cmd = "python3 '" + str(st).replace("'", "'\\''") + "/scratch/bad.py'"
+    r = sproj.sh(cmd, env_extra={"SUPERLITE_STATE_DIR": str(st)})
+    assert r.returncode == 2, r.stderr
