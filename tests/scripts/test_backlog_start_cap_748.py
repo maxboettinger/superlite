@@ -51,7 +51,7 @@ def test_start_in_fleet_worker_no_cap(fake, monkeypatch, capsys):
 
 def test_run_appends_cap(fake, capsys):
     rc, out = cli(capsys, "run", "--timeout", "9")
-    assert fake["run"] == [["run", "--timeout", "9", "--cap", "5"]] and out.startswith(LINE + "\n")
+    assert fake["run"] == [["run", "--timeout", "9"]] and "cap:" not in out  # #761: cmd_run reads the cap per round
 
 
 def test_tier_from_model_flag(fake, capsys):

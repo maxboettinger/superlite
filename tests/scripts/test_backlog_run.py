@@ -59,7 +59,7 @@ def running(bk, **kw):
 def test_start_picks_disjoint_batches_up_to_the_cap(bk, capsys):
     put(bk, b("B1", ["a.py"]), b("B2", ["a.py"]), b("B3", ["c.py"]))
     w1, w3 = bk.root / ".claude" / "worktrees" / "superlite-b1-t", bk.root / ".claude" / "worktrees" / "superlite-b3-t"
-    assert run(capsys, "start") == (0, f"B1 running lead=W1 worktree={w1}\nB3 running lead=W2 worktree={w3}\n")
+    assert run(capsys, "start", "--cap", "2") == (0, f"B1 running lead=W1 worktree={w1}\nB3 running lead=W2 worktree={w3}\n")
     x = get(bk, "B1")
     assert (x["state"], x["agent"], x["branch"], x["since"]) == ("running", "sl-m-W1", "superlite/b1-t", 5000) and get(bk, "B2")["state"] == "planned"
     assert "B1" in (w1 / ".superlite" / "briefs" / "lead.md").read_text() and ("send", "W1", "lead.md", "B1") in bk.calls
@@ -69,8 +69,8 @@ def test_start_refusals(bk, capsys):
     put(bk, b("B1", ["a.py"]), approved=None)
     assert run(capsys, "start") == (2, "BLOCKED: no ship approval yet (sl backlog decide --print)\n")
     put(bk, b("B1", ["a.py"], "running"), b("B2", ["a.py"]), b("B3", ["c.py"], decisions=[Q]))
-    assert run(capsys, "start", "B2") == (2, "BLOCKED: B2 shares files with running B1\n")
-    assert run(capsys, "start", "B3") == (2, "BLOCKED: B3 has open decisions (sl backlog decide --print)\n")
+    assert run(capsys, "start", "B2", "--cap", "2") == (2, "BLOCKED: B2 shares files with running B1\n")
+    assert run(capsys, "start", "B3", "--cap", "2") == (2, "BLOCKED: B3 has open decisions (sl backlog decide --print)\n")
     bk.down = True
     assert run(capsys, "start")[0] == 3 and not any(c[0] == "spawn" for c in bk.calls)
 
@@ -154,7 +154,7 @@ def test_start_never_spawns_a_second_lead_while_the_first_pane_lives(bk, capsys)
 
 def test_a_batch_main_parked_starts_only_by_name_and_fresh(bk, capsys):
     put(bk, b("B1", ["a.py"], "parked", reason="hold", parked_by="main"))
-    assert run(capsys, "start") == (0, "no startable batch\n")
+    assert run(capsys, "start", "--cap", "2") == (0, "no startable batch\n")
     assert run(capsys, "start", "B1")[0] == 0 and get(bk, "B1")["state"] == "running"
     brief = (bk.root / ".claude" / "worktrees" / "superlite-b1-t" / ".superlite" / "briefs" / "lead.md").read_text()
     assert ("resume=False" in brief) if brief.startswith("brief ") else ("Resume" not in brief)

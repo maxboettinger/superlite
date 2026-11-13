@@ -33,7 +33,7 @@ def test_start_keeps_a_test_cmd_the_worktree_already_has(bk, capsys):
 def test_start_seeds_nothing_when_the_main_checkout_has_no_test_cmd(bk, capsys):
     put(bk, b("B1", ["a.py"]))
     w1 = bk.root / ".claude" / "worktrees" / "superlite-b1-t"
-    assert run(capsys, "start") == (0, f"B1 running lead=W1 worktree={w1}\n")
+    assert run(capsys, "start", "--cap", "2") == (0, f"B1 running lead=W1 worktree={w1}\n")
     assert not (w1 / ".superlite" / "test-cmd.json").exists()
 
 
@@ -44,7 +44,7 @@ def test_start_goes_on_with_one_stderr_line_when_the_copy_fails(bk, capsys, monk
         raise OSError("disk full")
     monkeypatch.setattr(backlog.shutil, "copyfile", boom)
     w1 = bk.root / ".claude" / "worktrees" / "superlite-b1-t"
-    rc = br.main(["start"]); cap = capsys.readouterr()
+    rc = br.main(["start", "--cap", "2"]); cap = capsys.readouterr()
     assert (rc, cap.out) == (0, f"B1 running lead=W1 worktree={w1}\n")
     import run_config
     rc0 = run_config.resolve(None, bk.root)

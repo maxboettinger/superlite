@@ -74,7 +74,7 @@ def test_model_flag_overrides(bk, capsys, monkeypatch, tmp_path):
 def test_stdout_lines_unchanged(bk, capsys, monkeypatch, tmp_path):
     monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
     put(bk, b("B1", ["a.py"]))
-    rc, out, err = go(capsys, "B1")
+    rc, out, err = go(capsys, "B1", "--cap", "2")
     wt = bk.root / ".claude" / "worktrees" / "superlite-b1-t"
     assert out.splitlines() == [f"B1 running lead=W1 worktree={wt}"]
     assert err.startswith("run config: default-")

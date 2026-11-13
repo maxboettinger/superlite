@@ -156,7 +156,7 @@ def test_start_blocks_on_bare_flag(bk, capsys, monkeypatch):
 def test_start_blocks_on_root_path(bk, capsys, monkeypatch):
     put(bk, b("B1", ["a.py"]))
     fake_wt(monkeypatch, lambda topic, start: (Path(start), "no-repo"), bare="core.bare=true in x")
-    rc, out = run(capsys, "start", "B1")
+    rc, out = run(capsys, "start", "B1", "--cap", "2")
     assert rc == 2
     assert out.splitlines() == [f"BLOCKED: B1 not started: worktree ensure gave {bk.root} (no-repo), not a linked worktree under {bk.root}/.claude/worktrees; cause: core.bare=true in x"]
     assert get(bk, "B1")["state"] == "planned"

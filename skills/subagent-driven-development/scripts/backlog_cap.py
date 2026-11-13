@@ -180,3 +180,17 @@ def lead_cap(data, root, held=0, tier=None, env=None):  # O(b + a*l) plus the ro
     live = os.environ.get("SUPERLITE_LEAD_CAP_LIVE") != "0"  # O(1)
     accounts = account_state(root, tier, cfg["lead_weekly_max"], env) if live else ("unknown", [])  # O(a*l)
     return decide(active, room, room_why, cfg, live_leads() if live else None, accounts, held)  # O(1)
+
+
+def start_cap(root, model=None, config=None):  # O(b + a*l) plus the room, usage and herdr calls
+    """(cap, line) for a start: backlog.json, the overlap holds and the lead tier (model, else the run config's lead model)."""
+    import backlog_state as bs  # O(1)
+    data = bs.load(bs.path(root))  # O(size)
+    tier = model  # O(1)
+    if tier is None:  # O(1)
+        try:  # O(1)
+            import run_config  # O(1)
+            tier = run_config.resolve(config, root)["lead"]["model"]  # O(L)
+        except Exception:  # any failure: no tier
+            tier = None  # O(1)
+    return lead_cap(data, root, held=len(bs.holds(data)), tier=tier)  # O(b + a*l)

@@ -107,7 +107,7 @@ Your brief lists the files your batch may touch and the files other open batches
 `"$SL" backlog reset B [--discard]` (main only) stops a batch's lead, removes its worktree and branch and sets it back to planned; `--discard` also drops uncommitted work and unmerged commits, otherwise what git refuses to remove is kept and the batch parks with `reset kept its ...`; a shipped batch, a planned one with no lead or worktree and one whose PR merged refuse it.
 `"$SL" backlog run` as a background command is main's default loop: it runs start, then wait, and starts again, until a batch needs main (needs_decision, parked), a start refusal or the run end; shipped lines do not end it.
 `"$SL" backlog ship B lock [--wait 500]`: take the machine-wide ship lock. exit 4 means wait and rerun.
-`"$SL" backlog start [B ...] [--cap 2] [--model opus]`.
+`"$SL" backlog start [B ...] [--cap N] [--model opus]`.
 `"$SL" backlog status` first and after any compaction.
 `"$SL" backlog tell B --text T` (main only) messages a running batch's lead; a needs_decision batch takes `answer`.
 `"$SL" backlog unskip <issue>` takes an issue off the skipped list (the next plan triages it; `plan --issues N --add` plans it now).

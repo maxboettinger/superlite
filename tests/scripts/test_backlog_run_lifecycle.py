@@ -15,19 +15,19 @@ def test_start_takes_several_ids_and_reports_each_refusal(bk, capsys):
 
 def test_start_counts_batches_of_the_same_call_against_the_cap(bk, capsys):
     put(bk, b("B1", ["a.py"]), b("B2", ["b.py"]), b("B3", ["c.py"]))
-    rc, out = run(capsys, "start", "B1", "B2", "B3")
+    rc, out = run(capsys, "start", "B1", "B2", "B3", "--cap", "2")
     assert rc == 2 and out.splitlines()[0] == "BLOCKED: no free slot for B3 (cap 2)"
     assert get(bk, "B1")["state"] == get(bk, "B2")["state"] == "running" and get(bk, "B3")["state"] == "planned"
     put(bk, b("B5", ["e.py"]))
     n = sum(1 for c in bk.calls if c[0] == "spawn")
-    rc, out = run(capsys, "start", "B5", "B5")
+    rc, out = run(capsys, "start", "B5", "B5", "--cap", "2")
     assert rc == 0 and out.count("B5 running") == 1 and sum(1 for c in bk.calls if c[0] == "spawn") == n + 1
 
 
 def test_a_live_lead_refuses_only_its_own_batch(bk, capsys):
     put(bk, b("B1", ["a.py"], "parked", reason="x", lead="W9", agent="sl-m-W9", worktree=str(bk.root / "wts" / "superlite-b1-t")), b("B2", ["b.py"]))
     bk.states["sl-m-W9"] = "working"
-    rc, out = run(capsys, "start", "B1", "B2")
+    rc, out = run(capsys, "start", "B1", "B2", "--cap", "2")
     lines = out.splitlines()
     assert rc == 2 and lines[0] == "BLOCKED: B1 lead W9 is still running (sl backlog wait)" and lines[1].startswith("B2 running lead=")
     assert get(bk, "B1")["state"] == "parked"

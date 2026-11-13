@@ -36,7 +36,7 @@ The room command is an argv list in `~/.superlite/machine.json` under `room`, ru
 - `lead_units`: 2; units of room one lead takes. Measured on a machine with 18 cores and 64 GB: 9 live leads with 24 to 26 agents used about 0.6 cores and 1.8 GB each with their workers, so 2 per lead leaves room for a lead's fast test runs (full suites queue on the full-suite lock).
 - `leads_per_repo`: 6; leads for this repository.
 - `leads_per_machine`: 12; live leads on the machine (herdr agents named `sl-*-lead`); herdr unreachable drops this limit.
-- `lead_weekly_max`: none; percent (0 to 100); an account at or above it in the weekly usage counts as not usable.
+- `lead_weekly_max`: none; percent (0 to 100); an account at or above it in the weekly usage counts as not usable; a lead and every worker a lead starts skip an account at or above it while another is usable.
 
 The cap is the smallest of these limits, each a total lead count: running leads plus `room // lead_units`; `leads_per_repo`; running leads plus what `leads_per_machine` leaves; and, when no account is usable, the running leads. The line names the limit that decided first, then the room and the accounts. A key that is not valid falls back to its default and the line says `machine.json <key> invalid, default <v>`. Examples:
 

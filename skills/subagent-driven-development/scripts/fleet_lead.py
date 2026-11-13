@@ -134,7 +134,7 @@ def _spawn_lead(main_sd, worktree, model, base, after, rc):  # O(a * e + w) plus
     main_sd, worktree = Path(main_sd), Path(worktree)  # O(1)
     fresh = isinstance(after, NoShell)  # O(1)
     tail = "" if after is None else f"; retried in a fresh pane after {after.wid}" if fresh else f"; retried after {after.wid} on {after.account}"  # O(1)
-    account, cdir, shared = fleet.choose_account(main_sd, model, base) if after is None or fresh else fleet._retry_account(main_sd, model, base, after.account)  # O(a * e + w)
+    account, cdir, shared = fleet.choose_account(main_sd, model, base, lead=True) if after is None or fresh else fleet._retry_account(main_sd, model, base, after.account, lead=True)  # O(a * e + w)
     if fresh:  # O(1)
         print(f"{after.wid} {after.why}; retrying in a fresh pane", file=sys.stderr)  # O(1)
     elif after is not None:  # O(1)

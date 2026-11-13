@@ -843,16 +843,7 @@ def _cap_line(root: Path, rest: list) -> tuple:
     if os.environ.get("SUPERLITE_FLEET_WORKER") or any(x in ("-h", "--help") or x == "--cap" or x.startswith("--cap=") for x in rest):  # O(args)
         return None, ""  # O(1)
     import backlog_cap  # O(1)
-    import backlog_state as bs  # O(1)
-    data = bs.load(bs.path(root))  # O(size)
-    tier = _arg_val(rest, "--model")  # O(args)
-    if tier is None:  # O(1)
-        try:  # O(1)
-            import run_config  # O(1)
-            tier = run_config.resolve(_arg_val(rest, "--config"), root)["lead"]["model"]  # O(L)
-        except Exception:  # any failure: no tier
-            tier = None  # O(1)
-    return backlog_cap.lead_cap(data, root, held=len(bs.holds(data)), tier=tier)  # O(b + a*l)
+    return backlog_cap.start_cap(root, _arg_val(rest, "--model"), _arg_val(rest, "--config"))  # O(b + a*l)
 
 
 def _with_cap(cmd: str, rest: list, root: Path) -> list:
@@ -1078,8 +1069,6 @@ def main(argv=None) -> int:
         return _start(argv[1:])
     if argv and argv[0] in ROUTED:
         import backlog_run  # O(1)
-        if argv[0] == "run":  # O(1)
-            return backlog_run.main(_with_cap("run", argv[1:], _root()))  # O(run)
         return backlog_run.main(argv)
     if argv and argv[0] == "ship":
         import backlog_ship  # O(1)

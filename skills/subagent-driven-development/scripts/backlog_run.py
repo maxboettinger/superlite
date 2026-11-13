@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Backlog runner (phase 3): start batch leads, wait for them, answer an escalated lead.
 
-    backlog_run.py start [B ...] [--cap 2] [--model opus] [--config NAME]
+    backlog_run.py start [B ...] [--cap N] [--model opus] [--config NAME]
     backlog_run.py wait [--timeout 21600] [--poll 10] [--window 0]
-    backlog_run.py run [--timeout 43200] [--poll 10] [--cap 2] [--model M] [--config NAME] [--machine-wait 100] [--over-limit] [--retry 300]
+    backlog_run.py run [--timeout 43200] [--poll 10] [--cap N] [--model M] [--config NAME] [--machine-wait 100] [--over-limit] [--retry 300]
     backlog_run.py answer B --file F        (F = {"answers": {question: answer}, "by": "user"|"main"|{question: ...}})
     backlog_run.py tell B --text T          (send main's text to the running lead of B)
 
@@ -317,6 +317,10 @@ def cmd_start(a) -> int:
     data = bs.load(p)  # O(size)
     if not data.get("approved_ship"):  # O(1)
         return _refuse("no ship approval yet (sl backlog decide --print)")  # O(1)
+    if a.cap is None:  # O(1) no --cap: read the lead cap now
+        import backlog_cap  # O(1)
+        a.cap, cap_line = backlog_cap.start_cap(root, a.model, a.config)  # O(b + a*l)
+        print(cap_line)  # O(1)
     try:  # O(1)
         rc = run_config.resolve(a.config, root, {"lead": {"model": a.model}} if a.model else None)  # O(file)
     except run_config.ConfigError as e:  # O(1)
@@ -992,10 +996,22 @@ def cmd_run(a) -> int:
     sd, p = root / ".superlite", bs.path(root)  # O(1)
     deadline = time.monotonic() + a.timeout  # O(1)
     due, retry, last, seen = True, False, 0.0, set()  # O(1)
+    shown = None  # O(1) the cap of the last printed cap: line
     while True:  # O(timeout / poll)
         if due or (retry and time.monotonic() - last >= a.retry):  # O(1)
             backlog.set_standing(root)  # O(b)
-            ns = argparse.Namespace(batch=[], cap=a.cap, model=a.model, config=a.config, machine_wait=a.machine_wait, over_limit=a.over_limit)  # O(1)
+            cap = a.cap  # O(1)
+            if cap is None:  # O(1) read the cap again for each start round
+                if any(b["state"] == "planned" for b in bs.load(p)["batches"]):  # O(b)
+                    import backlog_cap  # O(1)
+                    cap, cap_line = backlog_cap.start_cap(root, a.model, a.config)  # O(b + a*l)
+                    if cap != shown:  # O(1)
+                        print(cap_line, flush=True)  # O(1)
+                        shown = cap  # O(1)
+                else:  # O(1)
+                    import backlog_cap  # O(1)
+                    cap = backlog_cap.FIXED_CAP  # O(1)
+            ns = argparse.Namespace(batch=[], cap=cap, model=a.model, config=a.config, machine_wait=a.machine_wait, over_limit=a.over_limit)  # O(1)
             buf = io.StringIO()  # O(1)
             with contextlib.redirect_stdout(buf):  # O(1)
                 rc = cmd_start(ns)  # O(start)
@@ -1124,7 +1140,7 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
     s = sub.add_parser("start")  # O(1)
     s.add_argument("batch", nargs="*")  # O(1)
-    s.add_argument("--cap", type=int, default=2)  # O(1)
+    s.add_argument("--cap", type=int, default=None)  # O(1)
     s.add_argument("--model", default=None)  # O(1)
     s.add_argument("--config", default=None)  # O(1)
     s.add_argument("--machine-wait", type=float, default=100)  # O(1)
@@ -1136,7 +1152,7 @@ def main(argv=None) -> int:
     r = sub.add_parser("run")  # O(1)
     r.add_argument("--timeout", type=int, default=43200)  # O(1)
     r.add_argument("--poll", type=int, default=10)  # O(1)
-    r.add_argument("--cap", type=int, default=2)  # O(1)
+    r.add_argument("--cap", type=int, default=None)  # O(1)
     r.add_argument("--model", default=None)  # O(1)
     r.add_argument("--config", default=None)  # O(1)
     r.add_argument("--machine-wait", type=float, default=100)  # O(1)
