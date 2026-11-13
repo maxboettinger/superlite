@@ -46,6 +46,7 @@ import experiment  # noqa: E402 | O(1)
 ACTIVE = ("running", "needs_decision")
 STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_DECISION|NEEDS_CONTEXT|BLOCKED)\b", re.I)
 NO_CHANGE = re.compile(r"(?i)\bStatus:\s*\**\s*DONE\**\s+no[- ]change\s*:\s*(\S[^\n]*)")  # O(1)
+PLANNED = re.compile(r"(?i)\bStatus:\s*\**\s*DONE\**\s+planned\s*:\s*`?([^\s`]+)")  # O(1)
 CTRL = re.compile(r"[\x00-\x1f\x7f]")  # O(1)
 REASON_MAX = 2000  # O(1) characters of a parked or no-change reason kept whole
 REPROMPT = ("superlite: your last turn ended without a status line. Go on with the batch; end your turn only with "
@@ -56,6 +57,8 @@ QUESTION_FIX = ("superlite: your .superlite/question.json is invalid: {errs}. Li
                 "(an over-long header, label or description is cut for you). Rewrite the file and end your turn with "
                 "Status: NEEDS_DECISION.")
 
+PLAN_FIX = ("superlite: your plan {plan} does not run: {errs}. Fix it (lint must pass and every task must own its files), "
+            "then end your turn with Status: DONE planned: <plan path> again.")
 ANSWER_MAIN = ("Main answered your question as AI orchestrator, not Max: read {af}; its by map names who answered each question "
                "(user: Max's decision, main: main's ruling); record each that way, then go on with the batch.")
 ANSWERS_LINE = ("- Answers given mid-run: {names} in .superlite/ (also under Max's decisions or main's rulings above; each file's by "
@@ -213,6 +216,85 @@ def machine_park_line(lines: list):  # O(lines * patterns)
     return f"machine: {parts}; fix the machine first, then sl backlog start {' '.join(ids)}"  # O(lines)
 
 
+def planned_path(text: str):  # the plan path of a `Status: DONE planned: <path>` line, else None | O(len)
+    m = PLANNED.search(str(text))  # O(len)
+    return (m.group(1).rstrip("*.,;)") or None) if m else None  # O(len)
+
+
+def lead_phase(batch: dict, rc: dict) -> str:  # "single", "plan" or "build" | O(k)
+    if run_config.build_lead(rc) is None:  # O(k)
+        return "single"  # O(1)
+    return "build" if batch.get("phase") == "build" and batch.get("plan") else "plan"  # O(1)
+
+
+def plan_errors(wt: Path, plan: str) -> list:  # why the plan does not run in wt; [] when it does | O(size) + spawn
+    wt = Path(wt)  # O(1)
+    f = (wt / plan).resolve()  # O(1)
+    if not f.is_file() or wt.resolve() not in f.parents:  # O(1)
+        return [f"plan {plan} not found in the worktree"]  # O(1)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SUPERLITE_FLEET_") and k != "SUPERLITE_STATE_DIR"}  # O(env)
+    errs = []  # O(1)
+    try:  # O(1)
+        cp = subprocess.run([sys.executable, str(HERE / "plan_tools.py"), "lint", "--plan", str(f)], cwd=str(wt), env=env,
+                            capture_output=True, text=True, timeout=300)  # O(size)
+        if cp.returncode:  # O(1)
+            tail = [x for x in (cp.stdout + "\n" + cp.stderr).splitlines() if x.strip()][-3:]  # O(len)
+            errs.append(f"lint exit {cp.returncode}: {' / '.join(x.strip() for x in tail)}")  # O(1)
+    except subprocess.TimeoutExpired:  # O(1)
+        errs.append("lint timed out")  # O(1)
+    except OSError as e:  # O(1)
+        errs.append(f"lint did not run: {e}")  # O(1)
+    try:  # O(1)
+        text = f.read_text(encoding="utf-8", errors="replace")  # O(size)
+    except OSError:  # O(1)
+        return errs  # O(1)
+    for m in re.finditer(r"(?m)^### (T\d+)\b[^\n]*\n(.*?)(?=^### |\Z)", text, re.S):  # O(size)
+        own = re.search(r"(?m)^\*\*Owns:\*\*[ \t]*(.*)$", m.group(2))  # O(len)
+        if not own or not re.search(r"[\w./-]+", own.group(1)):  # O(len)
+            errs.append(f"{m.group(1)} owns no files")  # O(1)
+    return errs  # O(t)
+
+
+def _summaries(sd, data: dict, batch: dict, backlog_brief) -> tuple:  # (picked paths, count left out) | O(b)
+    shipped = []  # O(1)
+    for x in data["batches"]:  # O(b)
+        f = Path(sd) / "backlog" / f"{x['id']}.md"  # O(1)
+        if x["state"] != "shipped" or not f.is_file():  # O(1)
+            continue  # O(1)
+        try:  # O(1)
+            txt = f.read_text(encoding="utf-8", errors="replace")  # O(size)
+        except OSError:  # O(1)
+            txt = ""  # O(1)
+        shipped.append({"id": x["id"], "path": str(f), "files": list(x.get("files") or []), "text": txt})  # O(1)
+    picked, rest = backlog_brief.pick_summaries(batch, shipped)  # O(b)
+    return list(picked), rest  # O(b)
+
+
+def _write_brief(sd, data: dict, batch: dict, wt: Path, branch: str, brc: dict, phase: str, summaries: tuple) -> Path:  # O(size) + spawns
+    import backlog_brief
+    picked, rest = summaries  # O(1)
+    ctx = {"sl": str(HERE / "sl"), "backlog_md": str(HERE.parent / "backlog.md"), "repo": data.get("repo", ""),
+           "approved": data.get("approved_ship"), "titles": data.get("titles", {}), "summaries": picked,
+           "resume": batch["state"] == "parked" and bool(batch.get("worktree")), "worktree": str(wt),
+           "text": brc["lead"].get("text")}  # O(1)
+    if rest:  # O(1)
+        ctx["summaries_more"] = {"count": rest, "dir": str(Path(sd) / "backlog")}  # O(1)
+    if phase != "single":  # O(1)
+        ctx["phase"] = phase  # O(1)
+    if phase == "build":  # O(1)
+        ctx["plan"] = batch.get("plan")  # O(1)
+    brief = wt / ".superlite" / "briefs" / ("lead-build.md" if phase == "build" else "lead.md")  # O(1)
+    brief.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+    text = backlog_brief.lead_brief(batch, ctx)  # O(size)
+    if ctx["resume"]:  # O(1)
+        text = text.rstrip("\n") + "\n" + "\n".join(_resume_state(batch, wt, branch)) + "\n"  # O(size) + spawns
+    note = testcmd.seed_note(wt)  # O(size) + spawn
+    if note:  # O(1)
+        text = text.rstrip("\n") + "\nTest command: " + note + "\n"  # O(size)
+    brief.write_text(text, encoding="utf-8")  # O(size)
+    return brief  # O(1)
+
+
 def cmd_start(a) -> int:
     import fleet
     import machine_load
@@ -250,11 +332,6 @@ def cmd_start(a) -> int:
         print("no startable batch")  # O(1)
         return 0  # O(1)
     code = 2 if msgs else 0  # O(1)
-    summaries = []  # O(1)
-    for b in data["batches"]:  # O(b)
-        f = sd / "backlog" / f"{b['id']}.md"  # O(1)
-        if b["state"] == "shipped" and f.is_file():  # O(1)
-            summaries.append(str(f))  # O(1)
     import trees  # O(1) lazy
     fleet_on, warned = False, False  # O(1)
     deadline = time.monotonic() + a.machine_wait  # one budget for the whole call | O(1)
@@ -305,24 +382,20 @@ def cmd_start(a) -> int:
         if backlog.seed_test_cmd(root, wt):  # main's .superlite/test-cmd.json before the brief (#334), recorded so it can follow main (#638) | O(size)
             testcmd.record_seed(wt)  # O(size)
         branch = "superlite/" + wt.name.replace("superlite-", "", 1)  # O(1)
-        ctx = {"sl": str(HERE / "sl"), "backlog_md": str(HERE.parent / "backlog.md"), "repo": data.get("repo", ""),
-               "approved": data.get("approved_ship"), "titles": data.get("titles", {}), "summaries": summaries,
-               "resume": batch["state"] == "parked" and bool(batch.get("worktree")), "worktree": str(wt),
-               "text": brc["lead"].get("text")}  # O(1)
-        brief = wt / ".superlite" / "briefs" / "lead.md"  # O(1)
-        brief.parent.mkdir(parents=True, exist_ok=True)  # O(1)
-        text = backlog_brief.lead_brief(batch, ctx)  # O(size)
-        if ctx["resume"]:  # O(1)
-            text = text.rstrip("\n") + "\n" + "\n".join(_resume_state(batch, wt, branch)) + "\n"  # O(size) + spawns
-        note = testcmd.seed_note(wt)  # O(size) + spawn
-        if note:  # O(1)
-            text = text.rstrip("\n") + "\nTest command: " + note + "\n"  # O(size)
-        brief.write_text(text, encoding="utf-8")  # O(size)
+        phase = lead_phase(batch, brc)  # O(k)
+        replan = False  # O(1)
+        if phase == "build":  # O(1)
+            perrs = plan_errors(wt, batch["plan"])  # O(size) + spawn
+            if perrs:  # the stored plan is not in this worktree or does not lint: plan again
+                print(f"{bid} plan {batch['plan']} does not run ({'; '.join(perrs)}); starting a planning lead", file=sys.stderr)  # O(1)
+                phase, replan = "plan", True  # O(1)
+        lrc = run_config.build_lead(brc) if phase == "build" else brc  # O(k)
+        brief = _write_brief(sd, data, batch, wt, branch, lrc, phase, _summaries(sd, data, batch, backlog_brief))  # O(size) + spawns
         if not fleet_on and not fleet_state.is_on(sd):  # O(w)
             fleet.main(["on", "--plan", str(sd)])  # O(w)
         fleet_on = True  # O(1)
         try:  # O(1)
-            rec = fleet_lead.spawn_lead(sd, wt, brc["lead"]["model"], rc=brc)  # O(1) + spawns
+            rec = fleet_lead.spawn_lead(sd, wt, lrc["lead"]["model"], rc=lrc)  # O(1) + spawns
         except SystemExit:  # O(1)
             print(f"BLOCKED: {bid} lead did not start; {bid} keeps its state, rerun sl backlog start {bid}")  # O(1)
             code = 2  # O(1)
@@ -335,11 +408,14 @@ def cmd_start(a) -> int:
             code = 2  # O(1)
             continue  # O(1)
 
-        def mark(d, bid=bid, rec=rec, wt=wt, branch=branch, brc=brc, arm=arm):  # O(b)
+        def mark(d, bid=bid, rec=rec, wt=wt, branch=branch, brc=brc, arm=arm, phase=phase, lrc=lrc, replan=replan):  # O(b)
             x = bs.batch(d, bid)
             x.update({"state": "running", "lead": rec["id"], "agent": rec["name"], "worktree": str(wt), "branch": branch,
                       "since": _now_ms(), "run_config": brc["id"], "reason": "", "ship_runs": 0, "ship_waits": 0, "reprompted": False, "question_reprompted": False,
-                      "gone_seen": {}, "gone_workers": []})  # O(1)
+                      "gone_seen": {}, "gone_workers": [], "phase": phase, "plan_returned": False,
+                      "leads": list(x.get("leads") or []) + [{"id": rec["id"], "phase": phase, "model": lrc["lead"]["model"]}]})  # O(1)
+            if replan:  # O(1)
+                x.pop("plan", None)  # O(1)
             if arm:  # O(1)
                 x.update({"experiment": arm["experiment"], "arm": arm["arm"]})  # O(1)
         bs.update(p, mark)  # O(size)
@@ -595,6 +671,52 @@ def _shipped(p, sd, root, b, wt, push: bool = True, head: str | None = None) -> 
     return out
 
 
+def _build_start(p, sd, data, b, wt, plan, fleet_io) -> list:  # the planning lead is done: check the plan, start the build lead | O(size) + spawns
+    import fleet
+    import fleet_lead
+    out, repo, bid = [], data.get("repo", ""), b["id"]  # O(1)
+    errs = plan_errors(wt, plan)  # O(size) + spawn
+    if errs and b.get("plan_returned"):  # O(1)
+        _park(p, sd, repo, b, "plan does not run: " + "; ".join(errs), out)  # O(size)
+        return out  # O(1)
+    if errs:  # O(1)
+        bs.update(p, lambda d, bid=bid: bs.batch(d, bid).update({"plan_returned": True, "since": _now_ms()}))  # O(size)
+        if fleet_io.main(["send", b["lead"], "--text", PLAN_FIX.format(plan=plan, errs="; ".join(errs[:5])), "--plan", str(sd)]):  # O(w)
+            _park(p, sd, repo, b, "plan does not run: " + "; ".join(errs), out)  # O(size)
+        return out  # O(1)
+    blc = run_config.build_lead(run_config.active(wt / ".superlite"))  # O(file)
+    if blc is None:  # O(1)
+        _park(p, sd, repo, b, "no lead.build_model in the run config", out)  # O(size)
+        return out  # O(1)
+    nb = {**b, "phase": "build", "plan": plan}  # O(1)
+    import backlog_brief
+    brief = _write_brief(sd, data, nb, wt, b.get("branch") or "", blc, "build", _summaries(sd, data, nb, backlog_brief))  # O(size) + spawns
+    model = blc["lead"]["model"]  # O(1)
+    try:  # O(1)
+        rec = fleet_lead.spawn_lead(sd, wt, model, rc=blc)  # O(1) + spawns
+    except SystemExit:  # O(1)
+        bs.update(p, lambda d, bid=bid: bs.batch(d, bid).update({"phase": "build", "plan": plan}))  # O(size)
+        _park(p, sd, repo, b, "build lead did not start", out)  # O(size)
+        return out  # O(1)
+    try:  # O(1)
+        fleet_io.send_brief(sd, rec["id"], str(brief), bid)  # O(w)
+    except fleet.hc.HerdrError:  # O(1)
+        _stop(sd, rec["id"])  # O(w)
+        bs.update(p, lambda d, bid=bid: bs.batch(d, bid).update({"phase": "build", "plan": plan}))  # O(size)
+        _park(p, sd, repo, b, "build lead got no brief", out)  # O(size)
+        return out  # O(1)
+    _stop(sd, b["lead"])  # O(w)
+
+    def mark(d):  # O(b)
+        x = bs.batch(d, bid)
+        x.update({"lead": rec["id"], "agent": rec["name"], "since": _now_ms(), "phase": "build", "plan": plan,
+                  "leads": list(x.get("leads") or []) + [{"id": rec["id"], "phase": "build", "model": model}],
+                  "reprompted": False, "question_reprompted": False, "gone_seen": {}, "gone_workers": []})  # O(1)
+    bs.update(p, mark)  # O(size)
+    out.append(f"{bid} building lead={rec['id']} model={model} plan={plan}")  # O(1)
+    return out  # O(1)
+
+
 def _round(root, sd, p, states) -> list:
     import fleet_io
     import fleet
@@ -668,10 +790,14 @@ def _round(root, sd, p, states) -> list:
             if _lags(text, str(rec.get("last") or "")):  # O(len)
                 if _now_ms() - rec.get("t", 0) < fleet_io.READ_MS:  # O(1)
                     continue  # O(1)
-                if STATUS.search(str(rec.get("last") or "")) and not no_change_reason(str(rec.get("last") or "")):  # O(len)
+                if STATUS.search(str(rec.get("last") or "")) and not no_change_reason(str(rec.get("last") or "")) and not (b.get("phase") == "plan" and planned_path(str(rec.get("last") or ""))):  # O(len)
                     _park(p, sd, data.get("repo", ""), b, f"{lastc} (transcript unread)", out)  # O(size)
                     continue  # O(1)
         stop = _stop_text(rec)  # O(size)
+        pp = planned_path(status_reason(stop, str(rec.get("last") or "lead stopped"))) if b.get("phase") == "plan" else None  # O(len)
+        if pp:  # O(1)
+            out.extend(_build_start(p, sd, data, b, wt, pp, fleet_io))  # O(size) + spawns
+            continue  # O(1)
         nc = no_change_reason(status_reason(stop, str(rec.get("last") or "lead stopped")))  # O(len)
         if nc:  # O(1)
             import backlog_ship
