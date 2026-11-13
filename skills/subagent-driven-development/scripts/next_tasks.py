@@ -29,6 +29,12 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")  # O(1)
 _TASK_HEADING = re.compile(r"^###\s+([A-Z]{1,3}\d+[A-Za-z]?)\b(.*)$")  # O(1)
 
 
+def default_plan():  # the running run's plan file, else DEFAULT_PLAN | O(d)
+    st = sibling("state")  # O(1)
+    found = sibling("plan_tools").run_plan(st.resolve(strict=False))  # O(d)
+    return str(found) if found else DEFAULT_PLAN  # O(1)
+
+
 def die(msg, code=2):  # O(len msg)
     print(f"error: {msg}", file=sys.stderr)  # O(1)
     sys.exit(code)  # O(1)
@@ -456,11 +462,15 @@ def ready_tasks(graph, times, committed, running, cap, status=None, stable=None,
 
 def main(argv=None):  # O(L + n + e + R log R) + process spawn
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
-    ap.add_argument("--plan", default=DEFAULT_PLAN)  # O(1)
+    ap.add_argument("--plan")  # O(1)
     ap.add_argument("--committed", default="")  # O(1)
     ap.add_argument("--running", default="")  # O(1)
     ap.add_argument("--cap", type=int, default=10)  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    try:  # O(1)
+        a.plan = str(sibling("plan_tools").resolve_plan(a.plan)) if a.plan else default_plan()  # O(d)
+    except sibling("plan_tools").PlanError as exc:  # O(1)
+        die(exc)  # O(1)
     graph = taskgraph(a.plan)  # O(n + e) + process spawn
     status = taskgraph_full(a.plan).get("status", {})  # O(1) memoized
     info = parse_plan(a.plan)  # O(L)

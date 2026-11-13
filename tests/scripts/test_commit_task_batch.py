@@ -99,3 +99,54 @@ def test_dispatch_uses_experiment_batch(tmp_path):
     assert solo and all("," not in t for t in solo), solo
     assert sorted(solo) == ["T3", "T4", "T5"]
     assert any("," in t for t in next_lines("b", False))  # control: the same run without the claim batches
+
+
+OWNED_PLAN = """# P
+
+## 9. Implementation plan
+
+### T2 · two · Complexity 2 · Est. context 10k · Est. time 1 min
+
+**Owns:** `src/f.py`
+
+### T3 · three · Complexity 2 · Est. context 10k · Est. time 1 min
+
+**Owns:** `src/c.py`
+
+### T4 · four · Complexity 2 · Est. context 10k · Est. time 1 min
+
+**Owns:** `src/f.py`
+"""
+OWNED_NOTE = "left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): src/f.py"
+
+
+def owned_repo(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    write(repo, "owned.md", OWNED_PLAN)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "plan")
+    monkeypatch.chdir(repo)
+    for k in ("SUPERLITE_AUTOCOMMIT", "SUPERLITE_PROBE_RUN", "SUPERLITE_BASH"):
+        monkeypatch.setenv(k, ENV[k])
+    write(repo, "src/f.py", "F = 1\n")
+    assert commit_task.main(["T2", "--plan", "owned.md"]) == 0
+    write(repo, "src/f.py", "F = 2\n")
+    write(repo, "src/c.py", "C = 1\n")
+    return repo
+
+
+def test_owned_note_skipped_when_later_call_task_commits(tmp_path, monkeypatch, capsys):
+    repo = owned_repo(tmp_path, monkeypatch)
+    capsys.readouterr()
+    assert commit_task.main(["T3", "T4", "--plan", "owned.md"]) == 0
+    cap = capsys.readouterr()
+    assert "owned by" not in cap.err
+    sha = cap.out.splitlines()[-1].split()[1]
+    assert git(repo, "show", f"{sha}:src/f.py") == "F = 2"
+
+
+def test_owned_note_kept_when_nobody_commits_it(tmp_path, monkeypatch, capsys):
+    owned_repo(tmp_path, monkeypatch)
+    capsys.readouterr()
+    assert commit_task.main(["T3", "--plan", "owned.md"]) == 0
+    assert capsys.readouterr().err.count(OWNED_NOTE) == 1

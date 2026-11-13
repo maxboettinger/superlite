@@ -167,14 +167,8 @@ def plan_file(sd: Path, given: str | None = None) -> Path | None:  # O(1)
     """The plan of the run in sd: --plan when it is a file, else stable.json, pool.json, sd/plan.md (the first that exists)."""
     if given and Path(given).is_file():  # O(1)
         return Path(given)  # O(1)
-    for name in ("stable.json", "pool.json"):  # O(1) iterations
-        try:  # O(1)
-            p = json.loads((sd / name).read_text(encoding="utf-8")).get("plan")  # O(file)
-        except (OSError, ValueError, AttributeError):  # O(1)
-            continue  # O(1)
-        if isinstance(p, str) and p and Path(p).is_file():  # O(1)
-            return Path(p)  # O(1)
-    return sd / "plan.md" if (sd / "plan.md").is_file() else None  # O(1)
+    import plan_tools  # O(1)
+    return plan_tools.run_plan(sd)  # O(1)
 
 
 def changed_since(root: Path, ref: str, files: list[str]) -> list[str]:  # O(f) plus two git calls

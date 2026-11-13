@@ -62,6 +62,35 @@ class PlanError(Exception):  # O(1)
         self.code = code  # O(1)
 
 
+def run_plan(sd: Path) -> Path | None:  # O(1)
+    """The plan of the run in sd: stable.json's, then pool.json's `plan` (an existing file; a relative one is also tried against sd's parent), else sd/plan.md; None when none."""
+    for name in ("stable.json", "pool.json"):  # O(1) iterations
+        try:  # O(1)
+            p = json.loads((sd / name).read_text(encoding="utf-8")).get("plan")  # O(file)
+        except (OSError, ValueError, AttributeError):  # O(1)
+            continue  # O(1)
+        if not isinstance(p, str) or not p:  # O(1)
+            continue  # O(1)
+        for cand in (Path(p), sd.parent / p):  # O(1) iterations
+            if cand.is_file():  # O(1)
+                return cand  # O(1)
+    return sd / "plan.md" if (sd / "plan.md").is_file() else None  # O(1)
+
+
+def resolve_plan(path: str) -> Path:  # O(d)
+    """A plan file is itself; a run folder is its plan file; PlanError when neither exists."""
+    p = Path(path)  # O(1)
+    if p.is_file():  # O(1)
+        return p  # O(1)
+    if p.is_dir():  # O(1)
+        import state  # lazy: no import cycle | O(1)
+        found = run_plan(state.plan_dir(path))  # O(d)
+        if found is None:  # O(1)
+            raise PlanError(f"--plan {path} is a run folder with no plan file (stable.json, pool.json and plan.md name none); pass the plan file")  # O(1)
+        return found  # O(1)
+    raise PlanError(f"plan not found: {path}")  # O(1)
+
+
 def is_task(tid: str, has_owns: bool) -> bool:  # O(1)
     """`T1` is always a task; another prefix (`S1`, `UI3`) only with an **Owns:** field, so `### S3 storage` stays prose."""
     return bool(re.match(r"T\d", tid)) or has_owns  # O(1)
@@ -343,9 +372,7 @@ class Plan:  # O(1)
 
     @classmethod  # O(1)
     def load(cls, path: str) -> "Plan":  # O(C+L) total + file I/O
-        p = Path(path)  # O(1)
-        if not p.is_file():  # O(1) stat I/O
-            raise PlanError(f"plan not found: {path}")  # O(1)
+        p = resolve_plan(path)  # O(1) stat I/O; a run folder gives its plan file
         try:  # O(1)
             raw = p.read_bytes()  # O(C) file read
             return cls(raw.decode("utf-8-sig"), p)  # O(C) decode + parse
@@ -3381,9 +3408,21 @@ def main(argv=None):  # O(1) + dispatch
         if str(SCRIPT_DIR) not in sys.path:  # O(1)
             sys.path.insert(0, str(SCRIPT_DIR))  # O(1)
         import pt_review  # O(1)
+        try:  # O(1)
+            for i, tok in enumerate(argv):  # a run folder after --plan becomes its plan file | O(len argv)
+                if tok == "--plan" and i + 1 < len(argv) and Path(argv[i + 1]).is_dir():  # O(1)
+                    argv[i + 1] = str(resolve_plan(argv[i + 1]))  # O(d)
+                elif tok.startswith("--plan=") and Path(tok[7:]).is_dir():  # O(1)
+                    argv[i:i + 1] = ["--plan", str(resolve_plan(tok[7:]))]  # O(len argv)
+                    break  # O(1)
+        except PlanError as exc:  # O(1)
+            print(f"error: {exc}", file=sys.stderr)  # O(1)
+            return exc.code  # O(1)
         return pt_review.main(argv)  # O(1)
     args = build_parser().parse_args(argv)  # O(1)
     try:  # O(1)
+        if isinstance(getattr(args, "plan", None), str) and Path(args.plan).is_dir():  # O(1)
+            args.plan = str(resolve_plan(args.plan))  # O(d)
         return args.func(args)  # O(1)
     except PlanError as exc:  # O(1)
         print(f"error: {exc}", file=sys.stderr)  # O(1)
