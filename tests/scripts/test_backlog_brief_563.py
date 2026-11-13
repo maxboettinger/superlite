@@ -50,7 +50,7 @@ def test_lead_brief_names_comment_commands():
 
 def test_lead_wait_in_foreground():
     t = bb.lead_brief({"id": "B1", "issues": [7]}, LCTX)
-    assert "`/x/sl fleet wait --timeout 540000 --plan .superlite` in the foreground, never as a background command" in t
+    assert "`/x/sl fleet wait --wave --timeout 540000 --plan .superlite` in the foreground" in t
     assert "under memory pressure Claude Code stops an idle session's background commands" in t
 
 
