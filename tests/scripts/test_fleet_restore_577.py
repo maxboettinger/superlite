@@ -102,7 +102,7 @@ def idle_agent(pane="w6:p1", session="s1", status="idle", name="sl-a-w1"):
 def test_busy_worker_resumed_and_continued(w):
     w.fake.agents = [idle_agent()]
     lines, blocked = w.run()
-    assert (lines, blocked) == (["W1 restored pane=w6:p2 session=s1 busy, continued", f"re-arm: {SL} fleet wait --any --timeout 540000 --plan {w.sd}"], False)
+    assert (lines, blocked) == (["W1 restored pane=w6:p2 session=s1 busy, continued", f"re-arm: {SL} fleet wait --wave --timeout 540000 --plan {w.sd}"], False)
     argv = ["--agent", "superlite:implementer", "--model", "sonnet", "--resume", "s1"]
     assert w.fake.calls[:3] == [("split_pane", "w6:p1", "down", "/p", {"K": "v"}), ("close_pane", "w6:p1"), ("start_agent", "sl-a-w1", "w6:p2", argv)]
     assert w.fake.calls[3] == ("prompt", "sl-a-w1", fr.CONTINUE + "\n\n" + fleet_report.WORK, ["working"], 15000)
@@ -226,7 +226,7 @@ def test_lead_fleet_first_and_lead_prompt(w):
     assert lines[1].startswith("W1 restored pane=") and lines[1].endswith("busy, continued")
     assert lines[-1] == f"re-arm: {SL} backlog wait" and f"--plan {lsd}" not in " ".join(lines)
     lead_prompt = next(c for c in w.fake.calls if c[0] == "prompt" and c[1] == "sl-a-lead")[2]
-    assert lead_prompt.startswith(fr.LEAD_CONTINUE) and f"re-arm: {SL} fleet wait --any --timeout 540000 --plan {lsd}" in lead_prompt
+    assert lead_prompt.startswith(fr.LEAD_CONTINUE) and f"re-arm: {SL} fleet wait --wave --timeout 540000 --plan {lsd}" in lead_prompt
     assert lead_prompt.endswith("Then continue your brief where you stopped.")
     worker_prompt = next(c for c in w.fake.calls if c[0] == "prompt" and c[1] == "sl-a-w2")[2]
     assert worker_prompt.startswith(fr.CONTINUE)

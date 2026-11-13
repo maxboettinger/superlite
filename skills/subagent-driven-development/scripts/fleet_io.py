@@ -5,7 +5,7 @@
     fleet_io.py send WID --brief FILE [--label L] [--full] [--plan P]
     fleet_io.py send WID --text TEXT [--plan P]    (task ids, --brief and --text are exclusive: two of them exit 2)
     fleet_io.py keys WID KEY [KEY ...]
-    fleet_io.py wait [--timeout MS] [--any] [WID ...]
+    fleet_io.py wait [--timeout MS] [--any | --wave] [--tests PATH ...] [WID ...]
     fleet_io.py stopped WID --sd DIR [--t MS]       (the worker stop hook: relabel the pane)
 
 A batch's task message has one Verify Tn line per member, each with its own --task, and a Batch line: one run per task (#556).
@@ -13,6 +13,7 @@ A batch's task message has one Verify Tn line per member, each with its own --ta
 `wait` honours `--timeout` as ms, a bare number under 1000 read as seconds (`540s`, `9m`, `1500ms` work); it returns each
 report once (`claim`): a worker another wait collected prints `Wn T3 already collected: <json>`; `BUSY`/`TIMEOUT` end with
 `(reported: Wk <json>)` naming this call's finishers.
+`--wave` returns once every pending worker and `--tests PATH` run (a background `run_tests` summary) finished, or right after the first failure (a status outside DONE, DONE_WITH_CONCERNS, APPROVED, GREEN, findings, a partial APPROVED, a RED or DIED run); `--any` and `--wave` exclude each other.
 
 `send`/`keys` to a stopped or dead worker exit 2 naming a fresh `sl fleet spawn`; an `agent_not_found` reply marks the worker dead; `send --brief` remembers the brief
 for the respawn. `wait` ends a busy worker whose agent herdr no longer lists (probed every 10 s) as `Wn Tn DEAD (its agent is gone; no report)`.
@@ -720,7 +721,7 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follow
     pane_label(sd, wid, pane_title(sd, wid, label, "reported, waiting for coordinator"))  # before the worker may be stopped | O(w)
     if w.get("one_turn") and rep["status"] in FINAL:  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker | O(1)
         _stop_worker(sd, wid)  # O(w)
-    return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n}  # O(1)
+    return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n, **({"partial": True} if part else {})}  # O(1)
 
 
 def _pane_tail(sd, wid, w):  # the last pane lines, or the reason there are none | O(s)
@@ -814,7 +815,31 @@ def _reported(results):  # the suffix naming the finishers of this call | O(r)
     return " (reported: " + ", ".join(f"{r['id']} {r['report']}" for r in results) + ")" if results else ""  # O(r)
 
 
-def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/poll * (w + m))
+WAVE_OK = ("DONE", "DONE_WITH_CONCERNS", "APPROVED", "GREEN")  # statuses that let a wave go on | O(1)
+
+
+def wave_failure(r):  # a result that ends a wave: a status outside WAVE_OK, findings, or a partial review | O(1)
+    return r.get("status") not in WAVE_OK or (r.get("findings") or 0) > 0 or bool(r.get("partial"))  # O(1)
+
+
+def test_result(path):  # the finished background test run PATH as a wait result (and its line), else None while it runs | O(summary size)
+    import run_tests  # O(1)
+    path = Path(path)  # O(1)
+    data = run_tests.read_summary(path)  # O(summary size)
+    if data is None:  # O(1)
+        pid = run_tests.pid_gone(path)  # O(1)
+        if pid is None or path.exists():  # still running, or a summary being written | O(1)
+            return None  # O(1)
+        print(f"tests {path} DIED (pid {pid}, no summary); log {path.with_suffix('.log')}")  # O(1)
+        status = "DIED"  # O(1)
+    else:  # O(1)
+        green = not data.get("failed") and bool(data.get("passed") or data.get("skipped"))  # O(1)
+        status = "GREEN" if green else "RED"  # O(1)
+        print(f"tests {path} {status} {run_tests.summary_line(data)}")  # O(1)
+    return {"id": "tests", "task": str(path), "status": status, "report": str(path), "source": "tests", "findings": 0}  # O(1)
+
+
+def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False, wave=False, tests=None):  # O(timeout/poll * (w + m))
     sd = Path(sd)  # O(1)
     clock = clock or now_ms  # O(1)
     workers = fs.load(sd)["workers"]  # O(w)
@@ -823,8 +848,9 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
     seen = {}  # wid -> {t: stop t, first: ms first seen, text, lag}; a flushed transcript is read once per stop record, a lagging one each poll | O(1)
     results = []  # O(1)
     probed = {}  # wid -> ms its agent was last probed for existence | O(1)
+    tp = [Path(t).absolute() for t in tests or []]  # test summaries still awaited | O(t)
     start = clock()  # O(1)
-    while pending:  # O(timeout/poll) iterations
+    while pending or tp:  # O(timeout/poll) iterations
         listed = True  # O(1)
         try:  # O(1)
             states = hc.agent_states()  # O(w)
@@ -907,13 +933,19 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False):  # O(timeout/
                     if _fleet().agent_gone(name, hc):  # only herdr's agent_not_found counts | O(1)
                         results.append(_dead(sd, wid, w))  # O(w)
                         pending.remove(wid)  # O(w)
-        if not pending:  # O(1)
+        for tpath in list(tp):  # O(t) iterations
+            r = test_result(tpath)  # O(summary size)
+            if r is not None:  # O(1)
+                results.append(r)  # O(1)
+                tp.remove(tpath)  # O(t)
+        rest = " ".join(pending + [f"tests:{t}" for t in tp])  # O(w + t)
+        if not pending and not tp:  # O(1)
             break  # O(1)
-        if any_ and results:  # the first finished worker ends the round; the rest stay busy | O(1)
-            print("BUSY " + " ".join(pending) + _reported(results))  # O(w)
+        if (any_ and results) or (wave and any(wave_failure(r) for r in results)):  # the first finisher (any_) or failure (wave) ends the round; the rest stay busy | O(r)
+            print("BUSY " + rest + _reported(results))  # O(w)
             break  # O(1)
         if clock() - start >= timeout_ms:  # O(1)
-            print("TIMEOUT " + " ".join(pending) + _reported(results))  # O(w)
+            print("TIMEOUT " + rest + _reported(results))  # O(w)
             break  # O(1)
         sleep(poll_s)  # O(poll_s)
     return results  # O(1)
@@ -945,6 +977,8 @@ def main(argv=None):  # O(wait)
     wp.add_argument("--poll", type=float, default=2.0)  # O(1)
     wp.add_argument("--plan")  # O(1)
     wp.add_argument("--any", action="store_true")  # O(1)
+    wp.add_argument("--wave", action="store_true")  # O(1)
+    wp.add_argument("--tests", action="append")  # O(1)
     wp.add_argument("ids", nargs="*")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     if a.cmd == "stopped":  # the hook calls this: it never fails | O(w)
@@ -954,6 +988,9 @@ def main(argv=None):  # O(wait)
             pass  # O(1)
         return 0  # O(1)
     if a.cmd == "wait":  # before any state or herdr call | O(len)
+        if a.any and a.wave:  # O(1)
+            print("error: --any and --wave exclude each other", file=sys.stderr)  # O(1)
+            return 2  # O(1)
         try:  # O(1)
             t_ms = parse_timeout(a.timeout)  # O(len)
         except ValueError:  # O(1)
@@ -976,7 +1013,7 @@ def main(argv=None):  # O(wait)
             hc.send_keys(fs.worker_name(sd, a.wid), a.keys)  # O(w + len keys)
             print(f"{a.wid} keys sent")  # O(1)
         elif a.cmd == "wait":  # O(1)
-            wait(sd, a.ids or None, t_ms, a.poll, any_=a.any)  # O(wait)
+            wait(sd, a.ids or None, t_ms, a.poll, any_=a.any, wave=a.wave, tests=a.tests)  # O(wait)
         elif a.text is not None:  # O(1)
             send_text(sd, a.wid, a.text)  # O(w + len text)
         elif a.brief:  # O(1)

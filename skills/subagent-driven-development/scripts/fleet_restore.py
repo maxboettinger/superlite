@@ -272,7 +272,7 @@ def _run(sd, c, prefix):  # (lines, re-arm lines, blocked) of one fleet | O(w * 
             blocked = blocked or b  # O(1)
     rearm = []  # O(1)
     if any(v.get("state") == "busy" for v in fs.load(sd)["workers"].values()):  # O(w)
-        rearm.append(f"re-arm: {SL} fleet wait --any --timeout {WAIT_MS} --plan {sd}")  # O(1)
+        rearm.append(f"re-arm: {SL} fleet wait --wave --timeout {WAIT_MS} --plan {sd}")  # O(1)
     if leads:  # O(1)
         rearm.append(f"re-arm: {SL} backlog wait")  # O(1)
     return lines, rearm + _test_lines(sd), blocked  # O(runs)
