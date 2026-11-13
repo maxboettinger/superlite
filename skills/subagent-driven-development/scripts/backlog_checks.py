@@ -286,6 +286,30 @@ def _plain(f) -> str | None:
     return "/".join(parts) if parts else None
 
 
+DEPENDS_WHY_MAX = 80
+
+
+def _why(v: str) -> str:
+    """A dependency reason: control characters and blank runs become one blank, cut at a whole word (#742)."""
+    return _word(" ".join(re.sub(r"[\x00-\x1f\x7f]", " ", v).split()), DEPENDS_WHY_MAX)  # O(len)
+
+
+def _depends(raw: object) -> tuple:
+    """(ids, {id: reason}) of a proposal's depends list, or (None, {}) when an entry is neither an id nor {"id", "why"}."""
+    if not isinstance(raw, list):  # O(1)
+        return None, {}
+    ids: list = []
+    why: dict = {}
+    for e in raw:  # O(deps)
+        d, w = (e, None) if isinstance(e, str) else (e.get("id"), e.get("why")) if isinstance(e, dict) else (None, None)
+        if not isinstance(d, str) or not (w is None or isinstance(w, str)):
+            return None, {}
+        ids.append(d)
+        if w is not None and d not in why and _why(w):  # O(len) the first non-blank reason wins
+            why[d] = _why(w)
+    return ids, why
+
+
 def _reach(batches: list[dict]) -> dict:
     deps = {b["id"]: set(b["depends"]) for b in batches}
     out = {}
@@ -363,10 +387,10 @@ def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> t
             else:
                 aclean.add(p)
         clean |= aclean  # an append-only file is also a batch file
-        deps = b.get("depends", [])
-        if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
-            errs.append(f"{bid}: depends must be a list of batch ids")
-            deps = []
+        deps, why = _depends(b.get("depends", []))
+        if deps is None:
+            errs.append(f"{bid}: depends must be a list of batch ids or {{\"id\", \"why\"}} objects")
+            deps, why = [], {}
         decisions = b.get("decisions", [])
         if not isinstance(decisions, list):
             errs.append(f"{bid}: decisions must be a list")
@@ -392,7 +416,7 @@ def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> t
                 cleaned.append(clean_question(d))
         out.append({"id": bid, "topic": topic, "issues": sorted(set(issues)), "files": sorted(clean), **({"append_only": sorted(aclean)} if aclean else {}),
                     **({"main_steps": scl} if scl else {}),
-                    "depends": list(dict.fromkeys(deps)), "decisions": cleaned, **copy.deepcopy(DEFAULTS)})
+                    "depends": list(dict.fromkeys(deps)), **({"depends_why": {d: why[d] for d in dict.fromkeys(deps) if d in why}} if why else {}), "decisions": cleaned, **copy.deepcopy(DEFAULTS)})
     for b in out:  # O(batches * deps)
         for d in b["depends"]:
             if (d not in ids and d not in batches) or d == b["id"]:  # local ids win over backlog ids
@@ -417,6 +441,57 @@ def serial_files(a: dict, b: dict) -> list[str]:
 def appended_files(a: dict, b: dict) -> list[str]:
     """Files both batches list and both only append to."""
     return sorted(set(a.get("files") or []) & set(b.get("files") or []) & set(a.get("append_only") or []) & set(b.get("append_only") or []))  # O(files)
+
+
+def _shares(a: dict, b: dict) -> str:
+    f = serial_files(a, b)  # O(files)
+    return f"shares {f[0]}" + (f" (+{len(f) - 1} more)" if len(f) > 1 else "") if f else ""  # O(1)
+
+
+def _put_why(b: dict, why: dict) -> None:
+    """Set b's depends_why to why restricted to b's depends, right after depends; an empty map drops the key."""
+    why = {d: why[d] for d in b["depends"] if why.get(d)}  # O(deps)
+    items = [(k, v) for k, v in b.items() if k != "depends_why"]  # O(keys)
+    b.clear()
+    for k, v in items:  # O(keys)
+        b[k] = v
+        if k == "depends" and why:
+            b["depends_why"] = why
+
+
+def prune_depends(batches: list[dict], backlog: list = ()) -> tuple[list[dict], list[str]]:
+    """Keep a dependency only where the batches share a file or the triage gave a why; return (batches, repair lines) (#742)."""
+    bs = copy.deepcopy(batches)  # O(n)
+    by = {b["id"]: b for b in bs}
+    other = {b["id"]: b for b in backlog if isinstance(b, dict) and "id" in b}
+    orig = _reach(bs)  # O(n * edges)
+    lines: list[str] = []
+    whys: dict = {}
+    for b in bs:  # O(n * deps)
+        w = dict(b.get("depends_why") or {})
+        keep = []
+        for d in b["depends"]:
+            if w.get(d):
+                keep.append(d)
+                continue
+            r = _shares(b, by.get(d) or other.get(d) or {})
+            if r:
+                keep.append(d)
+                w[d] = r
+            else:
+                lines.append(f"depends: {b['id']} no longer waits for {d}: no shared file and no reason")
+        b["depends"] = keep
+        whys[b["id"]] = w
+    for b in sorted(bs, key=_num):  # O(n^2 * edges)
+        for d in sorted(orig[b["id"]], key=lambda x: int(x[1:])):
+            if d in b["depends"] or d in _reach(bs)[b["id"]] or not _shares(b, by[d]):
+                continue
+            b["depends"].append(d)
+            whys[b["id"]][d] = _shares(b, by[d])
+            lines.append(f"depends: {b['id']} waits for {d}: {whys[b['id']][d]} (the order the dropped dependencies held)")
+    for b in bs:  # O(n)
+        _put_why(b, whys[b["id"]])
+    return bs, lines
 
 
 def separate(batches: list[dict]) -> list[dict]:
@@ -445,12 +520,19 @@ def separate(batches: list[dict]) -> list[dict]:
         else:
             a.pop("append_only", None)
         a["decisions"] = a["decisions"] + b["decisions"]
+        wb = b.get("depends_why") or {}
+        wa = {**wb, **(a.get("depends_why") or {})}  # a's own reason first, else the merged one's
         a["depends"] = [d for d in dict.fromkeys(a["depends"] + b["depends"]) if d not in (a["id"], b["id"])]
+        _put_why(a, wa)
         bs.remove(b)
         for x in bs:
             if x is not a:
+                wx = dict(x.get("depends_why") or {})
+                if b["id"] in wx:
+                    wx.setdefault(a["id"], wx[b["id"]])
                 x["depends"] = [a["id"] if d == b["id"] else d for d in x["depends"]]
                 x["depends"] = [d for d in dict.fromkeys(x["depends"]) if d != x["id"]]
+                _put_why(x, wx)
 
 
 def proposal_from(text: str) -> dict | None:

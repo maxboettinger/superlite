@@ -224,6 +224,15 @@ def approve_ship(data: dict, source: str, now: str) -> str:
     return f"ship approved (prompt {now}): every batch of this plan round may ship"
 
 
+def waits_for(data: dict, b: dict) -> str:
+    dep = next((d for d in b.get("depends", []) if not _shipped(data, d)), None)  # O(depends * batches)
+    if dep is None:  # O(1)
+        return ""  # O(1)
+    why = b.get("depends_why")  # O(1)
+    why = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(why.get(dep) or "")).split()) if isinstance(why, dict) else ""  # O(len)
+    return f"{dep}: {why}" if why else dep  # O(1)
+
+
 def skip_issue(data: dict, n: "int | str") -> str:
     hit = next((b for b in data.get("batches", []) if n in b.get("issues", [])), None)  # O(batches * issues)
     if hit is None:
@@ -238,6 +247,10 @@ def skip_issue(data: dict, n: "int | str") -> str:
             data["batches"] = [b for b in data["batches"] if b is not hit]  # O(batches)
             for b in data["batches"]:  # O(batches * depends)
                 b["depends"] = [d for d in b.get("depends", []) if d != hit["id"]]
+                if isinstance(b.get("depends_why"), dict):  # O(1)
+                    b["depends_why"].pop(hit["id"], None)  # O(1)
+                    if not b["depends_why"]:  # O(1)
+                        del b["depends_why"]  # O(1)
             keep = f"; its worktree {hit['worktree']} stays" if hit["state"] == "parked" and hit.get("worktree") else ""
             msg = f"skipped {ref(n)} ({hit['id']} dropped{keep})"
     data["outside"] = [o for o in data.get("outside", []) if o.get("number") != n]  # O(outside)
@@ -354,7 +367,7 @@ def status_lines(data: dict, all_: bool = False) -> list:
     for b in rows:  # O(batches)
         s = b["state"]
         if s == "planned":
-            dep = next((d for d in b.get("depends", []) if not _shipped(data, d)), None)
+            dep = waits_for(data, b).split(":")[0]  # O(depends * batches)
             h = held.get(b["id"])  # O(1)
             hold = f"clash {h}" if any(o["id"] == h for o in active) else f"start, or after {h}"  # O(batches)
             nxt = f"waits {dep}" if dep else "decide" if _unanswered(b) else hold if h else "start"
@@ -375,6 +388,10 @@ def status_lines(data: dict, all_: bool = False) -> list:
     for b in rows:  # O(batches)
         if b["state"] == "parked" and len(str(b.get("reason") or "")) > 40:  # O(1)
             lines.append(f"reason {b['id']}: {backlog_brief.cut_note(' '.join(re.sub(r'[\x00-\x1f\x7f]', ' ', str(b['reason'])).split()), b['id'])}")  # O(len)
+    for b in rows:  # O(batches)
+        w = waits_for(data, b) if b["state"] == "planned" else ""  # O(depends * batches)
+        if ": " in w:  # O(1)
+            lines.append(f"{b['id']} waits for {w}")  # O(1)
     lines.extend(step_lines(rows))  # O(batches * steps)
     lines.extend(left_out_lines(data))
     if nl:
