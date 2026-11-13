@@ -58,7 +58,7 @@ def test_home_of_on_folder(tmp_path):
 
 
 def test_follow_moves_fleet(tmp_path):
-    S = folder(tmp_path, "S"); W = folder(tmp_path, "W")
+    S = folder(tmp_path, "S"); W = folder(tmp_path, "W"); (W / "stable.json").write_text("{}")
     fleet(S, workers={"W1": {"state": "busy", "task": "R1"}}); fs.remember(S, "s1")
     r = fs.follow(W, "s1")
     assert r == {"from": str(S.resolve()), "to": str(W.resolve()), "workers": 1}
@@ -74,14 +74,14 @@ def test_follow_noop_when_target_on(tmp_path):
 
 
 def test_follow_fallback(tmp_path):
-    S = folder(tmp_path, "S"); W = folder(tmp_path, "W")
+    S = folder(tmp_path, "S"); W = folder(tmp_path, "W"); (W / "stable.json").write_text("{}")
     fleet(S, workers={"W1": {"state": "busy", "task": "R1"}})
     r = fs.follow(W, "s1", fallback=S)
     assert r == {"from": str(S.resolve()), "to": str(W.resolve()), "workers": 1}
 
 
 def test_follow_never_overwrites_a_target_report(tmp_path):
-    S = folder(tmp_path, "S"); W = folder(tmp_path, "W")
+    S = folder(tmp_path, "S"); W = folder(tmp_path, "W"); (W / "stable.json").write_text("{}")
     fleet(S); fs.remember(S, "s1")
     (S / "fleet" / "reports").mkdir(parents=True); (S / "fleet" / "reports" / "R1.md").write_text("old")
     (S / "fleet" / "reports" / "R2.md").write_text("two")
@@ -100,7 +100,7 @@ def test_follow_skips_a_running_lead(tmp_path):
 
 
 def test_follow_twice_is_a_no_op(tmp_path):
-    S = folder(tmp_path, "S"); W = folder(tmp_path, "W")
+    S = folder(tmp_path, "S"); W = folder(tmp_path, "W"); (W / "stable.json").write_text("{}")
     fleet(S); fs.remember(S, "s1")
     assert fs.follow(W, "s1") is not None
     assert fs.follow(W, "s1") is None

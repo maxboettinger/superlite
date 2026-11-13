@@ -74,9 +74,13 @@ def test_plan_whose_state_folder_cannot_be_created_exits_2(tmp_path, capsys):
     assert not (ro / ".superlite").exists()
 
 
-def test_new_plan_file_in_a_writable_folder_passes_the_check(tmp_path, capsys):
-    assert fleet.main(["status", "--plan", str(tmp_path / "docs" / "new-plan.md")]) == 0
-    assert capsys.readouterr().out == "fleet: off\n"
+def test_new_plan_file_without_run_state(tmp_path, capsys):
+    plan = tmp_path / "docs" / "new-plan.md"
+    sd = (tmp_path / "docs" / ".superlite").resolve()
+    assert fleet.main(["status", "--plan", str(plan)]) == 2
+    assert capsys.readouterr().err == f"error: --plan {plan}: no run state at {sd}\n"
+    assert fleet.main(["on", "--plan", str(plan)]) == 0
+    assert sd.is_dir()
 
 
 def test_spawn_without_plan_uses_the_current_directorys_run(tmp_path, monkeypatch, capsys):

@@ -58,5 +58,6 @@ def test_status_with_plan_prints_no_hint(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(fleet, "_sd", lambda a: tmp_path)
     monkeypatch.setattr(fleet.fs, "is_on", lambda sd: False)
     monkeypatch.setattr(fl, "backlog_hint", lambda sd, cwd: "backlog: x")
+    (tmp_path / "docs" / ".superlite").mkdir(parents=True)  # --plan needs its state folder (#707)
     assert fleet.main(["status", "--plan", str(tmp_path / "docs" / "new-plan.md")]) == 0
     assert capsys.readouterr().out == "fleet: off\n"

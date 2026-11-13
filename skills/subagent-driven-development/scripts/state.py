@@ -27,7 +27,7 @@ id), moves a pending gate (orchestrator.json, human-replies.jsonl) from the sess
 folder another live session owns (`force` takes it over). An owner is live while its binding points at the folder.
 Paths stay as given (absolute, symlinks not resolved, a relative path joined to $PWD), as the hooks see them. A
 binding also records $CLAUDE_PID, so the SessionStart hook moves it to the new id after /clear (same process). Bindings
-older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, linked_worktree, worktree_top, worktree_run, foreign_worktree, Foreign, for_plan, resolve, pool_path, bind, unbind, owner, live_owner, ACTIVE_MARKERS, run_markers. Stdlib only.
+older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, linked_worktree, worktree_top, worktree_run, foreign_worktree, Foreign, for_plan, resolve, pool_path, bind, unbind, owner, live_owner, ACTIVE_MARKERS, run_markers, holds_run_state. Stdlib only.
 """
 # Complexity notation:
 #   d = depth of a path (parents walked), b = bindings in $SUPERLITE_HOME/sessions
@@ -42,6 +42,7 @@ OWNER = "session"  # .superlite/session: the id of the session bound to this fol
 GATE_FILES = ("orchestrator.json", "human-replies.jsonl")  # a pending gate follows its session to the plan's folder | O(1)
 RUN_MARKERS = ("stable.json", "prime.md", "pool.json")  # a .superlite holding one of these is a started run | O(1)
 ACTIVE_MARKERS = RUN_MARKERS + ("orchestrator.json", "inline-flow.json")  # files that show a run is active (#671) | O(1)
+RUN_STATE = ACTIVE_MARKERS + ("fleet.json", OWNER)  # a state folder holding one of these has run state (#707) | O(1)
 PRUNE_S = 14 * 24 * 3600  # O(1)
 _SID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")  # a session id is also a file name | O(1)
 
@@ -99,8 +100,16 @@ def git_root(path):  # O(d)
 
 def plan_dir(plan_or_dir) -> Path:  # O(d)
     """The .superlite folder for an explicit plan, review plan, project folder or .superlite folder."""
+    bare = os.path.normpath(os.fspath(plan_or_dir)) == ".superlite"  # the bare value walks up to the nearest run (#707) | O(1)
     p = _abs(plan_or_dir)  # O(d)
     if p.name == ".superlite":  # O(1)
+        if bare:  # O(1)
+            top = git_root(p.parent)  # O(d)
+            for d in (p.parent, *p.parent.parents):  # O(d) iterations
+                if holds_run_state(d / ".superlite"):  # O(1)
+                    return d / ".superlite"  # O(1)
+                if d == top or top is None:  # never leaves the checkout's top; outside a checkout only the current folder | O(1)
+                    break  # O(1)
         return p  # O(1)
     if p.is_dir():  # O(1)
         return p / ".superlite"  # O(1)
@@ -118,6 +127,11 @@ def plan_dir(plan_or_dir) -> Path:  # O(d)
     if root.name == "plans" and root.parent.name == "docs":  # O(1)
         return root.parent.parent / ".superlite"  # O(1)
     return root / ".superlite"  # O(1)
+
+
+def holds_run_state(sd) -> bool:  # O(1)
+    """Whether the state folder sd holds a plan, pool, prime, orchestrator, inline-flow, fleet or session file."""
+    return any((Path(sd) / m).is_file() for m in RUN_STATE)  # O(1) iterations (7)
 
 
 def _binding(sid) -> Path:  # O(1)
