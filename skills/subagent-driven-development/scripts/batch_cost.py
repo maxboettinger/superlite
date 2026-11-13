@@ -140,10 +140,17 @@ def build_row(root, batch, end) -> dict:  # O(m + T + w)
             total_tokens[k] += (v.get("tokens") or {}).get(k, 0)  # O(1)
     total = {"n": sum(v.get("n", 0) for v in workers.values()), "tokens": total_tokens,
              "cost_usd": round(sum(v.get("cost_usd", 0.0) for v in workers.values()), 6)}  # O(w)
+    arm = {"experiment": None, "arm": None}  # O(1)
+    try:  # the batch's experiment and arm; a failure never breaks the row | O(f)
+        import experiment  # O(1)
+        a = experiment.assignment(root, batch["id"]) or {}  # O(f)
+        arm = {"experiment": a.get("experiment"), "arm": a.get("arm")}  # O(1)
+    except Exception:  # O(1)
+        pass  # O(1)
     return {"v": 1, "row": "batch", "t": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "batch": batch["id"],
-            "issues": batch.get("issues"), "config": "default", "end": end, "pr": batch.get("pr"), "version": batch.get("version"),
+            "issues": batch.get("issues"), "config": batch.get("run_config") or "default", "end": end, "pr": batch.get("pr"), "version": batch.get("version"),
             "lead": _lead(sd, batch), "workers": workers, "workers_total": total, "tests": snap.get("tests") or {},
-            "grade": batch_grade.grade(snap.get("quality") or {}, batch)}  # O(m + T + w)
+            "grade": batch_grade.grade(snap.get("quality") or {}, batch), "experiment": arm["experiment"], "arm": arm["arm"]}  # O(m + T + w)
 
 
 def record(root, batch, end):  # build and append one row; None on any failure | O(m + T + w)
