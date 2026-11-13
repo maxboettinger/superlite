@@ -9,6 +9,9 @@ words[0] is the command (a path or `.exe` suffix is dropped). Rules:
 - rm, rmdir, unlink, shred, tee, touch, truncate: every operand; dd: each of= value; install -d: every operand;
 - sed and perl write only with -i (--in-place); the operands after the script are the files; sed also writes the file of
   a `w`/`W` command or an `s///w` flag, and "?" for an `e` command or `s///e` flag (a shell command), with or without -i;
+- unknown option words ("?", or with dyn an expansion first or in an option's name) are read as each bare writing option
+  (sed/perl -i and -e SCRIPT, cp/mv/ln/install -t, cp -s, install -d, rsync --remove-source-files), alone and in pairs,
+  and the targets are the union; over 8 such words "?"; an option whose value sits in the unknown word is not read (#727);
 - link_sources(words) names the sources of a link-making command (ln, cp -l/-s/--link/--symbolic-link): a link to a
   protected file is a way to write it, so the judge checks them too (`link` is read as `ln` by the judge);
 - `-`, an empty word and a /dev/ path are not targets; --help, --version and a missing operand write nothing;
@@ -62,7 +65,7 @@ _SPEC = {  # O(1)
 _HELP = ("--help", "--version")  # O(1)
 
 
-def _parse(words, name, permute=True):  # O(n*m) | (opts [(name, value or None)], operands); short names are bare chars
+def _parse(words, name, permute=True, slots=None):  # O(n*m) | (opts [(name, value or None)], operands); short names are bare chars
     sv, sr, lv = _SPEC[name]  # O(1)
     opts, ops = [], []  # O(1)
     end = False  # O(1)
@@ -71,12 +74,16 @@ def _parse(words, name, permute=True):  # O(n*m) | (opts [(name, value or None)]
         w = words[i]  # O(1)
         i += 1  # O(1)
         if end or len(w) < 2 or w[0] != "-":  # an operand (a lone "-" too) | O(1)
+            if slots is not None and not end:  # an operand where an option may stand | O(1)
+                slots.append(i - 1)  # O(1)
             ops.append(w)  # O(1)
             end = end or not permute  # O(1)
             continue  # O(1)
         if w == "--":  # O(1)
             end = True  # O(1)
             continue  # O(1)
+        if slots is not None:  # an option word | O(1)
+            slots.append(i - 1)  # O(1)
         if w[1] == "-":  # O(m)
             key, eq, val = w.partition("=")  # O(m)
             if eq:  # O(1)
@@ -107,6 +114,53 @@ def _parse(words, name, permute=True):  # O(n*m) | (opts [(name, value or None)]
                 break  # O(1)
             opts.append((c, None))  # O(1)
     return opts, ops  # O(1)
+
+
+# per command: the bare options an unknown word in option position may be (#727)
+_MAY_BE = {"sed": ("-i", "-e1"), "perl": ("-i", "-e1"), "cp": ("-t", "-s"), "mv": ("-t",), "ln": ("-t",),  # O(1)
+           "install": ("-t", "-d"), "rsync": ("--remove-source-files",)}  # O(1)
+_MAX_UNKNOWN = 8  # O(1) | more unknown option words than this: the target is unknown
+
+
+def _unknown(w, d):  # O(m) | a word the guard cannot read that may be an option: "?", or (dynamic) an expansion first or in an option's name
+    if w == "?":  # O(1)
+        return True  # O(1)
+    if not d or not w:  # O(1)
+        return False  # O(1)
+    head = w.partition("=")[0]  # O(m)
+    return w[0] in "$`" or (w[0] == "-" and ("$" in head or "`" in head))  # O(m)
+
+
+def _slots(words, dyn, name):  # O(n*m) | indices of the unknown words _parse reads where an option may stand
+    pos = []  # O(1)
+    _parse(words, name, permute=(name != "perl"), slots=pos)  # O(n*m)
+    return [k for k in pos if _unknown(words[k], k < len(dyn) and dyn[k])]  # O(n*m)
+
+
+def _readings(words, dyn, name):  # O(u^2 * n*m) | word lists: as written, then each unknown option word as each _MAY_BE option, alone and with a second; None over _MAX_UNKNOWN
+    may = _MAY_BE.get(name, ())  # O(1)
+    dyn = list(dyn) if dyn is not None else []  # O(n)
+    first = _slots(words, dyn, name) if may else []  # O(n*m)
+    if len(first) > _MAX_UNKNOWN:  # O(1)
+        return None  # O(1)
+    out = [words]  # O(1)
+    for k in first:  # O(u)
+        for o in may:  # O(1)
+            w1 = words[:k] + [o] + words[k + 1:]  # O(n)
+            out.append(w1)  # O(1)
+            for j in _slots(w1, dyn[:k] + [False] + dyn[k + 1:], name):  # O(u * n*m)
+                for o2 in may:  # O(1)
+                    out.append(w1[:j] + [o2] + w1[j + 1:])  # O(n)
+    return out  # O(1)
+
+
+def _union(lists):  # O(r * t^2) | the items of every list, first-seen order, no repeats
+    out = []  # O(1)
+    for ts in lists:  # O(r)
+        for t in ts:  # O(t)
+            if t not in out:  # O(t)
+                out.append(t)  # O(1)
+    return out  # O(1)
 
 
 def _has(opts, *names):  # O(len(opts) * len(names))
@@ -166,12 +220,19 @@ def _is_link_opt(k):  # O(m) | -l, -s or a (GNU-abbreviated) --link / --symbolic
                                                         or len(k) >= 4 and "--symbolic-link".startswith(k)))  # O(m)
 
 
-def link_sources(words):  # O(n*m) | the sources a link-making ln or cp -l/-s names, as written (the link's content)
+def link_sources(words, dyn=None):  # O(n*m) | the sources a link-making ln or cp -l/-s names, as written (the link's content)
     if not words:  # O(1)
         return []  # O(1)
     name = words[0].replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".exe")  # O(m)
     if name not in ("ln", "cp"):  # O(1)
         return []  # O(1)
+    rs = _readings(words, dyn, name) or [words]  # O(u^2 * n*m)
+    if len(rs) == 1:  # O(1)
+        return _link_one(words, name)  # O(n*m)
+    return _union(_link_one(w, name) for w in rs)  # O(r * n*m)
+
+
+def _link_one(words, name):  # O(n*m) | link_sources for one reading
     opts, ops = _parse(words, name)  # O(n*m)
     if _has(opts, *_HELP) or (name == "cp" and not any(_is_link_opt(k) for k, _ in opts)):  # O(n*m)
         return []  # O(1)
@@ -249,12 +310,21 @@ def _inplace(words, name):  # O(n*m) | sed, perl: the operands after the script,
     return wr + [p for p in (ops if script else ops[1:]) if _real(p)]  # O(n*m)
 
 
-def targets(words):  # O(n*m) | the paths `words` (one simple command, decoded) writes, as written; "?" when unknown
+def targets(words, dyn=None):  # O(n*m) | the paths `words` (one simple command, decoded) writes, as written; "?" when unknown
     if not words:  # O(1)
         return []  # O(1)
     name = words[0].replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".exe")  # O(m)
     if name not in COMMANDS:  # O(1)
         return []  # O(1)
+    rs = _readings(words, dyn, name)  # O(u^2 * n*m)
+    if rs is None:  # O(1)
+        return ["?"]  # O(1)
+    if len(rs) == 1:  # O(1)
+        return _one(words, name)  # O(n*m)
+    return _union(_one(w, name) for w in rs)  # O(r * n*m)
+
+
+def _one(words, name):  # O(n*m) | targets for one reading
     if name in ("cp", "mv", "install", "ln"):  # O(1)
         return _copy(words, name)  # O(n*m)
     if name == "dd":  # O(1)

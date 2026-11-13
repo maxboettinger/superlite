@@ -18,7 +18,7 @@ REAL = os.environ.get("SUPERLITE_REAL") == "1"
 _WORDS = re.compile(r"\S+")
 
 
-def _fake_files(words):  # one operand per path, like the real cp/mv/rm/tee/touch for the plain forms used here
+def _fake_files(words, dyn=None):  # one operand per path, like the real cp/mv/rm/tee/touch for the plain forms used here
     ops = [w for w in words[1:] if not w.startswith("-")]
     if words[0] == "cp":
         return ops[-1:]
