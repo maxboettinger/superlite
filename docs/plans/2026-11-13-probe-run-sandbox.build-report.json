@@ -1,0 +1,123 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-13T07:09:35 (plan edited since)",
+ "headline": {
+  "wall_min": {
+   "projected": 7.727,
+   "actual": 3.997
+  },
+  "cost_usd_agents": {
+   "projected": 0.479082,
+   "actual": 0.813548
+  },
+  "task_min": {
+   "projected": 14.897,
+   "actual": 3.917
+  },
+  "agents": {
+   "projected": 4,
+   "actual": 6
+  }
+ },
+ "cost_split": {
+  "agents_usd": 0.700822,
+  "rework_usd": 0.112726,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 0.813548
+ },
+ "concurrency": {
+  "peak": 2,
+  "projected_peak": 3
+ },
+ "critical_path": {
+  "actual": [
+   "T1"
+  ],
+  "projected": [
+   "T3",
+   "T4"
+  ],
+  "projected_min": 7.727
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 4,
+   "cost_usd": 0.8135479999999999
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 9145,
+   "failed": 0,
+   "skipped": 11,
+   "seconds": 183.6,
+   "recorded": false
+  },
+  "tests_newer": {
+   "mode": "fast",
+   "passed": 4,
+   "failed": 0,
+   "skipped": 0,
+   "seconds": 33.4,
+   "recorded": false
+  },
+  "tests_from": "progress.md",
+  "first_time_pass": 3,
+  "first_time_n": 4,
+  "rework_dispatches": 1,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 3.89,
+   "actual_min": 0.913,
+   "delta": {
+    "abs": -2.9767,
+    "pct": -76.5
+   },
+   "cost_usd": 0.163182,
+   "first_time_pass": true
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 3.758,
+   "actual_min": 0.9,
+   "delta": {
+    "abs": -2.858,
+    "pct": -76.1
+   },
+   "cost_usd": 0.138708,
+   "first_time_pass": true
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 3.969,
+   "actual_min": 1.19,
+   "delta": {
+    "abs": -2.779,
+    "pct": -70.0
+   },
+   "cost_usd": 0.23575,
+   "first_time_pass": true
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 3.28,
+   "actual_min": 0.913,
+   "delta": {
+    "abs": -2.3667,
+    "pct": -72.2
+   },
+   "cost_usd": 0.275908,
+   "first_time_pass": false
+  }
+ ]
+}
