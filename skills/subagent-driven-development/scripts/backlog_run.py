@@ -9,7 +9,7 @@
 
 `run` starts, waits and starts again until a batch needs main (needs_decision, parked, a fatal start refusal) or nothing runs; `wait --window S` keeps collecting ends for S seconds after the first (#673). `start` takes several ids: each refusal prints BLOCKED, the others start. A lead that does not start prints `BLOCKED: B lead did not start; ...` after its spawn's own line, sets exit 2 and the batches after it still start (#551). Each lead worktree gets a copy of the main
 checkout's `.superlite/test-cmd.json` before its brief, unless it already has one (#334); the copied bytes are recorded in `.superlite/test-cmd.seeded` so an unedited copy follows the main checkout's file, and a lead brief gets one `Test command:` line when the copy and the main file differ (#638). A lead whose stop text holds no
-Status line is re-prompted once (`reprompted`), then parked. A question.json is cut to the limits (header, label,
+Status line is re-prompted once (`reprompted`; a planning lead's re-prompt names `DONE planned: <plan path>`), then parked. A question.json is cut to the limits (header, label,
 description; each cut is reported as `shortened:`); one still invalid is sent back to the lead once
 (`question_reprompted`), then parked. A stop record whose transcript lags (blank, or
 without the status its `last` holds) is re-read for fleet_io.READ_MS, then parked "(transcript unread)".
@@ -52,6 +52,7 @@ REASON_MAX = 2000  # O(1) characters of a parked or no-change reason kept whole
 REPROMPT = ("superlite: your last turn ended without a status line. Go on with the batch; end your turn only with "
             "Status: DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED, or write .superlite/question.json and end with "
             "Status: NEEDS_DECISION.")
+REPROMPT_PLAN = REPROMPT.replace("Status: DONE, ", "Status: DONE planned: <plan path>, DONE, ", 1)  # O(1) a planning lead's re-prompt (#732)
 QUESTION_FIX = ("superlite: your .superlite/question.json is invalid: {errs}. Limits: 1 to 4 distinct questions, each question 1 to 300 "
                 "characters, a header of 1 to 12, 2 to 4 options with distinct labels of 1 to 60 and descriptions up to 200 "
                 "(an over-long header, label or description is cut for you). Rewrite the file and end your turn with "
@@ -822,7 +823,7 @@ def _round(root, sd, p, states) -> list:
             _park(p, sd, data.get("repo", ""), b, reason, out)  # O(size)
             continue  # O(1)
         bs.update(p, lambda d, bid=bid: bs.batch(d, bid).update({"reprompted": True, "since": _now_ms()}))  # O(size)
-        if fleet_io.main(["send", b["lead"], "--text", REPROMPT, "--plan", str(sd)]):  # O(w)
+        if fleet_io.main(["send", b["lead"], "--text", REPROMPT_PLAN if b.get("phase") == "plan" else REPROMPT, "--plan", str(sd)]):  # O(w)
             _park(p, sd, data.get("repo", ""), b, reason, out)  # O(size)
     return out  # O(b)
 
