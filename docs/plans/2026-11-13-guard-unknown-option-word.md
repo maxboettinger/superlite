@@ -28,6 +28,9 @@ Ruling: an unknown word is read as a bare option only; an option whose value sit
 Ruling: the judge passes its `dyn` flags (guard_judge.py, two lines; no open batch lists it); guard_tools needs no change, its words are already `"?"` (lead's ruling).
 Ruling: tar's `_tar` is in guard_tools.py (B188's file): follow-up, not built here (lead's ruling).
 
+**Addendum, T2 (tar).** B188 shipped during the ship sync and no open batch lists guard_tools.py any more, so tar is built here after all (brief .superlite/briefs/T2-tar.md, brief-only worker, commit 5fafc3cd). In `_tar`, an unknown word where a tar option may stand (`guard_files._unknown(a, True)`; not a value, not after `--`) makes the result `["?"]`, because it may be `-x` and `-P` (members land anywhere). The exception is a literal mode other than extract: a short `c`, `t`, `r`, `u`, `A` or `d`, or a whole long `--create`, `--list`, `--append`, `--update`, `--catenate`, `--concatenate`, `--diff`, `--compare` or `--delete`. An abbreviation counts as no mode. The package review fixed one bug (9c557566): the value letters of bsdtar `-s,old,new,` were read as mode letters. A one-word `cp -st` reading was considered and dropped: every target it adds is already covered by the as-written reading and the `-s` reading.
+Ruling: tar is built here once B188 shipped, since the issue names it and no open batch owns the file (lead's ruling).
+
 ## Task graph
 
 ```mermaid
