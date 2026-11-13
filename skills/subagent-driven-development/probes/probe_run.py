@@ -1246,6 +1246,16 @@ def stale_adapter(adapter: Path) -> bool:  # O(adapter bytes + plan bytes)
         return False  # O(1)
 
 
+def unsandboxed_adapter(adapter: Path) -> bool:  # O(adapter bytes) #711: a generated adapter with a run= entry built before the sandbox
+    """True only for a generated adapter whose ENTRIES hold a `run` entry while its text lacks SANDBOX_DROP; any error is False."""
+    try:  # O(1)
+        entries = adapter_consts(adapter).get("ENTRIES")  # O(adapter bytes)
+        return isinstance(entries, list) and any(isinstance(e, dict) and "run" in e for e in entries) \
+            and "SANDBOX_DROP" not in adapter.read_text(encoding="utf-8", errors="replace")  # O(adapter bytes)
+    except Exception:  # noqa: BLE001 | O(1)
+        return False  # O(1)
+
+
 def run_folder(plan: Path) -> Path:  # O(d)
     """The .superlite folder a --plan path (file or folder) belongs to."""  # O(1)
     try:  # O(1)
@@ -1289,6 +1299,9 @@ def run_main(a) -> int:  # O(checkout + _run_main) total; one git checkout per -
         return 2  # O(1)
     if stale_adapter(adapter):  # the plan's Probe entry changed after the adapter was built: probing it tests the wrong target | O(adapter + plan bytes)
         print("probe_run: adapter is stale (plan entry changed); rebuild with plan_tools adapter", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    if unsandboxed_adapter(adapter):  # a run= adapter without the sandbox would run the command in the user's environment (#711) | O(adapter bytes)
+        print("probe_run: adapter's run= predates the sandbox; rebuild with plan_tools adapter", file=sys.stderr)  # O(1)
         return 2  # O(1)
     if not a.commit:  # O(1)
         return _run_main(a, root, root, adapter)  # O(_run_main)
