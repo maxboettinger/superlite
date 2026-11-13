@@ -87,11 +87,16 @@ def test_run_refuses_in_fleet_worker(bk, capsys, monkeypatch):
     assert run(capsys, "run", "--timeout", "0") == (2, "BLOCKED: sl backlog run runs only in the main session\n")
 
 
-def test_backlog_cli_routes_run(monkeypatch):
+def test_backlog_cli_routes_run(bk, monkeypatch):
     import backlog
     seen = []
+    monkeypatch.setattr(backlog, "_root", lambda: bk.root)
+    monkeypatch.setenv("SUPERLITE_LEAD_CAP_LIVE", "0")
+    import backlog_cap
+    monkeypatch.setattr(backlog_cap, "account_state", lambda *a, **k: ("unknown", []))
+    monkeypatch.setenv("SUPERLITE_HOME", str(bk.root / "home"))
     monkeypatch.setattr(br, "main", lambda argv=None: seen.append(argv) or 0)
-    assert backlog.main(["run", "--timeout", "0"]) == 0 and seen == [["run", "--timeout", "0"]]
+    assert backlog.main(["run", "--timeout", "0"]) == 0 and seen == [["run", "--timeout", "0", "--cap", "2"]]
 
 
 def test_run_refreshes_standing_before_each_start(bk, capsys, clock, monkeypatch):

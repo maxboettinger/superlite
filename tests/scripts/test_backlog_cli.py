@@ -122,10 +122,14 @@ def test_decide_print_and_file(bk, capsys, tmp_path):
 def test_status_and_router(bk, capsys, monkeypatch):
     assert cli(capsys, "status") == (0, "backlog: 0 batches, 0 running, 0 shipped, ship not approved\nnext: sl backlog plan\n")
     seen = []
+    monkeypatch.setenv("SUPERLITE_LEAD_CAP_LIVE", "0")
+    import backlog_cap
+    monkeypatch.setattr(backlog_cap, "account_state", lambda *a, **k: ("unknown", []))
+    monkeypatch.setenv("SUPERLITE_HOME", str(bk.root / "home"))
     monkeypatch.setitem(sys.modules, "backlog_run", types.SimpleNamespace(main=lambda argv: seen.append(argv) or 0))
     monkeypatch.setitem(sys.modules, "backlog_ship", types.SimpleNamespace(main=lambda argv: seen.append(argv) or 4))
     assert [bl.main(a) for a in (["start", "B2"], ["wait"], ["answer", "B2", "--file", "a.json"], ["ship", "B2", "merge"])] == [0, 0, 0, 4]
-    assert seen == [["start", "B2"], ["wait"], ["answer", "B2", "--file", "a.json"], ["B2", "merge"]]
+    assert seen == [["start", "B2", "--cap", "2"], ["wait"], ["answer", "B2", "--file", "a.json"], ["B2", "merge"]]
 
 def test_skip_and_park_from_main(bk, capsys, monkeypatch):
     cli(capsys, "plan")
