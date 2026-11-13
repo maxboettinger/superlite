@@ -21,7 +21,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -364,7 +366,180 @@ def render(rows: list[dict], total_cost: float, cap: float) -> str:
     return "\n".join(lines)
 
 
+# ---- offline replay (#682) -----------------------------------------------------------------------
+def replay_order(cases: list, arms: list, n: int, seed: int) -> list:
+    """Runs as (case, arm, k): rounds k ascending; each round holds every arm once per case, arm order shuffled by seed."""
+    rng = random.Random(seed)
+    out = []
+    for k in range(1, n + 1):
+        for case in cases:
+            order = list(arms)
+            rng.shuffle(order)
+            out += [(case, arm, k) for arm in order]
+    return out
+
+
+def _replay_cmd(template: str | None, arm: str, cfg: dict, prompt: Path, workdir: Path, budget: float) -> str:
+    lead = cfg["lead"]
+    if template is None:
+        template = ("claude -p --model {model} --effort {effort} --plugin-dir " + shlex.quote(str(ROOT)) +
+                    " --permission-mode auto --output-format stream-json --verbose --max-budget-usd {budget}"
+                    " < {prompt_file}")
+    vals = {"prompt_file": prompt, "model": lead.get("model") or "", "effort": lead.get("effort") or "",
+            "budget": f"{budget:.4f}", "arm": arm, "workdir": workdir}
+    return template.format(**{k: shlex.quote(str(v)) for k, v in vals.items()})
+
+
+def _replay_exec(cmd: str, workdir: Path, log: Path, timeout: float) -> tuple[str, float]:
+    t0 = time.time()
+    with open(log, "wb") as fh:
+        proc = subprocess.Popen(cmd, shell=True, cwd=workdir, stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            proc.wait(timeout=timeout)
+            end = "done"
+        except subprocess.TimeoutExpired:
+            kill_tree(proc.pid)
+            proc.wait()
+            end = "timeout"
+    return end, time.time() - t0
+
+
+def _shell(cmd: str, cwd: Path, timeout: float = 600) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(cmd, cwd=cwd, shell=True, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", "")
+
+
+def _replay_one(case: dict, arm: str, cfg: dict, k: int, a, work: Path, budget: float, cases_dir: Path) -> dict:
+    repo = Path(case["repo"])
+    dest = work / f"{case['id']}-{arm}-{k}"
+    prepare(repo, case.get("base", "HEAD"), dest, case.get("setup", ""))
+    base_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=dest, capture_output=True, text=True).stdout.strip()
+    prompt = work / f"{case['id']}-{arm}-{k}.prompt.md"
+    prompt.write_text(f"# {case['title']}\n\n{case.get('body', '')}\n\nFix it with a regression test, run the tests, "
+                      "commit; end with BENCHMARK-COMPLETE.\n", encoding="utf-8")
+    log = work / f"{case['id']}-{arm}-{k}.log"
+    end, wall = _replay_exec(_replay_cmd(a.agent_cmd, arm, cfg, prompt, dest, budget), dest, log, a.timeout)
+    res = harness.results_of(harness.read_events(log))
+    last = res[-1] if res else {}
+    usage = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0, "thinking": 0}
+    for u in (last.get("modelUsage") or {}).values():
+        usage["input"] += u.get("inputTokens", 0)
+        usage["output"] += u.get("outputTokens", 0)
+        usage["cache_read"] += u.get("cacheReadInputTokens", 0)
+        usage["cache_write"] += u.get("cacheCreationInputTokens", 0)
+    cost = float(last.get("total_cost_usd") or 0.0)
+    repo_ok = hidden_ok = False
+    judge = None
+    quality = 0.0
+    if end != "timeout":
+        repo_ok = _shell(case["test_cmd"], dest).returncode == 0
+        subprocess.run(["git", "add", "-A"], cwd=dest, capture_output=True)
+        diff = subprocess.run(["git", "diff", "--cached", base_sha], cwd=dest, capture_output=True, text=True).stdout
+        ht = case.get("hidden_test")
+        if ht:
+            target = dest / ht["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(cases_dir / ht["source"], target)
+            hidden_ok = _shell(case.get("hidden_cmd") or f"{case['test_cmd']} {ht['path']}", dest).returncode == 0
+        else:
+            hidden_ok = True
+        end = "passed" if repo_ok and hidden_ok else "failed"
+    if end == "passed":
+        quality = 100.0
+        if a.judge_cmd:
+            dfile = work / f"{case['id']}-{arm}-{k}.diff"
+            dfile.write_text(diff, encoding="utf-8")
+            out = _shell(a.judge_cmd.format(diff_file=shlex.quote(str(dfile)), title=shlex.quote(case["title"])), dest).stdout
+            m = re.search(r"Score:\s*(\d+(?:\.\d+)?)", out)
+            if m:
+                judge = float(m.group(1)) if "." in m.group(1) else int(m.group(1))
+                quality = 10.0 * judge
+    return {"end": end, "lead": {"model": cfg["lead"].get("model"), "effort": cfg["lead"].get("effort"),
+                                 "turns": last.get("num_turns", 0), "tokens": usage, "cost_usd": cost, "wall_s": round(wall, 1)},
+            "tests": {"repo_ok": repo_ok, "hidden_ok": hidden_ok}, "judge": judge, "quality": quality}
+
+
+def replay_main(argv: list) -> int:
+    ap = argparse.ArgumentParser(prog="mechanical_ab.py replay", description="offline replay of recorded cases per run config")
+    ap.add_argument("cases", type=Path, help="JSON list of cases: id, repo, base, title, body, test_cmd, hidden_test")
+    ap.add_argument("--arms", required=True, help="comma-separated run config names")
+    ap.add_argument("--n", type=int, default=3)
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--experiment", default="replay")
+    ap.add_argument("--cost-cap", type=float, default=10.0)
+    ap.add_argument("--timeout", type=float, default=600)
+    ap.add_argument("--agent-cmd")
+    ap.add_argument("--judge-cmd")
+    ap.add_argument("--out", type=Path)
+    ap.add_argument("--dry-run", action="store_true")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit as e:
+        return int(e.code or 0)
+
+    def refuse(msg: str) -> int:
+        print(f"error: {msg}", file=sys.stderr)
+        return 2
+
+    if a.n < 3:
+        return refuse("--n must be at least 3")
+    arms = [x.strip() for x in a.arms.split(",") if x.strip()]
+    if len(arms) < 2 or len(set(arms)) != len(arms):
+        return refuse("--arms needs two or more distinct run config names")
+    try:
+        cases = json.loads(a.cases.read_text(encoding="utf-8"))
+        assert isinstance(cases, list) and cases
+        by_id = {c["id"]: c for c in cases}
+        for c in cases:
+            missing = [key for key in ("repo", "title", "test_cmd") if not c.get(key)]
+            assert not missing, f"case {c['id']} lacks {', '.join(missing)}"
+    except (OSError, ValueError, AssertionError, KeyError, TypeError) as exc:
+        return refuse(f"cases file {a.cases}: {exc or 'not a non-empty JSON list of cases with ids'}")
+    sys.path.insert(0, str(ROOT / "skills" / "subagent-driven-development" / "scripts"))
+    import run_config
+    cfgs = {}
+    try:
+        for arm in arms:
+            for c in cases:
+                cfgs[(c["id"], arm)] = run_config.resolve(arm, project=c["repo"])
+    except run_config.ConfigError as exc:
+        return refuse(str(exc))
+    order = replay_order(list(by_id), arms, a.n, a.seed)
+    if a.dry_run:
+        print(json.dumps([{"case": c, "arm": m, "trial": k, "config": cfgs[(c, m)]["id"]} for c, m, k in order], indent=2))
+        return 0
+    out = a.out or harness.RESULTS / f"replay-{a.experiment}-{time.strftime('%Y%m%d-%H%M%S')}"
+    out.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix="replay-"))
+    spent = 0.0
+    with open(out / "replay.jsonl", "w", encoding="utf-8") as fh:
+        for i, (cid, arm, k) in enumerate(order):
+            cfg = cfgs[(cid, arm)]
+            head = {"v": 1, "row": "replay", "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "experiment": a.experiment, "arms": arms,
+                    "arm": arm, "config": cfg["id"], "batch": f"{cid}#{k}", "case": cid, "trial": k}
+            if spent >= a.cost_cap:
+                body = {"end": "skipped", "lead": {"model": cfg["lead"].get("model"), "effort": cfg["lead"].get("effort"), "turns": 0,
+                                                   "tokens": dict.fromkeys(("input", "cache_read", "cache_write", "output", "thinking"), 0),
+                                                   "cost_usd": 0.0, "wall_s": 0.0},
+                        "tests": {"repo_ok": False, "hidden_ok": False}, "judge": None, "quality": None}
+            else:
+                body = _replay_one(by_id[cid], arm, cfg, k, a, work, (a.cost_cap - spent) / (len(order) - i), a.cases.resolve().parent)
+                spent += body["lead"]["cost_usd"]
+            row = {**head, **body, "workers": {}, "workers_total": {"n": 0, "tokens": dict.fromkeys(
+                ("input", "cache_read", "cache_write", "output", "thinking"), 0), "cost_usd": 0.0}}
+            fh.write(json.dumps(row) + "\n")
+            fh.flush()
+    shutil.rmtree(work, ignore_errors=True)
+    print(f"report: sl experiment report {a.experiment} --rows {out / 'replay.jsonl'}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "replay":
+        return replay_main(argv[1:])
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("run_dir", type=Path)
     ap.add_argument("--tasks", help="comma-separated task ids (default: plan tasks marked Kind: mechanical)")
