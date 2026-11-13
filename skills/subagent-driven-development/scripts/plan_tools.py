@@ -2430,6 +2430,33 @@ def owns_link_warnings(plan: Plan, root: Path | None) -> list[str]:  # O(n*o) #5
     return out  # O(w)
 
 
+def pythonpath_warnings(plan: Plan, root: Path | None) -> list[str]:  # O(n*o*d) #712: owned package files commit_task cannot import by their package name
+    if root is None:  # O(1)
+        return []  # O(1)
+    live = [t for t in plan.tasks if t.status != "draft"]  # O(n)
+    if not any(e.endswith(".py") for t in live for e in t.owns):  # O(n*o)
+        return []  # O(n*o)
+    import pyroots  # lazy: keeps lint's import cost off plans without Python | O(1)
+    import commit_task as ct  # lazy: commit_task imports this module | O(1)
+    roots = pyroots.import_roots(root, str(plan.path) if plan.path else None)  # O(d*p)
+    packages = {e for t in plan.tasks for e in t.owns if e.endswith("__init__.py")}  # O(n*o)
+    out: list[str] = []  # O(1)
+    for t in live:  # O(n)
+        hits: list[tuple[str, str]] = []  # O(1)
+        for ent in t.owns:  # O(o)
+            if any(c in ent for c in "*?[") or not ent.endswith(".py") or not ct.is_module(ent):  # O(s)
+                continue  # O(1)
+            d = pyroots.owned_hint(root, ent, roots, packages)  # O(d)
+            if d is not None:  # O(1)
+                hits.append((ent, d))  # O(1)
+        if not hits:  # O(1)
+            continue  # O(1)
+        more = f" and {len(hits) - 1} more" if len(hits) > 1 else ""  # O(1)
+        out.append(f"WARNING: PYTHONPATH: {t.id} owns {hits[0][0]}{more}, not importable by their own package name from the repo root, "  # O(s)
+                   f"src/ or a pythonpath root; commit_task's import check fails on them unless you {pyroots.advice(root, [d for _, d in hits])}")  # O(k)
+    return out  # O(w)
+
+
 def also_touches_warnings(plan: Plan) -> list[str]:  # O(n*a*n) #596: Also-touches entries the task owns, nobody owns, or whose owner does not depend on the task
     try:  # O(1)
         anc = ancestors(parse_taskgraph(plan))  # O(e*n)
@@ -2587,6 +2614,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         root_ = stable_root(str(plan.path)) if plan.path else None  # O(d)
         warnings.extend(reach_warnings(plan, root_))  # O(L*s + n*o)
         warnings.extend(owns_link_warnings(plan, root_))  # O(n*o)
+        warnings.extend(pythonpath_warnings(plan, root_))  # O(n*o*d)
         warnings.extend(also_touches_warnings(plan))  # O(n^2*o)
     except (OSError, ValueError):  # O(1)
         pass  # O(1)
