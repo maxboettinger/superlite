@@ -1,0 +1,137 @@
+A CONFLICT (5), RED (6) or BLOCKED (3) releases the lock and keeps the batch parked with the reason; `"$SL" backlog start B` resumes its lead to fix a conflict or a red check.
+A `B OPEN #N` line names an issue the merge left open; `status` shows it too.
+A `B no-change: <reason> summary=<path>` line is a batch shipped with no PR: its issues stay OPEN and main closes each with the reason as comment.
+A `machine:` line also shows while free disk is below the warn level (50 GB, `SUPERLITE_DISK_WARN_GB`), naming that level or the floor; a `B simulators owed: ...` line names simulators a ship cleanup could not delete (status re-reads them and drops the gone ones).
+A `maxapp ship` timeout while the PR is open, not DIRTY and has no red check is a healthy wait, up to 30 not counted toward the 5 runs.
+A `sleep` or `until grep` loop polling for a result is a defect.
+A batch main shipped by hand (`maxapp ship -C <worktree>`) is recorded with `"$SL" backlog ship B done --pr N [--version X]` (main only; `gh pr view N` must read MERGED; it also records a planned batch that never had a lead or worktree).
+A batch whose lead could not merge (its merge step was denied, so the lead ended BLOCKED and `wait` parked it) is main's to ship with one command: `"$SL" backlog ship B merge --from-main` (main only, refused in any fleet worker; it needs the ship approval, a parked batch and its bumped version).
+A batch's `append_only` (in the triage proposal) lists the files of its `files` it only adds lines to, such as a strings catalog, a changelog or a module doc; a file two batches both list there does not serialise them: the proposal needs no `depends` for it, `start` holds neither batch on it, and its `overlap:` line ends `append-only in both, no hold; conflicts resolve at the ship rebase` (#602).
+A branch already on origin is synced by merging `origin/<branch>` then `origin/<default>`, never rebased; an unpushed one rebases.
+A denied merge (the permission check or the auto-mode classifier refuses the Bash call, no exit code) is not retried: run no `release` and end with `Status: BLOCKED merge denied: main runs sl backlog ship B merge --from-main`.
+A file still invalid after the cut is sent back to you once to rewrite; the next invalid one parks the batch with `invalid question.json: <errors>`.
+A file your issues need that no open batch lists (a shared root doc such as CLAUDE.md, AGENTS.md or README.md too) is yours: edit it and name it in notes.md; one another open batch lists goes into notes.md as a follow-up, never dropped.
+A fix outside those files, or one that needs a decision, stays a `Follow-up:` line (#602).
+A lead never runs one, nor any other step that installs a tool, changes global git or system config or writes to an outside service: at the start, before the build, it writes one `Left undone: main runs this: <command>` line into `.superlite/notes.md` per such step it cannot see done and builds around it, so main sees it on the shipped line (#674).
+A lead runs with `--permission-mode auto`, allowed tools `Bash(maxapp ship *)` and `Bash(<abs sl> backlog ship *)`, and AskUserQuestion disallowed (spike S3).
+A lead that does not start counts as refused: its spawn's `BLOCKED:` line is followed by `BLOCKED: B lead did not start; B keeps its state, rerun sl backlog start B`, and the batches after it still start; a lead pane that is not a shell yet gets one more start after 3 s, then one in a fresh pane (#551).
+A lead that stops without a Status line gets one re-prompt (no wait line); its next such stop parks the batch with `no status in stop text: <text>`, and `start` or `answer` resets the count.
+A long reason is cut at a sentence end with the marker ` [cut: sl backlog ship <B> notes prints the full text]`; `status` adds a `reason B: ...` line, and `"$SL" backlog ship B notes` prints a batch's full reason, no-change text and notes (any session, read-only).
+A new batch whose issues all name one merged PR gets `offer: B holds only #N, named by merged PR #M: sl backlog ship B done --pr M records it as shipped (no lead, no worktree)`.
+A pinned issue the triage worker left out as blocked gets a `check: #N left out as "<reason>" ...` line when the reason names no commit or version, or one the repository already has; a Jira key the search missed and the key read missed gets `not found: KEY (...)`.
+A plain `sl fleet status` in main lists main's own fleet and names the running leads in one `backlog:` line.
+A question for the human goes to `.superlite/question.json` (`{"questions": [...]}`, AskUserQuestion shape), then end with `Status: NEEDS_DECISION`.
+A run stopped for low memory restarts with `"$SL" backlog run --timeout 540` in the foreground.
+A shipped line ends with ` followups=N` and ` undone=M` when the lead's notes hold `Follow-up:` or `Left undone:` lines; one `B follow-up: <text>` or `B left undone: <text>` line per item follows it, and `status` keeps both counts in the shipped row.
+A shipped line may end with ` unverified=K`, and a `B UNVERIFIED: <step>` line follows it (the issue stays open); a design-only batch (`Kind: design`) shows `design: awaits plan approval`.
+A standing note from main in your brief binds you and goes into every brief and task message you give a worker.
+A status with only parked batches ends with `next: sl backlog start B resumes the parked batch, or sl backlog plan --reset drops it and plans every open issue again`.
+A step a lead cannot run (installing a tool, changing global git or system config, writing to an outside service) is a batch's `main_steps` entry from triage (`{"issues": [N], "runs": "main"|"user", "command": C, "why": W}`, at most 8), and a decision option may carry `runs` and `command` for the step its choice needs; `plan` and `status` print one `step B: main runs this: <command> (#N: <why>)` line (`Max runs this:` for `runs: user`, `decision: <question>` for a step from an answer) per step of every batch not yet shipped (#674).
+A stop whose transcript lags (blank, or without the status its cut `last` line holds) is re-read for 10 s from the stop; after that a cut line with a status parks the batch with `<cut line> (transcript unread)`, one without gets the re-prompt.
+A topic that is not a lowercase slug is rewritten and named in a `topic: "<id>" "<old>" -> <new>` line.
+A wait stopped for low memory (Claude Code stops an idle session's background commands) is restarted in the foreground: `"$SL" backlog wait --timeout 540`.
+Acceptance: an acceptance step you did not run (a running-app check, a prod command) is asked as a question `Ship without <step>?` (NEEDS_DECISION).
+Add your lines and never reorder, rewrite or delete existing ones; when the ship rebase conflicts on such a file (`bump` exits 5), keep both sides' lines, finish the rebase and rerun `bump` (#602).
+Adjacent fixes: a defect you find on the screen or flow your batch already changes (a render check, a review, a test) is fixed in this batch when the fix stays inside your batch's files and needs no new design decision; name it in notes.md as one `Ruling: adjacent fix: <what>` line and in pr-body.md.
+After a Herdr restart run `"$SL" fleet restore` first, then re-arm with `"$SL" backlog run` again: it re-reads backlog.json and every lead's stop records, so ends that happened meanwhile print on its first round.
+After a shipped merge `release` prints `B lock not held` and exits 0.
+An answer is a label, a label plus a note (`{"label": L, "note": N}`) or free text up to 2000 characters.
+An answers file may add `"steps": {"<question>": {"runs": "main"|"user", "command": C, "why": W}}` for a step its answer needs (a free-text answer too; the ship and admit questions take none), and an answer that picks an option with `runs` records that option's step; `decide` and `answer` add each step to the batch's `main_steps`, and `answer` also writes them as `steps` into the lead's `answer-<n>.json` and names them in its message.
+An answers file needs `"by"`: `"user"` for AskUserQuestion answers, `"main"` for answers main ruled as AI orchestrator, or a `{question: "user"|"main"}` map; `decide` and `answer` record it, lead briefs list those under main's rulings, never as Max's, and the ship approval refuses `main`.
+An approval the user's own prompt gave is recorded with `"$SL" backlog decide --approve-ship --source prompt`.
+An issue a shipped batch or a merged PR already names is not planned: `already shipped: #N in B (PR #M): not planned again`, or `already shipped: #N named by merged PR #M: not planned; close it, or sl backlog skip N keeps it out` (a pinned one is planned anyway, as `already shipped?:`); a plan with nothing left says `nothing to plan: every issue is already shipped`.
+An option label is cut at its last whole word, its full text moved to the front of its description.
+An urgent issue while batches are open: `plan --issues N --add` plans it as more batches next to them (running ones too), keeping every batch, the round's ship approval, the source and the cap; the triage brief lists the open batches' files, plan prints one `overlap: <new> shares <files> with <B> (<state>)` line per shared batch, and `start` holds a batch that shares a file with a running one until that one ships; with no batch open `--add` plans like `--issues` alone, and a pinned plan refused by open batches names `--add`.
+Append-only files: your brief's `Append-only files` line names files of your batch that another batch may append to at the same time.
+Attribution: each lead brief carries an `Attribution:` line; use it in commits and the PR.
+Backlog mode: batch leads
+Below the free-disk floor (20 GB on the main checkout's volume, `SUPERLITE_DISK_FLOOR_GB`; `--over-limit` does not skip it) a batch is not started: one `BLOCKED: waiting for disk: B not started: <free> GB free on <path>, below the <floor> GB floor; ...` line, exit 2, and the batch keeps its state, so a later `start` starts it once space is free (#672).
+Closing report: shipped PRs, parked batches with reasons, outside issues, follow-ups and left-undone steps, and in its own section the follow-ups for another repository (`B follow-up: other repository <name>: ...`): file none of them here; the user takes each to that repository's tracker.
+Code questions go to a researcher worker (`fleet spawn --role research`) with a pointed brief; read a file yourself only to rule on it.
+Columns: batch, state (planned, running, needs_decision, parked, shipped), topic, issues, PR.
+End states, one `Status:` line: `Status: DONE`, `Status: DONE no-change: <reason>` (no code change; no PR, issues stay open), `Status: NEEDS_DECISION`, `Status: BLOCKED <reason>`.
+Evals: an evals layer red on a case your batch's files do not touch is never stamped by the lead (no `test_layers.py stamp`): write question.json naming the case and its failing graders, end NEEDS_DECISION (#626).
+Every other permission dialog in a fleet pane is answered no by the `PermissionRequest` hook (`hooks/deny-worker-permission`); the worker ends BLOCKED or NEEDS_DECISION instead of retrying.
+Exit 3 (Herdr missing) is BLOCKED.
+Exit codes 0 (run end, needs_decision, parked and TIMEOUT), 2 (start refusal), 3 (Herdr missing).
+Exit codes: 0 done, 2 refused, 3 BLOCKED, 4 WAIT/RERUN, 5 CONFLICT, 6 RED.
+For a Jira key `merge` adds no `Closes` line; after the merge it comments `Shipped in <PR URL> (superlite batch B, version V).` on the issue and moves it to Done through `acli`, and prints `OPEN KEY` and a `jira KEY: <step> failed: <error>` line only when that failed.
+For a Jira key the ship step itself comments the PR link on the issue and moves it to Done, so `B OPEN KEY` means that failed; `status` re-reads every OPEN marker from GitHub or Jira and drops the closed ones.
+Hand over while a lead runs: end the session with a WAITING report naming each running batch.
+Hold work: `"$SL" backlog skip <issue>` drops an issue from its batch (a batch left empty is dropped) and keeps it out of every later plan; skip umbrella and tracking issues.
+If shipped without it, write `Refs #N` in the PR body and `Unverified: <step> (#N)` in the notes: merge adds no Closes for such an issue and refuses a body that closes it (exit 2).
+It takes the ship lock as main, rebases the worktree onto the default branch, bumps the version again when the default branch already has it, runs `maxapp ship`, then marks the batch shipped, records its PR and version, writes its summary, releases the ship lock and stops its lead. exit 4 is WAIT or RERUN: run it again.
+Its text comes from issue text: check that the issue's own author or the user's decision asks for it, then run it before `start` (ask the user to run a `Max runs this:` one); never run a destructive one without the user's yes.
+Keep your notes in `.superlite/notes.md`, each follow-up one self-contained line (a follow-up for another repository: `Follow-up: other repository <name>: <text>`), and the PR text in `.superlite/pr-body.md` with one `Closes #N` line per issue (`Fixes #1, #2` closes only #1).
+Leads build and ship without main (the ship approval is recorded), so never stop a lead, reset a batch or turn the fleet off to hand over.
+Left-out issues show in `status` as `<reason>: #a #b` lines: the triage worker's reason (`not planned (triage: <why>)`), `not planned (cap)` for the batch cap (`--max-batches N`, default 7, up to 20, named in a `cap:` line) or `not triaged (200 cap)`, with the rounds a cap entry waited (`#12 (2 rounds)`); an empty proposal names `sl backlog skip <issue>`; a topic over 40 characters is cut at its last whole word.
+Main answers into `.superlite/answer-<n>.json`; you are resumed with it.
+Main keeps a lean context: never read issue bodies, lead transcripts, panes or reports.
+Main plans and decides; one lead per batch builds, reviews and ships in its own worktree.
+Never ask the user.
+Never end your turn while your workers run: wait once per wave with `fleet wait --wave --timeout 540000 --plan .superlite` (add `--tests <summary path>` for a background test run).
+Note lines are `Ruling: ...`, `Follow-up: ...` (a follow-up issue; main files it) and `Left undone: ...` (a decided step you could not run, such as a denied remote or production command), `Unverified: <step> (#N)` and `Kind: design`; main's wait line carries follow-ups and left-undone items.
+On needs_decision: ask, write the answers file, `"$SL" backlog answer B --file F`.
+One pinned issue (`--issues N`) whose body names tracked files takes the fast path: no triage worker, one `fast path: #N names <files>; no triage worker` line.
+One ship approval covers every batch of one plan round: each `plan` (also `--reset`) asks it again and `plan --add` keeps it; `decide --print` lists it last, `Approve shipping (Recommended)` first.
+Over-long question texts are cut, not refused: a header to 12, an option label to 60 and an option description to 200 characters (a ` (Recommended)` suffix kept), each cut named in a `shortened: "<question>" <field>: N -> M characters` line (at most 5, then `shortened: K more`); a question over 300 characters still fails the plan.
+Read your brief at `.superlite/briefs/lead.md`.
+Resources named after a worktree (simulators, build folders): the main checkout's `.superlite/cleanup-cmd.json`, `{"cleanup": "<shell command>"}`, runs in the worktree right before `maxapp ship` removes it (`merge`, `ship B done`, `plan --reset`); `{worktree}` and `{branch}` expand shell-quoted, and `SUPERLITE_WORKTREE`, `SUPERLITE_BRANCH` and `SUPERLITE_BATCH` are set; a failure prints one `B project cleanup: ...` line and never stops the ship.
+Several ids (`start B7 B10`) are checked one by one: each refused batch prints its `BLOCKED:` reason first, the others still start, and the exit is 2 when any was refused.
+Ship in four steps, each one bare command `"$SL" backlog ship B ...` (`--plan .superlite` is accepted): no `cd` (you start in your worktree), no pipe, no `echo`, no `&&` chain, since the allow rules match only a command that starts with `"$SL" backlog ship` or `maxapp ship`:
+Shipped batches of earlier plan rounds fold into one `earlier rounds: N shipped (sl backlog status --all lists them)` line after the head line; `"$SL" backlog status --all` lists every batch.
+Simulators a lead lists in `.superlite/simulators.txt` are removed by superlite itself (`backlog.md`, Lead: Simulators).
+Simulators: append the UDID of each simulator you or a worker creates to `<worktree>/.superlite/simulators.txt` (one per line; a name works when only one device has it).
+Skip takes an issue out of a planned or parked batch (a running or needs_decision one refuses); a parked batch left empty is dropped, its lead stopped and its worktree kept on disk.
+Source: `--jql Q` reads Jira through acli, `--issues` pins GitHub numbers (`362,#433`) or Jira keys (issues an earlier cap left out are ranked first and named in a `Carry-over:` line of the triage brief), `--github` reads the open GitHub issues; backlog.json remembers the last plan's source and JQL and a plain `plan` reuses them (a `source:` line names a reused JQL); with nothing remembered and Jira named in the project's AGENTS.md or CLAUDE.md, a plain `plan` refuses and names `--jql` and `--github`.
+Start main in a fresh session: one that already loaded another superlite skill or command (start, brainstorming, writing-plans, subagent-driven-development, finishing) tells the user to run `/clear` and `/superlite:backlog` again, and ends its turn.
+Steps for main: the lead brief lists the batch's `main_steps` as `- main runs this: <command> (<source>)` lines (`Max runs this:` for the user's).
+Test layers: a plan with `LAYERS:` runs via `fleet run --layer` (headless, tui or evals); the unit layer is `run_tests --full`, `fleet run --layer unit` exits 2; fix RED before shipping.
+The next main session in that checkout runs `"$SL" backlog status`, then `"$SL" backlog run`, which reports every lead that ended meanwhile; a needs_decision batch waits for `"$SL" backlog decide --print --batch B` and `answer`.
+The run config's `lead.text` picks your brief: `default` (the full path) or `lean` (a batch of one issue and no decision whose issue names its files skips brainstorming and writing-plans and writes a short plan inline).
+The ship cleanup (merge, `ship B done`, `plan --reset`, `reset`) shuts down and deletes each listed one before the project cleanup command (`B simulators: removed N: ...`); one it could not delete is kept as the batch's `simulators_owed` and named by `wait` and `status` (#672).
+The summary `.superlite/backlog/B.md` keeps each note line up to 400 characters, cuts a longer one at its last sentence end or whole word with the marker ` [cut: sl backlog ship <B> notes prints the full text]`, and `B.notes.md` beside it holds the full notes.
+The summary paragraph runs: head `B shipped: #N` or `B no-change: #N`, `PR:`, `Version:`, the generated `Decisions:` line (`(Max)` or `(main's ruling)`), `No change:` or `Kind: design, awaits plan approval`, then the note lines, `Unverified:` written `UNVERIFIED:`.
+The triage worker and the leads read each issue's body and its latest comments; a reopened issue is planned again, never left out as already shipped (a `reopened:` line names it).
+Tracker: change no issue state; the one exception is an evidence comment.
+When the last lead ends and no batch is planned, running or needs_decision, `wait` ends with `run end: every batch shipped or parked; fleet off (stopped workers cleared: <n>)` (it ran `sl fleet off` for main's fleet), or, while workers still run, `run end: every batch shipped or parked; live workers W3 W7 still run: sl fleet off stops and clears them`: run `sl fleet off` yourself then.
+With no batch open its last line is `next: sl backlog plan`.
+Write a plan with `--plan` (superlite plan flow), build it with your own fleet, review it, then ship.
+You are a lead: a fleet worker of main's run for one batch, in your own worktree, with its own run and fleet.
+Your brief lists the files your batch may touch and the files other open batches own.
+`"$SL" backlog --help` lists every subcommand.
+`"$SL" backlog decide --print`, ask with AskUserQuestion (at most 4 per call), answers file `.superlite/backlog-answers.json`, `"$SL" backlog decide --file F`.
+`"$SL" backlog notes B` does the same.
+`"$SL" backlog park B --reason R` holds a planned batch: plain `start` skips it, `status` shows the reason, and only `start B` starts it.
+`"$SL" backlog plan` as a background command (`--tier sonnet`, `--timeout-min 60`, `--reset`).
+`"$SL" backlog reset B [--discard]` (main only) stops a batch's lead, removes its worktree and branch and sets it back to planned; `--discard` also drops uncommitted work and unmerged commits, otherwise what git refuses to remove is kept and the batch parks with `reset kept its ...`; a shipped batch, a planned one with no lead or worktree and one whose PR merged refuse it.
+`"$SL" backlog run` as a background command is main's default loop: it runs start, then wait, and starts again, until a batch needs main (needs_decision, parked), a start refusal or the run end; shipped lines do not end it.
+`"$SL" backlog ship B lock [--wait 500]`: take the machine-wide ship lock. exit 4 means wait and rerun.
+`"$SL" backlog start [B ...] [--cap 2] [--model opus]`.
+`"$SL" backlog status` first and after any compaction.
+`"$SL" backlog tell B --text T` (main only) messages a running batch's lead; a needs_decision batch takes `answer`.
+`"$SL" backlog unskip <issue>` takes an issue off the skipped list (the next plan triages it; `plan --issues N --add` plans it now).
+`"$SL" backlog wait --window S` keeps collecting ends for S seconds after its first line and prints them in one wake; needs_decision and parked still return at once.
+`--config NAME` picks the run config (lead model, effort, brief variant `lead.text`); `--model` overrides its lead model.
+`--reset` also removes each dropped batch's worktree: it stops its lead, runs the project cleanup command, then `git worktree remove` (a worktree with uncommitted changes stays) and `git branch -d` (a branch with unmerged commits stays); each prints one line.
+`--reset` drops the planned and parked batches and plans every open issue again (shipped batches stay); a running or needs_decision batch refuses it, and a plain `plan` refused by planned or parked batches names `--reset` in its `BLOCKED:` line.
+`--wait` alone (also on `merge --from-main`) waits without a limit; ship lock waiters are served first come first served and each `WAIT:` line names `queue place N of M`.
+`/superlite:backlog` works an issue backlog.
+`Kind: design` keeps every issue open and shows `design: awaits plan approval`.
+`SL` = `<plugin root>/skills/subagent-driven-development/scripts/sl`.
+`backlog wait` cuts an over-long header (12), option label (60, at its last whole word, its full text moved to the front of its description) and option description (200) as `plan` does, names each cut in a `B shortened:` line and never cuts the question text; then it checks the file: 1 to 4 distinct questions, each question 1 to 300 characters, a header, and 2 to 4 options with distinct labels.
+`bump [--version X]`: bump the version on your branch. exit 5 is a CONFLICT: rebase and rerun.
+`decide --print` prints each option without `runs` and `command` and names its step in one `step: "<question>" / "<label>": main runs this: <command>` line on stderr.
+`maxapp ship` fast-forwards the main checkout: keep it on its default branch and clean while leads ship.
+`merge [--title T] [--body-file F]`: run `maxapp ship` (a merge that ships frees the lock itself); give the Bash call a timeout of 600000 ms. exit 6 is RED: fix the checks, rerun.
+`merge` adds a missing line and prints `OPEN #N` for an issue still open after the merge.
+`plan --add` prints only the batches it added.
+`plan` first fast-forwards main's checkout when it is on the default branch, clean and behind: `sync: main checkout fast-forwarded <old>..<new> to origin/<d> (<behind> new)`; every other `sync:` line names why it did not (`not fast-forwarded`) and plan goes on with the local files.
+`release --park R` frees it and parks the batch with reason R.
+`release`, only when `merge` did not ship (a BLOCKED that kept the lock, giving up): free the lock.
+`ship B done --pr N` cleans up with git only (worktree remove, `branch -d`, `-D` only when the tip is PR N's head) and never runs maxapp ship; a failed cleanup shows `cleanup owed` in the status row plus one `cleanup owed: B <worktree>: <error>; fix it, then maxapp ship -C <worktree>` line.
+`start --note FILE` stores FILE's text (at most 2000 characters; an empty file clears it) as a standing note: every lead brief written from then on carries it and its lead copies it into its workers' briefs; `status` shows it in a `note:` line, and start names each running lead that started before it.
+`start` and `wait` stay for single steps; `wait` never runs next to a running `backlog run`.
+`start` applies an experiment arm's run config per batch and passes the config's `lead.text` to the brief.
+`wait` (one step) and `run` share these lines: one per lead that ends (shipped, parked, needs_decision, BLOCKED).
+`wait` stores the Status line whole, up to 2000 characters.
