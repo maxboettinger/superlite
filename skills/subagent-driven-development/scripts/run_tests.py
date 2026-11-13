@@ -125,6 +125,7 @@ WRITTEN = set()  # resolved summary paths this process wrote; main clears it | O
 XCODE_OUT = re.compile(r"^\W*✘ Test |: error: -\[|^Test case '.*' failed on |\*\* TEST (?:FAILED|SUCCEEDED) \*\*", re.M)  # xcodebuild test output | O(1)
 STAMP = None  # the stamp a full run was answered from; write_summary records it, main clears it | O(1)
 WARNING = ""  # the platform warning of this full run; write_summary records it, main clears it | O(1)
+DROPPED = ""  # the dropped-paths note of this fast run; write_summary records it, main clears it | O(1)
 OUTPUT = ""  # the full-output log of this run; write_summary records it, main clears it | O(1)
 
 
@@ -575,6 +576,8 @@ def pid_gone(mine):  # O(1) the pid recorded for a background run, when that pro
 
 def summary_line(data):  # the last line of --wait: counts, mode and error | O(1)
     head = f"tests ({data['mode']})" if data.get("mode") else "tests"  # O(1)
+    if data.get("paths_dropped"):  # the command took no paths and ran whole (#708) | O(1)
+        head = f"tests (whole command, {data['paths_dropped']})"  # O(1)
     out = f"{head}: {data.get('passed', 0)} passed, {data.get('failed', 0)} failed"  # O(1)
     if data.get("skipped", 0) > 0:  # O(1)
         out += f", {data['skipped']} skipped"  # O(1)
@@ -585,6 +588,11 @@ def summary_line(data):  # the last line of --wait: counts, mode and error | O(1
     if data.get("error"):  # O(1)
         out += f"; error: {str(data['error'])[:150]}"  # O(1)
     return out  # O(1)
+
+
+def dropped_note(spec):  # why a fast run's paths were not passed (#708) | O(1)
+    slot = "{only_testing}" if spec.get("language") == "swift" else "{files}"  # O(1)
+    return f"--fast paths not passed, {spec.get('origin') or 'the test config'} has no {slot}"  # O(1)
 
 
 def skip_non_test(paths):  # O(p) (test paths, non-test paths): docs, config and assets are no tests
@@ -821,6 +829,8 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
         data["output"] = OUTPUT  # O(1)
     if WARNING:  # the platforms a full run did not build (#598) | O(1)
         data["warning"] = WARNING  # O(1)
+    if DROPPED:  # the --fast paths the command could not take (#708) | O(1)
+        data["paths_dropped"] = DROPPED  # O(1)
     if STAMP:  # the maxapp test stamp that answered this full run (#639) | O(1)
         data["stamp"] = STAMP  # O(1)
     if started is not None:  # the packet closes only incidents logged before this run started (#101) | O(1)
@@ -1416,8 +1426,9 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         print("run_tests: pass-through args (after --) need a test run", file=sys.stderr)  # O(1)
         return 2  # O(1)
     WRITTEN.clear()  # O(1)
-    global CURRENT_TASK, OUTPUT, WARNING, STAMP  # O(1)
+    global CURRENT_TASK, OUTPUT, WARNING, STAMP, DROPPED  # O(1)
     OUTPUT = ""  # O(1)
+    DROPPED = ""  # O(1)
     STAMP = None  # O(1)
     WARNING = ""  # O(1)
     CURRENT_TASK = a.task or None  # O(1)
@@ -1956,6 +1967,7 @@ def task_cmd_spec(a):  # O(L + m + f) the spec of the `cmd=` in --task's plan **
 
 
 def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
+    global DROPPED  # O(1)
     paths = [p for chunk in (a.fast or []) for p in split_fast(chunk)]  # O(p)
     label = "fast" if paths or a.marker or getattr(a, "passthrough", None) else "full"  # O(1)
     if a.also and not a.task:  # O(1)
@@ -2030,6 +2042,9 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         bad = uncollectable_line(paths) if spec["python"] else None  # the built-in pytest runner cannot run a .sh test | O(p)
         if bad:  # O(1)
             return usage_error(a, label, bad)  # O(summary size)
+    if paths and not spec["python"] and spec.get("paths_dropped"):  # the command takes no paths: it runs whole, and says so (#708) | O(1)
+        DROPPED = dropped_note(spec)  # O(1)
+        print(f"run_tests: {DROPPED}; the whole command runs: {spec['command']}", file=sys.stderr)  # O(1)
     if label == "full" and not a.task and not tspec and not getattr(a, "destination", None) and not spec["python"]:  # a green maxapp test stamp answers a full run (#639) | O(d + n)
         hit = stamp_hit(a, spec, label)  # O(d + n)
         if hit is not None:  # O(1)
