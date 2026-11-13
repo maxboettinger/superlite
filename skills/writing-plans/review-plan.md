@@ -1,5 +1,13 @@
 # The review plan (human orchestrator, phase 1)
 
+## Human orchestrator: the two phases
+
+1. Write the review plan, small requests too (one-page form): `<plans>/<date>-<topic>.review.md`, plain words with diagrams, no code or taskgraph (`review-plan.md`). Nothing is built, dispatched or written except this file before the human's approving reply.
+2. Show it in plain text, not AskUserQuestion (the hook checks your typed reply; an AskUserQuestion answer does not count): the path, a five-line summary and "Reply approve to start, or tell me what to change". END THE TURN and do nothing else until the human replies; changes mean revise and ask again.
+3. Only after an approving reply: `sl orchestrator approve --review <path>` (refused without a fresh human reply; `lint --stable`, `dispatch`, `wave0` and `build_prime` refuse until then).
+4. Write the machine plan `<plans>/<date>-<topic>.md` from the approved review plan, in the order of `SKILL.md` Plan shape (same tasks and scope, header `**Review plan:** <path>`, and the review plan's `## Coverage` table copied unchanged), then `schedule --insert`, `lint --stable`, and dispatch the stable set in the same turn.
+5. It patches the FIX tasks, re-lints and dispatches the newly stable ones without asking again, as long as each fix stays inside what was approved (sizes, splits, stubs, field corrections). A fix that changes scope, an interface the human saw, or the spec coverage goes back to the human as one question. AI orchestrator: no review plan, straight to the machine plan.
+
 With a human orchestrator the plan the human reviews is written for a human: plain words, diagrams, about two pages. It is
 NOT the agent plan. After the yes the coordinator writes the machine plan (taskgraph, Produces/Consumes, `e.g.` examples,
 sizes) from it, with the header line `**Review plan:** <path>`. With an AI orchestrator there is no review plan.
