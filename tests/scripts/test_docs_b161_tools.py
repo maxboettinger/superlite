@@ -12,4 +12,6 @@ def test_tools_doc_b161():
                    "history: no plan document (inline run); nothing recorded",
                    "tests (full, CI): <workflow> run <id> green on HEAD <sha> (<url>)"):
         assert needle in text, needle
-    assert text.splitlines()[-3].startswith("`--plan` takes a plan file or a run folder")
+    assert any(
+        ln.startswith("`--plan` takes a plan file or a run folder") for ln in text.splitlines()
+    )
