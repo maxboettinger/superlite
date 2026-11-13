@@ -11,12 +11,16 @@ words[0] is the command (a path or `.exe` suffix is dropped). Rules:
   a `w`/`W` command or an `s///w` flag, and "?" for an `e` command or `s///e` flag (a shell command), with or without -i;
 - link_sources(words) names the sources of a link-making command (ln, cp -l/-s/--link/--symbolic-link): a link to a
   protected file is a way to write it, so the judge checks them too (`link` is read as `ln` by the judge);
-- `-`, an empty word and a /dev/ path are not targets; --help, --version and a missing operand write nothing.
+- `-`, an empty word and a /dev/ path are not targets; --help, --version and a missing operand write nothing;
+- script_text(path), script_lang(text) and session_start(transcript) read a script file, its `#!` language and the
+  session start for the judge (#693).
 Options follow getopt: clusters (-rfv), a value attached or in the next word (-t d, -td, --size 0, --size=0), `--` ends
 options; GNU permutes options after operands, perl stops its switches at the first operand.
 """
 # Complexity notation:
 #   n = words in the command, m = length of the longest word
+import datetime  # O(1)
+import json  # O(1)
 import os  # O(1)
 import re  # O(1)
 
@@ -262,3 +266,85 @@ def targets(words):  # O(n*m) | the paths `words` (one simple command, decoded) 
     if name in ("sed", "perl"):  # O(1)
         return _inplace(words, name)  # O(n*m)
     return _every(words, name)  # O(n*m)
+
+
+_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",  # O(1)
+          b"\xca\xfe\xba\xbe", b"MZ")  # O(1)
+
+
+def script_text(path, limit=65536):  # O(limit) | (text, None), or (None, why): "binary", "over N characters", ...
+    try:  # O(1)
+        with open(path, "rb") as f:  # O(1)
+            data = f.read(4 * limit + 1)  # O(limit)
+    except OSError as e:  # O(1)
+        return None, "unreadable: " + (e.strerror or type(e).__name__)  # O(1)
+    if data.startswith(_MAGIC) or b"\x00" in data:  # O(limit)
+        return None, "binary"  # O(1)
+    over = "over %d characters" % limit  # O(1)
+    if len(data) > 4 * limit:  # O(1)
+        return None, over  # O(1)
+    try:  # O(1)
+        text = data.decode("utf-8")  # O(limit)
+    except UnicodeDecodeError:  # O(1)
+        return None, "not UTF-8 text"  # O(1)
+    if len(text) > limit:  # O(1)
+        return None, over  # O(1)
+    return text, None  # O(1)
+
+
+_LANGS = {"sh": "sh", "bash": "sh", "zsh": "sh", "ksh": "sh", "dash": "sh", "uv": "py", "node": "js", "nodejs": "js",  # O(1)
+          "bun": "js", "perl": "pl", "ruby": "rb", "php": "php"}  # O(1)
+
+
+def script_lang(text):  # O(m) | (language, interpreter name) from the first line: sh, py, js, pl, rb, php; None if unknown
+    first = text.split("\n", 1)[0]  # O(m)
+    if not first.startswith("#!"):  # O(1)
+        return "sh", "sh"  # O(1)
+    words = first[2:].split()  # O(m)
+    if not words:  # O(1)
+        return None, ""  # O(1)
+    name = words[0].rsplit("/", 1)[-1]  # O(m)
+    if name == "env":  # O(1)
+        name, i = "", 1  # O(1)
+        while i < len(words):  # O(m)
+            w = words[i]  # O(1)
+            i += 1  # O(1)
+            if w == "-u" or w == "--unset":  # O(1)
+                i += 1  # O(1)
+            elif w.startswith("-") or re.match(r"[A-Za-z_]\w*=", w):  # O(1)
+                continue  # O(1)
+            else:  # O(1)
+                name = w.rsplit("/", 1)[-1]  # O(1)
+                break  # O(1)
+        if not name:  # O(1)
+            return None, ""  # O(1)
+    if name.startswith(("python", "pypy")):  # O(1)
+        return "py", name  # O(1)
+    return _LANGS.get(name), name  # O(1)
+
+
+def session_start(transcript):  # O(1) | epoch seconds: the earlier of the file's birth time and its first timestamp
+    if not transcript:  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        st = os.stat(transcript)  # O(1)
+        with open(transcript, "rb") as f:  # O(1)
+            head = f.read(65536)  # O(1)
+    except OSError:  # O(1)
+        return None  # O(1)
+    found = []  # O(1)
+    birth = getattr(st, "st_birthtime", None)  # O(1)
+    if birth is not None:  # O(1)
+        found.append(birth)  # O(1)
+    for line in head.decode("utf-8", "replace").split("\n"):  # O(1)
+        try:  # O(1)
+            rec = json.loads(line)  # O(1)
+            stamp = rec["timestamp"]  # O(1)
+            when = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))  # O(1)
+            if when.tzinfo is None:  # O(1)
+                when = when.replace(tzinfo=datetime.timezone.utc)  # O(1)
+            found.append(when.timestamp())  # O(1)
+            break  # O(1)
+        except (ValueError, KeyError, TypeError, AttributeError):  # O(1)
+            continue  # O(1)
+    return min(found) if found else None  # O(1)
