@@ -74,4 +74,4 @@ def test_quoted_strings_exist_in_code():
     pt = (SCRIPTS / "pt_review.py").read_text(encoding="utf-8")
     assert "default is {shown}, planned {w['default']}" in pt and "def _literal_or_call(" in pt
     assert "Red run" in (SCRIPTS / "fleet_report.py").read_text(encoding="utf-8")
-    assert 'fleet_report.REVIEW if role == "final-reviewer" else fleet_report.WORK' in (SCRIPTS / "fleet_io.py").read_text(encoding="utf-8")
+    assert 'ASK + " " + report_contract(w)' in (SCRIPTS / "fleet_io.py").read_text(encoding="utf-8")
