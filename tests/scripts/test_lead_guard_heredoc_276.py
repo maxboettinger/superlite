@@ -21,6 +21,15 @@ ALLOW = [
     'grep -rn "sl backlog start" .', 'rg "backlog decide" .',
     'git add . && git commit -m "docs: sl backlog start runs in main"', "ls . # sl backlog start",
     '"$SL" feedback add --kind bug "sl backlog start is blocked in a heredoc"', '$SL feedback add "sl backlog decide"',
+    # #706: a writer's heredoc or quote is data even when another command of the call is a runner
+    "cat > docs/x.md <<'EOF'\nRun `sl backlog plan` from main.\nEOF\nmake test",
+    "cat > docs/x.md <<'EOF'\nsl backlog start B1\nEOF\nbun test",
+    "cat <<'EOF' > docs/x.md\nsl backlog plan --reset\nEOF\nmake test && git add docs/x.md",
+    "tee docs/x.md > /dev/null <<'EOF'\nsl backlog start\nEOF\npython3 -m pytest -q",
+    "printf '%s\\n' 'sl backlog answer B1' > f; make test",
+    "echo 'sl backlog decide' >> notes.md; node build.js",
+    "cat > docs/x.md <<'EOF'\nsl backlog start\nEOF\ngit add docs/x.md && make test",
+    "if true; then cat > a.md <<'EOF'\nsl backlog plan\nEOF\nfi; make",
 ]
 BLOCK = [
     "bash <<'EOF'\nsl backlog start B1\nEOF",
@@ -50,6 +59,19 @@ BLOCK = [
     "{ source /dev/stdin; } <<'E'\nsl backlog start\nE",
     # F-T1-6: a backslash before n or t is a literal backslash, not a newline
     'sl backlog pla\\n', 'sl backlog a\\nswer B1', 'sl backlog star\\t',
+    # #706: text that feeds a runner, or a written file the call runs, stays blocked
+    "bash <<'EOF'\nsl backlog plan\nEOF\nmake test", "cat <<EOF > docs/x.md\n`sl backlog plan`\nEOF\nmake test",
+    "cat <<'EOF' | bash\nsl backlog start\nEOF", "{ cat <<'EOF'; } | bash\nsl backlog start\nEOF",
+    "cat > >(bash) <<'EOF'\nsl backlog start\nEOF", "cat >/dev/stdout <<'EOF' | bash\nsl backlog start\nEOF",
+    "cat <<'EOF' >&2 | bash\nsl backlog start\nEOF", "cat 2> err <<'EOF' | bash\nsl backlog start\nEOF",
+    "cat > f.sh <<'EOF'\nsl backlog start\nEOF\nchmod +x f.sh && ./f.sh", "cat > f <<'EOF'\nsl backlog start\nEOF\nbash < f",
+    "cat > /tmp/x.py <<'EOF'\nos.system('sl backlog start')\nEOF\npython3 /tmp/x.py",
+    "tee f.sh <<'EOF' >/dev/null\nsl backlog start\nEOF\nsh f.sh", "cat > Makefile <<'EOF'\nall:\n\tsl backlog start\nEOF\nmake",
+    "cat > $F <<'EOF'\nsl backlog start\nEOF\nbash $F", "x=$(cat <<'EOF'\nsl backlog start\nEOF\n); bash -c \"$x\"",
+    "read -r x <<'EOF'\nsl backlog start\nEOF\neval \"$x\"", "git commit -m 'sl backlog plan' && make test",
+    # a command inside $( ) or backticks naming the written file runs it (eval of its text)
+    "cat > f.md <<'E'\nsl backlog start\nE\neval \"$(cat f.md)\"",
+    "cat > f.md <<'E'\nsl backlog start\nE\neval \"`cat f.md`\"",
 ]
 
 
@@ -103,6 +125,28 @@ def test_large_heredoc_is_quick(sd):
 
 def test_description_alone_passes(sd):
     assert call(sd, "ls", description="then sl backlog start").returncode == 0
+
+
+@pytest.mark.parametrize("cmd,parts,absent", [
+    ("cat <<'EOF' | tee docs/x.md\nsl backlog plan\nEOF\nmake test",
+     ["Matched: the heredoc <<EOF; the runner word make elsewhere in this call makes it runnable.",
+      "Write the file in one Bash call and run make in another: that passes."], []),
+    ("git commit -m 'sl backlog plan' && make test",
+     ['Matched: the quoted text "sl backlog plan"; the runner word make elsewhere'], []),
+    ("bash <<'EOF'\nsl backlog plan\nEOF", ["Matched: the heredoc <<EOF, which bash in the same command runs."], ["in another"]),
+    ("cat > f.sh <<'EOF'\nsl backlog start\nEOF\nbash f.sh",
+     ["Matched: the heredoc <<EOF; it writes f.sh, which this call then runs (bash)."], ["in another"]),
+    ("cat <<EOF > d.md\n$(sl backlog start)\nEOF",
+     ["Matched: an assigned value or an unquoted heredoc holding $( or a backtick; the shell runs it."], []),
+    ("ls; sl backlog start B1", [], ["Matched:"]),
+])
+def test_block_line_names_the_match(sd, cmd, parts, absent):  # #706 item 2
+    r = call(sd, cmd)
+    assert r.returncode == 2 and "runs only in the main session" in r.stderr, r.stderr
+    for p in parts:
+        assert p in r.stderr, (p, r.stderr)
+    for a in absent:
+        assert a not in r.stderr, (a, r.stderr)
 
 
 def test_powershell_keeps_the_raw_match(sd):
