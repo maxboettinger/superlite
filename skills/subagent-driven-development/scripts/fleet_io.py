@@ -627,7 +627,7 @@ def _busy(sd, wid, label, sent, brief=None):  # worker busy on LABEL since SENT,
                 pass  # O(1)
 
 
-def send_brief(sd, wid, brief, label="", full=False):  # O(w + len brief path + pool bytes)
+def send_brief(sd, wid, brief, label="", full=False, preface=""):  # O(w + len brief path + pool bytes)
     """Tell worker WID to read the brief file and answer as its role's report contract says; returns the label
     (LABEL, else the brief's stem). FileNotFoundError for a missing brief, KeyError for an unknown worker."""
     sd = Path(sd)  # O(1)
@@ -637,6 +637,7 @@ def send_brief(sd, wid, brief, label="", full=False):  # O(w + len brief path + 
     w = fs.load(sd)["workers"][wid]  # KeyError for an unknown worker | O(w)
     role = w.get("role") or "implementer"  # O(1)
     msg = fleet_report.brief_message(role, str(path), full) if full else fleet_report.brief_message(role, str(path))  # O(1)
+    msg = f"{preface} {msg}" if preface else msg  # O(len)
     label = label or path.stem  # O(1)
     sent = now_ms()  # O(1)
     name = fs.name_of(sd, wid, w)  # O(w)

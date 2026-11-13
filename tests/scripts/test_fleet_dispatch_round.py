@@ -23,7 +23,7 @@ def test_spawn_without_prime_refuses_before_pane(world, capsys):
     with pytest.raises(SystemExit) as e:
         fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
     assert e.value.code == 3
-    assert capsys.readouterr().out.splitlines() == [f"BLOCKED: no {world.sd.resolve()}/prime.md; run build_prime --plan PLAN first"]
+    assert capsys.readouterr().out.splitlines() == [f"BLOCKED: no {world.sd.resolve()}/prime.md; run build_prime --plan PLAN first, or pass --brief FILE for a brief-only task outside a plan run"]
     assert world.fh.calls == [] and _next(world.sd) == before
 
 
@@ -32,7 +32,7 @@ def test_haiku_spawn_names_prime_haiku(world, capsys):
     with pytest.raises(SystemExit) as e:
         fleet.spawn(world.sd, world.plan, "haiku", world.proj)
     assert e.value.code == 3
-    assert capsys.readouterr().out.splitlines() == [f"BLOCKED: no {world.sd.resolve()}/prime-haiku.md; run build_prime --tier haiku --plan PLAN first"]
+    assert capsys.readouterr().out.splitlines() == [f"BLOCKED: no {world.sd.resolve()}/prime-haiku.md; run build_prime --tier haiku --plan PLAN first, or pass --brief FILE for a brief-only task outside a plan run"]
 
 
 def test_for_dispatch_without_prime_blocks_each_line(dwld, capsys):

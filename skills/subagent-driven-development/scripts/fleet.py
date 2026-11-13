@@ -355,7 +355,7 @@ def _live_names():  # names of the live herdr agents on this machine; no agent l
         return set()  # O(1)
 
 
-def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0, output=None):  # O(a * e + w) plus herdr calls
+def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0, output=None, brief=False, plain=True):  # O(a * e + w) plus herdr calls
     """One worker; a start that stays slow is retried once on another account.
     Implementers, fixers and package reviewers keep the MCP servers their project names or the stack default (`xcode` for an Xcode project), each checked first (#576).
     Every worker starts lean (#377): no MCP servers, Chrome, skills or slash commands; Artifact, ListAgents, ReadNotifications and ReportFindings denied (LEAN_FLAGS, LEAN_DENY)."""
@@ -364,9 +364,9 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=
         print(f"BLOCKED: fleet spawn: {busy}; rerun later, or pass --over-limit")  # O(1)
         raise SystemExit(3)  # O(1) before any pane
     try:  # O(1)
-        return _spawn(sd, plan, tier, project, cfg, env, role, None, output)  # O(a * e + w)
+        return _spawn(sd, plan, tier, project, cfg, env, role, None, output, brief, plain)  # O(a * e + w)
     except (_Slow, NoShell) as first:  # O(1)
-        return _spawn(sd, plan, tier, project, cfg, env, role, first, output)  # O(a * e + w)
+        return _spawn(sd, plan, tier, project, cfg, env, role, first, output, brief, plain)  # O(a * e + w)
 
 
 def with_model(argv, model):  # a copy of argv pinned to `model`: replace the value of --model, else insert after --agent NAME, else prepend | O(n)
@@ -381,7 +381,12 @@ def with_model(argv, model):  # a copy of argv pinned to `model`: replace the va
     return out  # O(1)
 
 
-def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a * e + w) plus herdr calls
+def fleet_roles_text(w):  # the brief-only preface for a worker without prime, else "" | O(1)
+    import fleet_roles  # noqa: E402 | O(1)
+    return fleet_roles.BRIEF_ONLY if w.get("brief_only") else ""  # O(1)
+
+
+def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=False, plain=True):  # O(a * e + w) plus herdr calls
     import fleet_roles  # noqa: E402 | O(1)
     sd = Path(sd)  # O(1)
     base = dict(os.environ) if env is None else env  # O(env)
@@ -389,10 +394,14 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a 
     launch = fleet_roles.launch(role, tier, cfg, output=output)  # a ValueError (unknown role or tier) reaches `main` | O(file)
     agent, model = launch["agent"], launch["model"]  # O(1)
     prime = "prime-haiku.md" if model == "haiku" else "prime.md"  # O(1)
+    if launch["prime"] and not (sd / prime).is_file() and brief:  # a brief-only task outside a plan run: no prime, one turn, no pool | O(1)
+        launch = fleet_roles.launch(role, tier, cfg, output=output, brief=True)  # O(file)
     if launch["prime"] and not (sd / prime).is_file():  # no pane, account or worker id for a worker that cannot read its prime | O(1)
         flag = "--tier haiku " if model == "haiku" else ""  # O(1)
-        print(f"BLOCKED: no {sd.resolve() / prime}; run build_prime {flag}--plan PLAN first")  # O(1)
+        more = ", or pass --brief FILE for a brief-only task outside a plan run" if plain else ""  # O(1)
+        print(f"BLOCKED: no {sd.resolve() / prime}; run build_prime {flag}--plan PLAN first{more}")  # O(1)
         raise SystemExit(3)  # O(1)
+    solo = role == "implementer" and not launch["prime"]  # O(1)
     fresh = isinstance(after, NoShell)  # O(1)
     tail = "" if after is None else f"; retried in a fresh pane after {after.wid}" if fresh else f"; retried after {after.wid} on {after.account}"  # O(1)
     rcfg = run_config.active(sd, project)  # the run's snapshot, else the layered default | O(file)
@@ -437,6 +446,8 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a 
         argv += ["--add-dir", str(sd.resolve())]  # O(1)
     record = {"name": name, "account": account, "agent": agent, "tier": tier or model, "state": "starting", "task": None, "role": role, "one_turn": launch["one_turn"],  # O(1)
               "run_config": rcfg["id"], "launch": {"argv": argv, "env": wenv, "cwd": cwd}}
+    if solo:  # O(1)
+        record["brief_only"] = True  # O(1)
     if names:  # O(1)
         record["mcp"] = names  # O(1)
     try:  # O(1)
@@ -517,7 +528,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None):  # O(a 
     fs.set_state(sd, wid, "ready")  # O(w)
     _launch_line(sd, wid, agent, model, account, pane)  # O(1)
     print(f"{wid} account={account} pane={pane} agent={agent}" + ("" if role == "implementer" else f" role={role}") + (f" mcp={','.join(names)}" if names else ""))  # O(1)
-    return {"id": wid, "account": account, "pane_id": pane, "agent": agent, "model": model, "role": role}  # O(1)
+    return {"id": wid, "account": account, "pane_id": pane, "agent": agent, "model": model, "role": role, **({"brief_only": True} if solo else {})}  # O(1)
 
 
 def _machine_line():  # O(p): the machine measurement as the status line; nothing while both checks are off or on any error
@@ -532,7 +543,7 @@ def _spawn_quiet(sd, plan, tier, project, over=False, machine_wait=100.0):  # O(
     buf = io.StringIO()  # O(1)
     try:  # spawn prints its own worker or BLOCKED line; a dispatch round reports one line per dispatch line instead | O(1)
         with contextlib.redirect_stdout(buf):  # O(1)
-            return spawn(sd, plan, tier, project, over=over, machine_wait=machine_wait), None  # O(spawn)
+            return spawn(sd, plan, tier, project, over=over, machine_wait=machine_wait, plain=False), None  # O(spawn)
     except SystemExit as e:  # O(1)
         if e.code != 3:  # O(1)
             raise  # O(1)
@@ -1100,7 +1111,7 @@ def main(argv=None):  # O(w) plus command cost
             ids = [x for v in a.for_review or [] for x in re.split(r"[,\s]+", v) if x]  # O(len)
             return for_review(sd, a.plan, state.git_root(sd) or sd.parent, ids, a.package, a.over_limit, a.machine_wait, note)  # O(L + e + spawn + send)
         try:  # O(1)
-            w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output)  # O(w)
+            w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=bool(a.brief))  # O(w)
         except ValueError as e:  # an unknown role or tier | O(1)
             print(f"error: {e}", file=sys.stderr)  # O(1)
             return 2  # O(1)
@@ -1109,7 +1120,7 @@ def main(argv=None):  # O(w) plus command cost
             label = a.label or Path(a.brief).stem  # O(1)
             add_constraints(a.brief, plan_file(sd, a.plan))  # O(L + len)
             try:  # O(1)
-                fio.send_brief(sd, w["id"], a.brief, a.label)  # O(w)
+                fio.send_brief(sd, w["id"], a.brief, a.label, **({"preface": fleet_roles_text(w)} if w.get("brief_only") else {}))  # O(w)
             except (hc.HerdrError, OSError, KeyError) as e:  # a worker that got no brief is stopped, not left ready | O(w)
                 stop(sd, [w["id"]])  # O(w)
                 print(f"BLOCKED: {w['id']} {label} not sent ({getattr(e, 'message', '') or e})")  # O(1)
