@@ -34,6 +34,7 @@ A function definition is the literal `function` command word or a one-word `NAME
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
+import shlex  # O(1)
 import stat  # O(1)
 import sys  # O(1)
 import time  # O(1)
@@ -41,6 +42,7 @@ from dataclasses import dataclass, field, replace  # O(1)
 from fnmatch import fnmatchcase  # O(1)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))  # O(1)
+PLUGIN_ROOT = os.path.realpath(os.path.join(_HERE, "..", "..", ".."))  # the superlite plugin tree: no script of it is session-written | O(1)
 if _HERE not in sys.path:  # O(1) python3 -I does not put the script's folder on the path
     sys.path.insert(0, _HERE)  # O(1)
 
@@ -164,6 +166,9 @@ class _Ctx:  # O(p)
         self.deadline = time.monotonic() + MAX_SECONDS  # O(1)
         self.tracked = {}  # (work tree folder, .gitignore source) -> is it tracked? git's answer, kept for the call | O(1)
         self.wts = None  # the linked worktrees of the project, listed once | O(1)
+        self.transcript = None  # the hook JSON's transcript_path, for the session start | O(1)
+        self._start = False  # the session start (epoch seconds or None), read on first use | O(1)
+        self.disk = {}  # real path of a script file -> (text, why, session-written?) read this call | O(1)
         cache = os.environ.get("SUPERLITE_CACHE_DIR") or os.path.join(  # O(p)
             os.environ.get("XDG_CACHE_HOME") or os.path.join(self.home, ".cache"), "superlite")  # O(p)
         dirs = {cache, os.path.join(self.home, ".cache", "superlite")}  # the folder of the Python cache the hook trusts | O(1)
@@ -436,7 +441,7 @@ def _expand(text, st, ctx, split=True, quoted=False):  # O(p + v) | ~ and the va
         val = ctx.projn if name == "CLAUDE_PROJECT_DIR" else st.here[0] if (name == "PWD" and len(st.here) == 1 and st.here[0]) else ctx.tmpdir if name == "TMPDIR" else _home_env() if name == "HOME" else None  # O(1)
         if val is None:  # O(1)
             return m.group(0)  # O(1)
-        if cut and (name == "HOME" or ifs != DEFAULT_IFS) and (ifs is None or any(ch in val for ch in ifs)):  # an unquoted $HOME splits like any value, the default IFS included | O(p)
+        if cut and (ifs is None or any(ch in val for ch in ifs)):  # an unquoted $HOME, $PWD, $TMPDIR, $CLAUDE_PROJECT_DIR splits like any value, the default IFS included | O(p)
             return m.group(0)  # O(1)
         return val  # O(1)
     out = VAR.sub(sub, text)  # O(p)
@@ -683,6 +688,8 @@ def _unwrap(words, dyn, c, st, ctx, bare):  # O(w) | (command words, dyn, direct
             i = 2  # O(1)
             while i < len(words) and words[i].startswith("-"):  # O(w)
                 i += 2 if words[i] in UV_VAL else 1  # O(1)
+            if base == "uv" and i < len(words) and (words[i].endswith(".py") or "--script" in words[2:i]):  # a Python script file: `_uv` judges it as `python3 X` | O(w)
+                break  # O(1)
             words, dyn, bare = words[i:], dyn[i:], bare[i:]  # O(w)
             continue  # O(1)
         if base not in WRAP:  # O(1)
@@ -831,19 +838,125 @@ def _is_sl(words):  # O(w) | an sl call: `$SL`, or a script that really lies in 
     return False  # O(1)
 
 
-def _wrote_script(operand, c, st, ctx, depth):  # O(n) | verdict for a script file this command wrote earlier: its heredoc text is judged like a -c body, any other write is unknown, a file from an earlier call is None
+def _session_start(ctx):  # O(1) | the session start in epoch seconds from the transcript, read once; None when unknown
+    if ctx._start is False:  # O(1)
+        ctx._start = guard_files.session_start(ctx.transcript)  # O(1)
+    return ctx._start  # O(1)
+
+
+def _session_written(real, ctx):  # O(git) | is the script file (real path) one this session wrote? its scratch folder, else untracked, outside the plugin (unless in the project) and changed since the session start
+    low = real.lower()  # O(p)
+    for sd in ctx.sds:  # O(s)
+        if low.startswith(os.path.join(os.path.realpath(sd), "scratch").lower().rstrip("/") + "/"):  # O(p)
+            return True  # O(1)
+    if _rel(real, ctx.projreal) is None and (low + "/").startswith(PLUGIN_ROOT.lower().rstrip("/") + "/"):  # O(p)
+        return False  # O(1)
+    start = _session_start(ctx)  # O(1)
+    try:  # O(1)
+        if start is not None and os.stat(real).st_mtime < start:  # O(1)
+            return False  # O(1)
+    except OSError:  # O(1)
+        return False  # O(1)
+    rc = _git_rc(["ls-files", "--error-unmatch", "--", os.path.basename(real)], os.path.dirname(real), ctx)  # O(git)
+    return rc != 0  # tracked only on a clean yes; a git error counts as untracked | O(1)
+
+
+def _disk_script(full, operand, lang, argv, c, st, ctx, depth):  # O(n) | verdict for a script file an earlier call of this session wrote; None when the file is no such script
+    real = _real(full)  # O(p)
+    if real not in ctx.disk:  # each file is read once per call | O(p)
+        text, why, mine = None, None, False  # O(1)
+        if os.path.isfile(real):  # O(1)
+            mine = _session_written(real, ctx)  # O(git)
+            if mine:  # O(1)
+                text, why = guard_files.script_text(real)  # O(len)
+        ctx.disk[real] = (text, why, mine)  # O(1)
+    text, why, mine = ctx.disk[real]  # O(1)
+    if not mine or why == "binary":  # O(1)
+        return None  # O(1)
+    if why:  # O(1)
+        return _unknown(ctx, f"{operand}: a script this session wrote, {why}")  # O(1)
+    name = lang  # O(1)
+    if lang is None:  # O(1)
+        lang, name = guard_files.script_lang(text)  # O(m)
+        if lang is None:  # O(1)
+            return _unknown(ctx, f"{operand}: a script this session wrote for {name}, a language the guard cannot judge")  # O(1)
+    if lang == "sh":  # O(1)
+        st2 = st.fork_for(c)  # O(v)
+        st2.nested = True  # O(1)
+        return _walk_text(text, st2, ctx, depth + 1)  # O(n)
+    return _code_run(lang, text, argv, full, c, st, ctx)  # O(len)
+
+
+CODE = {"py": ("python3", "-c"), "js": ("node", "-e"), "pl": ("perl", "-e"), "rb": ("ruby", "-e"), "php": ("php", "-r")}  # language -> interpreter and its inline-code flag | O(1)
+
+def _code_run(lang, text, argv, full, c, st, ctx):  # O(len) | verdict for the code of a script file (heredoc-written or on disk) of a non-shell language: its targets judged like inline code, housekeeping included
+    interp, flag = CODE[lang]  # O(1)
+    w = _argv_sub([interp, flag, text] + list(argv))  # O(len)
+    pairs = [(t, "?") for t in guard_tools.targets(w, text=ctx.text, file=full)]  # O(len)
+    return _judge_pairs(pairs, interp, True, text, c, st, ctx)  # O(t * d * p)
+
+
+def _lang_of(base):  # O(1) | the language an interpreter command runs
+    return "py" if base.startswith(("python", "pypy")) else {"node": "js", "nodejs": "js", "bun": "js", "perl": "pl", "ruby": "rb", "php": "php"}[base]  # O(1)
+
+
+def _operand(base, w):  # O(w) | index of the script file an interpreter runs, None for code, a module or stdin
+    i, n, lang = 1, len(w), _lang_of(base)  # O(1)
+    while i < n:  # O(w)
+        x = w[i]  # O(1)
+        if x == "-" or x in ("-m", "-c", "-e", "-E", "-p", "-r", "--eval", "--print") and not (x == "-r" and lang in ("js", "rb")) and not (x == "-E" and lang != "pl") and not (x == "-p" and lang != "js"):  # -E is a Python flag, -p a Perl one | O(1)
+            return None  # O(1)
+        if x in ("-W", "-X") or (lang == "js" and x in ("-r", "--require")) or (lang == "rb" and x == "-r") or (lang in ("pl", "rb") and x == "-I") or (lang == "php" and x == "-f"):  # an option with a value; php -f names the file | O(1)
+            if lang == "php" and x == "-f":  # O(1)
+                return i + 1 if i + 1 < n else None  # O(1)
+            i += 2  # O(1)
+        elif x.startswith("-") and x != "--":  # O(1)
+            i += 1  # O(1)
+        else:  # O(1)
+            return i + (x == "--") if i + (x == "--") < n else None  # O(1)
+    return None  # O(1)
+
+
+def _uv(words, c, st, ctx, depth):  # O(n) | `uv run [options] X.py` and `uv run --script X` as `python3 X`
+    i, n = 2, len(words)  # O(1)
+    while i < n:  # O(w)
+        x = words[i]  # O(1)
+        if x == "--":  # O(1)
+            i += 1  # O(1)
+            break  # O(1)
+        if x in UV_VAL:  # O(1)
+            i += 1  # O(1)
+        elif not x.startswith("-"):  # O(1)
+            break  # O(1)
+        i += 1  # O(1)
+    if i >= n:  # O(1)
+        return None  # O(1)
+    return _run_script(words[i], "py", words[i + 1:], c, st, ctx, depth)  # O(n)
+
+
+def _run_script(operand, lang, argv, c, st, ctx, depth):  # O(n) | verdict for a script file: its text from a heredoc of this call (judged like a -c body), any other write of it is unknown, else a file an earlier call of this session wrote, judged by its text
+    operand = _expand(operand, st, ctx)  # O(p + v)
+    if "$" in operand or "`" in operand:  # O(1)
+        return None  # O(1)
+    seen = set()  # O(1)
     for d in c.inn:  # O(d)
         full = _clean(_winpath(operand)) if operand.startswith("/") else (_clean(d + "/" + operand) if d else None)  # O(p)
-        if full is None:  # O(1)
+        if full is None or full in seen:  # O(1)
             continue  # O(1)
+        seen.add(full)  # O(1)
         if full in st.shared["scripts"]:  # O(1)
-            st2 = st.fork_for(c)  # O(v)
-            st2.nested = True  # O(1)
-            v = _walk_text(st.shared["scripts"][full], st2, ctx, depth + 1)  # O(n)
-            if v is not None:  # O(1)
-                return v  # O(1)
+            if lang in CODE:  # O(1)
+                v = _code_run(lang, st.shared["scripts"][full], argv, full, c, st, ctx)  # O(len)
+            else:  # O(1)
+                st2 = st.fork_for(c)  # O(v)
+                st2.nested = True  # O(1)
+                v = _walk_text(st.shared["scripts"][full], st2, ctx, depth + 1)  # O(n)
         elif full in st.shared["wrote"]:  # O(1)
             return _unknown(ctx, operand)  # O(1)
+        else:  # O(1)
+            v = _disk_script(full, operand, lang, argv, c, st, ctx, depth)  # O(n)
+        if v is not None:  # O(1)
+            return v  # O(1)
     return None  # O(1)
 
 
@@ -880,15 +993,76 @@ def _shell(words, dyn, c, st, ctx, depth):  # O(n) | a shell's -c body, stdin pr
     if script is not None and (script.startswith(("<(", ">("))):  # process substitution: a program the guard cannot read | O(1)
         return _unknown(ctx, script)  # O(1)
     if script is not None and not has_s and script not in ("/dev/stdin", "/dev/fd/0", "-"):  # a script file | O(1)
-        return _wrote_script(script, c, st, ctx, depth)  # O(n)
+        return _run_script(script, "sh", words[i + 1:], c, st, ctx, depth)  # O(n)
     if c.docs:  # O(1)
         return _walk_docs(c.docs, c, st, ctx, depth)  # O(docs)
+    if has_s or script is None or script in ("/dev/stdin", "/dev/fd/0", "-"):  # `sh < x.sh`, `sh -s < x.sh`, `sh - < x.sh`: the file on stdin is the program | O(1)
+        for r in c.seg.redirects:  # O(redirects)
+            if r.op == "<" and r.target and not r.target.startswith(("<(", ">(", "&")):  # O(1)
+                return _run_script(r.target, "sh", [], c, st, ctx, depth)  # O(n)
     return _unknown(ctx, f"program piped into {words[0]}") if c.piped else None  # a program piped in: unknown | O(1)
+
+
+EVAL_SUBST = re.compile(r"\$\(([^()$`]*)\)|`([^`$()]*)`")  # a command substitution without a nested $ or backtick | O(1)
+EVAL_UNSAFE = re.compile(r"[$`*?\[<>|&;(){}\n]")  # a character that makes a substitution not plainly literal | O(1)
+
+
+def _printf_text(words):  # O(w * p) | the output of printf F W... for %s, %%, \n, \t, \\; None for anything else
+    fmt, args, out, i = words[0], words[1:], [], 0  # O(1)
+    while True:  # the format is reused while words remain | O(w)
+        j, used = 0, False  # O(1)
+        while j < len(fmt):  # O(p)
+            ch = fmt[j]  # O(1)
+            if ch == "%" and fmt[j + 1:j + 2] == "s":  # O(1)
+                out.append(args[i] if i < len(args) else "")  # O(1)
+                i, used, j = i + 1, True, j + 2  # O(1)
+            elif ch == "%" and fmt[j + 1:j + 2] == "%":  # O(1)
+                out.append("%")  # O(1)
+                j += 2  # O(1)
+            elif ch == "\\" and fmt[j + 1:j + 2] in ("n", "t", "\\"):  # O(1)
+                out.append({"n": "\n", "t": "\t", "\\": "\\"}[fmt[j + 1]])  # O(1)
+                j += 2  # O(1)
+            elif ch in "%\\":  # O(1)
+                return None  # O(1)
+            else:  # O(1)
+                out.append(ch)  # O(1)
+                j += 1  # O(1)
+        if not used or i >= len(args):  # O(1)
+            return "".join(out)  # O(p)
+
+
+def _subst_output(inner):  # O(p) | the text of `echo W...` or `printf F W...` with literal words, else None
+    if EVAL_UNSAFE.search(inner):  # a variable, glob, redirect or control operator: not plainly literal | O(p)
+        return None  # O(1)
+    try:  # O(1)
+        w = shlex.split(inner)  # O(p)
+    except ValueError:  # O(1)
+        return None  # O(1)
+    if not w:  # O(1)
+        return None  # O(1)
+    if w[0] == "echo":  # O(1)
+        a = w[1:]  # O(1)
+        if a[:1] == ["-n"]:  # O(1)
+            a = a[1:]  # O(1)
+        if a and re.fullmatch(r"-[A-Za-z]+", a[0]):  # any other option: not resolvable | O(1)
+            return None  # O(1)
+        return " ".join(a)  # O(w)
+    if w[0] == "printf" and len(w) > 1:  # O(1)
+        return _printf_text(w[1:])  # O(w * p)
+    return None  # O(1)
+
+
+def _eval_resolve(part):  # O(p) | the part with each resolvable echo/printf substitution replaced by its output
+    def sub(m):  # O(p)
+        out = _subst_output(m.group(1) if m.group(1) is not None else m.group(2))  # O(p)
+        return m.group(0) if out is None else out.rstrip("\n")  # a substitution cuts trailing newlines | O(p)
+    return EVAL_SUBST.sub(sub, part)  # O(p)
 
 
 def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and source/. run in the shell's own state
     if base == "eval":  # O(1)
         parts = [_expand(w, st, ctx, False) if d else w for w, d in zip(words[1:], dyn[1:])]  # O(w * p)
+        parts = [_eval_resolve(p) if ("$(" in p or "`" in p) else p for p in parts]  # O(w * p)
         st2 = st.fork_for(c)  # O(v)
         v = _walk_text(" ".join(parts), st2, ctx, depth + 1)  # O(n)
         if v is not None:  # O(1)
@@ -896,8 +1070,12 @@ def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and sou
         c.ok = c.fail = st2.dirs  # O(1)
         if c.persist:  # O(1)
             _copy_back(st, st2)  # O(v)
-        if any("$" in p or "`" in p for p in parts):  # a body the guard cannot read: it may cd, and may read the heredocs | O(w * p)
+        dynamic = [p for p in parts if "$" in p or "`" in p]  # O(w * p)
+        if dynamic:  # a body the guard cannot read: it may cd, and may read the heredocs | O(w)
             c.ok = c.fail = (None,)  # O(1)
+            for p in dynamic:  # O(w)
+                if not (STDIN_READ.search(p) or re.fullmatch(r"\$\(\s*ssh-agent\b[^()]*\)|`\s*ssh-agent\b[^`]*`", p.strip())):  # O(p)
+                    return _unknown(ctx, "eval " + _flat(p) + ": text the guard cannot resolve")  # O(p)
             return _walk_docs(c.docs, c, st, ctx, depth)  # O(docs)
         return None  # O(1)
     operand = words[1] if len(words) > 1 else None  # source / . | O(1)
@@ -910,7 +1088,7 @@ def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and sou
     if operand is not None and ACTIVATE.search(operand):  # O(p)
         return None  # O(1)
     c.ok = c.fail = (None,)  # a script file may cd | O(1)
-    return _wrote_script(operand, c, st, ctx, depth) if operand is not None else None  # O(n)
+    return _run_script(operand, "sh", words[2:], c, st, ctx, depth) if operand is not None else None  # O(n)
 
 
 def _cd(base, words, c, st, ctx):  # O(d * p) | the directories after cd, pushd, popd
@@ -1070,20 +1248,6 @@ def _patch_dir(w):  # O(w) | the folder `patch -d DIR` works in, "." without -d
         if x.startswith("-d") and len(x) > 2:  # O(1)
             return x[2:]  # O(p)
     return "."  # O(1)
-
-
-def _script(w, inn, st):  # O(w * d) | (code, argv words) of a Python script file this command wrote by heredoc, else None
-    i = 1  # O(1)
-    while i < len(w) and w[i].startswith("-"):  # O(w)
-        i += 2 if w[i] in ("-W", "-X") else 1  # O(1)
-    if i >= len(w):  # O(1)
-        return None  # O(1)
-    p = w[i]  # O(1)
-    for d in inn:  # O(d)
-        full = _clean(_winpath(p)) if p.startswith("/") else (_clean(d + "/" + p) if d else None)  # O(p)
-        if full in st.shared["scripts"]:  # O(1)
-            return st.shared["scripts"][full], list(w[i + 1:])  # O(w)
-    return None  # O(1)
 
 
 def _link_hit(src, dests, inn, st, ctx):  # O(d * p) | protected verdict when a link's source is a protected file (or the run folder)
@@ -1364,13 +1528,22 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
     if m:  # O(1)
         flag = {"node": "-e", "nodejs": "-e", "bun": "-e", "perl": "-e", "ruby": "-e", "php": "-r"}.get(base, "-c")  # O(1)
     has_code = m is not None and (flag in w[1:] or (flag == "-c" and "-m" in w[1:]))  # O(w)
-    script = _script(w, c.inn, st) if (m and flag == "-c" and not has_code) else None  # O(w * d)
+    if m and not has_code:  # an interpreter's script file: written by heredoc in this call, or by this session | O(w)
+        i = _operand(base, w)  # O(w)
+        lang = _lang_of(base)  # O(1)
+        if i is not None:  # O(1)
+            v = _run_script(w[i], lang, w[i + 1:], c, st, ctx, depth)  # O(n)
+            if v is not None:  # O(1)
+                return v  # O(1)
+        elif not c.docs and not c.piped and (len(w) == 1 or w[1] == "-"):  # `python3 < x.py`, `python3 - < x.py` | O(1)
+            for r in c.seg.redirects:  # O(redirects)
+                if r.op == "<" and r.target and not r.target.startswith(("<(", ">(", "&")):  # O(1)
+                    v = _run_script(r.target, lang, w[2:], c, st, ctx, depth)  # O(n)
+                    if v is not None:  # O(1)
+                        return v  # O(1)
     if base in guard_tools.COMMANDS or base.lower() in guard_tools.COMMANDS or m:  # O(1)
         progs = c.docs if (m and not has_code) else []  # a heredoc or here-string is the program | O(docs)
-        if script is not None:  # a script this command wrote by heredoc: its code, with the words after it as argv | O(code)
-            pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub([base, "-c", script[0]] + script[1]), text=ctx.text))  # O(code)
-            pairs.extend(_prog_pairs(w, flag, progs, ctx.text))  # the docs on its stdin are judged too | O(docs)
-        elif base == "git":  # git: from each directory, with the command's variables and the project as top | O(d * w)
+        if base == "git":  # git: from each directory, with the command's variables and the project as top | O(d * w)
             env = dict(st.vars)  # O(v)
             for x in c.seg.words:  # NAME=value words before git | O(w)
                 if _base(x) == "git":  # O(1)
@@ -1394,8 +1567,12 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
             pairs.append(("?", None))  # O(1)
         else:  # O(1)
             pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub(w) if m and flag == "-c" else w, text=ctx.text))  # O(w)
+    return _judge_pairs(pairs, base, m is not None, " ".join(w[1:]) + "".join(c.docs), c, st, ctx)  # O(t * d * p)
+
+
+def _judge_pairs(pairs, base, m, code, c, st, ctx):  # O(t * d * p) | judge the (target, file name) pairs a command or an interpreter's script names, housekeeping included
     inn = c.inn  # O(1)
-    if m and "chdir" in " ".join(w[1:]) + "".join(c.docs) + (script[0] if script else ""):  # the code moves: unknown | O(n)
+    if m and "chdir" in code:  # the code moves: unknown | O(n)
         inn = (None,)  # O(1)
     fl = _flags(c.seg, ctx)  # O(w)
     for i, (t, name) in enumerate(pairs):  # O(t)
@@ -1445,10 +1622,12 @@ def _run_words(words, dyn, c, st, ctx, depth, bare=None):  # O(n) | judge one co
             v = _check(w, c.inn, st, ctx, None, fl.get(w, ""))  # O(d * p)
             if v is not None:  # O(1)
                 break  # O(1)
-    elif "/" in words[0] and base not in SHELLS and _wrote_script(words[0], c, st, ctx, depth) is not None:  # a script written earlier in this call, run by its path | O(n)
-        v = _wrote_script(words[0], c, st, ctx, depth)  # O(n)
+    elif "/" in words[0] and base not in SHELLS and _run_script(words[0], None, words[1:], c, st, ctx, depth) is not None:  # a script file run by its path: written earlier in this call, or by this session | O(n)
+        v = _run_script(words[0], None, words[1:], c, st, ctx, depth)  # O(n)
     elif base in SHELLS:  # O(1)
         v = _shell(words, dyn, c, st, ctx, depth)  # O(n)
+    elif base == "uv" and words[1:2] == ["run"] and (v := _uv(words, c, st, ctx, depth)) is not None:  # O(n)
+        pass  # O(1)
     elif base in ("eval", "source", "."):  # O(1)
         v = _source_or_eval(base, words, dyn, c, st, ctx, depth)  # O(n)
     elif base == "find":  # O(1)
@@ -1908,8 +2087,9 @@ def _walk(segs, st, ctx, depth, force_cond=False):  # O(s * n) | judge the segme
     return None  # O(1)
 
 
-def judge(command, cwd, project, mode, sds=()):  # O(s * n * d) | Verdict for the first write the policy denies, else None
+def judge(command, cwd, project, mode, sds=(), transcript=None):  # O(s * n * d) | Verdict for the first write the policy denies, else None
     ctx = _Ctx(command, project, mode, sds)  # O(n + p)
+    ctx.transcript = transcript  # O(1)
     here = _clean(_winpath(cwd)) if cwd else ctx.projn  # O(p)
     if not here.startswith("/"):  # O(1)
         here = _clean(ctx.projn + "/" + here)  # O(p)
@@ -1941,9 +2121,16 @@ MESSAGES = {  # O(1)
              "- An inline build (the run's plan holds exactly one task): you may write that task's Owns yourself.",
              "- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; "
              "`sl render_edit restore` undoes it.",
+             "- A throwaway script (count lines, compare outputs, time a command): write it under {scratch}/ and run it from "
+             "there. The folder is git-ignored and `sl orchestrator end` removes it; a run of a script there is judged like a "
+             "heredoc script, so it may read the project but not write project code.",
              "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
              ".superlite by hand."],
 }  # O(1)
+
+
+def _scratch_hint(project, sd):  # O(p) | the coordinator's throwaway-script folder: project-relative when the state folder lies in the project
+    return sd[len(project) + 1:] + "/scratch" if sd.startswith(project + "/") else sd + "/scratch"  # O(p)
 
 
 def _flat(s, limit=120):  # O(len) | one line, no control characters
@@ -2021,7 +2208,8 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
             raise ValueError("no command in the hook input")  # O(1)
         cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else None  # O(1)
         pd = os.environ.get("SUPERLITE_FLEET_PARENT_DIR")  # O(1)
-        v = judge(cmd, cwd or project, project, mode, (sd, pd) if pd else (sd,))  # O(s * n * d)
+        tp = data.get("transcript_path") if isinstance(data.get("transcript_path"), str) else None  # O(1)
+        v = judge(cmd, cwd or project, project, mode, (sd, pd) if pd else (sd,), transcript=tp)  # O(s * n * d)
     except Exception as e:  # noqa: BLE001  fail open on anything | O(1)
         _incident(sd, "guard-error", tool, f"{type(e).__name__}: {e}")  # O(len)
         _ack()  # the judge ran and logged its own error | O(1)
@@ -2033,7 +2221,7 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
     target = v.rel if named and not v.word else f"unresolved {_flat(v.word)} in: {cmd}" if v.word else cmd  # the word first: the incident cuts the rest | O(len)
     _incident(sd, "rule-block", tool, target, rule=v.kind, cwd=cwd or project)  # O(len)
     for line in MESSAGES[v.kind]:  # O(1)
-        _err(line)  # O(len)
+        _err(line.replace("{scratch}", _scratch_hint(project, sd)))  # the scratch folder line (#690) names its folder | O(len)
     if v.cmd:  # the one command of the chain that was refused | O(1)
         _err(REFUSED.format(_flat(v.cmd, 300)))  # O(len)
     if v.kind != "protected":  # the protected message names no target | O(1)

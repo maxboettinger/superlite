@@ -346,14 +346,24 @@ def test_variable_prefix_is_no_unknown_dir(P):
     assert v is not None and v.kind == "code"
 
 
+def _wait_cmd(out):
+    return (f"cd {out} && SL=/x/sl && $SL fleet stop W17 2>&1 | tail -1; ( git diff main --name-only -- '*.swift' ) "
+            "| sort -u | while read f; do [ -f \"$f\" ] && echo \"$f\"; done | xargs -n 20 swift format lint 2>&1 "
+            "| grep -c warning; W=$($SL run_tests --full --background 2>&1 | grep '^wait:'); "
+            "echo \"$W\" > .superlite/last-wait.txt")
+
+
 def test_wait_file_after_unknown_dir_passes(P, tmp_path):
     out = tmp_path / "out"
     out.mkdir()
-    cmd = (f"cd {out} && SL=/x/sl && $SL fleet stop W17 2>&1 | tail -1; ( git diff main --name-only -- '*.swift' ) "
-           "| sort -u | while read f; do [ -f \"$f\" ] && echo \"$f\"; done | xargs -n 20 swift format lint 2>&1 "
-           "| grep -c warning; W=$($SL run_tests --full --background 2>&1 | grep '^wait:'); "
-           "echo \"$W\" > .superlite/last-wait.txt; eval \"$W\" >/dev/null 2>&1")
-    assert run(cmd, P) is None
+    assert run(_wait_cmd(out), P) is None
+
+
+def test_eval_of_captured_wait_line_blocks(P, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    v = run(_wait_cmd(out) + "; eval \"$W\" >/dev/null 2>&1", P)
+    assert v is not None and "text the guard cannot resolve" in v.word
 
 
 def test_prose_function_word_is_no_function(P, tmp_path):

@@ -384,3 +384,73 @@ def test_nested_failing_arithmetic_keeps_the_hook_verdict(proj):
 
     assert verdict("echo " + "$(( (" * 40 + ")" * 40) == 2  # nested past the judge's depth: an unknown target, blocked as before
     assert verdict("echo " + "$(( (" * 40 + "echo 1 > src/a.py" + ")" * 40) == 2
+
+
+# #693: runs the script judge must keep letting through.
+def _src(proj):
+    (proj / "src").mkdir(exist_ok=True)
+    (proj / "src" / "a.py").write_text("x = 1\n")
+
+
+@pytest.mark.parametrize("cmd", [
+    "bash script.sh", "python3 nothere.py", "./nothere.sh", "python3 -m pytest -q", "uv run pytest -q",
+])
+def test_693_missing_and_module_runs_pass(proj, cmd):
+    _src(proj)
+    assert bash(proj, cmd).returncode == 0
+
+
+def test_693_tracked_script_passes(proj):
+    _src(proj)
+    (proj / "tools").mkdir()
+    w = proj / "tools" / "w.sh"
+    w.write_text("echo y > src/a.py\n")
+    w.chmod(0o755)
+    subprocess.run(["git", "init", "-q"], cwd=proj, check=True)
+    subprocess.run(["git", "add", "tools/w.sh"], cwd=proj, check=True)
+    assert bash(proj, "bash tools/w.sh").returncode == 0
+    assert bash(proj, "./tools/w.sh").returncode == 0
+
+
+def test_693_old_untracked_script_passes(proj, tmp_path_factory):
+    import datetime
+    import time
+    _src(proj)
+    now = time.time()
+    stamp = datetime.datetime.fromtimestamp(now - 3600, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    t = proj / "t.jsonl"
+    t.write_text(json.dumps({"type": "user", "timestamp": stamp}) + "\n")
+    old = tmp_path_factory.mktemp("old") / "old.sh"
+    old.write_text("echo y > src/a.py\n")
+    os.utime(old, (now - 7200, now - 7200))
+    assert run(proj, "Bash", {"command": f"bash {old}"}, transcript_path=str(t)).returncode == 0
+
+
+@pytest.mark.parametrize("cmd", [
+    "eval \"$(ssh-agent -s)\"", "eval 'ls'", "eval ls -la", "x='ls docs'; eval \"$x\"",
+    "eval \"$(cat)\" <<'EOF'\nls\nEOF",
+])
+def test_693_eval_forms_pass(proj, cmd):
+    _src(proj)
+    assert bash(proj, cmd).returncode == 0
+
+
+def test_693_quoted_tmpdir_with_space_passes(proj, tmp_path_factory):
+    _src(proj)
+    d = tmp_path_factory.mktemp("tmp") / "a b"  # proj is tmp_path itself: the folder must lie outside it
+    d.mkdir()
+    raw = json.dumps({"tool_name": "Bash", "tool_input": {"command": 'echo x > "$TMPDIR/o.txt"'}})
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(proj), "TMPDIR": str(d)}
+    r = subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env)
+    assert r.returncode == 0
+
+
+def test_693_binary_and_activate_pass(proj, tmp_path_factory):
+    _src(proj)
+    app = tmp_path_factory.mktemp("bin") / "app"
+    app.write_bytes(b"\x7fELF" + b"\0" * 64)
+    app.chmod(0o755)
+    assert bash(proj, f"{app} --version").returncode == 0
+    (proj / ".venv" / "bin").mkdir(parents=True)
+    (proj / ".venv" / "bin" / "activate").write_text("export X=1\n")
+    assert bash(proj, "source .venv/bin/activate").returncode == 0
