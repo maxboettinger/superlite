@@ -12,7 +12,7 @@
 #     general-purpose and sl dispatch/assign/wave0/commit_task/finish/build_prime/run_tests are denied.
 #  3. Active run (.superlite/stable.json, prime.md or pool.json exists): project code is not written
 #     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg,
-#     jpeg, gif, svg, webp), any docs.md, .superlite/** and .git/info/exclude (a stray untracked file or folder may also be removed with rm, and a git-ignored path no task Owns may be written or removed), in the project or a linked worktree in it; an Edit/Write of the Owns of an inline build (the run's plan holds exactly one task) passes too, judged by guard_judge.py --owns. `sl orchestrator end` closes the run.
+#     jpeg, gif, svg, webp), any docs.md, .superlite/** and .git/info/exclude (a stray untracked file or folder may also be removed with rm, and a git-ignored path no task Owns may be written or removed), in the project or a linked worktree in it; an Edit/Write of the Owns of an inline build (the run's plan holds exactly one task) passes too, judged by guard_judge.py --owns. `sl orchestrator end` closes the run. <state folder>/scratch/ is the coordinator's throwaway-script folder: a Bash run of a script there is judged with its text inlined as a heredoc (scratch_inline), and the code block names it (scratch_hint).
 #  4. Fleet on (.superlite/fleet.json says "on": true): an Agent call of a superlite role (implementer, implementer-haiku,
 #     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher, checker) is denied with the
 #     `sl fleet spawn --role` hint, as the role is a fleet worker then. The message says the block repeats on every call (no retry);
@@ -656,20 +656,100 @@ find_py() {
   return 1
 }
 
+# scratch_hint: the message line that names the coordinator's throwaway-script folder (#690): project-relative when the
+# state folder lies under the project, else absolute. Builtins only.
+scratch_hint() {
+  local S="$sd/scratch"
+  case "$sd" in "$proj"/*) S="${sd#"$proj"/}/scratch" ;; esac
+  printf '%s\n' "- A throwaway script (count lines, compare outputs, time a command): write it under $S/ and run it from there. The folder is git-ignored and \`sl orchestrator end\` removes it; a run of a script there is judged like a heredoc script, so it may read the project but not write project code."
+}
+
+# scratch_esc S: S as JSON string content into ESC (backslash, quote, tab and CR escaped); fails when another control
+# character is left. Builtins only.
+scratch_esc() {
+  local s="$1" bs='\' dq='"' tab=$'\t' cr=$'\r'
+  s=${s//"$bs"/"$bs$bs"}; s=${s//"$dq"/"$bs$dq"}; s=${s//"$tab"/"${bs}t"}; s=${s//"$cr"/"${bs}r"}
+  ESC="$s"
+  [[ $s != *[[:cntrl:]]* ]]
+}
+
+# scratch_inline: sets jin, the hook JSON the judge reads. While the guard enforces, a Bash command that names a script in
+# $sd/scratch (or one folder below) gets that script's text in front of it as a heredoc, so the judge sees what the run
+# executes (#690). Skipped: symlinks, files over 65536 characters or with a NUL byte, non-script data files, and every
+# file past the 64th examined. Builtins only; nullglob is restored.
+scratch_inline() {
+  jin="$input"
+  [ "$tool" = Bash ] && [ "$enforce" = 1 ] || return 0
+  local had=0 f b n=0 seen=0 pre="" body D t ok re m rest ln k c
+  local bs='\' sq="'" nl=$'\n'
+  shopt -q nullglob && had=1
+  shopt -s nullglob
+  for f in "$sd"/scratch/* "$sd"/scratch/*/*; do
+    seen=$((seen + 1))
+    [ "$seen" -le 64 ] || break
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    b="${f##*/}"
+    [[ $cmd == *"$b"* ]] || continue
+    ok=0
+    case "$b" in *.py|*.sh|*.bash|*.zsh|*.js|*.mjs|*.cjs|*.ts|*.pl|*.rb|*.php) ok=1 ;; esac
+    { [ "$ok" = 1 ] || [ -x "$f" ]; } || continue
+    body=""
+    IFS= read -r -d '' -n 65537 body < "$f"
+    [ $? = 1 ] || continue
+    D="SL_SCRATCH_$((n + 1))"
+    while [[ "$nl$body$nl" == *"$nl$D$nl"* ]]; do D="SL_SCRATCH_$((n + 1))_$RANDOM"; done
+    t=${f//"$sq"/"$sq$bs$sq$sq"}   # an assignment: bash 3.2 keeps the inner quotes literal in a double-quoted ${//}
+    scratch_esc "cat > '$t' <<'$D'" || continue
+    t="$ESC${bs}n"
+    ok=1; k=0; c=""
+    # line by line: bash 3.2 rescans a 60 KB string for every replacement and copies it for every append, so the escaping
+    # runs on short lines and a chunk of 64 lines is appended to the long string (linear)
+    while IFS= read -r ln || [ -n "$ln" ]; do
+      scratch_esc "$ln" || { ok=0; break; }
+      c="$c$ESC${bs}n"
+      k=$((k + 1))
+      [ $((k % 64)) = 0 ] && { t="$t$c"; c=""; }
+    done < "$f"
+    [ "$ok" = 1 ] || continue
+    scratch_esc "$D" || continue
+    t="$t$c$ESC${bs}n"
+    pre="$pre$t"
+    n=$((n + 1))
+  done
+  [ "$had" = 1 ] || shopt -u nullglob
+  re='"command"[[:space:]]*:[[:space:]]*"'
+  if [ -n "$pre" ] && [[ $input =~ $re ]]; then
+    m="${BASH_REMATCH[0]}"
+    rest="${input#*"$m"}"
+    jin="${input:0:$(( ${#input} - ${#rest} ))}$pre$rest"
+  fi
+}
+
 # run_judge MODE: runs guard_judge.py on the hook input. Exit 2 is its block (its output is the message, passed on);
 # 0 allows only with the judge's `guard: ok NONCE` line: an exit 0 without it (a fake interpreter in the cache) re-probes
 # Python without the cache and runs the judge once more. Any other outcome fails open after a guard-error incident.
 # Never returns.
 run_judge() {
   local judge="${BASH_SOURCE[0]%/*}/../skills/subagent-driven-development/scripts/guard_judge.py" out rc try
-  local nonce="$RANDOM$RANDOM$$$RANDOM"
+  local nonce="$RANDOM$RANDOM$$$RANDOM" head nlh=$'\n' fc bc tail
   [ -f "$judge" ] || { guard_error "guard_judge.py not found"; exit 0; }
   find_py || { guard_error "no Python 3.10+ found"; exit 0; }
   for try in 1 2; do
-    out="$(printf '%s' "$input" | SUPERLITE_GUARD_NONCE="$nonce" "${PY[@]}" -I -X utf8 "$judge" --mode "$1" --project "$proj" --sd "$sd" 2>&1)"
+    out="$(printf '%s' "$jin" | SUPERLITE_GUARD_NONCE="$nonce" "${PY[@]}" -I -X utf8 -W ignore "$judge" --mode "$1" --project "$proj" --sd "$sd" 2>&1)"   # -W ignore: one SyntaxWarning per invalid escape of an inlined script would fill the message
     rc=$?
     case "$rc" in
-      2) printf '%s\n' "$out" >&2; exit 2 ;;
+      2) if [[ $out == *"$nlh- After the run, "* ]]; then   # #690: the judge's code message gets the scratch line too
+           head="${out%%"$nlh- After the run, "*}"
+           out="$head$nlh$(scratch_hint)$nlh- After the run, ${out#*"$nlh- After the run, "}"
+         fi
+         if [ "$jin" != "$input" ] && [[ $out == *"${nlh}Blocked command: "* ]]; then   # the judge read the inlined heredocs: name the typed command
+           fc="${cmd:0:4096}"; fc="${fc//$'\r'/ }"; fc="${fc//$'\n'/ }"; fc="${fc//$'\t'/ }"; fc="${fc//[[:cntrl:]]/}"; fc="${fc:0:120}"
+           fc="${fc#"${fc%%[! ]*}"}"; fc="${fc%"${fc##*[! ]}"}"
+           bc="${out##*"${nlh}Blocked command: "}"; tail=""
+           [[ $bc == *"$nlh"* ]] && tail="$nlh${bc#*"$nlh"}"
+           out="${out%"${nlh}Blocked command: "*}${nlh}Blocked command: $fc$tail"
+         fi
+         printf '%s\n' "$out" >&2; exit 2 ;;
       0) [[ $out == *"guard: ok $nonce"* ]] && exit 0
          [ "$try" = 1 ] || break
          find_py nocache || { guard_error "no Python 3.10+ found"; exit 0; } ;;
@@ -716,6 +796,7 @@ elif [ -z "$hit" ]; then
     mode=idle
     [ "$active" = 1 ] && mode=active
     [ "$human" = 1 ] && mode=human
+    scratch_inline
     run_judge "$mode"
   fi
 fi
@@ -757,6 +838,7 @@ else
     '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, rm a file or folder git does not track and no task Owns, and write or rm a git-ignored path no task Owns.' \
     "- An inline build (the run's plan holds exactly one task): you may write that task's Owns yourself." \
     '- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; `sl render_edit restore` undoes it.' \
+    "$(scratch_hint)" \
     '- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete .superlite by hand.' >&2
 fi
 if [ "$prot" != 1 ]; then   # (prot 2, the cache, names its target too)   name what was judged: a path as "target", a command as "command"
