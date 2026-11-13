@@ -21,11 +21,12 @@ def test_spawn_lead_starts_in_the_worktree_without_prime(world, tmp_path, monkey
     monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
     wt = tmp_path / "wt"; wt.mkdir()
     fleet.main(["on", "--accounts", "claude1,claude3"])
-    r = fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u"})
+    rc = fl.run_config.resolve()
+    r = fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u"}, rc=rc)
     lsd, name = str((wt / ".superlite").resolve()), fleet.fs.agent_name(world.sd, "W1", root=wt, ident="lead")
-    assert r == {"id": "W1", "name": name, "account": "claude3", "pane_id": "w6:p1", "agent": "lead", "model": "opus", "role": "lead", "lead_sd": lsd}
+    assert r == {"id": "W1", "name": name, "account": "claude3", "pane_id": "w6:p1", "agent": "lead", "model": "opus", "role": "lead", "lead_sd": lsd, "config": rc["id"]}
     sl = str(Path(fl.__file__).resolve().parent / "sl")
-    assert ("start_agent", name, fl.lead_argv(sl, "opus", 400000)) in world.fh.calls and not any(c[0] == "prompt" for c in world.fh.calls)
+    assert ("start_agent", name, fl.lead_argv(sl, "opus", 400000, "xhigh", list(rc["lead"]["deny"]))) in world.fh.calls and not any(c[0] == "prompt" for c in world.fh.calls)
     env = next(c for c in world.fh.calls if c[0] == "create_workspace")[2]
     assert (env["SUPERLITE_FLEET_ROLE"], env["SUPERLITE_STATE_DIR"], env["SUPERLITE_FLEET_PARENT_DIR"]) == ("lead", lsd, str(world.sd.resolve()))
     w = json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]

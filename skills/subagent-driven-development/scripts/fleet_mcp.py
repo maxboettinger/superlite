@@ -79,6 +79,10 @@ def _scope(cj: dict, key) -> dict:  # the mcpServers of one project entry in .cl
 def servers(role: str, project, claude_json) -> tuple[dict, list[str]]:  # (name -> definition kept for role, notes for names left out) | O(n + f)
     if role not in MCP_ROLES:  # O(1)
         return {}, []  # O(1)
+    return named(_names(Path(project)), project, claude_json)  # O(n + f)
+
+
+def named(names: list, project, claude_json) -> tuple:  # (name -> definition for the given names, notes for names left out) | O(n + f)
     project = Path(project)  # O(1)
     resolved = project.resolve()  # O(1)
     cj = _load(claude_json) if claude_json else {}  # O(f)
@@ -92,7 +96,7 @@ def servers(role: str, project, claude_json) -> tuple[dict, list[str]]:  # (name
     layers.append(us if isinstance(us, dict) else {})  # O(1)
     layers.append(BUILTIN)  # O(1)
     kept, notes = {}, []  # O(1)
-    for name in _names(project):  # O(n)
+    for name in names:  # O(n)
         d = next((layer[name] for layer in layers if isinstance(layer.get(name), dict)), None)  # O(1)
         if d is None:  # O(1)
             notes.append(f"mcp: {name} left out: no definition in {project}/.mcp.json, {claude_json} or the built-in list")  # O(1)

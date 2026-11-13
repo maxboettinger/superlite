@@ -8,11 +8,11 @@ LINE = "BLOCKED: W9 account c3 startup: agent target pane w:p{n} is not an avail
 
 def flaky(monkeypatch, fail_on):
     mod = sys.modules["fleet_lead"]; orig, n = mod.spawn_lead, [0]
-    def spawn(main_sd, wt, model="opus", env=None):
+    def spawn(main_sd, wt, model="opus", env=None, rc=None):
         n[0] += 1
         if n[0] in fail_on:
             print(LINE.format(n=n[0])); raise SystemExit(3)
-        return orig(main_sd, wt, model, env)
+        return orig(main_sd, wt, model, env, rc)
     monkeypatch.setattr(mod, "spawn_lead", spawn)
 
 

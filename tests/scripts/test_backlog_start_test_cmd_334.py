@@ -46,5 +46,8 @@ def test_start_goes_on_with_one_stderr_line_when_the_copy_fails(bk, capsys, monk
     w1 = bk.root / ".claude" / "worktrees" / "superlite-b1-t"
     rc = br.main(["start"]); cap = capsys.readouterr()
     assert (rc, cap.out) == (0, f"B1 running lead=W1 worktree={w1}\n")
-    assert cap.err == f"test-cmd.json not seeded into {w1}: disk full\n"
+    import run_config
+    rc0 = run_config.resolve(None, bk.root)
+    line = f"run config: {rc0['id']} (lead {rc0['lead']['model']}, effort {rc0['lead']['effort']})\n"
+    assert cap.err == line + f"test-cmd.json not seeded into {w1}: disk full\n"
     assert get(bk, "B1")["state"] == "running" and not (w1 / ".superlite" / "test-cmd.json").exists()
