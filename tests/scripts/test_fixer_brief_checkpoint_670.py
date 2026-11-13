@@ -63,13 +63,20 @@ def test_coordinator_text_names_newest_checkpoint(monkeypatch):
     assert lines[i + 1] == findings.checkpoint_line(ST, None)
 
 
-def test_route_brief_file_names_checkpoint(tmp_path):
+def test_route_brief_file_names_checkpoint(tmp_path, monkeypatch):
     root = tmp_path / "repo"; sd = root / ".superlite"; (sd / "fleet" / "reports").mkdir(parents=True)
+    (root / ".git").mkdir()
     rep = sd / "fleet" / "reports" / "FR1.json"
     rep.write_text(json.dumps({"id": "W4", "label": "FR1", "status": "CHANGES_REQUESTED", "valid": True,
                                "findings": [{"file": "src/a.py", "line": 1, "problem": "p", "fix": "x", "tier": 1}]}))
     plan = make_plan(root, [{"id": "T1", "owns": "src/a.py"}])
     (sd / "progress.md").write_text("- commit T1 abcdef1234 done\n")
+    (sd / "checkpoints.json").write_text(json.dumps({"run": "r-1", "entries": [{"task": "T1", "sha": "deadbee"}]}))
+    elsewhere = tmp_path / "elsewhere"; elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
     findings.route(sd, plan, [str(rep)], "/sl/sl")
     briefs = list((sd / "briefs").glob("*"))
-    assert briefs and any("Reviewed version:" in b.read_text() for b in briefs)
+    assert briefs
+    want = ("Reviewed version: T1's checkpoint deadbee (ref refs/superlite/r-1/T1): "
+            "`git show deadbee:<path>` prints a file as reviewed; " + TAIL)
+    assert any(want in b.read_text() for b in briefs)
