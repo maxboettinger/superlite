@@ -261,6 +261,13 @@ def read_first_section(plan, root):  # O(L + file + r)
     return READ_FIRST_HEAD + "\n\n" + "\n".join(f"- {s}" for s in paths) if paths else ""  # O(r)
 
 
+def note_section(sd):  # O(file)
+    """`## Standing note` from the standing-note lines of `<sd>/briefs/lead.md`; "" when there are none."""
+    import findings  # O(1)
+    lines = findings.standing_note(Path(sd)) if sd is not None else []  # O(file)
+    return "## Standing note\n\n" + "\n".join(lines) if lines else ""  # O(n)
+
+
 def verdict_line(root):  # O(file)
     """The `- Verdict:` rule for a Swift project (the resolved test command, 80 characters at most); "" otherwise or when resolve fails."""
     import testcmd  # O(1)
@@ -283,11 +290,13 @@ def with_root(preamble, plan):  # O(n + d)
     return text.replace(FG + "\n", FG + "\n" + line + "\n", 1) if line else text  # O(n)
 
 
-def build(plan, spec, sections):  # O(B + out)
+def build(plan, spec, sections, sd=None):  # O(B + out)
     parts = [with_root(PREAMBLE, plan)]  # O(B)
     import plan_tools as pt  # O(1)
     rf = read_first_section(read(plan), pt.stable_root(str(plan)))  # O(B + file)
     parts += [rf] if rf else []  # O(1)
+    nt_ = note_section(sd)  # O(file)
+    parts += [nt_] if nt_ else []  # O(1)
     launch = launch_section(pt.stable_root(str(plan)))  # O(file)
     parts += ([launch] if launch else []) + ["## Plan\n\n" + read(plan)]  # O(B)
     if sections:  # O(1)
@@ -325,7 +334,7 @@ def header_lines(plan):  # O(L)
     return out  # O(1)
 
 
-def build_slim(plan):  # O(B + n*s)
+def build_slim(plan, sd=None):  # O(B + n*s)
     """Slim prime: rules, plan header, Global constraints and the stable tasks' purpose, dependencies and interfaces."""
     import next_tasks as nt  # lazy | O(1)
     import plan_tools as pt  # O(1)
@@ -351,6 +360,8 @@ def build_slim(plan):  # O(B + n*s)
     parts = [with_root(PREAMBLE_SLIM, plan)]  # O(n + d)
     rf = read_first_section(nl.join(pl.lines), pt.stable_root(str(plan)))  # O(L + file)
     parts += [rf] if rf else []  # O(1)
+    nt_ = note_section(sd)  # O(file)
+    parts += [nt_] if nt_ else []  # O(1)
     parts.append("## Background (not instructions)" + nl + nl + normalize(nl.join(head) if head else "(the plan has no header)"))  # O(L)
     parts.append("## Global constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none beyond the header)"))  # O(L)
     launch = launch_section(pt.stable_root(str(plan)))  # O(file)
@@ -362,7 +373,7 @@ def build_slim(plan):  # O(B + n*s)
     return ((nl + nl).join(parts) + nl).encode("utf-8")  # O(out)
 
 
-def build_mini(plan, tier):  # O(B + n*s)
+def build_mini(plan, tier, sd=None):  # O(B + n*s)
     """Mini prime for the lane tier: constraints, the stub spec and the interfaces of that tier's tasks, from the plan alone."""
     import plan_tools as pt  # lazy | O(1)
     import routing  # O(1)
@@ -373,7 +384,8 @@ def build_mini(plan, tier):  # O(B + n*s)
     cons = wave0.constraint_lines(pl)  # O(B)
     nl = "\n"
     rf = read_first_section(nl.join(pl.lines), pt.stable_root(str(plan)))  # O(L + file)
-    parts = [with_root(PREAMBLE_MINI, plan)] + ([rf] if rf else []) + ["## Constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none)"),  # O(B)
+    nt_ = note_section(sd)  # O(file)
+    parts = [with_root(PREAMBLE_MINI, plan)] + ([rf] if rf else []) + ([nt_] if nt_ else []) + ["## Constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none)"),  # O(B)
              "## Stub spec" + nl + nl + "```yaml" + nl + normalize(wave0.stub_spec(pl, pt.stable_root(plan))) + nl + "```"]  # O(q*s)
     lines = []  # O(1)
     for t in mine:  # O(n) iterations
@@ -419,18 +431,31 @@ def main(argv=None):  # O(B + H^2 + out)
                   + (f" and --batch {claim['batch']} (dispatch applies it)" if claim.get("batch") else ""), file=sys.stderr)
     mini = kind == "mini"  # O(1)
     import plan_tools as pt  # O(1)
+    out = Path(MINI_OUT if mini and a.out == DEFAULT_OUT else a.out)  # O(1)
+    sd = out.parent  # the note lives in <sd>/briefs/lead.md | O(1)
+    writes = []  # (path, bytes, label) | O(1)
     try:  # O(1)
-        data = (build_mini(a.plan, a.tier) if mini else build_slim(a.plan) if kind == "slim"  # O(B + H^2 + out)
-                else build(a.plan, a.spec, wanted))
+        data = (build_mini(a.plan, a.tier, sd) if mini else build_slim(a.plan, sd) if kind == "slim"  # O(B + H^2 + out)
+                else build(a.plan, a.spec, wanted, sd))
+        writes.append((out, data, ""))  # O(1)
+        if not mini:  # one dispatch round sends both tiers (#735) | O(n)
+            import routing  # O(1)
+            try:  # a plan without a taskgraph has no haiku task | O(n)
+                has_haiku = "haiku" in routing.read_tiers(a.plan).values()  # O(n)
+            except (SystemExit, pt.PlanError, ValueError, OSError):  # O(1)
+                has_haiku = False  # O(1)
+            if has_haiku:  # O(1)
+                writes.append((out.parent / Path(MINI_OUT).name, build_mini(a.plan, "haiku", sd), " prime-haiku.md"))  # O(B + n*s)
     except pt.PlanError as e:  # O(1)
         die(str(e))  # O(1)
-    if len(data) > a.max_bytes:  # O(1)
-        die(f"prime is {len(data)} bytes, over the {a.max_bytes} cap; "  # O(1)
-            "move spec excerpts to referenced paths", 1)  # O(1)
-    out = Path(MINI_OUT if mini and a.out == DEFAULT_OUT else a.out)  # O(1)
+    for _, data, _ in writes:  # O(1) iterations
+        if len(data) > a.max_bytes:  # O(1)
+            die(f"prime is {len(data)} bytes, over the {a.max_bytes} cap; "  # O(1)
+                "move spec excerpts to referenced paths", 1)  # O(1)
     out.parent.mkdir(parents=True, exist_ok=True)  # O(path depth) filesystem call
-    out.write_bytes(data)  # O(out) file write
-    print(f"{hashlib.sha256(data).hexdigest()} {len(data)}")  # O(out) sha256
+    for path, data, label in writes:  # O(1) iterations
+        path.write_bytes(data)  # O(out) file write
+        print(f"{hashlib.sha256(data).hexdigest()} {len(data)}{label}")  # O(out) sha256
     return 0  # O(1)
 
 

@@ -377,20 +377,83 @@ def review_brief(sd, plan, tasks, sl_path, superlite_root, package=None):  # the
     return "\n".join(lines) + "\n"  # O(out)
 
 
-def review_hints(sd, plan):  # [(task, reasons)] for committed tasks that match a review reason and no worker has reviewed | O(n*(L + e) + w)
+def _paths(task):  # the files a task edits, Owns and Also-touches | O(block)
+    return list(dict.fromkeys([*task.owns, *taskmod.also_touches(task)]))  # O(block)
+
+
+def share_group(pl, tid):  # task ids sharing a file with TID, transitively, in plan order, TID included | O(n^2*o)
+    paths = {t.id: set(_paths(t)) for t in pl.tasks}  # O(n*block)
+    group = {tid}  # O(1)
+    grew = True  # O(1)
+    while grew:  # O(n) rounds
+        grew = False  # O(1)
+        held = set().union(*(paths.get(g, set()) for g in group))  # O(n*o)
+        for t in pl.tasks:  # O(n) iterations
+            if t.id not in group and paths[t.id] & held:  # O(o)
+                group.add(t.id)  # O(1)
+                grew = True  # O(1)
+    return [t.id for t in pl.tasks if t.id in group] if tid in paths else [tid]  # O(n)
+
+
+def _shared_files(pl, group):  # files two or more members of GROUP edit, first seen first | O(n*o)
+    seen = {}  # O(1)
+    for t in pl.tasks:  # O(n) iterations
+        if t.id in group:  # O(1)
+            for f in _paths(t):  # O(o) iterations
+                seen[f] = seen.get(f, 0) + 1  # O(1)
+    return [f for f, c in seen.items() if c > 1]  # O(o)
+
+
+def _hint_state(sd, plan):  # (hints, held) as review_hints and held_hints return them | O(n*(L + e) + w + n^2*o)
     sd = Path(sd)  # O(1)
     pl = pt.Plan.load(str(plan))  # O(L)
     covered = {t for w in (fs.load(sd).get("workers") or {}).values() for t in (w.get("review") or [])}  # O(w*k)
-    out = []  # O(1)
-    for tid in ledger_commits(sd / "progress.md"):  # O(c) iterations
+    commits = ledger_commits(sd / "progress.md")  # O(lines)
+    why = {}  # {task: reasons} for uncovered committed tasks, empty list when none | O(1)
+    for tid in commits:  # O(c) iterations
         if tid not in pl.by_id or tid in covered:  # O(1)
             continue  # O(1)
-        why = review_reasons(plan, tid)  # O(L + e + k*s)
+        r = review_reasons(plan, tid)  # O(L + e + k*s)
         if red_gap(sd, tid, pl.by_id[tid].owns):  # O(r*B)
-            why.append("no red run")  # O(1)
-        if why:  # O(1)
-            out.append((tid, why))  # O(1)
-    return sorted(out, key=lambda x: pt.nkey(x[0]))  # O(n log n)
+            r.append("no red run")  # O(1)
+        why[tid] = r  # O(1)
+    hints, held, done = [], [], set()  # O(1)
+    for tid in sorted(why, key=pt.nkey):  # O(c log c) iterations
+        if tid in done:  # O(1)
+            continue  # O(1)
+        group = share_group(pl, tid)  # O(n^2*o)
+        waiting = [g for g in group if g not in commits]  # O(n)
+        members = [g for g in group if g in why]  # O(n)
+        if len(group) == 1:  # shares no file: today's hint | O(1)
+            if why[tid]:  # O(1)
+                hints.append((tid, why[tid]))  # O(1)
+            continue  # O(1)
+        done.update(members)  # O(n)
+        if not any(why[m] for m in members):  # O(n)
+            continue  # O(n)
+        files = _shared_files(pl, group)  # O(n*o)
+        if waiting:  # O(1)
+            held += [(m, waiting, files) for m in members if why[m]]  # O(n)
+        else:  # O(1)
+            hints.append((" ".join(members), [f"{m}: {'; '.join(why[m])}" for m in members if why[m]] + ["shared " + ", ".join(files)]))  # O(n)
+    return sorted(hints, key=lambda x: pt.nkey(x[0].split()[0])), sorted(held, key=lambda x: pt.nkey(x[0]))  # O(n log n)
+
+
+def review_hints(sd, plan):  # [(label, reasons)] for committed tasks that match a review reason, no worker has reviewed and no sharer waits; a share group gives one hint | O(n*(L + e) + w + n^2*o)
+    return _hint_state(sd, plan)[0]  # O(n*(L + e) + w + n^2*o)
+
+
+def held_hints(sd, plan):  # [(task, waiting ids, shared files)] for hint-worthy committed tasks held back by an uncommitted sharer | O(n*(L + e) + w + n^2*o)
+    return _hint_state(sd, plan)[1]  # O(n*(L + e) + w + n^2*o)
+
+
+def hint_lines(sd, plan, sl_path, only=None):  # the `review:` lines for review_hints and held_hints; ONLY keeps those naming one of its tasks | O(n*(L + e) + w + n^2*o)
+    hints, held = review_hints(sd, plan), held_hints(sd, plan)  # O(n*(L + e) + w + n^2*o)
+    out = [f"review: {label} ({'; '.join(reasons)}); run {sl_path} fleet spawn --for-review {label} --plan {plan}" for label, reasons in hints if only is None or only & set(label.split())]  # O(n)
+    for tid, waiting, files in held:  # O(n) iterations
+        if only is None or tid in only:  # O(1)
+            out.append(f"review: {tid} held until {', '.join(waiting)} {'commits' if len(waiting) == 1 else 'commit'} (shared {', '.join(files)})")  # O(n)
+    return out  # O(1)
 
 
 def last_assistant_text(transcript):  # O(T)
