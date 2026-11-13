@@ -56,6 +56,8 @@ A tracked, modified (not new, not deleted) file under a `tests/` folder that no 
 commits with the task being committed (a fixer's edit to a shared test): `shared-test <path>`
 on stderr and a `workaround` incident `Tn: shared test adjusted` (resolution `accepted`).
 (8) A shared test that a busy fixer/reviewer worker's brief names (`busy_briefs`; not the calling worker's own) is left uncommitted: `left uncommitted (edited by busy W7 (label); commit_task Tn again once it is done): F`; a task left with nothing fails `nothing to commit; held for busy W7: F`.
+(9) A modified shared test is also held while another busy editing worker (fleet.json: role implementer or unset, fixer, package-reviewer, writer; label not naming Tn; not the caller) runs: `left uncommitted (changed while busy W3 (T6) runs; commit_task Tn again once it is done): F` (several: `... W3 (T6), W7 (x) run; ... once they are done`), unless Tn's newest fleet report lists it in `files` or the calling worker's `sent` time is not later than the file's mtime.
+(10) The `owned by` note prints once at the end of the call, only for a file still differing from the newest checkpoint (a later task of the call may have taken it). A file the task is ruled to commit (`--claim`, earlier `--also`) is never held for a running sibling. A task whose only changes are held files fails `nothing to commit; held for ...` instead of `no change since`. Without --plan the session run's plan (stable.json, pool.json, plan.md of the state folder) is used before .superlite/plan.md.
 New tests, deletions and source files still block; T0 never takes shared tests.
 An owned file a checkpoint of this plan holds that git status no longer lists (back to its HEAD content, or a new file deleted) is staged again when it differs from the newest checkpoint; a restored one prints `restored F (back to its HEAD content)` on stderr.
 Stdlib only.
@@ -629,6 +631,52 @@ def busy_briefs(sd, me):  # O(w + brief size) file reads; {worker id: (task labe
     return out  # O(1)
 
 
+EDITOR_ROLES = ("", "implementer", "fixer", "package-reviewer", "writer")  # busy workers that edit files | O(1)
+
+
+def busy_editors(sd, me, tid):  # O(w); {worker id: task label} of busy editing workers other than the caller whose label does not name tid
+    import fleet_state  # O(1) lazy
+    out = {}  # O(1)
+    try:  # an unreadable fleet.json holds nothing | O(1)
+        for wid, w in (fleet_state.load(sd).get("workers") or {}).items():  # O(w) iterations
+            label = str(w.get("task") or "")  # O(1)
+            if w.get("state") != "busy" or wid == me or (w.get("role") or "") not in EDITOR_ROLES or not label:  # O(1)
+                continue  # O(1)
+            if re.search(r"(?<![A-Za-z0-9])" + re.escape(tid) + r"(?![A-Za-z0-9])", label):  # O(len)
+                continue  # O(1)
+            out[wid] = label  # O(1)
+    except (OSError, AttributeError, TypeError):  # O(1)
+        return {}  # O(1)
+    return out  # O(w)
+
+
+def report_files(sd, tid):  # O(r*B); the `files` of tid's newest fleet report (label names tid), [] when none
+    best = None  # (mtime, files) | O(1)
+    for p in (Path(sd) / "fleet" / "reports").glob("*.json"):  # O(r) iterations
+        try:  # O(1)
+            rep = json.loads(p.read_text(encoding="utf-8"))  # O(B)
+            when = p.stat().st_mtime  # O(1)
+        except (OSError, ValueError):  # O(1)
+            continue  # O(1)
+        if not isinstance(rep, dict) or tid not in [x.strip() for x in str(rep.get("label") or "").split(",")]:  # O(k)
+            continue  # O(1)
+        if best is None or when > best[0]:  # O(1)
+            best = (when, rep.get("files"))  # O(1)
+    files = best[1] if best else None  # O(1)
+    return [_rel(x) for x in files if isinstance(x, str)] if isinstance(files, list) else []  # O(files)
+
+
+def sent_before(sd, me, f):  # O(w); True when the calling fleet worker was sent its task no later than f's mtime
+    if not me:  # O(1)
+        return False  # O(1)
+    try:  # O(1)
+        import fleet_state  # O(1) lazy
+        sent = (fleet_state.load(sd).get("workers") or {}).get(me, {}).get("sent")  # O(w)
+        return isinstance(sent, (int, float)) and sent <= os.stat(f).st_mtime * 1000  # O(1) stat
+    except (OSError, AttributeError, TypeError):  # O(1)
+        return False  # O(1)
+
+
 def brief_names(text, f):  # O(len text)
     return re.search(r"(?<![\w./-])" + re.escape(f) + r"(?![\w/-])", text) is not None  # O(len text)
 
@@ -723,25 +771,39 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
     mine += back  # O(m)
     if cand:  # a shared test already in the parent checkpoint is not this task's change | O(1)
         shared = changed_vs_parent(cand)  # O(m) + process spawns
-        busy_held = {}  # shared test -> [(worker id, label)] of busy workers whose brief names it (#484) | O(1)
-        briefs = busy_briefs(a.sd, os.environ.get("SUPERLITE_FLEET_WORKER")) if shared and getattr(a, "sd", None) else {}  # O(w + brief size)
+        busy_held = {}  # shared test -> [(worker id, label)] of busy workers whose brief names it (#484) or that edit meanwhile | O(1)
+        me = os.environ.get("SUPERLITE_FLEET_WORKER")  # O(1)
+        sd_ = getattr(a, "sd", None)  # O(1)
+        briefs = busy_briefs(sd_, me) if shared and sd_ else {}  # O(w + brief size)
+        editors = busy_editors(sd_, me, tid) if shared and sd_ else {}  # O(w)
+        reported = set(report_files(sd_, tid)) if editors else set()  # O(r*B)
+        named_by = {}  # shared test -> True when a brief names it | O(1)
         for f in shared:  # O(m) iterations
             who = [(wid, lab) for wid, (lab, text) in sorted(briefs.items()) if brief_names(text, f)]  # O(w * brief size)
             if who:  # O(1)
                 busy_held[f] = who  # O(1)
+                named_by[f] = True  # O(1)
+            elif editors and f not in reported and not sent_before(sd_, me, f):  # an unnamed edit while other workers write: held | O(1)
+                busy_held[f] = sorted(editors.items())  # O(w log w)
         shared = [f for f in shared if f not in busy_held]  # O(m)
         mine += shared  # O(m)
         for f, who in sorted(busy_held.items()):  # O(m) iterations
             names = ", ".join(f"{wid} ({lab})" for wid, lab in who)  # O(w)
-            note_once(a, f"left uncommitted (edited by busy {names}; commit_task {tid} again once it is done): {f}")  # O(w)
+            if named_by.get(f):  # O(1)
+                note_once(a, f"left uncommitted (edited by busy {names}; commit_task {tid} again once it is done): {f}")  # O(w)
+            elif len(who) == 1:  # O(1)
+                note_once(a, f"left uncommitted (changed while busy {names} runs; commit_task {tid} again once it is done): {f}")  # O(w)
+            else:  # O(1)
+                note_once(a, f"left uncommitted (changed while busy {names} run; commit_task {tid} again once they are done): {f}")  # O(w)
 
     pool_path = getattr(a, "pool", None) or state.pool_path()  # O(1)
     running = others_running(pool_path, call) if theirs or mine or claimed else []  # tasks running outside this call | O(pool bytes)
     owned = {f: committed_owners(f, info, call, done, running) for f in theirs}  # O(m*n*f)
     owned = {f: o for f, o in owned.items() if o}  # O(m)
     if owned:  # a file changed after its committed owner's checkpoint: say so (#397) | O(1)
-        for f in changed_vs_parent(list(owned)):  # O(m) + process spawns
-            note_once(a, f"left uncommitted (owned by {', '.join(owned[f])}, changed after its checkpoint; run commit_task {owned[f][0]}): {f}")  # O(1)
+        if not hasattr(a, "owned_notes"):  # printed by main after the last task of the call (#667) | O(1)
+            a.owned_notes = {}  # O(1)
+        a.owned_notes.update(owned)  # O(m)
     for f in (changed_vs_parent(list(claimed)) if claimed else []):  # a claimed file equal to the newest checkpoint prints nothing (#419) | O(m) + process spawns
         t2 = claimed[f]  # O(1)
         if t2 in done and t2 not in running:  # O(call)
@@ -774,7 +836,8 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         return fail(1, "out-of-scope " + ", ".join(out_of_scope[:5]) + (" ..." if len(out_of_scope) > 5 else ""))  # O(m)
     held = {}  # file -> running siblings that also own it (#399) | O(1)
     if running and mine and not (w0 and tid == w0[0]):  # Wave 0 stubs commit while their owner runs; a running sibling's edits in a shared file stay out of this checkpoint | O(1)
-        cand_hold = [f for f in mine if not any(hit(f, e) for e in also)]  # --also entries are never held | O(m*k)
+        cand_hold = [f for f in mine if not any(hit(f, e) for e in also)  # --also entries and files this task is ruled to commit are never held | O(m*k)
+                     and not any(t3 == tid and hit(f, e) for e, t3 in ruled.items())]  # O(m*r)
         shared_run = running_shared(cand_hold, info, running)  # O(m*n*f)
         if shared_run:  # O(1)
             diff = set(changed_vs_parent(list(shared_run)))  # O(m) + process spawns
@@ -784,7 +847,7 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         sib = [t for t in info if any(t in ids for ids in held.values())]  # plan order | O(n*m)
         files = ", ".join(sorted(held))  # O(m log m)
         note_once(a, f"left uncommitted (shared with running {', '.join(sib)}; commit_task {tid} again once it is done): {files}")  # O(1)
-    if not mine:  # O(1)
+    if not mine or ((held or busy_held) and not changed_vs_parent(mine)):  # nothing, or only held files differ from the newest checkpoint (#667) | O(m) + process spawns
         print(f"nothing to commit for {tid}", file=sys.stderr)  # O(1)
         if held:  # O(1)
             return fail(1, f"nothing to commit; held for running {', '.join(sib)}: {files}")  # O(1)
@@ -878,7 +941,10 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
             print(f"error: --plan {a.plan} is a run folder with no plan file (stable.json, pool.json or plan.md name none); pass the plan file", file=sys.stderr)  # O(1)
             return 2  # O(1)
         a.plan = str(found)  # O(1)
-    a.plan = a.plan or nt.DEFAULT_PLAN  # O(1)
+    if not a.plan:  # the session run's own plan (stable.json, pool.json, sd/plan.md), else the default | O(file)
+        import orchestrator  # O(1) lazy
+        found = orchestrator.plan_file(sd)  # O(file)
+        a.plan = str(found) if found else nt.DEFAULT_PLAN  # O(1)
     if not a.claim:  # a claim only writes a ruling | O(1)
         import render_edit  # O(1) lazy
         left = render_edit.applied(sd)  # O(a log a)
@@ -977,6 +1043,9 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
                     print(f"{tid}: probe files committed: {' '.join(pf)} (a background probe_run wrote them{hint})")  # O(m)
         else:  # a task that is not checkpointed always says so, one task or several (#179) | O(1)
             print(f"{tid} FAILED: {a.failed.get(tid, 'not checkpointed')}")  # O(1)
+    if getattr(a, "owned_notes", None):  # a file a later task of this call checkpointed prints nothing (#667) | O(m) + process spawns
+        for f in changed_vs_parent(list(a.owned_notes)):  # O(m)
+            note_once(a, f"left uncommitted (owned by {', '.join(a.owned_notes[f])}, changed after its checkpoint; run commit_task {a.owned_notes[f][0]}): {f}")  # O(1)
     if a.blocked:  # one hint for every task, not one per task | O(1)
         print("hint: commit or exclude these files, they are outside every Owns: " + ", ".join(sorted(a.blocked)))  # O(b log b)
     release_agents(a.pool, committed)  # O(pool bytes)

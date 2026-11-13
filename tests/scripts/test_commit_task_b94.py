@@ -1,6 +1,7 @@
 """commit_task: run-folder --plan (#456), review lines with --dispatch (#455), shared tests held for busy workers (#484)."""
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -143,17 +144,86 @@ def test_own_worker_brief_does_not_hold(run, monkeypatch, capsys):
     assert SHARED in checkpoint_files(sd)
 
 
-def test_idle_worker_or_unnamed_file_does_not_hold(run, capsys):
+def test_idle_worker_does_not_hold(run, capsys):
     repo, sd, plan = run
     busy(sd, state="idle")
     edit(repo)
     assert commit_task.main(["T4", "--plan", plan]) == 0
     assert f"shared-test {SHARED}" in capsys.readouterr().err
+
+
+def workers(sd, spec):
+    """spec: {wid: (role, label)} all busy; extra fields via a 3rd tuple item."""
+    ws = {}
+    for wid, item in spec.items():
+        role, label, *extra = item
+        ws[wid] = {"state": "busy", "role": role, "task": label, **(extra[0] if extra else {})}
+    (sd / "fleet.json").write_text(json.dumps({"on": True, "workers": ws}), encoding="utf-8")
+
+
+def test_unnamed_busy_worker_holds_shared_test(run, capsys):
+    repo, sd, plan = run
     busy(sd, brief="- F-T5-1 tests/registry/test_x2.py:4 - p - x\n")
     write(repo, SHARED, "def test_x():\n    assert 3\n")
     write(repo, "src/a.py", "X = 5\n")
     assert commit_task.main(["T4", "--plan", plan]) == 0
+    err = capsys.readouterr().err
+    assert ("left uncommitted (changed while busy W7 (fix-F-T5-1) runs; commit_task T4 again once it is done): "
+            + SHARED) in err
+    assert "shared-test" not in err
+    assert checkpoint_files(sd) == ["src/a.py"]
+
+
+def test_two_busy_workers_named(run, capsys):
+    repo, sd, plan = run
+    workers(sd, {"W3": ("implementer", "T6"), "W7": ("fixer", "fix-F-T5-1")})
+    edit(repo)
+    assert commit_task.main(["T4", "--plan", plan]) == 0
+    assert ("left uncommitted (changed while busy W3 (T6), W7 (fix-F-T5-1) run; commit_task T4 again once they are done): "
+            + SHARED) in capsys.readouterr().err
+    assert checkpoint_files(sd) == ["src/a.py"]
+
+
+def test_own_report_lists_shared_test(run, capsys):
+    repo, sd, plan = run
+    workers(sd, {"W3": ("implementer", "T6")})
+    write(sd.parent, ".superlite/fleet/reports/T4.json",
+          json.dumps({"label": "T4", "role": "implementer", "files": [SHARED]}))
+    edit(repo)
+    assert commit_task.main(["T4", "--plan", plan]) == 0
     assert f"shared-test {SHARED}" in capsys.readouterr().err
+    assert SHARED in checkpoint_files(sd)
+
+
+def test_caller_worker_edit_after_send_joins(run, monkeypatch, capsys):
+    repo, sd, plan = run
+    edit(repo)
+    sent = int(Path(repo / SHARED).stat().st_mtime * 1000) - 5000
+    workers(sd, {"W9": ("implementer", "T4", {"sent": sent}), "W3": ("implementer", "T6")})
+    monkeypatch.setenv("SUPERLITE_FLEET_WORKER", "W9")
+    assert commit_task.main(["T4", "--plan", plan]) == 0
+    assert f"shared-test {SHARED}" in capsys.readouterr().err
+    assert SHARED in checkpoint_files(sd)
+
+
+@pytest.mark.parametrize("role", ["final-reviewer", "research"])
+def test_reader_roles_do_not_hold(run, capsys, role):
+    repo, sd, plan = run
+    workers(sd, {"W5": (role, "rev-x")})
+    edit(repo)
+    assert commit_task.main(["T4", "--plan", plan]) == 0
+    assert f"shared-test {SHARED}" in capsys.readouterr().err
+    assert SHARED in checkpoint_files(sd)
+
+
+def test_commit_without_plan_uses_stable_plan(run, monkeypatch):
+    repo, sd, plan = run
+    monkeypatch.setenv("SUPERLITE_STATE_DIR", str(sd))
+    (sd / "stable.json").write_text(json.dumps({"plan": "docs/plans/p.md"}), encoding="utf-8")
+    assert not (sd / "plan.md").exists()
+    write(repo, "src/a.py", "X = 1\n")
+    assert commit_task.main(["T1"]) == 0
+    assert checkpoint_files(sd) == ["src/a.py"]
 
 
 def test_only_held_file_fails(run, capsys):

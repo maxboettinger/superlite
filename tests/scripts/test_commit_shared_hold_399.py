@@ -87,16 +87,48 @@ def test_all_held_fails_with_reason(tmp_path):
     assert entries(repo) == []
 
 
-def test_held_after_own_checkpoint_says_no_change(tmp_path):
+def test_held_after_own_checkpoint_fails(tmp_path):
     repo = setup(tmp_path)
     write(repo, "src/a.py", "A = 1\n")
-    s1 = ck(repo, "T1").stdout.strip()
+    assert ck(repo, "T1").returncode == 0
     pool(repo, [{"busy": True, "current": "T2"}])
+    write(repo, "src/shared.py", "S = 2\n")
+    n = len(entries(repo))
+    r = ck(repo, "T1")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "T1 FAILED: nothing to commit; held for running T2: src/shared.py" in r.stdout
+    assert "no change since" not in r.stdout
+    assert len(entries(repo)) == n
+
+
+def test_claimed_file_not_held_for_running_owner(tmp_path):
+    repo = setup(tmp_path)
+    pool(repo, [{"busy": True, "current": "T2"}])
+    write(repo, "src/shared.py", "S = 1\n")
+    assert ck(repo, "T1", "--claim", "src/shared.py", "--ruling", "R").returncode == 0
+    r = ck(repo, "T1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "shared with running" not in r.stderr
+    assert "src/shared.py" in entries(repo)[-1]["files"]
+    n = len(entries(repo))
+    write(repo, "src/shared.py", "S = 3\n")
+    r = ck(repo, "T1")
+    assert r.returncode == 0 and "shared with running" not in r.stderr
+    assert len(entries(repo)) == n + 1
+
+
+def test_claimed_by_earlier_also_not_held(tmp_path):
+    repo = setup(tmp_path)
+    pool(repo, [{"busy": True, "current": "T2"}])
+    write(repo, "src/a.py", "A = 1\n")
+    write(repo, "src/shared.py", "S = 1\n")
+    assert ck(repo, "T1", "--also", "src/shared.py", "--ruling", "R").returncode == 0
     write(repo, "src/shared.py", "S = 2\n")
     r = ck(repo, "T1")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert r.stdout == f"T1: no change since its last checkpoint {s1}\n"
-    assert HOLD in r.stderr
+    assert "shared with running" not in r.stderr
+    assert "src/shared.py" in entries(repo)[-1]["files"]
+    assert len(entries(repo)) == 2
 
 
 def test_unchanged_shared_file_not_held(tmp_path):
