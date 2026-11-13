@@ -14,10 +14,10 @@
 #     by the coordinator; allowed targets are docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg,
 #     jpeg, gif, svg, webp), any docs.md, .superlite/** and .git/info/exclude (a stray untracked file or folder may also be removed with rm, and a git-ignored path no task Owns may be written or removed), in the project or a linked worktree in it; an Edit/Write of the Owns of an inline build (the run's plan holds exactly one task) passes too, judged by guard_judge.py --owns. `sl orchestrator end` closes the run. <state folder>/scratch/ is the coordinator's throwaway-script folder: a Bash run of a script there is judged with its text inlined as a heredoc (scratch_inline), and the code block names it (scratch_hint).
 #  4. Fleet on (.superlite/fleet.json says "on": true): an Agent call of a superlite role (implementer, implementer-haiku,
-#     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher, checker) is denied with the
+#     fixer-sonnet, fixer-sonnet-high, fixer-opus, package-reviewer, final-reviewer, researcher, checker, writer) is denied with the
 #     `sl fleet spawn --role` hint, as the role is a fleet worker then. The message says the block repeats on every call (no retry);
 #     a researcher's message gives the research path (brief under <state folder>/briefs/, spawn, send, `fleet wait Wn`,
-#     report under <state folder>/fleet/reports/). Other agents (Explore, general-purpose) fall through.
+#     report under <state folder>/fleet/reports/). A writer's names spawn --role writer --brief; the brief's Output: line names its one file. Other agents (Explore, general-purpose) fall through.
 #     Reads the run's own fleet.json: from a linked worktree its .superlite, not a binding's folder in another checkout;
 #     a fleet another session turned on (owner_session, owner_pid) is skipped unless that session is still bound there.
 #     The message names the state folder as PLAN for a build without a plan.
@@ -383,6 +383,7 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         package-reviewer|final-reviewer) frole="$fname" ;;
         researcher) frole="research" ;;
         checker) frole="checker" ;;
+        writer) frole="writer" ;;
       esac
       if [ -n "$frole" ]; then
         printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)","rule":"fleet","cwd":"%s"}\n' "$tool" "$REPLY" "$cwdv" \
@@ -392,6 +393,8 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         [ "$FSD" = "$FSD0" ] || fread=" Fleet state read: $FSD0/fleet.json, moved to $FSD/fleet.json."
         if [ "$frole" = research ]; then
           printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $FSD/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $FSD/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $FSD/fleet/reports/<name>.md. PLAN is the plan file, or $FSD before a plan exists. sl fleet off goes back to in-process agents.$fread" >&2
+        elif [ "$frole" = writer ]; then
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role writer --brief <abs brief file> --plan PLAN (fleet.md); the brief's Output: line names the one file the writer may write. PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents.$fread" >&2
         else
           printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents.$fread" >&2
         fi

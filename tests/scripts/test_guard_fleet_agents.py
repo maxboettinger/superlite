@@ -22,13 +22,27 @@ def guard(sd, agent, env=None, **extra):
     ("superlite:fixer-opus", "sl fleet spawn --role fixer --tier opus"),
     ("superlite:package-reviewer", "sl fleet spawn --role package-reviewer"),
     ("superlite:final-reviewer", "sl fleet spawn --role final-reviewer"),
-    ("superlite:researcher", "sl fleet spawn --role research")])
+    ("superlite:researcher", "sl fleet spawn --role research"),
+    ("superlite:checker", "sl fleet spawn --role checker"),
+    ("Superlite:Checker", "sl fleet spawn --role checker")])
 def test_fleet_on_blocks_each_superlite_role(sd, agent, hint):
     fleet(sd)
     r = guard(sd, agent)
     assert r.returncode == 2 and hint in r.stderr and "fleet send Wn --brief" in r.stderr and "sl fleet off" in r.stderr
     inc = json.loads((sd / "incidents.jsonl").read_text().splitlines()[-1])
     assert (inc["kind"], inc["agent"], inc["tool"]) == ("rule-block", "coordinator", "Agent") and agent in inc["target"]
+
+@pytest.mark.parametrize("agent", ["superlite:writer", "Superlite:Writer", "writer", "WRITER"])
+def test_fleet_on_blocks_writer_with_its_brief_path(sd, agent):  # #710
+    fleet(sd)
+    r = guard(sd, agent)
+    assert r.returncode == 2, r.stderr
+    assert "sl fleet spawn --role writer --brief <abs brief file> --plan PLAN" in r.stderr
+    assert "Output: line names the one file" in r.stderr and "fleet send" not in r.stderr
+    assert "do not retry it" in r.stderr and "sl fleet off" in r.stderr
+    inc = json.loads((sd / "incidents.jsonl").read_text().splitlines()[-1])
+    assert (inc["kind"], inc["agent"], inc["tool"], inc["rule"]) == ("rule-block", "coordinator", "Agent", "fleet")
+    assert agent in inc["target"]
 
 def test_fleet_off_or_absent_changes_nothing(sd):
     assert guard(sd, "superlite:fixer-opus").returncode == 0
