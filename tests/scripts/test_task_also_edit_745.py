@@ -70,3 +70,7 @@ def test_also_touches_parse(tmp_path):
     fenced = write(tmp_path, body_extra="```\n**Also-touches:** src/x.py\n```\n")
     t = plan_tools.Plan.load(fenced).by_id["T3"]
     assert task.also_touches(t) == []
+
+
+def test_module_docstring_names_also_touches():
+    assert "also_touches" in task.__doc__ and "Also edit:" in task.__doc__

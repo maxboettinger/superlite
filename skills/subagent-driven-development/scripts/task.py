@@ -10,6 +10,7 @@ interfaces`: for each producer of an item Tn consumes, its title, Produces lines
 block mentions (a one-word heading in an explicit form such as `Design section`, or, with an uppercase letter,
 by its own case outside field labels and inline code), when there is any; last
 `## Global constraints`: the plan's constraint, Tech stack and Architecture lines (`wave0.constraint_lines`).
+`also_touches` reads a task's Also-touches files and `also_line` renders them as an `Also edit:` line in the task block.
 Exit 2 for an unknown task or a missing plan. Language-neutral. Stdlib only.
 """
 # Complexity notation:
@@ -113,7 +114,7 @@ def referenced_sections(plan, task) -> list:  # O(L + sections*L)
     return out  # O(1)
 
 
-def also_touches(task) -> list:  # O(len body)
+def also_touches(task) -> list[str]:  # O(len body)
     """The task's `**Also-touches:**` files as `commit_task.add_also_owns` reads them, minus repeats and files it owns."""
     out = []  # O(1)
     for f in nt.parse_owns(nt._field(task.text, "Also-touches")):  # O(len body) iterations
