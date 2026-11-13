@@ -16,3 +16,21 @@ def test_detail_choice_is_a_ruling_for_ai_orchestrator():
         "include the plan `detail` choice in the same batch (AI orchestrator: a `Ruling:` line, not a question): `contracts`"
         in SKILL.read_text()
     )
+
+
+COVERAGE = SKILL.parent / "coverage.md"
+ONE_BATCH = SKILL.parents[2] / "evals/ai-asks-once/graders/one-batch.md"
+PLAIN_CAP = "no question tool: at most 4 numbered questions per message, the rest wait for the reply (AI orchestrator: `ruled` instead); a point past the fourth is a stated assumption, never a question"
+
+
+def test_plain_text_rounds_keep_the_cap_758():
+    # #758: with no question tool a run listed 6 numbered questions in one message.
+    assert "until none is open (plain text: 4 per message, no 5th; AI orchestrator: rule the rest)" in SKILL.read_text()
+    assert PLAIN_CAP in COVERAGE.read_text()
+
+
+def test_one_batch_judge_lists_then_counts_758():
+    text = ONE_BATCH.read_text()
+    assert "First list, one per line, each question" in text
+    assert "then count the lines" in text
+    assert "the defaults it will use when the user does not answer" in text
