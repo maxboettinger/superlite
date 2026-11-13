@@ -155,7 +155,7 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
             ln = line(None, t.id, tt, t.features.get("tests") == "build", bool(tt))  # O(o)
             out += [("Verify: " if len(mine) == 1 else f"Verify {t.id}: ") + (ln or "no test command (no code file in Owns); check that each owned file exists and says what the task asks.")]  # O(o)
         if len(mine) > 1:  # O(1)
-            out += ["Batch: run each task's Verify command on its own (the red run too), never one run_tests for several tasks; a `--task Tn` run may use Tn's own tree, which holds Tn's files but not another member's unfinished ones, so each task's change must work without the other's."]  # O(1)
+            out += ["Batch: run each task's Verify command on its own (the red run too), never one run_tests for several tasks; a `--task Tn` run may use Tn's own tree, which holds Tn's files but not another member's unfinished ones, so each task's change must work without the other's. Report each task's red run on its own line, `Red run Tn: <summary line>`, and give the json block's `red` as an object keyed by task id."]  # O(1)
     out += ["", f"Reply in at most 200 words, starting with `{STATUS_LINE}` (pick one), then files changed, the test command and its result line, and open questions."]  # O(1)
     return "\n".join(out) + "\n"  # O(out)
 
@@ -279,7 +279,8 @@ def red_gap(sd, tid, owns):  # why TID's newest implementer report proves no red
             best = (when, p.name, rep)  # O(1)
     if best is None:  # O(1)
         return None  # O(1)
-    red = str(best[2].get("red") or "").strip()  # O(len)
+    reds = best[2].get("reds")  # a batch report's red run per task id; older reports have none | O(1)
+    red = str(reds[tid] if isinstance(reds, dict) and isinstance(reds.get(tid), str) else best[2].get("red") or "").strip()  # O(len)
     if not red:  # O(1)
         return "its report names no red run"  # O(1)
     if red.lower().startswith("none"):  # O(1)
@@ -667,6 +668,8 @@ def report_contract(wrec):  # the contract a worker's texts end with | O(size of
     brief = lead_brief(wrec) if role == "lead" else None  # O(1)
     if brief is not None and fleet_report._planning(str(brief)):  # O(size of the brief)
         return fleet_report.PLANNED  # O(size of the brief)
+    if role == "implementer" and "," in str(wrec.get("task") or ""):  # a batch implementer reports its red run per task | O(1)
+        return fleet_report.WORK_BATCH  # O(1)
     return fleet_report.WORK  # O(1)
 
 
@@ -772,7 +775,7 @@ def _ask(sd, wid, w, after=0):  # ask a worker whose turn ended without a report
         return None  # O(1)
     sent = max(now_ms(), after + 1)  # newer than the stop record it answers, whatever the clocks say | O(1)
     try:  # O(1)
-        _prompt(fs.name_of(sd, wid, w), ASK + " " + (fleet_report.REVIEW if role == "final-reviewer" else fleet_report.WORK))  # O(len)
+        _prompt(fs.name_of(sd, wid, w), ASK + " " + report_contract(w))  # O(len)
     except hc.HerdrError:  # O(1)
         return False  # O(1)
     label = w.get("task") or wid  # O(1)

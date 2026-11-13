@@ -52,4 +52,4 @@ def test_quoted_strings_exist_in_code():
     assert "shipped (sl backlog status --all lists them)" in (SCRIPTS / "backlog_state.py").read_text(encoding="utf-8")
     rep = (SCRIPTS / "fleet_report.py").read_text(encoding="utf-8")
     assert "Red run" in rep and '"red": red or _red_line(text)' in rep
-    assert 'fleet_report.REVIEW if role == "final-reviewer" else fleet_report.WORK' in (SCRIPTS / "fleet_io.py").read_text(encoding="utf-8")
+    assert 'ASK + " " + report_contract(w)' in (SCRIPTS / "fleet_io.py").read_text(encoding="utf-8")

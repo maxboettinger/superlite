@@ -9,7 +9,8 @@ import fleet_io as io  # noqa: E402
 TAIL = ", then run the printed `wait:` line in the foreground."
 BATCH = ("Batch: run each task's Verify command on its own (the red run too), never one run_tests for several tasks; "
          "a `--task Tn` run may use Tn's own tree, which holds Tn's files but not another member's unfinished ones, "
-         "so each task's change must work without the other's.")
+         "so each task's change must work without the other's. "
+         "Report each task's red run on its own line, `Red run Tn: <summary line>`, and give the json block's `red` as an object keyed by task id.")
 
 
 def verify_lines(msg):
