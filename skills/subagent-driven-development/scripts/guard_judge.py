@@ -688,6 +688,8 @@ def _unwrap(words, dyn, c, st, ctx, bare):  # O(w) | (command words, dyn, direct
             i = 2  # O(1)
             while i < len(words) and words[i].startswith("-"):  # O(w)
                 i += 2 if words[i] in UV_VAL else 1  # O(1)
+            if base == "uv" and i < len(words) and (words[i].endswith(".py") or "--script" in words[2:i]):  # a Python script file: `_uv` judges it as `python3 X` | O(w)
+                break  # O(1)
             words, dyn, bare = words[i:], dyn[i:], bare[i:]  # O(w)
             continue  # O(1)
         if base not in WRAP:  # O(1)
@@ -882,13 +884,54 @@ def _disk_script(full, operand, lang, argv, c, st, ctx, depth):  # O(n) | verdic
         st2 = st.fork_for(c)  # O(v)
         st2.nested = True  # O(1)
         return _walk_text(text, st2, ctx, depth + 1)  # O(n)
-    interp = {"py": "python3", "js": "node", "pl": "perl", "rb": "ruby", "php": "php"}[lang]  # O(1)
-    flag = {"py": "-c", "php": "-r"}.get(lang, "-e")  # O(1)
-    for t in guard_tools.targets(_argv_sub([interp, flag, text] + list(argv)), text=ctx.text, file=full):  # O(len)
-        v = _check(t, c.inn, st, ctx, "?", "")  # O(d * p)
-        if v is not None:  # O(1)
-            return v  # O(1)
+    return _code_run(lang, text, argv, full, c, st, ctx)  # O(len)
+
+
+CODE = {"py": ("python3", "-c"), "js": ("node", "-e"), "pl": ("perl", "-e"), "rb": ("ruby", "-e"), "php": ("php", "-r")}  # language -> interpreter and its inline-code flag | O(1)
+
+def _code_run(lang, text, argv, full, c, st, ctx):  # O(len) | verdict for the code of a script file (heredoc-written or on disk) of a non-shell language: its targets judged like inline code, housekeeping included
+    interp, flag = CODE[lang]  # O(1)
+    w = _argv_sub([interp, flag, text] + list(argv))  # O(len)
+    pairs = [(t, "?") for t in guard_tools.targets(w, text=ctx.text, file=full)]  # O(len)
+    return _judge_pairs(pairs, interp, True, text, c, st, ctx)  # O(t * d * p)
+
+
+def _lang_of(base):  # O(1) | the language an interpreter command runs
+    return "py" if base.startswith(("python", "pypy")) else {"node": "js", "nodejs": "js", "bun": "js", "perl": "pl", "ruby": "rb", "php": "php"}[base]  # O(1)
+
+
+def _operand(base, w):  # O(w) | index of the script file an interpreter runs, None for code, a module or stdin
+    i, n, lang = 1, len(w), _lang_of(base)  # O(1)
+    while i < n:  # O(w)
+        x = w[i]  # O(1)
+        if x == "-" or x in ("-m", "-c", "-e", "-E", "-p", "-r", "--eval", "--print") and not (x == "-r" and lang in ("js", "rb")) and not (x == "-E" and lang != "pl") and not (x == "-p" and lang != "js"):  # -E is a Python flag, -p a Perl one | O(1)
+            return None  # O(1)
+        if x in ("-W", "-X") or (lang == "js" and x in ("-r", "--require")) or (lang == "rb" and x == "-r") or (lang in ("pl", "rb") and x == "-I") or (lang == "php" and x == "-f"):  # an option with a value; php -f names the file | O(1)
+            if lang == "php" and x == "-f":  # O(1)
+                return i + 1 if i + 1 < n else None  # O(1)
+            i += 2  # O(1)
+        elif x.startswith("-") and x != "--":  # O(1)
+            i += 1  # O(1)
+        else:  # O(1)
+            return i + (x == "--") if i + (x == "--") < n else None  # O(1)
     return None  # O(1)
+
+
+def _uv(words, c, st, ctx, depth):  # O(n) | `uv run [options] X.py` and `uv run --script X` as `python3 X`
+    i, n = 2, len(words)  # O(1)
+    while i < n:  # O(w)
+        x = words[i]  # O(1)
+        if x == "--":  # O(1)
+            i += 1  # O(1)
+            break  # O(1)
+        if x in UV_VAL:  # O(1)
+            i += 1  # O(1)
+        elif not x.startswith("-"):  # O(1)
+            break  # O(1)
+        i += 1  # O(1)
+    if i >= n:  # O(1)
+        return None  # O(1)
+    return _run_script(words[i], "py", words[i + 1:], c, st, ctx, depth)  # O(n)
 
 
 def _run_script(operand, lang, argv, c, st, ctx, depth):  # O(n) | verdict for a script file: its text from a heredoc of this call (judged like a -c body), any other write of it is unknown, else a file an earlier call of this session wrote, judged by its text
@@ -902,9 +945,12 @@ def _run_script(operand, lang, argv, c, st, ctx, depth):  # O(n) | verdict for a
             continue  # O(1)
         seen.add(full)  # O(1)
         if full in st.shared["scripts"]:  # O(1)
-            st2 = st.fork_for(c)  # O(v)
-            st2.nested = True  # O(1)
-            v = _walk_text(st.shared["scripts"][full], st2, ctx, depth + 1)  # O(n)
+            if lang in CODE:  # O(1)
+                v = _code_run(lang, st.shared["scripts"][full], argv, full, c, st, ctx)  # O(len)
+            else:  # O(1)
+                st2 = st.fork_for(c)  # O(v)
+                st2.nested = True  # O(1)
+                v = _walk_text(st.shared["scripts"][full], st2, ctx, depth + 1)  # O(n)
         elif full in st.shared["wrote"]:  # O(1)
             return _unknown(ctx, operand)  # O(1)
         else:  # O(1)
@@ -950,7 +996,7 @@ def _shell(words, dyn, c, st, ctx, depth):  # O(n) | a shell's -c body, stdin pr
         return _run_script(script, "sh", words[i + 1:], c, st, ctx, depth)  # O(n)
     if c.docs:  # O(1)
         return _walk_docs(c.docs, c, st, ctx, depth)  # O(docs)
-    if script is None and not has_s:  # `sh < x.sh`: the file on stdin is the program | O(1)
+    if has_s or script is None or script in ("/dev/stdin", "/dev/fd/0", "-"):  # `sh < x.sh`, `sh -s < x.sh`, `sh - < x.sh`: the file on stdin is the program | O(1)
         for r in c.seg.redirects:  # O(redirects)
             if r.op == "<" and r.target and not r.target.startswith(("<(", ">(", "&")):  # O(1)
                 return _run_script(r.target, "sh", [], c, st, ctx, depth)  # O(n)
@@ -1202,20 +1248,6 @@ def _patch_dir(w):  # O(w) | the folder `patch -d DIR` works in, "." without -d
         if x.startswith("-d") and len(x) > 2:  # O(1)
             return x[2:]  # O(p)
     return "."  # O(1)
-
-
-def _script(w, inn, st):  # O(w * d) | (code, argv words) of a Python script file this command wrote by heredoc, else None
-    i = 1  # O(1)
-    while i < len(w) and w[i].startswith("-"):  # O(w)
-        i += 2 if w[i] in ("-W", "-X") else 1  # O(1)
-    if i >= len(w):  # O(1)
-        return None  # O(1)
-    p = w[i]  # O(1)
-    for d in inn:  # O(d)
-        full = _clean(_winpath(p)) if p.startswith("/") else (_clean(d + "/" + p) if d else None)  # O(p)
-        if full in st.shared["scripts"]:  # O(1)
-            return st.shared["scripts"][full], list(w[i + 1:])  # O(w)
-    return None  # O(1)
 
 
 def _link_hit(src, dests, inn, st, ctx):  # O(d * p) | protected verdict when a link's source is a protected file (or the run folder)
@@ -1496,13 +1528,22 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
     if m:  # O(1)
         flag = {"node": "-e", "nodejs": "-e", "bun": "-e", "perl": "-e", "ruby": "-e", "php": "-r"}.get(base, "-c")  # O(1)
     has_code = m is not None and (flag in w[1:] or (flag == "-c" and "-m" in w[1:]))  # O(w)
-    script = _script(w, c.inn, st) if (m and flag == "-c" and not has_code) else None  # O(w * d)
+    if m and not has_code:  # an interpreter's script file: written by heredoc in this call, or by this session | O(w)
+        i = _operand(base, w)  # O(w)
+        lang = _lang_of(base)  # O(1)
+        if i is not None:  # O(1)
+            v = _run_script(w[i], lang, w[i + 1:], c, st, ctx, depth)  # O(n)
+            if v is not None:  # O(1)
+                return v  # O(1)
+        elif not c.docs and not c.piped and (len(w) == 1 or w[1] == "-"):  # `python3 < x.py`, `python3 - < x.py` | O(1)
+            for r in c.seg.redirects:  # O(redirects)
+                if r.op == "<" and r.target and not r.target.startswith(("<(", ">(", "&")):  # O(1)
+                    v = _run_script(r.target, lang, w[2:], c, st, ctx, depth)  # O(n)
+                    if v is not None:  # O(1)
+                        return v  # O(1)
     if base in guard_tools.COMMANDS or base.lower() in guard_tools.COMMANDS or m:  # O(1)
         progs = c.docs if (m and not has_code) else []  # a heredoc or here-string is the program | O(docs)
-        if script is not None:  # a script this command wrote by heredoc: its code, with the words after it as argv | O(code)
-            pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub([base, "-c", script[0]] + script[1]), text=ctx.text))  # O(code)
-            pairs.extend(_prog_pairs(w, flag, progs, ctx.text))  # the docs on its stdin are judged too | O(docs)
-        elif base == "git":  # git: from each directory, with the command's variables and the project as top | O(d * w)
+        if base == "git":  # git: from each directory, with the command's variables and the project as top | O(d * w)
             env = dict(st.vars)  # O(v)
             for x in c.seg.words:  # NAME=value words before git | O(w)
                 if _base(x) == "git":  # O(1)
@@ -1526,8 +1567,12 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
             pairs.append(("?", None))  # O(1)
         else:  # O(1)
             pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub(w) if m and flag == "-c" else w, text=ctx.text))  # O(w)
+    return _judge_pairs(pairs, base, m is not None, " ".join(w[1:]) + "".join(c.docs), c, st, ctx)  # O(t * d * p)
+
+
+def _judge_pairs(pairs, base, m, code, c, st, ctx):  # O(t * d * p) | judge the (target, file name) pairs a command or an interpreter's script names, housekeeping included
     inn = c.inn  # O(1)
-    if m and "chdir" in " ".join(w[1:]) + "".join(c.docs) + (script[0] if script else ""):  # the code moves: unknown | O(n)
+    if m and "chdir" in code:  # the code moves: unknown | O(n)
         inn = (None,)  # O(1)
     fl = _flags(c.seg, ctx)  # O(w)
     for i, (t, name) in enumerate(pairs):  # O(t)
@@ -1581,6 +1626,8 @@ def _run_words(words, dyn, c, st, ctx, depth, bare=None):  # O(n) | judge one co
         v = _run_script(words[0], None, words[1:], c, st, ctx, depth)  # O(n)
     elif base in SHELLS:  # O(1)
         v = _shell(words, dyn, c, st, ctx, depth)  # O(n)
+    elif base == "uv" and words[1:2] == ["run"] and (v := _uv(words, c, st, ctx, depth)) is not None:  # O(n)
+        pass  # O(1)
     elif base in ("eval", "source", "."):  # O(1)
         v = _source_or_eval(base, words, dyn, c, st, ctx, depth)  # O(n)
     elif base == "find":  # O(1)
@@ -2074,18 +2121,16 @@ MESSAGES = {  # O(1)
              "- An inline build (the run's plan holds exactly one task): you may write that task's Owns yourself.",
              "- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; "
              "`sl render_edit restore` undoes it.",
+             "- A throwaway script (count lines, compare outputs, time a command): write it under {scratch}/ and run it from "
+             "there. The folder is git-ignored and `sl orchestrator end` removes it; a run of a script there is judged like a "
+             "heredoc script, so it may read the project but not write project code.",
              "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
              ".superlite by hand."],
 }  # O(1)
 
 
-def _scratch_hint(project, sd):  # O(p) | the line that names the coordinator's throwaway-script folder: project-relative when the state folder lies in the project
-    scratch = sd + "/scratch"  # O(p)
-    if sd.startswith(project + "/"):  # O(p)
-        scratch = sd[len(project) + 1:] + "/scratch"  # O(p)
-    return ("- A throwaway script (count lines, compare outputs, time a command): write it under " + scratch + "/ and run it from there. "
-            "The folder is git-ignored and `sl orchestrator end` removes it; a run of a script there is judged like a heredoc script, "
-            "so it may read the project but not write project code.")  # O(p)
+def _scratch_hint(project, sd):  # O(p) | the coordinator's throwaway-script folder: project-relative when the state folder lies in the project
+    return sd[len(project) + 1:] + "/scratch" if sd.startswith(project + "/") else sd + "/scratch"  # O(p)
 
 
 def _flat(s, limit=120):  # O(len) | one line, no control characters
@@ -2176,9 +2221,7 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
     target = v.rel if named and not v.word else f"unresolved {_flat(v.word)} in: {cmd}" if v.word else cmd  # the word first: the incident cuts the rest | O(len)
     _incident(sd, "rule-block", tool, target, rule=v.kind, cwd=cwd or project)  # O(len)
     for line in MESSAGES[v.kind]:  # O(1)
-        if v.kind == "code" and line.startswith("- After the run, "):  # the scratch folder line (#690) comes right before it | O(1)
-            _err(_scratch_hint(project, sd))  # O(p)
-        _err(line)  # O(len)
+        _err(line.replace("{scratch}", _scratch_hint(project, sd)))  # the scratch folder line (#690) names its folder | O(len)
     if v.cmd:  # the one command of the chain that was refused | O(1)
         _err(REFUSED.format(_flat(v.cmd, 300)))  # O(len)
     if v.kind != "protected":  # the protected message names no target | O(1)

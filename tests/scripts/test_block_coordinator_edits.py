@@ -369,15 +369,17 @@ def test_scratch_data_file_not_inlined(sproj):
     assert sproj.sh("cat .superlite/scratch/notes.txt").returncode == 0
 
 
-def test_scratch_symlink_and_oversize_skipped(sproj):
+def test_scratch_symlink_and_oversize_judged(sproj):
     sproj.put("bad.py", BAD)
     try:
         os.symlink(sproj.scratch / "bad.py", sproj.scratch / "link.py")
     except (OSError, NotImplementedError):
         pytest.skip("no symlinks")
-    assert sproj.sh("python3 .superlite/scratch/link.py").returncode == 0
+    assert sproj.sh("python3 .superlite/scratch/link.py").returncode == 2
     sproj.put("big.py", "# x\n" * 17500 + BAD + "\n")
-    assert sproj.sh("python3 .superlite/scratch/big.py").returncode == 0
+    r = sproj.sh("python3 .superlite/scratch/big.py")
+    assert r.returncode == 2
+    assert "over 65536 characters" in r.stderr
 
 
 def test_scratch_large_script_is_quick(sproj):
@@ -393,7 +395,7 @@ def test_scratch_large_script_is_quick(sproj):
 
 
 def test_scratch_unresolved_block_names_original_command(sproj):
-    sproj.put("u.py", "from pathlib import Path\n(Path(__file__).parent / 'o.txt').write_text('1')")
+    sproj.put("u.py", "import os\nopen(os.environ['OUT'], 'w').write('1')")
     r = sproj.sh("python3 .superlite/scratch/u.py")
     assert r.returncode == 2
     assert "Blocked command: python3 .superlite/scratch/u.py" in r.stderr.splitlines()
