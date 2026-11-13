@@ -1295,6 +1295,92 @@ def forecast_inputs_note(coef: dict) -> str:  # O(1) | which forecast inputs are
     return "inputs: " + "; ".join(parts) if parts else ""  # O(1)
 
 
+RUN_WRAPPERS = {"env", "sudo", "nohup", "time", "exec", "uv", "uvx", "npx", "poetry", "pipenv", "run"}  # O(1)
+RUN_INTERPRETERS = {"python", "python3", "py", "node", "bash", "sh", "zsh", "ruby", "perl"}  # O(1)
+RUN_OUTSIDE = {"gh", "git", "ssh", "scp", "sftp", "rsync", "curl", "wget", "docker", "podman", "kubectl", "helm", "systemctl", "launchctl", "service", "terraform", "ansible", "ansible-playbook", "aws", "gcloud", "az", "heroku", "fly", "flyctl", "vercel", "netlify"}  # O(1)
+RUN_WORDS = {"deploy", "publish", "push", "release", "restart", "upload", "nightly", "cron"}  # O(1)
+RUN_DRY = re.compile(r"^--?dry[-_]?run(=.*)?$", re.I)  # O(1)
+RUN_TAIL = ("probes run every run= entry for real with fuzzed arguments appended, so a command that fetches, pushes, opens pull requests, "  # O(1)
+            "deploys or restarts a service gets **Probe entry:** none (<why>)")  # O(1)
+
+
+def _run_stem(tok: str) -> str:  # O(s)
+    return Path(tok.replace("\\", "/")).stem.lower()  # O(s)
+
+
+def run_effect(cmd: str) -> tuple[str, str] | None:  # O(s) #711: a `run=` entry runs for real, so name the commands with outside effects
+    """("issue", why) for a dry-run flag or an outside tool as the program, ("warning", word) for an effect word, else None."""
+    try:  # O(1)
+        toks = shlex.split(cmd)  # O(s)
+    except ValueError:  # O(1)
+        toks = cmd.split()  # O(s)
+    if any(RUN_DRY.match(t) for t in toks):  # O(t)
+        return ("issue", "has a dry-run flag")  # O(1)
+    i = 0  # O(1)
+    while i < len(toks):  # O(t)
+        if re.match(r"^[A-Za-z_]\w*=", toks[i]):  # O(s)
+            i += 1  # O(1)
+        elif _run_stem(toks[i]) in RUN_WRAPPERS:  # O(s)
+            i += 1  # O(1)
+            while i < len(toks) and toks[i].startswith("-"):  # O(t)
+                i += 1  # O(1)
+        else:  # O(1)
+            break  # O(1)
+    if i >= len(toks):  # O(1)
+        return None  # O(1)
+    j = i  # O(1)
+    if _run_stem(toks[i]) in RUN_INTERPRETERS:  # O(s)
+        j = i + 1  # O(1)
+        while j < len(toks):  # O(t)
+            if toks[j] == "-c":  # O(1)
+                return None  # O(1)
+            if toks[j] == "-m" and j + 1 < len(toks):  # O(1)
+                j += 1  # O(1)
+                break  # O(1)
+            if toks[j].startswith("-"):  # O(1)
+                j += 1  # O(1)
+                continue  # O(1)
+            break  # O(1)
+        if j >= len(toks):  # O(1)
+            return None  # O(1)
+    prog = toks[j].rsplit(".", 1)[-1].lower() if toks[j - 1:j] == ["-m"] and j > i else _run_stem(toks[j])  # O(s)
+    if prog in RUN_OUTSIDE:  # O(1)
+        return ("issue", f"runs {prog}")  # O(1)
+    for w in [*re.split(r"[-_.]", prog), *(t.lower() for t in toks[j + 1:] if not t.startswith("-") and "/" not in t and "\\" not in t)]:  # O(t*s)
+        if w in RUN_WORDS:  # O(1)
+            return ("warning", w)  # O(1)
+    return None  # O(1)
+
+
+def _run_entries(plan: Plan) -> list:  # O(L*s + n) (holder, command) of every unfenced `run=` Probe entry part
+    spans = [(t.line, t.line + t.text.count("\n"), t.id) for t in plan.tasks]  # O(n)
+    out = []  # O(1)
+    for i, ln in enumerate(plan.lines):  # O(L)
+        fm = None if plan.fenced[i] else FIELD_RE.match(ln.strip())  # O(s)
+        if not fm or fm.group(1).strip().lower() != "probe entry":  # O(1)
+            continue  # O(1)
+        holder = next((tid for lo, hi, tid in spans if lo <= i <= hi), None)  # O(n)
+        for part in re.split(r"\s*·\s*", fm.group(2)):  # O(parts)
+            key, eq, val = strip_ticks(part).partition("=")  # O(s)
+            if eq and key.strip().lower() == "run" and strip_ticks(val):  # O(s)
+                out.append((holder, strip_ticks(val)))  # O(1)
+    return out  # O(entries)
+
+
+def _run_shown(cmd: str) -> str:  # O(s)
+    return cmd if len(cmd) <= 60 else cmd[:57] + "..."  # O(s)
+
+
+def run_entry_warnings(plan: Plan) -> list[str]:  # O(L*s) #711: a `run=` entry naming an effect word
+    out = []  # O(1)
+    for _, cmd in _run_entries(plan):  # O(entries)
+        eff = run_effect(cmd)  # O(s)
+        msg = f'WARNING: PROBE: run={_run_shown(cmd)} names "{eff[1]}": {RUN_TAIL}' if eff and eff[0] == "warning" else ""  # O(s)
+        if msg and msg not in out:  # O(entries)
+            out.append(msg)  # O(1)
+    return out  # O(entries)
+
+
 def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
     """PROBE: a `call=` Probe entry must name a Produces of this plan that takes exactly one required parameter (probes pass
     one text argument). The entry's task is a fix task; an entry outside every task block (plan header, a section) is plan-scoped."""
@@ -1344,6 +1430,12 @@ def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
             if (holder, msg) not in seen:  # O(1)
                 seen.add((holder, msg))  # O(1)
                 issues.append(Issue(msg, [holder] if holder else (), scope="task" if holder else "plan"))  # O(1)
+    for holder, cmd in _run_entries(plan):  # O(entries)
+        eff = run_effect(cmd)  # O(s)
+        msg = f"PROBE: run={_run_shown(cmd)} {eff[1]}: {RUN_TAIL}" if eff and eff[0] == "issue" else ""  # O(s)
+        if msg and (holder, msg) not in seen:  # O(1)
+            seen.add((holder, msg))  # O(1)
+            issues.append(Issue(msg, [holder] if holder else (), scope="task" if holder else "plan"))  # O(1)
     return issues  # O(issues)
 
 
@@ -2625,6 +2717,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         frozen = set()  # O(1)
     issues.extend(shape.example_issues(plan, frozen))  # a consumer of structured data without examples is a fix task | O(n*q)
     issues.extend(probe_issues(plan))  # a `call=` entry the probes cannot call is a fix task (#177) | O(L*s + n*q)
+    warnings.extend(run_entry_warnings(plan))  # a `run=` entry with an effect word (#711) | O(L*s)
     warnings.extend(shape.split_notes(plan))  # O(n*q)
 
     # diagrams
@@ -3106,11 +3199,13 @@ def refresh_adapter(plan_path: str, write: bool = True) -> str:  # O(file + entr
         entries = pt_review.plan_entries(plan)  # O(E_p*m)
     except Exception:  # noqa: BLE001 | O(1)
         return ""  # O(1)
-    if entries == lits["ENTRIES"]:  # O(E_p)
+    old_run = any("run" in e for e in entries) and "SANDBOX_DROP" not in src  # a run= adapter built before the sandbox (#711) | O(E_p)
+    if entries == lits["ENTRIES"] and not old_run:  # O(E_p)
         return ""  # O(1)
     rel = adapter.relative_to(sl_dir.parent).as_posix()  # O(1)
     sl = (Path(__file__).resolve().parent / "sl").as_posix()  # O(1)
-    why = "the plan has no Probe entry lines" if not entries else "the plan's Probe entries changed"  # O(1)
+    why = ("the plan has no Probe entry lines" if not entries else "the plan's Probe entries changed" if entries != lits["ENTRIES"]  # O(E_p)
+           else "the adapter's run= predates the sandbox")  # O(1)
     run = f"RUN: {sl} plan_tools adapter --plan {Path(plan_path).resolve()} (the probe adapter is stale: {why})"  # O(1)
     if not write:  # O(1)
         return run  # O(1)
@@ -3125,7 +3220,7 @@ def refresh_adapter(plan_path: str, write: bool = True) -> str:  # O(file + entr
         new = pt_review.build_adapter(plan, adapter, root)  # O(E_p*m + template)
         compile(new, str(adapter), "exec")  # O(template)
         adapter.write_text(new, encoding="utf-8", newline="\n")  # O(template)
-        return f"ADAPTER: rebuilt {rel} (the plan's Probe entries changed)"  # O(1)
+        return f"ADAPTER: rebuilt {rel} ({why})"  # O(1)
     except Exception:  # noqa: BLE001 | O(1)
         return run  # O(1)
     finally:  # O(r)
