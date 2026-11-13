@@ -113,11 +113,28 @@ def referenced_sections(plan, task) -> list:  # O(L + sections*L)
     return out  # O(1)
 
 
+def also_touches(task) -> list:  # O(len body)
+    """The task's `**Also-touches:**` files as `commit_task.add_also_owns` reads them, minus repeats and files it owns."""
+    out = []  # O(1)
+    for f in nt.parse_owns(nt._field(task.text, "Also-touches")):  # O(len body) iterations
+        if f not in out and f not in task.owns:  # O(o)
+            out.append(f)  # O(1)
+    return out  # O(1)
+
+
+def also_line(files) -> str:  # O(f)
+    """The `Also edit:` line that names files another task owns but this task edits too."""
+    return "Also edit: " + ", ".join(files) + " (Also-touches: files another task owns that this task edits too; commit_task commits them with this task)"  # O(f)
+
+
 def render(plan, tid) -> str:  # O(n*q*s)
     task = plan.by_id.get(tid)  # O(1)
     if task is None:  # O(1)
         raise KeyError(tid)  # O(1)
     out = [task.text.rstrip("\n").rstrip()]  # O(block)
+    also = also_touches(task)  # O(block)
+    if also:  # O(1)
+        out += ["", also_line(also)]  # O(f)
     if task.repo:  # an external task names its tree before the consumed interfaces | O(1)
         out += [""] + pt.external_brief(str(plan.path) if plan.path else None, task)  # O(d)
     prods, missing = producers_of(plan, task)  # O(n*q*s)

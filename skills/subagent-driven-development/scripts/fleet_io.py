@@ -123,7 +123,8 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
     mine = [pl.by_id[t] for t in tasks]  # O(k)
     ids = ", ".join(tasks)  # O(k)
     owns = [o for t in mine for o in t.owns]  # O(k*o)
-    others = list(dict.fromkeys(o for t in pl.tasks if t.id not in tasks for o in t.owns if o not in owns))  # O(n*o*k) own files are never off limits, repeats dropped
+    also = list(dict.fromkeys(f for t in mine if not t.repo for f in taskmod.also_touches(t) if f not in owns))  # O(k*block) Also-touches files, editable
+    others = list(dict.fromkeys(o for t in pl.tasks if t.id not in tasks for o in t.owns if o not in owns and o not in also))  # O(n*o*k) own files are never off limits, repeats dropped
     out = [f"# Task{'s' if len(tasks) > 1 else ''} {ids}", "", f"SUPERLITE={superlite_root}", f"PLAN={plan}", f"sl (type it literally in every command): {sl_path}"]  # O(1)
     if tier == "haiku":  # O(1)
         out += ["", "Your task text:", ""] + [taskmod.render(pl, t) for t in tasks]  # O(k*n*q*s)
@@ -131,7 +132,7 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
         out += ["Your task text: " + " and ".join(f"`{sl_path} task {t} --plan {plan}`" for t in tasks)]  # O(k)
     ext = mine[0].repo if len(mine) == 1 else None  # dispatch never batches an external task | O(k*s)
     own_line = f"Owns (relative to the task's tree of {ext['root']}): {', '.join(mine[0].written_owns)}" if ext else f"Owns: {', '.join(owns)}"  # O(o)
-    out += [own_line, f"Do not touch: {', '.join(others) if others else '(nothing else is owned)'}"]  # O(n*o)
+    out += [own_line] + ([taskmod.also_line(also)] if also else []) + [f"Do not touch: {', '.join(others) if others else '(nothing else is owned)'}"]  # O(n*o)
     cmds = {t.id: testcmd.task_command(t.field_text("tests")) for t in mine} if not ext else {}  # O(k*s)
     tail = ", then run the printed `wait:` line in the foreground."  # O(1)
 
