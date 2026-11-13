@@ -1117,42 +1117,73 @@ def _unq(m: re.Match, lang: str) -> str | None:  # O(len(text)) | a literal's te
     return re.sub(r"\\(.)", r"\1", text, flags=re.S)  # O(len(text))
 
 
-def _cmd_words(raw: str, lang: str) -> list[str] | None:  # O(len(raw)) | the literal command words, None when unknown
+_WHY: list[str] = []  # O(1) | the reasons the last targets() call recorded for a subprocess call it names "?" (#705)
+
+
+def _why(reason: str) -> list[str]:  # O(|_WHY|) | record why a subprocess call is unknown; its "?" target
+    if reason not in _WHY:  # O(|_WHY|)
+        _WHY.append(reason)  # O(1)
+    return ["?"]  # O(1)
+
+
+def unresolved() -> str:  # O(1) | the first reason the last targets() call recorded for a "?", "" when none
+    return _WHY[0] if _WHY else ""  # O(1)
+
+
+def _elem(part: str, lang: str) -> str | None:  # O(len(part)) | one argv element's literal value, None when it is not a literal
+    m = _LIT.match(part)  # O(len(part))
+    if m and not part[m.end():].strip():  # O(len(part))
+        return _unq(m, lang)  # O(len(part))
+    if lang == "py":  # a name bound only to one literal, or a composition of literals (#705)  # O(1)
+        r = _compose_raw(part.strip(), _NAMES[0])  # O(len(part))
+        if r is not None and len(r) == 1 and _UNK not in r[0]:  # O(len(r[0]))
+            return r[0]  # O(1)
+    return None  # O(1)
+
+
+def _cmd_words(raw: str, lang: str) -> tuple[list[str], list[int]] | None:  # O(len(raw)) | the command words and their kinds: 0 a literal, 1 one word that is not a literal ("?"), 2 any number of words; None when unreadable
     s = raw.lstrip(" \t\r\n")  # O(len(raw))
     if s.startswith("("):  # O(1)
         s = s[1:]  # O(len(raw))
     words: list[str] = []  # O(1)
+    kinds: list[int] = []  # O(1)
     while True:  # O(len(raw))
         s = s.lstrip(" \t\r\n")  # O(len(s))
         if not s or s[0] in ");":  # O(1)
             break  # O(1)
-        if s[0] == "[":  # a list of literals: the argv  # O(1)
-            j = s.find("]")  # O(len(s))
-            if j < 0:  # O(1)
+        if s[0] == "[":  # the argv list  # O(1)
+            j = _scan_close(s, 0)  # O(len(s))
+            if j >= len(s):  # O(1)
                 return None  # O(1)
-            inner, s = s[1:j], s[j + 1:]  # O(len(s))
-            while inner.strip():  # O(len(inner))
-                m = _LIT.match(inner)  # O(len(inner))
-                v = _unq(m, lang) if m else None  # O(len(inner))
-                if v is None:  # O(1)
+            parts = _split_top(s[1:j])  # O(len(s))
+            if parts and not parts[-1].strip():  # a trailing comma  # O(1)
+                parts.pop()  # O(1)
+            for part in parts:  # O(len(s))
+                p = part.strip()  # O(len(part))
+                if not p:  # O(1)
                     return None  # O(1)
-                words.append(v)  # O(1)
-                inner = inner[m.end():].lstrip(" \t\r\n")  # O(len(inner))
-                if inner.startswith(","):  # O(1)
-                    inner = inner[1:]  # O(len(inner))
-                elif inner:  # O(1)
-                    return None  # O(1)
+                v = None if p.startswith("*") else _elem(p, lang)  # O(len(p))
+                words.append("?" if v is None else v)  # O(1)
+                kinds.append(2 if p.startswith("*") else int(v is None))  # an unpacked list: any number of words  # O(1)
+            s = s[j + 1:].lstrip(" \t")  # O(len(s))
+            if s.startswith("+"):  # the list + more words: any number of words  # O(1)
+                words.append("?")  # O(1)
+                kinds.append(2)  # O(1)
+                break  # O(1)
+            if s and s[0] not in ",);\n":  # the list is part of another expression (a slice, a method call)  # O(1)
+                return None  # O(1)
         else:  # O(1)
             m = _LIT.match(s)  # O(len(s))
             nxt = s[m.end():].lstrip(" \t") if m else ""  # O(len(s))
-            if m and (not nxt or nxt[0] in ",);\n"):  # O(1)
-                v = _unq(m, lang)  # O(len(s))
-                if v is None:  # O(1)
-                    return None  # O(1)
+            v = _unq(m, lang) if m and (not nxt or nxt[0] in ",);\n") else None  # O(len(s))
+            if v is not None:  # O(1)
                 words.append(v)  # O(1)
+                kinds.append(0)  # O(1)
                 s = s[m.end():]  # O(len(s))
             elif words and re.match(r"\{|\w+\s*(?:=(?!=)|:(?!:))|function\b|async\b|\(|\w+\s*=>|\)", s):  # options  # O(1)
                 break  # O(1)
+            elif not words:  # the program, or the shell string, is not a literal (#705)  # O(1)
+                return ["?"], [1]  # O(1)
             else:  # O(1)
                 return None  # O(1)
         s = s.lstrip(" \t")  # O(len(s))
@@ -1160,7 +1191,11 @@ def _cmd_words(raw: str, lang: str) -> list[str] | None:  # O(len(raw)) | the li
             s = s[1:]  # O(len(s))
         else:  # O(1)
             break  # O(1)
-    return words or None  # O(1)
+    return (words, kinds) if words else None  # O(1)
+
+
+def _runs_code(c: str) -> bool:  # O(1) | an interpreter whose inline code _eval_code reads
+    return _PY.match(c) is not None or c in _NODE or c in ("ruby", "php", "perl")  # O(1)
 
 
 def _known(w: str) -> bool:  # O(len(w))
@@ -1198,10 +1233,13 @@ def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the pat
     if _cmd(words[0]) in _WRAP or re.match(r"[A-Za-z_]\w*=", words[0]):  # skip a wrapper and its options  # O(1)
         k = next((i for i in range(1, len(words)) if _known(words[i]) and not words[i].startswith("-")), len(words))  # O(w)
         if k == len(words):  # O(1)
-            return []  # O(1)
+            first = next((x for x in words[1:] if not x.startswith("-") and not re.match(r"[A-Za-z_]\w*=", x)), None)  # O(w)
+            return ["?"] if first == "?" else []  # a wrapper whose program is not a literal (#705)  # O(1)
     w = words[k:]  # O(w)
     c = _cmd(w[0])  # O(1)
-    if c == "xargs" or (c == "find" and any(a in _FIND_W for a in w)):  # O(w)
+    if c == "xargs" or (c == "find" and any(a in _FIND_W or a == "?" for a in w)):  # find: a word that is not a literal may be an action (#705)  # O(w)
+        return ["?"]  # O(1)
+    if "?" in w[1:-1] and (c in _SHELLS or c in _PSHELLS or _runs_code(c)):  # such a word before the last may be -c and its code (#705)  # O(w)
         return ["?"]  # O(1)
     if c == "eval":  # O(1)
         return _shell(" ".join(w[1:]))  # O(w)
@@ -1218,14 +1256,24 @@ def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the pat
 
 
 def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(raw)) | os.system, subprocess.run, ...
-    words = _cmd_words(raw, lang)  # O(len(raw))
-    if words is None or _depth[0] >= 4:  # O(1)
+    found = _cmd_words(raw, lang)  # O(len(raw))
+    if found is None or _depth[0] >= 4:  # O(1)
         return ["?"]  # O(1)
+    words, kinds = found  # O(1)
+    if kinds[0]:  # the program, or the shell string, is not a literal (#705)  # O(1)
+        return _why("subprocess program is not a string literal")  # O(1)
+    k = next((i for i, x in enumerate(kinds) if x), -1)  # the first argument that is not a literal  # O(w)
+    cause = f"subprocess argument {k + 1} is not a string literal"  # the program is argument 1  # O(1)
+    if 2 in kinds:  # an unpacked list or a `+` tail: any words, -c CODE too  # O(w)
+        return _why(cause)  # O(1)
     _depth[0] += 1  # O(1)
     try:  # O(1)
-        return _shell(words[0]) if len(words) == 1 else _argv(words)  # O(len(raw))
+        out = _shell(words[0]) if len(words) == 1 else _argv(words)  # O(len(raw))
     finally:  # O(1)
         _depth[0] -= 1  # O(1)
+    if "?" in out and k >= 0:  # O(len(out))
+        _why(cause)  # O(1)
+    return out  # O(1)
 
 
 def _a_sh_rb(args: list[Arg], raw: str) -> list[str]:  # O(len(raw))
@@ -1293,7 +1341,7 @@ _CALLS: dict[str, list[tuple[str, object]]] = {
         (_PYP + r"(?:remove|removedirs|unlink|rmdir|rmtree|truncate)\s*\(", _a_arg(0)),
         (r"(?<![\w.])(?:os\.)?(?:system|popen)\s*\(", _a_sh),
         (r"(?<![\w.])(?:subprocess\.)?(?:run|call|check_call|check_output|Popen|getoutput|getstatusoutput)\s*\(",
-         lambda a, r: _a_sh(a, r) if re.match(r"\s*\(?\s*(?:\[|[rRbBuU]{0,2}['\"])", r) else ["?"]),
+         lambda a, r: _a_sh(a, r) if re.match(r"\s*\(?\s*(?:\[|[rRbBuU]{0,2}['\"])", r) else _why("subprocess program is not a string literal")),
         (r"\bsubprocess\.\w+\s*\(", _a_sh),
         (r"(?<![\w.])(?:os\.)?(?:exec[lv]p?e?|spawn[lv]p?e?)\s*\(|\bpty\.spawn\s*\(", _a_unknown),
         (r"(?<![\w.])(?:fileinput\.)?(?:input|FileInput)\s*\((?=[^)]*inplace\s*=\s*(?:True|1))", _a_arg(0)),
@@ -1715,6 +1763,7 @@ def targets(words: list[str], cwd: str | None = None, env=None, top: str | None 
     variables in force for the command (GIT_WORK_TREE; a None value is unknown), top the directory a `!` alias runs in
     (the project root), text the whole command line (a git config or git dir named anywhere makes the config unknown),
     file the path of the script whose text a Python `-c` argument is (`__file__`; None: unknown)."""
+    _WHY.clear()  # the reasons of this call only (#705)  # O(1)
     return _targets(words, cwd, env, top, text, file)  # O(len(words) * |options|)
 
 
@@ -1737,6 +1786,8 @@ def _targets(words: list[str], cwd: str | None = None, env=None, top: str | None
     if cmd in _PS_CMDLETS:  # O(1)
         return _ps(cmd, args)  # O(len(args))
     found = _eval_code(cmd, args)  # O(len(args))
+    if found and "?" in found[1].split("\n"):  # inline code that is not a literal (#705)  # O(len(code))
+        return ["?"]  # O(1)
     if found:  # O(1)
         return _code(found[1], found[0], temp_root(text), file)  # O(len(code))
     return []  # O(1)

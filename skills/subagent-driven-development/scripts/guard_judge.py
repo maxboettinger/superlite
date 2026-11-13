@@ -144,6 +144,7 @@ class _Ctx:  # O(p)
     def __init__(self, command, project, mode, sds=()):  # O(n + p)
         self.mode = mode  # O(1)
         self.gitwhy = ""  # git's reason for a target it cannot name, for the command being judged | O(1)
+        self.toolwhy = ""  # why a script's subprocess call is unknown (guard_tools.unresolved, #705), for the command being judged | O(1)
         self.sd = next((d for d in sds if isinstance(d, str) and d), None)  # first state folder | O(s)
         self.sds = tuple(d for d in sds if isinstance(d, str) and d and "\0" not in d)  # every state folder of the run | O(s)
         self.enforce = mode in ("active", "human")  # O(1)
@@ -601,7 +602,8 @@ def _check(t, inn, st, ctx, name=None, flag="", quoted=False):  # O(d * (p + dep
         flag = _flag_of(t, {w: "g" for w in ctx.vglob})  # O(v * p)
     if flag:  # a glob or brace word: its text is a pattern, not the file | O(alts * d * p)
         return _check_flagged(t, inn, st, ctx, name, flag)  # O(MAX_BRACE * d * p)
-    word = t if t != "?" else "? (from " + (ctx.cmd or "the command") + (": " + ctx.gitwhy if ctx.cmd == "git" and ctx.gitwhy else "") + ")"  # the target as read, before the $VAR/ cut | O(p)
+    why = ctx.gitwhy if ctx.cmd == "git" else ctx.toolwhy  # git's reason, else a script's subprocess call's (#705) | O(1)
+    word = t if t != "?" else "? (from " + (ctx.cmd or "the command") + (": " + why if why else "") + ")"  # the target as read, before the $VAR/ cut | O(p)
     m = re.match(r"^\$(?:\{\w+\}|\w+)/+(.+)$", t)  # `$VAR/rest`: rest judged from an unknown directory | O(p)
     cut = bool(m) and "$" not in m.group(1) and "`" not in m.group(1)  # O(p)
     if cut:  # O(1)
@@ -892,7 +894,7 @@ CODE = {"py": ("python3", "-c"), "js": ("node", "-e"), "pl": ("perl", "-e"), "rb
 def _code_run(lang, text, argv, full, c, st, ctx):  # O(len) | verdict for the code of a script file (heredoc-written or on disk) of a non-shell language: its targets judged like inline code, housekeeping included
     interp, flag = CODE[lang]  # O(1)
     w = _argv_sub([interp, flag, text] + list(argv))  # O(len)
-    pairs = [(t, "?") for t in guard_tools.targets(w, text=ctx.text, file=full)]  # O(len)
+    pairs = [(t, "?") for t in _tool_targets(ctx, w, text=ctx.text, file=full)]  # O(len)
     return _judge_pairs(pairs, interp, True, text, c, st, ctx)  # O(t * d * p)
 
 
@@ -1500,12 +1502,19 @@ def _housekeeping(v, ctx, folders, write=False, wrote=(), raw=None):  # O(p) + g
         return False, "git could not tell"  # O(1)
 
 
-def _prog_pairs(w, flag, progs, text=None):  # O(docs * w) | (target, "?") of each heredoc or here-string read as the interpreter's program
+def _tool_targets(ctx, w, **kw):  # O(len) | guard_tools.targets, keeping why a script's subprocess call is unknown for the block's word (#705)
+    ts = guard_tools.targets(w, **kw)  # O(len)
+    if "?" in ts and not ctx.toolwhy:  # O(len)
+        ctx.toolwhy = guard_tools.unresolved()  # O(1)
+    return ts  # O(1)
+
+
+def _prog_pairs(w, flag, progs, ctx):  # O(docs * w) | (target, "?") of each heredoc or here-string read as the interpreter's program
     out = []  # O(1)
     for doc in progs:  # O(docs)
         k = w.index("-", 1) if "-" in w[1:] else len(w)  # O(w)
         w2 = _argv_sub(w[:k] + [flag, doc] + w[k + 1:])  # O(w + doc)
-        out.extend((t, "?") for t in guard_tools.targets(w2, text=text))  # O(doc)
+        out.extend((t, "?") for t in _tool_targets(ctx, w2, text=ctx.text))  # O(doc)
     return out  # O(docs)
 
 
@@ -1562,11 +1571,11 @@ def _targets(words, dyn, base, xargs, c, st, ctx, depth):  # O(t * d * p) | judg
                 ts.append("?")  # the patch lands below a folder git does not name as its cwd | O(1)
             pairs.extend((t, "?") for t in ts)  # O(t)
         elif progs:  # O(docs)
-            pairs.extend(_prog_pairs(w, flag, progs, ctx.text))  # O(docs)
+            pairs.extend(_prog_pairs(w, flag, progs, ctx))  # O(docs)
         elif m and not has_code and c.piped and (len(w) == 1 or "-" in w[1:]):  # a program piped in | O(w)
             pairs.append(("?", None))  # O(1)
         else:  # O(1)
-            pairs.extend((t, "?") for t in guard_tools.targets(_argv_sub(w) if m and flag == "-c" else w, text=ctx.text))  # O(w)
+            pairs.extend((t, "?") for t in _tool_targets(ctx, _argv_sub(w) if m and flag == "-c" else w, text=ctx.text))  # O(w)
     return _judge_pairs(pairs, base, m is not None, " ".join(w[1:]) + "".join(c.docs), c, st, ctx)  # O(t * d * p)
 
 
@@ -1602,6 +1611,7 @@ def _run_words(words, dyn, c, st, ctx, depth, bare=None):  # O(n) | judge one co
         return None  # O(1)
     ctx.cmd = _base(words[0])  # O(p)
     ctx.gitwhy = ""  # O(1)
+    ctx.toolwhy = ""  # O(1)
     c.inn = c.ok = c.fail = inn  # the wrapper may have changed the directory | O(1)
     words = [_expand(w, st, ctx, True, not b) if d else w for w, d, b in zip(words, dyn, bare)]  # the variables the guard knows | O(w * p)
     dyn = [d and ("$" in w or "`" in w) for w, d in zip(words, dyn)]  # O(w)
@@ -2123,7 +2133,9 @@ MESSAGES = {  # O(1)
              "`sl render_edit restore` undoes it.",
              "- A throwaway script (count lines, compare outputs, time a command): write it under {scratch}/ and run it from "
              "there. The folder is git-ignored and `sl orchestrator end` removes it; a run of a script there is judged like a "
-             "heredoc script, so it may read the project but not write project code.",
+             "heredoc script, so it may read the project but not write project code. A subprocess call whose program is "
+             "not a string literal (`[prog, ...]`, `sys.executable`) is judged unknown; a later argument that is not a "
+             "literal is judged like an unknown shell variable.",
              "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
              ".superlite by hand."],
 }  # O(1)

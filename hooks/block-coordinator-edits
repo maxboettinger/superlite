@@ -661,7 +661,7 @@ find_py() {
 scratch_hint() {
   local S="$sd/scratch"
   case "$sd" in "$proj"/*) S="${sd#"$proj"/}/scratch" ;; esac
-  printf '%s\n' "- A throwaway script (count lines, compare outputs, time a command): write it under $S/ and run it from there. The folder is git-ignored and \`sl orchestrator end\` removes it; a run of a script there is judged like a heredoc script, so it may read the project but not write project code."
+  printf '%s\n' "- A throwaway script (count lines, compare outputs, time a command): write it under $S/ and run it from there. The folder is git-ignored and \`sl orchestrator end\` removes it; a run of a script there is judged like a heredoc script, so it may read the project but not write project code. A subprocess call whose program is not a string literal (\`[prog, ...]\`, \`sys.executable\`) is judged unknown; a later argument that is not a literal is judged like an unknown shell variable."
 }
 
 # scratch_esc S: S as JSON string content into ESC (backslash, quote, tab and CR escaped); fails when another control
