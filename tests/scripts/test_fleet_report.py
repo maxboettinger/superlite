@@ -8,9 +8,9 @@ import fleet_report as fr  # noqa: E402
 def block(obj):
     return "```json\n" + json.dumps(obj) + "\n```"
 
-GOOD = {"status": "DONE", "files": ["src/a.py"], "tests": "3 passed", "red": "", "findings": [], "summary": "ok", "concerns": []}
+GOOD = {"status": "DONE", "files": ["src/a.py"], "tests": "3 passed", "red": "", "reds": {}, "findings": [], "summary": "ok", "concerns": []}
 FINDING = {"file": "src/a.py", "line": 12, "problem": "off by one", "fix": "use <=", "tier": 1}
-EMPTY = {"files": [], "tests": "", "red": "", "findings": [], "summary": "", "concerns": [], "valid": False}
+EMPTY = {"files": [], "tests": "", "red": "", "reds": {}, "findings": [], "summary": "", "concerns": [], "valid": False}
 
 def test_json_block_wins():
     assert fr.parse("Status: DONE\n" + block(GOOD)) == {**GOOD, "valid": True}
@@ -23,7 +23,7 @@ def test_last_block_counts_and_status_comes_from_json():
 def test_final_reviewer_block_after_checked_lines():
     text = "Verdict: CHANGES_REQUESTED\nsrc/a.py:12 - off by one - use <= - tier 1\nChecked:\nT1 diff: read\n" + block(
         {"status": "CHANGES_REQUESTED", "files": [], "tests": "", "findings": [FINDING], "summary": "1 finding"})
-    assert fr.parse(text) == {"status": "CHANGES_REQUESTED", "files": [], "tests": "", "red": "", "findings": [FINDING], "summary": "1 finding", "concerns": [], "valid": True}
+    assert fr.parse(text) == {"status": "CHANGES_REQUESTED", "files": [], "tests": "", "red": "", "reds": {}, "findings": [FINDING], "summary": "1 finding", "concerns": [], "valid": True}
 
 @pytest.mark.parametrize("bad", [
     {**FINDING, "tier": "critical"}, {**FINDING, "tier": 4}, {**FINDING, "tier": True}, {**FINDING, "line": "12"},
@@ -37,7 +37,7 @@ def test_unknown_json_status_and_broken_json_fall_back():
 
 def test_verdict_lines_become_findings_without_a_block():
     text = "Verdict: CHANGES_REQUESTED\nsrc/a.py:12 - off by one - use <= - tier 1\n- src/b.py:3 - crash on empty - guard it - tier 3\nChecked:\nT1 diff: read"
-    assert fr.parse(text) == {"status": "CHANGES_REQUESTED", "files": [], "tests": "", "red": "", "summary": "", "concerns": [], "valid": False,
+    assert fr.parse(text) == {"status": "CHANGES_REQUESTED", "files": [], "tests": "", "red": "", "reds": {}, "summary": "", "concerns": [], "valid": False,
                               "findings": [FINDING, {"file": "src/b.py", "line": 3, "problem": "crash on empty", "fix": "guard it", "tier": 3}]}
     assert fr.parse("Verdict: APPROVED") == {"status": "APPROVED", **EMPTY}
 
