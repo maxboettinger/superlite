@@ -1553,19 +1553,78 @@ def call(text, package=None):
 '''  # O(1)
 
 _ADAPTER_RUN = '''
+import atexit
+import shutil
+import site
+import tempfile
+
+SANDBOX_DROP = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_CONFIG_GLOBAL")
+_SANDBOX = []
+_USER_BASE = site.getuserbase()
+
+
+def _sandbox():
+    """Scratch (home, cwd), made once per process: under the probe worker's folder when it names one."""
+    if not _SANDBOX:
+        box = os.environ.get("SUPERLITE_PROBE_SANDBOX")
+        if box and os.path.isdir(box):
+            top = tempfile.mkdtemp(prefix="run-", dir=box)
+        else:
+            top = tempfile.mkdtemp(prefix="probe-run-")
+            atexit.register(shutil.rmtree, top, True)
+        home, cwd = os.path.join(top, "home"), os.path.join(top, "cwd")
+        os.mkdir(home)
+        os.mkdir(cwd)
+        _SANDBOX.append((home, cwd))
+    return _SANDBOX[0]
+
+
+def _sandbox_env(home, cwd):
+    env = {k: v for k, v in os.environ.items() if k not in SANDBOX_DROP and k != "OLDPWD"}
+    env.setdefault("PYTHONUSERBASE", _USER_BASE)
+    env.update(HOME=home, XDG_CONFIG_HOME=os.path.join(home, ".config"), XDG_CACHE_HOME=os.path.join(home, ".cache"),
+               XDG_DATA_HOME=os.path.join(home, ".local", "share"), XDG_STATE_HOME=os.path.join(home, ".local", "state"),
+               PWD=cwd, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1")
+    if os.name == "nt":
+        env.update(USERPROFILE=home, APPDATA=os.path.join(home, "AppData", "Roaming"), LOCALAPPDATA=os.path.join(home, "AppData", "Local"))
+    return env
+
+
+def _rooted(cmd):
+    """The planned command's own path tokens made absolute against ROOT (the scratch cwd is not the tree)."""
+    def fix(tok, first=False):
+        if os.path.isabs(tok) or tok.startswith("-"):
+            return tok
+        if "/" in tok or os.sep in tok or (not first and (ROOT / tok).is_file()):
+            return str(ROOT / tok)
+        return tok
+    out = []
+    for i, tok in enumerate(cmd):
+        if i and cmd[i - 1] == "-c":
+            out.append(tok)
+        elif tok.startswith("--") and "=" in tok:
+            name, _, val = tok.partition("=")
+            out.append(name + "=" + fix(val))
+        else:
+            out.append(fix(tok, i == 0))
+    return out
+
 
 def run(args=(), stdin="", package=None, timeout=10):
-    """CLI entry: execute the planned command with extra args; returns (rc, stdout, stderr)."""
+    """CLI entry: execute the planned command with extra args in a scratch HOME and working folder without credential variables; returns (rc, stdout, stderr)."""
     cmd = shlex.split(_entry("run", package)["run"], posix=(os.name != "nt"))
     if cmd and cmd[0] in ("python", "python3", "py"):
         cmd[0] = sys.executable
+    cmd = _rooted(cmd)
     if isinstance(args, str):
         args = shlex.split(args, posix=(os.name != "nt"))
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONPATH=os.pathsep.join(
+    home, cwd = _sandbox()
+    env = _sandbox_env(home, cwd)
+    env.update(PYTHONIOENCODING="utf-8", PYTHONPATH=os.pathsep.join(
         [str(ROOT / "src"), str(ROOT)] + [str(ROOT / r) for r in IMPORT_ROOTS]
         + ([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else [])))
     data = stdin if isinstance(stdin, bytes) else stdin.encode("utf-8", "surrogateescape")
-    p = subprocess.run(cmd + list(args), input=data, capture_output=True, cwd=ROOT, env=env, timeout=timeout)
+    p = subprocess.run(cmd + list(args), input=data, capture_output=True, cwd=cwd, env=env, timeout=timeout)
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 '''  # O(1)
 
