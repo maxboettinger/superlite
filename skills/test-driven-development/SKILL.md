@@ -30,6 +30,7 @@ Reproduce the bug as a failing test first, see it fail, then fix. The test is th
 - One behavior per test; "and" in the name means split it.
 - Assert observable behavior, not implementation details.
 - Cover the contract's edge cases: empty input, errors, boundaries.
+- A test that spawns git in a temporary repository removes `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_WORK_TREE` from the child's environment: git exports them to its hooks, so a test run from a hook (a pre-commit suite run) that keeps them acts on the real repository.
 - UI work: besides the component in isolation, one check of it in its real container with the real data state (loaded, not the loading placeholder), named as the evidence.
 
 ## Exceptions
