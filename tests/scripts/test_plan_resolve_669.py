@@ -104,3 +104,12 @@ def test_brief_constraints_use_run_plan(world, monkeypatch):
     brief = world.proj / "b.md"; brief.write_text("do it\n")
     assert fleet.main(["spawn", "--role", "research", "--brief", str(brief), "--plan", str(world.sd)]) == 0
     assert sent == ["do it\n" + SECTION]
+
+
+def test_dispatch_pool_folder_plan_wins_over_session_folder(run, tmp_path, monkeypatch):
+    sd, a, _ = run
+    other = tmp_path / "other" / ".superlite"; other.mkdir(parents=True)
+    monkeypatch.setattr(state, "resolve", lambda *x, **k: other)
+    got = _record(monkeypatch)
+    dispatch.main(["--pool", str(sd / "pool.json")])
+    assert got == [str(a)]
