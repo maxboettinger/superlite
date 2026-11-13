@@ -31,8 +31,17 @@ APPEND_TRIAGE = ("append_only lists the files of a batch's files it only adds li
                  "reorders or deletes lines in is never append_only for it")  # O(1)
 ROOT_DOC_TRIAGE = ("List a shared root doc (CLAUDE.md, AGENTS.md, README.md) in the files of every batch whose fix makes it wrong; "
                    "the rule that no two batches share a file holds for it too; ")  # O(1)
-TRIAGE_RUN = ("offer no decision option a batch lead cannot carry out: a lead has no deploy, production, migration-run or other "
-              "remote-host access (the auto-mode classifier denies those commands), so such a step is main's after the batch ships; ")  # O(1)
+TRIAGE_RUN = ("a lead has no deploy, production, migration-run or other remote-host access and cannot install a tool, change global git "
+              "or system config or write to an outside service (the auto-mode classifier denies those commands): list each such step an "
+              "issue's text asks for in its batch's main_steps, one {\"issues\": [<n>], \"runs\": \"main\", \"command\": \"<exact command, "
+              "at most 300 characters>\", \"why\": \"<what it is for, at most 200 characters>\"} per step (at most 8; \"runs\": \"user\" only "
+              "for a step only the user can do, such as an interactive sign-in), and give a decision option whose choice needs such a step "
+              "\"runs\" and \"command\" keys and name the step in its description; offer no other option a lead cannot carry out; ")  # O(1)
+STEPS_RULE = ("Steps a lead cannot run (installing a tool, changing global git or system config, writing to an outside service: the "
+              "auto-mode classifier denies them) are main's or Max's: never run one; at the start, before the build, write one `Left undone: "
+              "main runs this: <command>` line (`Max runs this:` for Max's) into .superlite/notes.md per such step your issues or decisions "
+              "ask for that you cannot see done, and build around it.")  # O(1)
+STEPS_HEAD = "Steps for main or Max (named at plan or decision time):"  # O(1)
 MAIN_HEAD = "Main's rulings (orchestrator rulings: main decided these as AI orchestrator, not Max; record each as main's ruling, never as Max's decision):"  # O(1)
 ATTRIBUTION = ("Attribution: name Max in notes.md, pr-body.md and commit messages only for a decision listed under Max's decisions above, "
                "one an answer file's by marks user, or one a shipped summary's `Decisions:` line marks (Max); main's rulings, your own "
@@ -113,6 +122,14 @@ WAVE_WAIT = ("Never end your turn while your workers run: wait once per wave wit
              "wait with `fleet wait` or `run_tests --wait`.")  # O(1)
 
 
+def step_text(x):  # O(len)
+    """One steps line: the step, then its source (issues, or the decision) and why in parentheses; every stored text cleaned."""
+    why = clean(x["why"], 200) if x.get("why") else ""  # O(len)
+    nums = " ".join(ref(n) for n in x.get("issues") or [] if isinstance(n, (int, str)))  # O(i)
+    src = nums + (": " + why if why else "") if nums else ("decision: " + clean(x["question"]) + (": " + why if why else "") if x.get("question") else why)  # O(len)
+    return bc.step_line({"runs": x["runs"], "command": clean(x["command"], 300)}) + (f" ({src})" if src else "")  # O(len)
+
+
 def lead_variant(batch, ctx):  # O(L)
     """`lean` for a lean config text, one issue and no batch decision; else `default`. Text: ctx["text"], else the layered run config."""
     text = ctx.get("text")  # O(1)
@@ -179,6 +196,11 @@ def lead_brief(batch, ctx):  # O(i + f + a)
         out.append(MAIN_HEAD)  # O(1)
         out += [f"- {clean(q)}: {clean(a)}" for q, a in main]  # O(a)
     out.append(ATTRIBUTION)  # O(1)
+    out.append(STEPS_RULE)  # O(1)
+    steps = [x for x in batch.get("main_steps") or [] if isinstance(x, dict) and x.get("runs") in ("main", "user") and isinstance(x.get("command"), str)]  # O(s)
+    if steps:  # O(1)
+        out.append(STEPS_HEAD)  # O(1)
+        out += [f"- {step_text(x)}" for x in steps]  # O(s)
     if ctx.get("note"):  # O(1)
         out.append(NOTE_HEAD)  # O(1)
         out += ["    " + CTRL.sub("", ln.rstrip("\r")) for ln in str(ctx["note"]).splitlines()]  # O(n)
@@ -299,7 +321,7 @@ def triage_brief(issues, ctx):  # O(i)
                "except issues left out only because of the batch cap of " + str(ctx["max_batches"]) + ": those get no left_out entry (plan names them itself).")  # O(1)
     out.append('End with Status: DONE, then one fenced json block: {"status": "DONE", "files": [], "tests": "", "findings": [], '
                '"summary": "<n> batches", "batches": [{"id": "B1", "topic": "<kebab words>", "issues": ' + ('["<KEY>"]' if jira else '[<n>]') + ', '
-                              '"files": ["<path>"], "append_only": [], "depends": [], "decisions": [{"questions": [{"question": "<1-300 chars>", '
+                              '"files": ["<path>"], "append_only": [], "depends": [], "main_steps": [], "decisions": [{"questions": [{"question": "<1-300 chars>", '
                '"header": "<1-12 chars>", "options": [{"label": "<recommended first> (Recommended)", "description": "<trade-off>"}, '
                '{"label": "...", "description": "..."}]}]}]}], "left_out": [{"issues": ' + ('["<KEY>"]' if jira else '[<n>]') + ', "reason": "<why>"}]}')  # O(1)
     return "\n".join(out) + "\n"  # O(n)

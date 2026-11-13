@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The one answer rule for backlog decide and answer: an option label, a label plus a note, or free text."""
-from backlog_checks import REC
+from backlog_checks import REC, check_step, step_line
 
 RULE = ('an answer is an option label, a label plus a note ("<label>; note: <text>" or {"label": L, "note": N}), '
         'or your own text: 1 to 2000 characters, no control characters but newline and tab')
@@ -55,3 +55,53 @@ def answer_text(value: object, labels: list[str], fixed: bool = False) -> tuple[
         return None, f'label "{label}" is not one of: ' + ", ".join(labels)  # O(labels)
     text = f"{label}; note: {note}" if note else label  # O(len)
     return (None, RULE) if len(text) > MAX else (text, "")  # O(1)
+
+
+def answer_steps(obj: dict, answers: dict, questions: dict) -> tuple:
+    """(steps by question, "") from an answers file: its explicit steps map, else the step of the picked option (#674); ({}, error) otherwise."""
+    raw = obj.get("steps", {}) if isinstance(obj, dict) else {}  # O(1)
+    if not isinstance(raw, dict) or not all(isinstance(k, str) for k in raw):  # O(steps)
+        return {}, "steps: an object {question: {runs, command, why}}"  # O(1)
+    out: dict = {}  # O(1)
+    for k, v in raw.items():  # O(steps)
+        if k not in answers:  # O(1)
+            return {}, f"steps: {k[:60]} is not answered in this file"  # O(1)
+        c, errs = check_step(v, f"steps {k[:60]}")  # O(len)
+        if errs:  # O(1)
+            return {}, errs[0]  # O(1)
+        out[k] = c  # O(1)
+    for q, a in answers.items():  # O(answers * options)
+        if q in out or not isinstance(a, str):  # O(1)
+            continue  # O(1)
+        label = a.split("; note: ", 1)[0]  # O(len)
+        for o in (questions.get(q) or {}).get("options") or []:  # O(options)
+            if not isinstance(o, dict) or not ("runs" in o or "command" in o) or not isinstance(o.get("label"), str) or _bare(o["label"]) != label:  # O(len)
+                continue  # O(1)
+            c, errs = check_step({k: o[k] for k in ("runs", "command") if k in o}, f"steps {q[:60]}")  # O(len)
+            if errs:  # O(1)
+                return {}, errs[0]  # O(1)
+            out[q] = c  # O(1)
+            break  # O(1)
+    return out, ""  # O(1)
+
+
+def add_steps(batch: dict, steps: dict) -> int:
+    """Append each step not yet listed (same runs and command) to the batch's main_steps with its question; returns the count added."""
+    have = batch.setdefault("main_steps", [])  # O(1)
+    n = 0  # O(1)
+    for text, st in steps.items():  # O(steps * have)
+        if any(h.get("runs") == st["runs"] and h.get("command") == st["command"] for h in have):  # O(have)
+            continue  # O(1)
+        have.append({**{k: v for k, v in st.items() if k != "issues"}, "question": text})  # O(1)
+        n += 1  # O(1)
+    if not have:  # O(1)
+        del batch["main_steps"]  # O(1)
+    return n  # O(1)
+
+
+def steps_text(steps: dict) -> str:
+    """The sentence appended to the lead message when an answer carries steps; "" without steps."""
+    if not steps:  # O(1)
+        return ""  # O(1)
+    return ("Steps for main or Max (never run one yourself; write each you cannot see done as one `Left undone: main runs this: <command>` "
+            "line into .superlite/notes.md now): " + "; ".join(step_line(s) for s in steps.values()) + ".")  # O(steps)

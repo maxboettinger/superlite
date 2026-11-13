@@ -298,7 +298,7 @@ def added_lines(data: dict, ids: list, pin: list) -> list[str]:
     """What --add prints: the table header and the rows of the added batches, the pinned issues left out, the open-questions line (#583)."""
     import backlog_state as bs  # O(1)
     rows = bs.status_lines(data, all_=True)  # O(b)
-    keep = [x for x in rows if x.startswith("batch | issues | ") or x.split(" | ", 1)[0] in ids]  # O(b)
+    keep = [x for x in rows if x.startswith("batch | issues | ") or x.split(" | ", 1)[0] in ids or x.partition(":")[0].removeprefix("step ") in ids and x.startswith("step ")]  # O(b)
     keep = keep if len(keep) > 1 else []  # O(1)
     held = set(pin or [])  # O(pin)
     cut = {**data, "outside": [o for o in data.get("outside", []) if isinstance(o, dict) and o.get("number") in held]}  # O(outside)
@@ -706,7 +706,10 @@ def cmd_decide(a) -> int:
         return 0
     if a.print:
         if not a.batch:
-            print(json.dumps({"questions": bs.open_questions(d)}, indent=2))
+            shape, steps = bc.ask_shape({"questions": bs.open_questions(d)})  # O(q)
+            print(json.dumps(shape, indent=2))
+            for line in steps:  # O(q)
+                print(line, file=sys.stderr)
             return 0
         try:
             b = bs.batch(d, a.batch)
@@ -719,8 +722,9 @@ def cmd_decide(a) -> int:
         if errs:
             print(f"BLOCKED: {a.batch} question.json invalid: " + "; ".join(errs[:5]))
             return 3
-        print(json.dumps(bc.clean_question(q), indent=2))
-        for line in bc.cut_lines(cuts):  # O(q)
+        shape, steps = bc.ask_shape(bc.clean_question(q))  # O(q)
+        print(json.dumps(shape, indent=2))
+        for line in bc.cut_lines(cuts) + steps:  # O(q)
             print(line, file=sys.stderr)
         return 0
     if not a.file:
@@ -753,13 +757,26 @@ def cmd_decide(a) -> int:
     if bad:  # O(1)
         print("\n".join(bad))  # O(answers)
         return 2  # O(1)
+    steps, serr = backlog_answer.answer_steps(obj, answers, qs)  # O(answers * options)
+    if serr:  # O(1)
+        print(f"BLOCKED: {serr}")  # O(1)
+        return 2  # O(1)
+    for t in steps:  # O(steps)
+        if t == bs.SHIP_Q or t.startswith("Admit outside issue #"):  # O(1)
+            print(f"BLOCKED: steps: {t[:60]} takes no step")  # O(1)
+            return 2  # O(1)
     res = {}
 
     def apply(data):
         c = copy.deepcopy(data)
         errs = bs.answer(c, answers, by, _now())
         res["errs"] = errs
+        res["steps"] = 0
         if not errs:
+            for t, st in steps.items():  # O(steps * b)
+                bid, sep, text = t.partition(": ")
+                if sep and any(x.get("id") == bid for x in c.get("batches", [])):  # O(b)
+                    res["steps"] += backlog_answer.add_steps(bs.batch(c, bid), {text: st})  # O(have)
             data.clear()
             data.update(c)
         res["open"] = len(bs.open_questions(data))
@@ -769,7 +786,8 @@ def cmd_decide(a) -> int:
         return 2
     ruled, own = sum(1 for v in by.values() if v == "main"), sum(1 for v in by.values() if v == "user")  # O(answers)
     parts = ([f"{own} as the user's"] if own else []) + ([f"{ruled} ruled by main"] if ruled else [])  # O(1)
-    print(f"recorded {len(answers)} answers" + (f" ({', '.join(parts)})" if parts else "") + f", {res['open']} open")
+    print(f"recorded {len(answers)} answers" + (f" ({', '.join(parts)})" if parts else "") + f", {res['open']} open"
+          + (f", {res['steps']} main steps (sl backlog status lists them)" if res["steps"] else ""))
     return 0
 
 

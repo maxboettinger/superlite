@@ -26,6 +26,57 @@ def _text(errs: list, where: str, v, lo: int, hi: int, msg: str) -> bool:
     return True
 
 
+RUNS = {"main": "main", "user": "Max"}
+
+
+def _line(v: object, hi: int, lo: int) -> bool:
+    return isinstance(v, str) and lo <= len(v) <= hi and not any(ord(c) < 32 or ord(c) == 127 for c in v)  # O(len)
+
+
+def check_step(obj: object, where: str, issues: list | None = None) -> tuple:
+    """A step a lead cannot run (#674): (clean step, []) or (None, errors). Unknown keys are dropped."""
+    if not isinstance(obj, dict):  # O(1)
+        return None, [f"{where}: not an object"]
+    errs: list[str] = []
+    out: dict = {}
+    if issues is not None:
+        got = obj.get("issues")
+        if (not isinstance(got, list) or not got or not all(isinstance(i, int) and not isinstance(i, bool) and i in issues for i in got)):  # O(len * issues)
+            errs.append(f"{where} issues: a non-empty list of this batch's issues")
+        else:
+            out["issues"] = got
+    if not isinstance(obj.get("runs"), str) or obj["runs"] not in RUNS:  # O(1)
+        errs.append(f"{where} runs: main or user")
+    else:
+        out["runs"] = obj["runs"]
+    if not _line(obj.get("command"), 300, 1):  # O(len)
+        errs.append(f"{where} command: 1 to 300 characters, one line")
+    else:
+        out["command"] = obj["command"]
+    if "why" in obj:
+        if not _line(obj["why"], 200, 0):  # O(len)
+            errs.append(f"{where} why: 0 to 200 characters, one line")
+        else:
+            out["why"] = obj["why"]
+    return (None, errs) if errs else (out, [])
+
+
+def step_line(step: dict) -> str:
+    return f"{RUNS[step['runs']]} runs this: {step['command']}"  # O(1)
+
+
+def ask_shape(q: dict) -> tuple:
+    """The question without the step keys of its options (AskUserQuestion rejects them) and one line per option that had a step."""
+    out = copy.deepcopy(q)
+    lines: list[str] = []
+    for e in as_batch(out).get("questions", []):  # O(questions * options)
+        for o in e.get("options", []):
+            r, c = o.pop("runs", None), o.pop("command", None)
+            if isinstance(r, str) and r in RUNS and isinstance(c, str):  # O(1)
+                lines.append(f'step: "{_word(e.get("question", ""), 60)}" / "{o.get("label", "")}": {step_line({"runs": r, "command": c})}')
+    return out, lines
+
+
 def as_batch(q):
     """A bare question object {"question", "header", "options"} becomes {"questions": [q]}; anything else passes through."""
     if isinstance(q, dict) and "questions" not in q and "question" in q:  # O(1)
@@ -195,7 +246,7 @@ def check_question(q: dict) -> list[str]:
             errs.append(f"{p} options: 2 to 4 entries")
         else:
             labels: set = set()
-            for o in opts:
+            for n, o in enumerate(opts, 1):  # O(options)
                 if not isinstance(o, dict):
                     errs.append(f"{p} options: not an object")
                     continue
@@ -204,6 +255,8 @@ def check_question(q: dict) -> list[str]:
                         errs.append(f"{p} options: duplicate label {o['label']}")
                     labels.add(o["label"])
                 _text(errs, f"{p} options description", o.get("description", ""), 0, 200, "description 0 to 200 characters")
+                if "runs" in o or "command" in o:
+                    errs.extend(check_step({k: o[k] for k in ("runs", "command") if k in o}, f"{p} option {n}")[1])  # O(1)
         if "multiSelect" in e and not isinstance(e["multiSelect"], bool):
             errs.append(f"{p} multiSelect: true or false")
     return errs
@@ -214,7 +267,7 @@ def clean_question(q: dict) -> dict:
     out = []
     for e in as_batch(q)["questions"]:  # O(4 * options)
         c = {"question": e["question"], "header": e["header"],
-             "options": [{k: o[k] for k in ("label", "description") if k in o} for o in e["options"]]}
+             "options": [{k: o[k] for k in ("label", "description", "runs", "command") if k in o} for o in e["options"]]}
         if "multiSelect" in e:
             c["multiSelect"] = e["multiSelect"]
         out.append(c)
@@ -318,6 +371,19 @@ def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> t
         if not isinstance(decisions, list):
             errs.append(f"{bid}: decisions must be a list")
             decisions = []
+        steps = b.get("main_steps", [])
+        if not isinstance(steps, list):
+            errs.append(f"{bid}: main_steps must be a list")
+            steps = []
+        elif len(steps) > 8:
+            errs.append(f"{bid}: main_steps: at most 8 entries")
+            steps = []
+        scl = []
+        for k, st in enumerate(steps, 1):
+            c, bad = check_step(st, f"{bid} main_steps {k}", sorted(set(issues)))
+            errs.extend(bad)
+            if c:
+                scl.append(c)
         cleaned = []
         for k, d in enumerate(decisions, 1):
             bad = check_question(d)
@@ -325,6 +391,7 @@ def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> t
             if not bad:
                 cleaned.append(clean_question(d))
         out.append({"id": bid, "topic": topic, "issues": sorted(set(issues)), "files": sorted(clean), **({"append_only": sorted(aclean)} if aclean else {}),
+                    **({"main_steps": scl} if scl else {}),
                     "depends": list(dict.fromkeys(deps)), "decisions": cleaned, **copy.deepcopy(DEFAULTS)})
     for b in out:  # O(batches * deps)
         for d in b["depends"]:
