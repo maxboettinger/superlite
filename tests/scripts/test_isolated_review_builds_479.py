@@ -33,6 +33,8 @@ def repo(tmp_path, out=OUT, code=0):
     cmd = f"{sys.executable} -c \"{script}\""
     (sd / "test-cmd.json").write_text(json.dumps({"language": "swift", "test": cmd, "test_file": cmd, "isolate": True}), encoding="utf-8")
     git(tmp_path, "init", "-q")
+    with (tmp_path / ".git" / "info" / "exclude").open("a", encoding="utf-8") as fh:
+        fh.write("_sl_home/\n")  # the test's superlite home is no project file
     git(tmp_path, "add", "-A")
     git(tmp_path, "commit", "-q", "-m", "init")
     return plan
