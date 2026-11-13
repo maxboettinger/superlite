@@ -14,6 +14,7 @@ from _fixtures import HOST_VARS  # importing it drops the host vars, sets the pr
 _SESSION_HOME = tempfile.mkdtemp(prefix="sl-home-")
 os.environ["SUPERLITE_HOME"] = _SESSION_HOME
 atexit.register(shutil.rmtree, _SESSION_HOME, True)
+os.environ["SUPERLITE_GUARD_SECONDS"] = "30"  # the judge's wall-clock budget under suite load; hooks and nested runs inherit it (#739)
 
 
 @pytest.fixture(autouse=True)

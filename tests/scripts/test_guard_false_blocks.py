@@ -362,25 +362,44 @@ def test_temp_root_with_a_named_folder_stays_unknown(proj, tmp_path_factory, cha
     assert hook_tmpdir(proj, cmd, troot).returncode == 2, cmd
 
 
-# F-T1-1: a failing `$((` or command-position `((` is tried as arithmetic once per start index, so nesting stays linear.
-@pytest.mark.parametrize("cmd", [
-    "echo " + "$(( (" * 40 + ")" * 40,
-    "echo " + "$(( (" * 40 + "rm src/a.py" + ")" * 40,
-    "((" * 40 + "echo a" + ")" * 40,
-    "(( " + "$(( (" * 40 + ")" * 40,
-    "(( " * 40 + "rm src/a.py" + ") " * 40,
+def _lex_calls(cmd):
+    # #739: calls into guard_lex while it splits cmd, a step count no machine load changes
+    calls = 0
+    lex = guard_lex.__file__
+
+    def count(frame, event, arg):
+        nonlocal calls
+        if event == "call" and frame.f_code.co_filename == lex:
+            calls += 1
+
+    sys.setprofile(count)
+    try:
+        guard_lex.split(cmd)
+    finally:
+        sys.setprofile(None)
+    return calls
+
+
+# F-T1-1: a failing `$((` or command-position `((` is tried as arithmetic once per start index, so nesting does not
+# grow exponentially. #739: counted in lexer calls, not wall clock: doubling the depth from 10 to 20 multiplied them
+# by 1.9 to 7.1 when measured; an exponential retry multiplies them by about a thousand.
+@pytest.mark.parametrize("head,opener,mid,closer", [
+    ("echo ", "$(( (", "", ")"),
+    ("echo ", "$(( (", "rm src/a.py", ")"),
+    ("", "((", "echo a", ")"),
+    ("(( ", "$(( (", "", ")"),
+    ("", "(( ", "rm src/a.py", ") "),
 ])
-def test_nested_failing_arithmetic_lexes_in_linear_time(cmd):
-    code = "import sys, guard_lex; guard_lex.split(sys.argv[1])"
-    env = {**os.environ, "PYTHONPATH": str(_Path(guard_lex.__file__).parent)}
-    subprocess.run([sys.executable, "-c", code, cmd], env=env, timeout=1.0, check=True)  # TimeoutExpired = exponential
+def test_nested_failing_arithmetic_lexes_in_linear_time(head, opener, mid, closer):
+    small, big = (_lex_calls(head + opener * n + mid + closer * n) for n in (10, 20))
+    assert 0 < small and big <= 16 * small, (small, big)
 
 
 def test_nested_failing_arithmetic_keeps_the_hook_verdict(proj):
     def verdict(cmd):
         raw = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
         env = {**os.environ, "CLAUDE_PROJECT_DIR": str(proj)}
-        return subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env, timeout=10).returncode
+        return subprocess.run([BASH, str(HOOK)], input=raw, capture_output=True, text=True, env=env, timeout=60).returncode
 
     assert verdict("echo " + "$(( (" * 40 + ")" * 40) == 2  # nested past the judge's depth: an unknown target, blocked as before
     assert verdict("echo " + "$(( (" * 40 + "echo 1 > src/a.py" + ")" * 40) == 2

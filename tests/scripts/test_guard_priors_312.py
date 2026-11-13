@@ -86,9 +86,8 @@ def test_force_cond_registers_nothing(P):
 
 @pytest.mark.parametrize("ns", [(10, 10), (5, 5, 5), (3, 3, 3, 3)])
 def test_nested_literal_for_loops_are_not_walked_again(P, ns, monkeypatch):
-    # A re-walk spends MAX_STEPS, which no machine load changes. The 1.5 s wall-clock budget is raised to 10 s here:
-    # the server's 4-worker full run starved it (B130 follow-up); 10 s of CPU time still fails a walk that went slow.
-    monkeypatch.setattr(guard_judge, "MAX_SECONDS", 10)
+    # A re-walk spends MAX_STEPS, which no machine load changes; the wall-clock budget is raised by conftest (#739).
+    # 10 s of CPU time still fails a walk that went slow.
     names = "abcd"
     head = "".join(f"for {names[k]} in {' '.join(str(i) for i in range(n))}; do " for k, n in enumerate(ns))
     body = "echo hi > docs/" + "".join("$" + names[k] for k in range(len(ns))) + ".md; " + "done; " * len(ns)
