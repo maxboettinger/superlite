@@ -42,10 +42,18 @@ def test_invalid_utf8_is_plan_error(tmp_path):  # O(1)
     assert info.value.code == 2  # O(1)
 
 
-def test_directory_is_plan_not_found(tmp_path):  # O(1)
+def test_directory_without_plan_is_run_folder_error(tmp_path):  # O(1)
     with pytest.raises(PlanError) as info:  # O(1)
         Plan.load(str(tmp_path))  # O(1)
-    assert str(info.value) == f"plan not found: {tmp_path}"  # O(1)
+    assert str(info.value) == f"--plan {tmp_path} is a run folder with no plan file (stable.json, pool.json and plan.md name none); pass the plan file"  # O(1)
+    assert info.value.code == 2  # O(1)
+
+
+def test_directory_with_plan_md_loads(tmp_path):  # O(1)
+    plan = tmp_path / ".superlite" / "plan.md"  # O(1)
+    plan.parent.mkdir()  # O(1)
+    plan.write_text("# Plan\n\n### T1 one\n\n**Owns:** a.py\n", encoding="utf-8")  # O(1)
+    assert Plan.load(str(tmp_path)).path == plan  # O(1)
 
 
 @needs_posix_user

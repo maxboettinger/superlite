@@ -25,6 +25,7 @@ import argparse  # O(1)
 import json  # O(1)
 from datetime import datetime, timedelta  # O(1)
 import re  # O(1)
+import subprocess  # O(1)
 import sys  # O(1)
 import time  # O(1)
 from collections import Counter  # O(1)
@@ -371,9 +372,109 @@ def unblocked_report(ledger, lint_log):  # O(R*w + L*n)
     return f"unblocked: yes - every stable task was dispatched before the next patch; {worst}"  # O(1)
 
 
+def _default_ref(g, top):  # O(1) + spawns: the default branch ref a run branched from, None when none exists
+    rc, out, _ = g(top, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD")  # O(1) + spawn
+    names = ([out] if not rc and out else []) + ["origin/main", "main", "master"]  # O(1)
+    for n in names:  # O(1) iterations
+        if g(top, "rev-parse", "--verify", "-q", f"{n}^{{commit}}")[0] == 0:  # O(1) + spawn
+            return n  # O(1)
+    return None  # O(1)
+
+
+def inline_commits(sd):  # O(C) + git spawns
+    """-> (base, [(sha, subject), ...]) the branch commits since the run's base, oldest first (an inline run has no commit lines, #668);
+    base = checkpoints.json `base`, else the merge-base of HEAD with the default branch. None when there is no base, no commit or any error."""
+    try:  # O(1)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+        import worktree  # O(1)
+        g = worktree.git  # O(1)
+        top = _git_top(Path(sd) / "x")  # O(1) + spawn
+        if top is None:  # O(1)
+            return None  # O(1)
+        base = None  # O(1)
+        try:  # O(1)
+            b = json.loads((Path(sd) / "checkpoints.json").read_text(encoding="utf-8")).get("base")  # O(size)
+            if isinstance(b, str) and b and g(top, "rev-parse", "--verify", "-q", f"{b}^{{commit}}")[0] == 0:  # O(1) + spawn
+                base = g(top, "rev-parse", f"{b}^{{commit}}")[1]  # O(1) + spawn
+        except (OSError, ValueError, AttributeError):  # O(1)
+            base = None  # O(1)
+        if base is None:  # O(1)
+            ref = _default_ref(g, top)  # O(1) + spawns
+            rc, mb, _ = g(top, "merge-base", "HEAD", ref) if ref else (1, "", "")  # O(1) + spawn
+            if rc or not mb:  # O(1)
+                return None  # O(1)
+            base = mb  # O(1)
+        rc, out, _ = g(top, "log", "--reverse", "--format=%H%x00%s", f"{base}..HEAD")  # O(C) + spawn
+        rows = [tuple(ln.split("\0", 1)) for ln in out.split("\n") if "\0" in ln] if not rc else []  # O(C)
+        return (base, rows) if rows else None  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return None  # O(1)
+
+
+def spec_rulings(sd):  # O(spec bytes) the `Ruling:` lines of <run folder>/spec.md, in order; [] when none or unreadable
+    try:  # O(1)
+        text = (Path(sd) / "spec.md").read_text(encoding="utf-8", errors="replace")  # O(size)
+    except OSError:  # O(1)
+        return []  # O(1)
+    return [m.group(1) for m in (RULING.match(ln) for ln in text.replace("\r\n", "\n").split("\n")) if m]  # O(lines)
+
+
+OK_CONCLUSIONS = ("success", "skipped", "neutral")  # O(1)
+
+
+def ci_full_run(top, sha):  # O(runs) + spawn (timeout 15 s)
+    """-> {"name", "id", "url", "more"} when `gh run list --commit SHA` shows every run completed with success, skipped or neutral
+    and one success; None on any error, timeout or other result. Never raises."""
+    try:  # O(1)
+        cp = subprocess.run(["gh", "run", "list", "--commit", sha, "--json", "databaseId,workflowName,name,status,conclusion,url", "--limit", "20"],  # O(1) + spawn
+                            cwd=str(top), capture_output=True, text=True, timeout=15)
+        if cp.returncode:  # O(1)
+            return None  # O(1)
+        runs = json.loads(cp.stdout)  # O(size)
+        if not isinstance(runs, list) or not runs or not all(isinstance(r, dict) for r in runs):  # O(runs)
+            return None  # O(1)
+        if any(r.get("status") != "completed" or r.get("conclusion") not in OK_CONCLUSIONS for r in runs):  # O(runs)
+            return None  # O(1)
+        first = next((r for r in runs if r.get("conclusion") == "success"), None)  # O(runs)
+        if first is None:  # O(1)
+            return None  # O(1)
+        return {"name": first.get("workflowName") or first.get("name") or "ci", "id": first.get("databaseId"),  # O(1)
+                "url": first.get("url") or "", "more": len(runs) - 1}
+    except Exception:  # noqa: BLE001 (OSError, timeout, bad JSON) | O(1)
+        return None  # O(1)
+
+
+def ci_line(sd):  # O(runs) + git spawns; the `tests (full, CI)` line when HEAD is clean, pushed and its CI runs are green, else None
+    try:  # O(1)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+        import worktree  # O(1)
+        top = _git_top(Path(sd) / "x")  # O(1) + spawn
+        if top is None:  # O(1)
+            return None  # O(1)
+        g = worktree.git  # O(1)
+        rc, st, _ = g(top, "status", "--porcelain", "--untracked-files=no")  # O(files) + spawn
+        if rc or st:  # O(1)
+            return None  # O(1)
+        rc, sha, _ = g(top, "rev-parse", "HEAD")  # O(1) + spawn
+        if rc or not sha:  # O(1)
+            return None  # O(1)
+        rc, rem, _ = g(top, "branch", "-r", "--contains", sha)  # O(refs) + spawn
+        if rc or not rem:  # O(1)
+            return None  # O(1)
+        r = ci_full_run(top, sha)  # O(runs) + spawn
+        if r is None:  # O(1)
+            return None  # O(1)
+        more = f" and {r['more']} more" if r["more"] else ""  # O(1)
+        return f"tests (full, CI): {r['name']} run {r['id']}{more} green on HEAD {sha[:10]} ({r['url']})"  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return None  # O(1)
+
+
 def history_section(plan, sl_dir):  # O(M + B + n*(n + e))
     """Append the run's rows to history (global and project), refresh stats, and report predicted against actual."""
     sl = Path(sl_dir)  # O(1)
+    if plan == "":  # a run without a plan document (#668) | O(1)
+        return "history: no plan document (inline run); nothing recorded"  # O(1)
     if not plan or not (sl / "metrics.jsonl").is_file():  # O(1)
         return "history: no metrics.jsonl or plan, nothing recorded"  # O(1)
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
@@ -508,13 +609,26 @@ def moved_lines(sd, plan=None):  # O(files) + git spawns
         return []  # O(1)
 
 
-def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # O(R*w + I*w + C + G)
+def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None, end_plan=None):  # O(R*w + I*w + C + G)
     rulings, commits, _ = read_ledger(ledger)  # O(R*w)
     incidents = open_incidents(log, load_run_summaries(sl_dir or Path(ledger).parent), ledger)  # O(I*w + I*S*F)
     out = ["# superlite run summary", ""]  # O(1)
+    run_sd = Path(ledger).resolve().parent  # O(d)
+    inline = None  # (base, commits) of a run with no plan document and no commit line (#668) | O(1)
+    if not commits and not plan:  # O(1)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+        import orchestrator  # O(1)
+        if plan == "" or orchestrator.plan_file(run_sd) is None:  # O(1)
+            inline = inline_commits(run_sd)  # O(C) + spawns
+            have = set(rulings)  # O(R)
+            rulings = rulings + [r for r in spec_rulings(run_sd) if r not in have]  # O(R)
     cp = checkpoint_note(ledger)  # checkpoint mode: nothing was committed | O(1) + git spawns
-    out.append(f"{'checkpoints' if cp else 'commits'}: {len(commits)}")  # O(1)
-    out += [f"- {t} {sha[:10]} {title}".rstrip() for t, sha, title in commits]  # O(C)
+    if inline:  # O(1)
+        out.append(f"commits: {len(inline[1])} (branch commits since {inline[0][:10]}, inline run)")  # O(1)
+        out += [f"- {sha[:10]} {subject}".rstrip() for sha, subject in inline[1]]  # O(C)
+    else:  # O(1)
+        out.append(f"{'checkpoints' if cp else 'commits'}: {len(commits)}")  # O(1)
+        out += [f"- {t} {sha[:10]} {title}".rstrip() for t, sha, title in commits]  # O(C)
     out += cp  # O(1)
     out.append("")  # O(1)
     out.append(f"rulings: {len(rulings)}")  # O(1)
@@ -530,12 +644,17 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     res, newer, n_newer = test_result(ledger)  # O(R*w)
     nm = lambda r: f"recorded {r['mode']}" if r["recorded"] else r["mode"]  # O(1)
     fmt = lambda r: f"{r['passed']} passed, {r['failed']} failed, {r['skipped']} skipped in {r['seconds']:.1f}s"  # O(1)
-    if res:  # O(1)
+    after = commits_after_full(ledger) if res and res["mode"] == "full" and not res["recorded"] else []  # O(R*w)
+    ci = None if res and res["mode"] == "full" and not res["recorded"] and not after else ci_line(run_sd)  # a green CI run of HEAD is the full run (#668) | O(runs) + spawns
+    if ci:  # O(1)
+        out.append(ci)  # O(1)
+        if res:  # O(1)
+            out.append(f"- local {nm(res)} run (not the run's result): {fmt(res)}")  # O(1)
+    elif res:  # O(1)
         out.append(f"tests ({res['mode']}{', recorded' if res['recorded'] else ''}): {fmt(res)}")  # O(1)
         if newer:  # O(1)
             out.append(f"- newer {nm(newer)} run (not the run's result): {fmt(newer)}" if n_newer == 1
                        else f"- {n_newer} newer {nm(newer)} runs (not the run's result), newest: {fmt(newer)}")  # O(1)
-        after = commits_after_full(ledger) if res["mode"] == "full" and not res["recorded"] else []  # O(R*w)
         if after:  # O(1)
             out.append(f"- committed after this full run: {', '.join(after)} (it does not cover them; rerun sl run_tests --full)")  # O(C)
     else:  # O(1)
@@ -562,7 +681,7 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
     out += [f"- {a}" for a in accepted]  # O(accepted)
     out.append("")  # O(1)
     if plan is not None:  # O(1)
-        out.append(history_section(plan or None, sl_dir or str(Path(ledger).parent)))  # see history_section
+        out.append(history_section(plan, sl_dir or str(Path(ledger).parent)))  # see history_section
         out.append("")  # O(1)
     out.append(f"open incidents: {len(incidents)} ({len(ranked_incidents(incidents))} distinct)")  # O(I + G log G)
     out += group_incidents(incidents)  # O(I + G log G)
@@ -581,7 +700,8 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None):  # 
             out.append(f"this run belongs to session {other}: run `sl orchestrator takeover --plan {sd}` before `sl orchestrator end`")  # O(1)
     except Exception:  # O(1)
         pass  # O(1)
-    out.append(f"next: sl orchestrator end{' --plan ' + plan if plan else ''}" + END_TAIL)  # the last line (#497) | O(1)
+    end_plan = plan if end_plan is None else end_plan  # O(1)
+    out.append(f"next: sl orchestrator end{' --plan ' + end_plan if end_plan else ''}" + END_TAIL)  # the last line (#497) | O(1)
     return "\n".join(out) + "\n"  # O(R + C + G + I) join
 
 
@@ -622,7 +742,14 @@ def main(argv=None):  # O(R*w + I*w)
     if open_edits:  # O(1)
         print(f"BLOCKED: render edits still applied: {', '.join(open_edits)}; run sl render_edit restore first")  # O(a)
         return 2  # O(1)
-    sys.stdout.write(summary(ledger, log, a.lint_log or str(Path(ledger).with_name("lint-log.jsonl")), a.plan))  # O(output)
+    plan = a.plan  # O(1)
+    import orchestrator  # O(1)
+    if plan and Path(plan).is_dir():  # a run folder: its plan file, "" when it has none (an inline run, #668) | O(d)
+        found = orchestrator.plan_file(state.plan_dir(plan))  # O(d + file)
+        plan = str(found) if found else ""  # O(1)
+    elif not plan and orchestrator.plan_file(sd) is None:  # O(d)
+        plan = ""  # O(1)
+    sys.stdout.write(summary(ledger, log, a.lint_log or str(Path(ledger).with_name("lint-log.jsonl")), plan, end_plan=a.plan or ""))  # O(output)
     log_auto(read_stops(log), str(Path(log).resolve()))  # after the summary: a feedback failure never costs the closing text (#140) | O(I*w)
     drop_trees(sd)  # the run's trees are not needed after the summary (#614) | O(T + folders)
     return 0  # O(1)
