@@ -1,12 +1,12 @@
 from test_plan_tools import ROOT
 CMD = (ROOT / "commands" / "backlog.md").read_text(encoding="utf-8")
-REF = (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8")
+REF = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
 
 def test_command_is_the_main_loop():
     assert CMD.startswith("---\ndescription: ")
     for s in ('"$SL" backlog status', "after any compaction", '"$SL" backlog plan', "background command", '"$SL" backlog decide --print',
               "AskUserQuestion", "at most 4", '"$SL" backlog decide --file', '"$SL" backlog start', '"$SL" backlog wait',
-              '"$SL" backlog answer', "needs_decision", "parked", "shipped", "Never read issue bodies", "backlog.md", "BLOCKED"):
+              '"$SL" backlog answer', "needs_decision", "parked", "shipped", "Never read issue bodies", "backlog-main.md", "BLOCKED"):
         assert s in CMD, s
     assert CMD.index("backlog status") < CMD.index("backlog plan") < CMD.index("backlog start")
 

@@ -274,7 +274,7 @@ def test_review_plan_template_names_every_required_section_and_has_two_diagrams(
 
 def test_skills_mention_both_phases_and_keep_their_caps():
     skills = REPO / "skills"
-    plans = (skills / "writing-plans" / "SKILL.md").read_text(encoding="utf-8")
+    plans = "\n".join(p.read_text(encoding="utf-8") for p in sorted((skills / "writing-plans").glob("*.md")))
     brain = (skills / "brainstorming" / "SKILL.md").read_text(encoding="utf-8")
     sdd = (skills / "subagent-driven-development" / "SKILL.md").read_text(encoding="utf-8")
     for text in (plans, brain):
@@ -288,7 +288,7 @@ def test_skills_mention_both_phases_and_keep_their_caps():
 
 def test_texts_state_the_hard_rule_plain_text_approval_and_the_small_form():
     skills = REPO / "skills"
-    plans = (skills / "writing-plans" / "SKILL.md").read_text(encoding="utf-8")
+    plans = "\n".join(p.read_text(encoding="utf-8") for p in sorted((skills / "writing-plans").glob("*.md")))
     brain = (skills / "brainstorming" / "SKILL.md").read_text(encoding="utf-8")
     sdd = (skills / "subagent-driven-development" / "SKILL.md").read_text(encoding="utf-8")
     ref = (skills / "subagent-driven-development" / "orchestrator.md").read_text(encoding="utf-8")

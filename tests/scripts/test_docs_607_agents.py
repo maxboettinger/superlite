@@ -13,7 +13,7 @@ def test_implementers_name_the_task_test_command():
 
 
 def test_writing_plans_names_contracts_and_prose():
-    t = read("skills/writing-plans/SKILL.md")
+    t = "\n".join(read(p) for p in ("skills/writing-plans/SKILL.md", "skills/writing-plans/task-template.md", "skills/writing-plans/split.md"))
     for s in ("acyclic_siblings", "tsconfig", "prose"):
         assert s in t, s
 

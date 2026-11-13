@@ -2,7 +2,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-BACKLOG = (ROOT / "skills/subagent-driven-development/backlog.md").read_text()
+BACKLOG = ((ROOT / "skills/subagent-driven-development/backlog-main.md").read_text() + "\n" + (ROOT / "skills/subagent-driven-development/backlog.md").read_text())
 TOOLS = (ROOT / "docs/tools.md").read_text()
 
 

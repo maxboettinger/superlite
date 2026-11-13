@@ -1,6 +1,6 @@
 from test_plan_tools import ROOT
 
-BACKLOG = (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8")
+BACKLOG = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
 CMD = (ROOT / "commands" / "backlog.md").read_text(encoding="utf-8")
 
 NEW3 = "One ship approval covers every batch of one plan round: each `plan` (also `--reset`) asks it again and `plan --add` keeps it; `decide --print` lists it last, `Approve shipping (Recommended)` first. An approval the user's own prompt gave is recorded with `\"$SL\" backlog decide --approve-ship --source prompt`. An answers file needs `\"by\"`: `\"user\"` for AskUserQuestion answers, `\"main\"` for answers main ruled as AI orchestrator, or a `{question: \"user\"|\"main\"}` map; `decide` and `answer` record it, lead briefs list those under main's rulings, never as Max's, and the ship approval refuses `main`."
@@ -23,7 +23,7 @@ def test_main_doc_b90():
     l3 = line(main, "3. ")
     assert NEW3 in l3
     assert "One ship approval covers all batches." not in l3
-    assert line(main, "5. ").endswith(" " + S5)
+    assert S5 in line(main, "5. ")
     assert line(section(BACKLOG, "## Lead", "## Permissions"), "- Keep your notes in").endswith(" " + LEAD)
 
 

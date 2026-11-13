@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from test_plan_tools import ROOT
 
-BACKLOG = (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8")
+BACKLOG = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
 FLEET = (ROOT / "docs" / "fleet.md").read_text(encoding="utf-8")
 
 B_FRESH = "Start main in a fresh session: one that already loaded another superlite skill or command (start, brainstorming, writing-plans, subagent-driven-development, finishing) tells the user to run `/clear` and `/superlite:backlog` again, and ends its turn."

@@ -2,7 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CMD = (ROOT / "commands" / "backlog.md").read_text()
-SKILL = (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text()
+SKILL = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text() + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text())
 TOOLS = (ROOT / "docs" / "tools.md").read_text()
 ROW = next(ln for ln in TOOLS.splitlines() if ln.startswith("| `backlog` |"))
 

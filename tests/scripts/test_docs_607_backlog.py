@@ -1,6 +1,6 @@
 from pathlib import Path
 
-DOC = (Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8")
+DOC = ((Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
 
 
 def test_release_and_unit_layer_are_explained():

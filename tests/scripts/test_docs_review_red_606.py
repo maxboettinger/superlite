@@ -22,6 +22,6 @@ def test_fleet_reviewer_line_names_both_sections():
 
 
 def test_writing_plans_names_also_touches_and_the_lint_warnings():
-    t = read("skills/writing-plans/SKILL.md")
+    t = "\n".join(read(f"skills/writing-plans/{n}") for n in ("SKILL.md", "task-template.md", "probe-plan.md", "split.md"))
     assert "| `Also-touches` |" in t
     assert "`ALSO-TOUCHES:`" in t and "`OWNS:`" in t and "`REACH:`" in t

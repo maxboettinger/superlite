@@ -9,6 +9,10 @@ def _read(name):  # O(1)
     return (SDD / name).read_text(encoding="utf-8")  # O(n)
 
 
+def _both():
+    return _read("backlog-main.md") + "\n" + (SDD / "backlog.md").read_text(encoding="utf-8")
+
+
 def _section(text, head):  # O(n)
     start = text.index(head)  # O(n)
     nxt = text.find("\n## ", start + len(head))  # O(n)
@@ -44,7 +48,7 @@ def test_researcher_rule():  # O(n)
 
 
 def test_backlog_lead_variant():  # O(n)
-    text = _read("backlog.md")  # O(n)
+    text = _both()  # O(n)
     lead = _section(text, "## Lead")  # O(n)
     for needle in ("lead.text", "`lean`", "`default`", "--wave"):  # O(1)
         assert needle in lead, needle  # O(n)

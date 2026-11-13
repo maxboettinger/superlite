@@ -2,9 +2,9 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-WP = (ROOT / "skills" / "writing-plans" / "SKILL.md").read_text(encoding="utf-8")
+WP = "\n".join((ROOT / "skills" / "writing-plans" / n).read_text(encoding="utf-8") for n in ("SKILL.md", "task-template.md", "probe-plan.md", "split.md"))
 CMD_BACKLOG = (ROOT / "commands" / "backlog.md").read_text(encoding="utf-8")
-SDD_BACKLOG = (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8")
+SDD_BACKLOG = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
 RESUME = (ROOT / "commands" / "resume.md").read_text(encoding="utf-8")
 
 

@@ -1,6 +1,6 @@
 from test_plan_tools import ROOT
 
-SDD = (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8")
+SDD = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
 CMD = (ROOT / "commands" / "backlog.md").read_text(encoding="utf-8")
 
 

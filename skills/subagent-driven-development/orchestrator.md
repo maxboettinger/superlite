@@ -1,5 +1,7 @@
 # Who orchestrates: human orchestrator or AI orchestrator
 
+A reference for maintainers and the docs: no brief, command or worker loads this file.
+
 When someone asks superlite to create something, it first settles who orchestrates (D40).
 
 - **Human orchestrator:** the human validates the plan before it is linted and sent off, in two phases. Phase 1: the review plan
