@@ -121,6 +121,28 @@ WAVE_WAIT = ("Never end your turn while your workers run: wait once per wave wit
              "wait still reports every worker that finished meanwhile. A shell loop that polls (`sleep`, `until grep`) is a defect: "
              "wait with `fleet wait` or `run_tests --wait`.")  # O(1)
 
+BUILD_TAIL = ("superlite:subagent-driven-development with fleet on, the final review (UI screenshots go in .superlite/render/, its packet lists them), the test layers. "
+              "Builds: the verdict is `sl run_tests` (the project's test command; a project with `.maxapp` runs `maxapp test`, "
+              "which a build pool may place on another Mac, and a full run whose tree a green maxapp test stamp covers returns that "
+              "result without a run); task trees build in <tree>/.build/DerivedData and any build of your own goes under .build/ of the "
+              "worktree, never -derivedDataPath outside the worktree (your session scratchpad included; backlog cleanup removes "
+              "scratchpad build folders when the worktree goes); a product, simulator or device build stays on this machine and runs "
+              "only when an issue's acceptance asks for a running-app check; copy this sentence into every worker brief.")  # O(1)
+PLAN_STOP = ("this is the plan phase: a build lead on a cheaper model (run config lead.build_model) runs your plan; it reads the plan, "
+             ".superlite/notes.md and the batch record, never your transcript, so write every ruling the build needs into the plan. "
+             "Dispatch no implementer, review and ship nothing. Once `{sl} plan_tools lint --plan <plan> --spec <plan> --stable` passes, "
+             "every task owns its files and no worker of yours is busy, end your turn with `Status: DONE planned: <plan path from the "
+             "worktree root>`; main's wait checks the plan and sends it back once when it does not run.")  # O(1)
+PLAN_END = ("End: Status: DONE planned: <plan path> once the plan lints green; Status: DONE no-change: <reason> when your issues need "
+            "no code change (a duplicate: name the issue it duplicates; write no plan, ship nothing; main closes the issues); otherwise "
+            "Status: BLOCKED with the reason. Then the JSON block.")  # O(1)
+BUILD_ROLE = ("A planning lead wrote and linted the plan {plan}; you run it: dispatch, review, ship. Read the plan and .superlite/notes.md "
+              "(its Left undone lines stand), not the design history: do not re-plan, re-design or re-read shipped summaries; the plan's "
+              "rulings bind. When the plan does not hold (a task cannot be built as written, a ruling contradicts the code), let running "
+              "workers finish, ask main in .superlite/question.json and end with Status: NEEDS_DECISION; a plan that does not lint or a "
+              "task that owns no files: Status: BLOCKED plan: <errors>.")  # O(1)
+BUILD_HEAD = "Build (build lead, plan {plan}): no superlite:brainstorming and no superlite:writing-plans; run "  # O(1)
+
 
 def step_text(x):  # O(len)
     """One steps line: the step, then its source (issues, or the decision) and why in parentheses; every stored text cleaned."""
@@ -149,13 +171,37 @@ def lead_variant(batch, ctx):  # O(L)
     return "lean" if text == "lean" and one else "default"  # O(1)
 
 
+def pick_summaries(batch, shipped, last=5):  # O(s * f)
+    """Paths of the shipped summaries that touch the batch's files (shared file, or a file path or name in the text) plus the last `last`; and how many were left out.
+    A file's tokens are its full path and its basename only when that has a dot (`sl` would match everything). A file matching more than max(10, s // 4) entries is shared and selects none."""
+    files = set(batch.get("files") or [])  # O(f)
+
+    def hit(f, e):  # O(1)
+        toks = {f} | ({Path(f).name} if "." in Path(f).name else set())  # O(1)
+        return f in (e.get("files") or []) or any(t and t in (e.get("text") or "") for t in toks)  # O(1)
+
+    limit = max(10, len(shipped) // 4)  # O(1)
+    use = [f for f in files if sum(hit(f, e) for e in shipped) <= limit]  # O(s * f)
+    keep = set(range(max(0, len(shipped) - last), len(shipped)))  # O(last)
+    for i, e in enumerate(shipped):  # O(s * f)
+        if any(hit(f, e) for f in use):  # O(f)
+            keep.add(i)  # O(1)
+    paths = [shipped[i]["path"] for i in sorted(keep)]  # O(s)
+    return paths, len(shipped) - len(paths)  # O(1)
+
+
 def lead_brief(batch, ctx):  # O(i + f + a)
     ctx = {**STANDING, **ctx}  # O(1)
     bid, sl = batch["id"], ctx["sl"]  # O(1)
+    phase = ctx.get("phase")  # O(1) None (one lead), "plan" or "build"
     out = [f"# Lead brief: {bid} ({clean(batch.get('topic', ''))})"]  # O(1)
     if ctx.get("resume"):  # O(1)
         out.append(f"Resume: this batch was parked ({clean(batch.get('reason', ''))}); run superlite:resume first.")  # O(1)
-    out.append(f"You are the lead of batch {bid} in {ctx['repo']}. Read {ctx['backlog_md']} first: it holds the lead rules.")  # O(1)
+    if phase == "build":  # O(1)
+        out.append(f"You are the build lead of batch {bid} in {ctx['repo']}. Read {ctx['backlog_md']} first: it holds the lead rules.")  # O(1)
+        out.append(BUILD_ROLE.format(plan=ctx.get("plan", "")))  # O(1)
+    else:  # O(1)
+        out.append(f"You are the lead of batch {bid} in {ctx['repo']}. Read {ctx['backlog_md']} first: it holds the lead rules.")  # O(1)
     out.append(DATA_RULE)  # O(1)
     jira = _jira(batch.get("issues", []))  # O(i)
     if jira:  # O(1)
@@ -205,22 +251,33 @@ def lead_brief(batch, ctx):  # O(i + f + a)
         out.append(NOTE_HEAD)  # O(1)
         out += ["    " + CTRL.sub("", ln.rstrip("\r")) for ln in str(ctx["note"]).splitlines()]  # O(n)
     paths = ", ".join(ctx.get("summaries") or []) or "none"  # O(1)
-    if paths == "none":  # O(1)
+    if phase == "build":  # O(1)
+        out.append("Rulings from shipped batches: applied in the plan by the planning lead; do not read them again.")  # O(1)
+    elif paths == "none":  # O(1)
         out.append("Rulings from shipped batches: none")  # O(1)
     else:  # O(1)
         out.append(f"Rulings from shipped batches: {paths} (read each; at most 10 lines).")  # O(1)
+    more = ctx.get("summaries_more") or {}  # O(1)
+    if phase != "build" and more.get("count", 0) > 0:  # O(1)
+        out.append(f"Other shipped summaries: {more['count']} more in {more.get('dir', '')} "
+                   "(one B<n>.md per batch; read one only when a ruling you need is missing).")  # O(1)
     out.append("Your run: the worktree you start in, state in .superlite/; pass --plan .superlite to every sl call.")  # O(1)
     out.append(f"First: `{sl} orchestrator set ai --plan .superlite`, then `{sl} fleet on --plan .superlite`.")  # O(1)
     out.append(CODE_RULE.format(sl=sl))  # O(1)
-    head = LEAN_BUILD.format(sl=sl) if lead_variant(batch, ctx) == "lean" else "Build: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, "  # O(1)
-    out.append(head +
-               "superlite:subagent-driven-development with fleet on, the final review (UI screenshots go in .superlite/render/, its packet lists them), the test layers. "
-               "Builds: the verdict is `sl run_tests` (the project's test command; a project with `.maxapp` runs `maxapp test`, "
-               "which a build pool may place on another Mac, and a full run whose tree a green maxapp test stamp covers returns that "
-               "result without a run); task trees build in <tree>/.build/DerivedData and any build of your own goes under .build/ of the "
-               "worktree, never -derivedDataPath outside the worktree (your session scratchpad included; backlog cleanup removes "
-               "scratchpad build folders when the worktree goes); a product, simulator or device build stays on this machine and runs "
-               "only when an issue's acceptance asks for a running-app check; copy this sentence into every worker brief.")  # O(1)
+    lean = lead_variant(batch, ctx) == "lean"  # O(1)
+    head = LEAN_BUILD.format(sl=sl) if lean else "Build: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, "  # O(1)
+    plan_head = (LEAN_BUILD.format(sl=sl)[:-len("run ")] + "stop: " if lean else
+                 "Plan: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, then stop: ")  # O(1)
+    if phase == "plan":  # O(1)
+        out.append(plan_head + PLAN_STOP.format(sl=sl))  # O(1)
+    else:  # O(1)
+        out.append((BUILD_HEAD.format(plan=ctx.get("plan", "")) if phase == "build" else head) + BUILD_TAIL)  # O(1)
+    if phase == "plan":  # O(1)
+        out.append(WAVE_WAIT.format(sl=sl))  # O(1)
+        out.append("Escalate a new major decision: let running workers finish, write .superlite/question.json in the "
+                   "AskUserQuestion shape, end your turn with Status: NEEDS_DECISION.")  # O(1)
+        out.append(PLAN_END)  # O(1)
+        return "\n".join(out) + "\n"  # O(n)
     sim = f"{ctx['worktree']}/.superlite/simulators.txt" if ctx.get("worktree") else ".superlite/simulators.txt of your worktree"  # O(1)
     out.append("Simulators: append the UDID of each simulator you or a worker creates (`xcrun simctl create` or `clone`; a checker's "
                f"`Simulators:` line marks its created ones) as one line to {sim}; never list one you did not create; ship cleanup "
