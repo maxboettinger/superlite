@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Backlog runner (phase 3): start batch leads, wait for them, answer an escalated lead.
 
-    backlog_run.py start [B ...] [--cap 2] [--model opus]
+    backlog_run.py start [B ...] [--cap 2] [--model opus] [--config NAME]
     backlog_run.py wait [--timeout 21600] [--poll 10]
     backlog_run.py answer B --file F        (F = {"answers": {question: answer}, "by": "user"|"main"|{question: ...}})
     backlog_run.py tell B --text T          (send main's text to the running lead of B)
@@ -39,6 +39,7 @@ import backlog_brief as bb  # noqa: E402 | O(1) imported here, so a test's stub 
 import backlog_checks as bc  # noqa: E402 | O(1)
 import backlog_state as bs  # noqa: E402 | O(1)
 import testcmd  # noqa: E402 | O(1)
+import run_config  # noqa: E402 | O(1)
 
 ACTIVE = ("running", "needs_decision")
 STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_DECISION|NEEDS_CONTEXT|BLOCKED)\b", re.I)
@@ -232,6 +233,11 @@ def cmd_start(a) -> int:
     if not data.get("approved_ship"):  # O(1)
         return _refuse("no ship approval yet (sl backlog decide --print)")  # O(1)
     try:  # O(1)
+        rc = run_config.resolve(a.config, root, {"lead": {"model": a.model}} if a.model else None)  # O(file)
+    except run_config.ConfigError as e:  # O(1)
+        return _refuse(f"run config: {e}")  # O(1)
+    print(f"run config: {rc['id']} (lead {rc['lead']['model']}, effort {rc['lead']['effort']})", file=sys.stderr)  # O(1)
+    try:  # O(1)
         live = fleet.hc.agent_states()  # O(w)
     except fleet.hc.HerdrError as e:  # O(1)
         return _refuse(f"Herdr not reachable ({e})", 3)  # O(1)
@@ -297,7 +303,7 @@ def cmd_start(a) -> int:
             fleet.main(["on", "--plan", str(sd)])  # O(w)
         fleet_on = True  # O(1)
         try:  # O(1)
-            rec = fleet_lead.spawn_lead(sd, wt, a.model)  # O(1) + spawns
+            rec = fleet_lead.spawn_lead(sd, wt, rc["lead"]["model"], rc=rc)  # O(1) + spawns
         except SystemExit:  # O(1)
             print(f"BLOCKED: {bid} lead did not start; {bid} keeps its state, rerun sl backlog start {bid}")  # O(1)
             code = 2  # O(1)
@@ -313,7 +319,7 @@ def cmd_start(a) -> int:
         def mark(d, bid=bid, rec=rec, wt=wt, branch=branch):  # O(b)
             x = bs.batch(d, bid)
             x.update({"state": "running", "lead": rec["id"], "agent": rec["name"], "worktree": str(wt), "branch": branch,
-                      "since": _now_ms(), "reason": "", "ship_runs": 0, "ship_waits": 0, "reprompted": False, "question_reprompted": False,
+                      "since": _now_ms(), "run_config": rc["id"], "reason": "", "ship_runs": 0, "ship_waits": 0, "reprompted": False, "question_reprompted": False,
                       "gone_seen": {}, "gone_workers": []})
         bs.update(p, mark)  # O(size)
         print(f"{bid} running lead={rec['id']} worktree={wt}")  # O(1)
@@ -885,7 +891,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("start")  # O(1)
     s.add_argument("batch", nargs="*")  # O(1)
     s.add_argument("--cap", type=int, default=2)  # O(1)
-    s.add_argument("--model", default="opus")  # O(1)
+    s.add_argument("--model", default=None)  # O(1)
+    s.add_argument("--config", default=None)  # O(1)
     s.add_argument("--machine-wait", type=float, default=100)  # O(1)
     s.add_argument("--over-limit", action="store_true")  # O(1)
     w = sub.add_parser("wait")  # O(1)

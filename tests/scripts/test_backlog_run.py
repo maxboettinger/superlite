@@ -20,9 +20,9 @@ def bk(tmp_path, monkeypatch):
         if ns.down:
             raise Herdr("unreachable")
         return dict(ns.states)
-    def spawn_lead(main_sd, wt, model="opus", env=None):
+    def spawn_lead(main_sd, wt, model="opus", env=None, rc=None):
         ns.n[0] += 1; wid = f"W{ns.n[0]}"; ns.states[f"sl-m-{wid}"] = "working"; log("spawn", wt.name)
-        return {"id": wid, "name": f"sl-m-{wid}", "account": "c3", "pane_id": "p", "agent": "lead", "model": model, "role": "lead", "lead_sd": str(wt / ".superlite")}
+        return {"id": wid, "name": f"sl-m-{wid}", "account": "c3", "pane_id": "p", "agent": "lead", "model": model, "role": "lead", "lead_sd": str(wt / ".superlite"), "rc": rc}
     def ensure(topic, start):
         wt = root / ".claude" / "worktrees" / f"superlite-{topic}"; (wt / ".superlite").mkdir(parents=True, exist_ok=True); return wt, "created"
     fakes = {"fleet": types.SimpleNamespace(hc=types.SimpleNamespace(agent_states=states, HerdrError=Herdr), main=lambda argv: log("fleet", argv) or 0,
