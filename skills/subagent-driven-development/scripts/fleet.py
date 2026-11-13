@@ -363,10 +363,11 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=
     if busy:  # O(1)
         print(f"BLOCKED: fleet spawn: {busy}; rerun later, or pass --over-limit")  # O(1)
         raise SystemExit(3)  # O(1) before any pane
+    kw = {**({"output": output} if output is not None else {}), **({"brief": True} if brief else {}), **({"plain": False} if not plain else {})}  # only the non-default flags, so an older _spawn signature still fits | O(1)
     try:  # O(1)
-        return _spawn(sd, plan, tier, project, cfg, env, role, None, output, brief, plain)  # O(a * e + w)
+        return _spawn(sd, plan, tier, project, cfg, env, role, None, **kw)  # O(a * e + w)
     except (_Slow, NoShell) as first:  # O(1)
-        return _spawn(sd, plan, tier, project, cfg, env, role, first, output, brief, plain)  # O(a * e + w)
+        return _spawn(sd, plan, tier, project, cfg, env, role, first, **kw)  # O(a * e + w)
 
 
 def with_model(argv, model):  # a copy of argv pinned to `model`: replace the value of --model, else insert after --agent NAME, else prepend | O(n)
