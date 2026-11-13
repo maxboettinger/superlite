@@ -5,7 +5,8 @@
 
 Per worker: the pane that holds its session (Herdr agent list) or its recorded pane gives the place; a fresh pane is split
 off it with the recorded env, the old pane is closed, the recorded agent starts with `--resume <session>`. A busy worker
-whose turn the restart cut gets a continue prompt (a lead's ends with its phase's report contract, fleet_io.report_contract). Leads' own fleets come first. Prints one line per worker, then the waits
+whose turn the restart cut gets a continue prompt that ends with its report contract (fleet_io.report_contract: a lead's phase,
+the final reviewer's REVIEW, a batch implementer's WORK_BATCH, else WORK). Leads' own fleets come first. Prints one line per worker, then the waits
 to re-arm and the test runs that ended meanwhile. Exit 3 when a line says BLOCKED, else 0.
 """
 
@@ -19,7 +20,6 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import fleet  # noqa: E402 | O(1)
 import fleet_io as fio  # noqa: E402 | O(1)
-import fleet_report  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
 import herdr_client  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
@@ -31,7 +31,6 @@ CONTINUE = ("Herdr restarted and ended your last turn; sl fleet restore resumed 
 LEAD_CONTINUE = ("Herdr restarted and ended your last turn; sl fleet restore resumed this session and your fleet with their fleet env. "
                  "Your waits died with the restart: re-arm them in the foreground first:")  # O(1)
 LEAD_TAIL = "Then continue your brief where you stopped."  # O(1)
-REVIEW_ROLES = ("final-reviewer",)  # O(1)
 WAIT_MS = 540000  # O(1)
 
 
@@ -234,7 +233,7 @@ def _one(sd, c, wid, w, rearm_of_lead, prefix):  # (line, blocked) for one worke
     if role == "lead":  # O(1)
         text = "\n".join([LEAD_CONTINUE] + rearm_of_lead + [LEAD_TAIL]) + "\n\n" + fio.report_contract(w)  # O(r + size of the brief)
     else:  # O(1)
-        text = CONTINUE + "\n\n" + (fleet_report.REVIEW if role in REVIEW_ROLES else fleet_report.WORK)  # O(1)
+        text = CONTINUE + "\n\n" + fio.report_contract(w)  # REVIEW, WORK_BATCH for a batch label, else WORK | O(1)
     try:  # O(1)
         c.prompt(name, text, ["working"], 15000)  # O(len)
     except Exception as e:  # noqa: BLE001 | O(1)
