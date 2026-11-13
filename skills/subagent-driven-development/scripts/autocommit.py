@@ -3,7 +3,8 @@
 
     autocommit.py on|off|status         any command also takes --plan P (plan, folder or .superlite): work in P's checkout
     autocommit.py apply [--no-squash] [--trailer "Key: value"]...   real commits on the current branch, one per task
-                                        (--no-squash: one per checkpoint; each --trailer ends every commit message)
+                                        (--no-squash: one per checkpoint; each --trailer ends every commit message);
+                                        `apply` runs the project's commit hooks before HEAD moves
     autocommit.py clean      delete refs/superlite/* and the checkpoint state
 
 Default is OFF: commit_task then records a shadow checkpoint commit (never on HEAD, the
@@ -12,6 +13,7 @@ in the tree. `on` (or SUPERLITE_AUTOCOMMIT=1, which overrides the file) makes co
 commit on the current branch as before. Library: `held_files(root)` lists the checkpointed files a hook can skip (read-only). State: .superlite/autocommit.json and
 .superlite/checkpoints.json. Stdlib only; commits use the user's git identity, trailers only from `apply --trailer`.
 """
+import functools
 import json
 import os
 import re
@@ -30,12 +32,98 @@ TRAILER = re.compile(r"([A-Za-z0-9][A-Za-z0-9-]*):[ \t]*([^\r\n]+)")
 NO_TRAILER_VALUE = "apply: --trailer needs a value: --trailer \"Key: value\""
 
 
-def git(*args, env=None, check=True):
+def git(*args, env=None, check=True, input=None):
     r = subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8",
-                       env={**os.environ, **env} if env else None)
+                       env={**os.environ, **env} if env else None, input=input)
     if check and r.returncode != 0:
         sys.exit(f"git {' '.join(args[:2])} failed: {(r.stderr or r.stdout).strip()}")
     return r
+
+
+def git_version(text):
+    """The first two numbers of a `git --version` text as (major, minor); (0, 0) when there are none."""
+    m = re.search(r"(\d+)\.(\d+)", text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def clean_message(text):
+    """Commit message text like git's whitespace cleanup: "" when nothing is left, else one trailing newline."""
+    lines, out = [ln.rstrip() for ln in text.splitlines()], []
+    for ln in lines:
+        if not ln and (not out or not out[-1]):
+            continue
+        out.append(ln)
+    while out and not out[-1]:
+        out.pop()
+    return "\n".join(out) + "\n" if out else ""
+
+
+@functools.lru_cache(maxsize=None)
+def has_hook_command():
+    return git_version(git("--version", check=False).stdout) >= (2, 36)
+
+
+def run_hook(name, args, env):
+    """Run the commit hook `name` like git would; return its exit status (0 when there is no hook).
+
+    Its output goes to stderr. git before 2.36 has no `git hook run`: the hook file runs from the top folder."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    full = {**os.environ, **env}
+    if has_hook_command():
+        return subprocess.run(["git", "hook", "run", "--ignore-missing", name, *(["--", *args] if args else [])],
+                              env=full, stdin=subprocess.DEVNULL, stdout=sys.stderr).returncode
+    path = Path(git("rev-parse", "--git-path", f"hooks/{name}").stdout.strip()).resolve()
+    if not (path.is_file() and os.access(path, os.X_OK)):
+        return 0
+    top = git("rev-parse", "--show-toplevel").stdout.strip()
+    return subprocess.run([str(path), *args], env=full, cwd=top, stdin=subprocess.DEVNULL,
+                          stdout=sys.stderr).returncode
+
+
+def hook_failed(hook, rc, title):
+    return (f"apply: the {hook} hook failed (exit {rc}) for {title}; HEAD and the checkpoints are unchanged: "
+            "fix the cause, then rerun `sl autocommit apply` (a file you edit for the fix needs "
+            "`sl commit_task` again first, or commit it yourself with `git add -A && git commit`)")
+
+
+def hook_pass(todo, trailers):
+    """Run pre-commit, prepare-commit-msg and commit-msg for each (entry, tree) of `todo`; return the messages.
+
+    Each commit's tree is in a temporary index. Any stop exits (code 1) before a commit, ref or state changes."""
+    idx = str(Path(".superlite/apply-hook.index").resolve())
+    edit = Path(git("rev-parse", "--git-path", "COMMIT_EDITMSG").stdout.strip()).resolve()
+    env = {"GIT_INDEX_FILE": idx, "GIT_EDITOR": ":"}
+    out = []
+    Path(idx).parent.mkdir(parents=True, exist_ok=True)
+    try:
+        for e, tree in todo:
+            title = e["title"]
+            Path(idx).unlink(missing_ok=True)
+            git("read-tree", tree, env=env)
+            rc = run_hook("pre-commit", [], env)
+            if rc:
+                sys.exit(hook_failed("pre-commit", rc, title))
+            now = git("write-tree", env=env).stdout.strip()
+            if now != tree:
+                d = [p for p in git("diff", "--name-only", "-z", tree, now).stdout.split("\0") if p]
+                sys.exit(f"apply: the pre-commit hook changed the staged files for {title}: "
+                         + ", ".join(d[:8]) + (" ..." if len(d) > 8 else "")
+                         + "; HEAD and the checkpoints are unchanged: checkpoint the change with `sl commit_task` "
+                         "and rerun `sl autocommit apply`, or commit it yourself with `git add -A && git commit`")
+            edit.write_text(title + "\n" + ("\n" + "\n".join(trailers) + "\n" if trailers else ""), encoding="utf-8")
+            for hook, args in (("prepare-commit-msg", [str(edit), "message"]), ("commit-msg", [str(edit)])):
+                rc = run_hook(hook, args, env)
+                if rc:
+                    sys.exit(hook_failed(hook, rc, title))
+            msg = clean_message(edit.read_text(encoding="utf-8"))
+            if not msg:
+                sys.exit(f"apply: the commit message for {title} is empty after the commit-msg hook; "
+                         "HEAD and the checkpoints are unchanged")
+            out.append(msg)
+    finally:
+        Path(idx).unlink(missing_ok=True)
+    return out
 
 
 def is_on():
@@ -377,18 +465,22 @@ def apply(squash=True, trailers=()):
                  + ", ".join(edited[:8]) + (" ..." if len(edited) > 8 else "")
                  + "; checkpoint them again with `sl commit_task`, or commit the files yourself with `git add -A && git commit`")
     ptree = git("rev-parse", f"{start}^{{tree}}").stdout.strip() if start else EMPTY_TREE  # O(1)
-    done, skipped = [], []  # O(1)
-    for e, tree in chain:  # O(n)
-        if tree == ptree:  # O(1)
-            skipped.append(e)  # O(1)
-            continue  # O(1)
-        parent = git("commit-tree", tree, "-m", e["title"], *(["-m", "\n".join(trailers)] if trailers else []),
-                     *(["-p", parent] if parent else [])).stdout.strip()  # O(1)
-        ptree = tree  # O(1)
-        done.append(e)  # O(1)
+    todo, skipped = [], []
+    for e, tree in chain:
+        if tree == ptree:
+            skipped.append(e)
+            continue
+        todo.append((e, tree))
+        ptree = tree
+    messages = hook_pass(todo, list(trailers)) if todo else []
+    done = []
+    for (e, tree), msg in zip(todo, messages):
+        parent = git("commit-tree", tree, "-F", "-", *(["-p", parent] if parent else []), input=msg).stdout.strip()
+        done.append(e)
     if done:  # O(1)
         git("update-ref", "-m", "superlite: apply checkpoints", "HEAD", parent, *([start] if start else []))  # O(1)
         git("reset", "-q", "--", *sorted(files), env={"GIT_LITERAL_PATHSPECS": "1"})  # the run's files to the new HEAD; unrelated staged changes stay staged, the tree is untouched  # O(f)
+        run_hook("post-commit", [], {"GIT_EDITOR": ":"})  # result ignored
     if note:
         print(note)
     print(f"applied {len(done)} commit(s) on {st.get('branch') or 'HEAD'}:")
