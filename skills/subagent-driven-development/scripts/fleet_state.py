@@ -156,8 +156,8 @@ def _blocked(src, sd):  # O(w)
     return any(w.get("role") == "lead" and w.get("state") != "stopped" for w in load(src)["workers"].values())  # O(w)
 
 
-def follow(sd, sid=None, fallback=None):  # O(w + f)
-    """Move the session's fleet into `sd`; {"from", "to", "workers"} when it moved, else None."""
+def follow(sd, sid=None, fallback=None, named=False):  # O(w + f)
+    """Move the session's fleet into `sd`; {"from", "to", "workers"} when it moved, else None. A folder without run state is a target only when named (`fleet on`)."""
     if sid is None:  # O(1)
         import state  # O(1)
         sid = state.session_id()  # O(1)
@@ -167,6 +167,10 @@ def follow(sd, sid=None, fallback=None):  # O(w + f)
     if src is None and fallback is not None and _owned(Path(fallback), sid):  # O(w)
         src = Path(fallback)  # O(1)
     target = Path(sd).resolve()  # O(1)
+    if not named:  # O(1)
+        import state  # O(1)
+        if not state.holds_run_state(target):  # O(1)
+            return None  # O(1)
     if src is None or src.resolve() == target or is_on(sd) or _blocked(src, sd):  # O(w)
         return None  # O(1)
     src = src.resolve()  # O(1)

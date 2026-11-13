@@ -8,6 +8,7 @@ import fleet  # noqa: E402
 import fleet_io  # noqa: E402
 import orchestrator  # noqa: E402
 import fleet_state as fs  # noqa: E402
+import state  # noqa: E402
 
 HEAD = "# Plan\n**Goal:** test.\n\nGlobal constraints:\n- Every check runs on the build machine.\n\n"
 TASKS = "### T1 first · Complexity 3 (O-1) · Est. context 40k\n**Owns:** src/a.py\n"
@@ -57,6 +58,7 @@ def test_add_constraints_reports_change_and_survives_errors(plan, tmp_path):
 
 
 def test_send_brief_gains_constraints_once(world, plan, monkeypatch):
+    state.plan_dir(plan).mkdir(parents=True, exist_ok=True)  # --plan needs its state folder (#707)
     got = []
     monkeypatch.setattr(fleet_io, "main", lambda argv: got.append(list(argv)) or 0)
     brief = world.proj / "b.md"; brief.write_text("# Brief\n")
@@ -69,6 +71,7 @@ def test_send_brief_gains_constraints_once(world, plan, monkeypatch):
 
 
 def test_send_survives_a_failing_plan_lookup(world, plan, monkeypatch):
+    state.plan_dir(plan).mkdir(parents=True, exist_ok=True)  # --plan needs its state folder (#707)
     got = []
     monkeypatch.setattr(fleet_io, "main", lambda argv: got.append(list(argv)) or 0)
     monkeypatch.setattr(fleet, "_sd", lambda a: (_ for _ in ()).throw(RuntimeError("boom")))

@@ -888,14 +888,14 @@ def _report(sd, ids):  # print each worker's last report or a report by label; r
     return 1 if bad else 0  # O(1)
 
 
-def _follow(plan):  # O(w)
+def _follow(plan, named=False):  # O(w)
     """Move the session's fleet into the folder this command names; one stderr line when it moved, a warning when it failed."""
     try:  # O(1)
         sd = Path(state.resolve(plan)).resolve()  # O(d)
     except (state.Foreign, OSError):  # O(1)
         return  # O(1)
     try:  # O(1)
-        r = fs.follow(sd)  # O(w)
+        r = fs.follow(sd, named=named)  # O(w)
     except Exception as e:  # noqa: BLE001 | a failed move must not stop the command | O(1)
         print(f"fleet: warning: fleet not moved ({e})", file=sys.stderr)  # O(1)
         return  # O(1)
@@ -910,8 +910,13 @@ def main(argv=None):  # O(w) plus command cost
     if why:  # O(1)
         print(f"error: --plan {plan}: {why}; pass the plan file or the run's .superlite folder, or leave --plan out to use the current directory's run", file=sys.stderr)  # O(1)
         return 2  # O(1)
+    if plan is not None and argv and argv[0] not in ("on", "name") and not argv[0].startswith("-"):  # a missing state folder is refused, nothing created, no fleet moves (#707) | O(d)
+        sd = Path(state.resolve(plan)).resolve()  # O(d)
+        if not sd.is_dir():  # O(1)
+            print(f"error: --plan {plan}: no run state at {sd}", file=sys.stderr)  # O(1)
+            return 2  # O(1)
     if argv and argv[0] != "name" and not argv[0].startswith("-"):  # Every subcommand but name first moves this session's fleet into its folder (#580) | O(1)
-        _follow(plan)  # O(w)
+        _follow(plan, named=argv[0] == "on")  # O(w)
     if argv and argv[0] == "send" and _brief_arg(argv):  # the brief gains the plan's Global constraints once (#635) | O(L + len)
         try:  # O(1)
             import orchestrator  # noqa: E402 | O(1) lazy

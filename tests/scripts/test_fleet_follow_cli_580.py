@@ -39,6 +39,7 @@ def test_status_after_lint_bind_shows_busy_workers(tmp_path, monkeypatch, capsys
 def test_wait_delegation_follows_first(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("SUPERLITE_SESSION_ID", "s1")
     S, W = run(tmp_path, "S"), run(tmp_path, "W")
+    (W / "stable.json").write_text("{}")
     session_fleet_in(S)
     seen = []
     import fleet_io
