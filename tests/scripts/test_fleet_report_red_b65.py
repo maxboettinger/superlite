@@ -18,7 +18,7 @@ def block(obj):
 
 
 def test_json_red_field_is_carried():
-    assert fr.parse("Status: DONE\n" + block({**GOOD, "red": RED})) == {**GOOD, "red": RED, "valid": True}
+    assert fr.parse("Status: DONE\n" + block({**GOOD, "red": RED})) == {**GOOD, "red": RED, "reds": {}, "valid": True}
 
 
 def test_json_without_red_takes_the_red_run_line():
@@ -33,7 +33,7 @@ def test_empty_json_red_takes_the_red_run_line():
 
 def test_bold_bullet_line_without_json():
     assert fr.parse("Status: DONE\n- **Red run:** none - no test\n") == {
-        "status": "DONE", "files": [], "tests": "", "red": "none - no test", "findings": [], "summary": "",
+        "status": "DONE", "files": [], "tests": "", "red": "none - no test", "reds": {}, "findings": [], "summary": "",
         "concerns": [], "valid": False}
 
 

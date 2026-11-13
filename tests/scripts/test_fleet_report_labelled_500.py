@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "skills" / "subagent-driven-development" / "scripts"))
 import fleet_report as fr  # noqa: E402
 
-GOOD = {"status": "DONE", "files": ["src/a.py"], "tests": "3 passed", "red": "", "findings": [], "summary": "ok", "concerns": []}
+GOOD = {"status": "DONE", "files": ["src/a.py"], "tests": "3 passed", "red": "", "reds": {}, "findings": [], "summary": "ok", "concerns": []}
 LAB = ("Status: DONE_WITH_CONCERNS\n\nFiles changed:\n- `skills/a.py`\n- tests/test_a.py: new cases\n* docs/a.md\n\n"
        "Test: tests (fast): 37 passed, 0 failed\nRed run: tests (fast): 2 failed\nConcerns:\n- slow path untested\n- **name clash** with b.py\n")
 
@@ -21,7 +21,7 @@ def block(obj):
 
 def test_labelled_task_report_parses_in_full():
     assert fr.parse(LAB) == {"status": "DONE_WITH_CONCERNS", "files": ["skills/a.py", "tests/test_a.py", "docs/a.md"],
-                             "tests": "tests (fast): 37 passed, 0 failed", "red": "tests (fast): 2 failed", "findings": [],
+                             "tests": "tests (fast): 37 passed, 0 failed", "red": "tests (fast): 2 failed", "reds": {}, "findings": [],
                              "summary": "", "concerns": ["slow path untested", "name clash with b.py"], "valid": False}
 
 

@@ -9,6 +9,8 @@
     fleet_io.py stopped WID --sd DIR [--t MS]       (the worker stop hook: relabel the pane)
 
 A batch's task message has one Verify Tn line per member, each with its own --task, and a Batch line: one run per task (#556).
+`task_message` adds the `Also edit:` line (task.also_line) and keeps those files out of `Do not touch`; the `Batch:` line asks for per-task red runs.
+`report_contract` gives a batch implementer (task label with a comma) fleet_report.WORK_BATCH, and `_ask` uses `report_contract`; `red_gap` reads a report's `reds[tid]` before `red`.
 
 `wait` honours `--timeout` as ms, a bare number under 1000 read as seconds (`540s`, `9m`, `1500ms` work); it returns each
 report once (`claim`): a worker another wait collected prints `Wn T3 already collected: <json>`; `BUSY`/`TIMEOUT` end with
@@ -123,7 +125,8 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
     mine = [pl.by_id[t] for t in tasks]  # O(k)
     ids = ", ".join(tasks)  # O(k)
     owns = [o for t in mine for o in t.owns]  # O(k*o)
-    others = list(dict.fromkeys(o for t in pl.tasks if t.id not in tasks for o in t.owns if o not in owns))  # O(n*o*k) own files are never off limits, repeats dropped
+    also = list(dict.fromkeys(f for t in mine if not t.repo for f in taskmod.also_touches(t) if f not in owns))  # O(k*block) Also-touches files, editable
+    others = list(dict.fromkeys(o for t in pl.tasks if t.id not in tasks for o in t.owns if o not in owns and o not in also))  # O(n*o*k) own files are never off limits, repeats dropped
     out = [f"# Task{'s' if len(tasks) > 1 else ''} {ids}", "", f"SUPERLITE={superlite_root}", f"PLAN={plan}", f"sl (type it literally in every command): {sl_path}"]  # O(1)
     if tier == "haiku":  # O(1)
         out += ["", "Your task text:", ""] + [taskmod.render(pl, t) for t in tasks]  # O(k*n*q*s)
@@ -131,7 +134,7 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
         out += ["Your task text: " + " and ".join(f"`{sl_path} task {t} --plan {plan}`" for t in tasks)]  # O(k)
     ext = mine[0].repo if len(mine) == 1 else None  # dispatch never batches an external task | O(k*s)
     own_line = f"Owns (relative to the task's tree of {ext['root']}): {', '.join(mine[0].written_owns)}" if ext else f"Owns: {', '.join(owns)}"  # O(o)
-    out += [own_line, f"Do not touch: {', '.join(others) if others else '(nothing else is owned)'}"]  # O(n*o)
+    out += [own_line] + ([taskmod.also_line(also)] if also else []) + [f"Do not touch: {', '.join(others) if others else '(nothing else is owned)'}"]  # O(n*o)
     cmds = {t.id: testcmd.task_command(t.field_text("tests")) for t in mine} if not ext else {}  # O(k*s)
     tail = ", then run the printed `wait:` line in the foreground."  # O(1)
 
@@ -154,7 +157,7 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
             ln = line(None, t.id, tt, t.features.get("tests") == "build", bool(tt))  # O(o)
             out += [("Verify: " if len(mine) == 1 else f"Verify {t.id}: ") + (ln or "no test command (no code file in Owns); check that each owned file exists and says what the task asks.")]  # O(o)
         if len(mine) > 1:  # O(1)
-            out += ["Batch: run each task's Verify command on its own (the red run too), never one run_tests for several tasks; a `--task Tn` run may use Tn's own tree, which holds Tn's files but not another member's unfinished ones, so each task's change must work without the other's."]  # O(1)
+            out += ["Batch: run each task's Verify command on its own (the red run too), never one run_tests for several tasks; a `--task Tn` run may use Tn's own tree, which holds Tn's files but not another member's unfinished ones, so each task's change must work without the other's. Report each task's red run on its own line, `Red run Tn: <summary line>`, and give the json block's `red` as an object keyed by task id."]  # O(1)
     out += ["", f"Reply in at most 200 words, starting with `{STATUS_LINE}` (pick one), then files changed, the test command and its result line, and open questions."]  # O(1)
     return "\n".join(out) + "\n"  # O(out)
 
@@ -278,7 +281,8 @@ def red_gap(sd, tid, owns):  # why TID's newest implementer report proves no red
             best = (when, p.name, rep)  # O(1)
     if best is None:  # O(1)
         return None  # O(1)
-    red = str(best[2].get("red") or "").strip()  # O(len)
+    reds = best[2].get("reds")  # a batch report's red run per task id; older reports have none | O(1)
+    red = str(reds[tid] if isinstance(reds, dict) and isinstance(reds.get(tid), str) else best[2].get("red") or "").strip()  # O(len)
     if not red:  # O(1)
         return "its report names no red run"  # O(1)
     if red.lower().startswith("none"):  # O(1)
@@ -666,6 +670,8 @@ def report_contract(wrec):  # the contract a worker's texts end with | O(size of
     brief = lead_brief(wrec) if role == "lead" else None  # O(1)
     if brief is not None and fleet_report._planning(str(brief)):  # O(size of the brief)
         return fleet_report.PLANNED  # O(size of the brief)
+    if role == "implementer" and "," in str(wrec.get("task") or ""):  # a batch implementer reports its red run per task | O(1)
+        return fleet_report.WORK_BATCH  # O(1)
     return fleet_report.WORK  # O(1)
 
 
@@ -771,7 +777,7 @@ def _ask(sd, wid, w, after=0):  # ask a worker whose turn ended without a report
         return None  # O(1)
     sent = max(now_ms(), after + 1)  # newer than the stop record it answers, whatever the clocks say | O(1)
     try:  # O(1)
-        _prompt(fs.name_of(sd, wid, w), ASK + " " + (fleet_report.REVIEW if role == "final-reviewer" else fleet_report.WORK))  # O(len)
+        _prompt(fs.name_of(sd, wid, w), ASK + " " + report_contract(w))  # O(len)
     except hc.HerdrError:  # O(1)
         return False  # O(1)
     label = w.get("task") or wid  # O(1)

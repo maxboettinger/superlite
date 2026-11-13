@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fleet worker reports: parse a worker's reply into one dict, and build the one-line brief message.
 
-    fleet_report.parse(text, label="", allow_json=True) -> {"status", "files", "tests", "red", "findings", "summary", "concerns", "valid"}
+    fleet_report.parse(text, label="", allow_json=True) -> {"status", "files", "tests", "red", "reds", "findings", "summary", "concerns", "valid"}
     fleet_report.brief_message(role, path, full=False) -> one line telling a worker to read PATH and how to end its reply (a lead's follows its brief's End line; O(size of the brief), as it reads the brief file)
 
 `parse` never raises. Only a valid last fenced json block sets `valid` True. The fallbacks (a `Verdict:` line with
@@ -9,7 +9,8 @@ finding lines, then a `Status:` line, then a status token) read the labelled for
 `Test:`/`Tests:`/`Test result:`, `Summary:` and `Concerns:`/`Open questions:` lines (bold, backticked or bulleted labels),
 each with an inline value or the list items under it; `concerns` is the list of those entries (the json block's
 non-empty `concerns` list wins). `full` makes a final-reviewer brief ask for a full review, not the fast path.
-`red` is the json block's non-empty `red` string, else the reply's last `Red run:` line, else ""; a non-string `red` breaks the block.
+`red` is the json block's non-empty `red` string, else the reply's last `Red run:` line, else ""; a `red` that is neither a string nor an object of strings breaks the block.
+`reds` is a batch worker's red run per task id: `Red run Tn:` lines, `Red run:` header items (`- Tn: text`) and the json `red` object.
 """
 # Complexity notation:
 # s = characters of the reply, f = findings in it
@@ -26,6 +27,10 @@ BLOCK = re.compile(r"^[ \t]*```json[^\n]*\n(.*?)\n?^[ \t]*```[ \t]*$", re.DOTALL
 VERDICT = re.compile(r"^\s*\**Verdict:\**\s*(APPROVED|CHANGES_REQUESTED)\b", re.M)  # O(1)
 PARTIAL = re.compile(r"^\s*\**Verdict:\**\s*APPROVED\s*\(partial\b", re.M | re.I)  # O(1)
 RED_LINE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?([*`]*)Red run([*`]*):([*`]*)[ \t]*(\S.*?)[ \t]*\r?$", re.M)  # O(1)
+TID = r"[A-Z]{1,3}\d+[A-Za-z]?"  # a plan task id | O(1)
+RED_TASK = re.compile(r"^[ \t]*(?:[-*][ \t]+)?([*`]*)Red run[ \t]+\(?(" + TID + r")\)?[*`]*:[*`]*[ \t]*(\S.*?)[ \t]*\r?$", re.M)  # `Red run Tn: text` | O(1)
+RED_HEAD = re.compile(r"^[ \t]*(?:[-*][ \t]+)?[*`]*Red runs?[*`]*:[*`]*[ \t]*(.*?)[ \t]*\r?$")  # a `Red run:` header, with or without a value | O(1)
+RED_ITEM = re.compile(r"^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?[*`]*(" + TID + r")[*`]*:[*`]*[ \t]*(\S.*?)[ \t]*\r?$")  # a per-task item under a header | O(1)
 FINDING_LINE = re.compile(r"^\s*(?:[-*]\s+)?(\S+?):(\d+)\s+-\s+(.+?)\s+-\s+(.+)\s+-\s+tier\s+([123])\s*$", re.M)  # O(1)
 LABEL = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?[*_`]*(files changed|changed files|files touched|files|tests?(?: command| results?)?|results?|summary|concerns|open questions|questions)"
                    r"[*_`]*[ \t]*:[*_`]*[ \t]*(.*)$", re.I)  # a label line, its text stripped of trailing blanks | O(1)
@@ -37,6 +42,9 @@ WORK = ("End your reply with the line `Status: <DONE|DONE_WITH_CONCERNS|NEEDS_CO
         '"red": "<the summary line of the run that saw your new tests fail, or none - no test>", '
         '"findings": [{"file": "<path>", "line": <int>, "problem": "<text>", "fix": "<text>", "tier": <1|2|3>}], '
         '"summary": "<one line>"}. `findings` lists only the findings still open; `tier` is the integer 1, 2 or 3 (fixing.md).')  # O(1)
+RED_ONE = '"red": "<the summary line of the run that saw your new tests fail, or none - no test>"'  # O(1)
+RED_MANY = '"red": {"<task id>": "<the summary line of the run that saw that task\'s new tests fail, or none - no test>"}'  # O(1)
+WORK_BATCH = WORK.replace(RED_ONE, RED_MANY, 1)  # a batch worker's red is an object keyed by task id | O(1)
 PLANNED = WORK.replace("`Status: <DONE|", "`Status: <DONE planned: <plan path>|DONE|", 1)  # O(1)
 PLANNED_END = "End: Status: DONE planned:"  # O(1)
 REVIEW = ("After the `Checked:` lines (outside the 300-word cap), end with one fenced json block: "
@@ -67,6 +75,33 @@ def _red_line(text: str) -> str:  # O(s)
     return value  # O(1)
 
 
+def _red_tasks(text: str) -> dict:  # O(s)
+    """Per-task red runs: the `Red run Tn:` lines and the items under `Red run:` headers, a later entry for an id winning."""
+    out, head, first = {}, False, True  # head = inside a header's item list, first = no item read yet | O(1)
+    for line in text.split("\n"):  # O(s)
+        m = RED_TASK.match(line)  # O(len)
+        if m:  # O(1)
+            value = m.group(3).strip()  # O(len)
+            if m.group(1).startswith("**") and value.endswith("**"):  # a fully bold line closes its stars after the value
+                value = value[:-2].rstrip()  # O(1)
+            out[m.group(2)] = value  # O(1)
+            head = False  # O(1)
+            continue  # O(1)
+        if RED_HEAD.match(line):  # O(len)
+            head, first = True, True  # O(1)
+            continue  # O(1)
+        if head:  # O(1)
+            if first and not line.strip():  # blank lines count only before the first item | O(1)
+                continue  # O(1)
+            m = RED_ITEM.match(line)  # O(len)
+            if m:  # O(1)
+                out[m.group(1)] = m.group(2).strip()  # O(1)
+                first = False  # O(1)
+                continue  # O(1)
+            head = False  # the first other line ends the list | O(1)
+    return out  # O(1)
+
+
 def _file_entry(part: str) -> str:  # O(p)
     """A files entry: its first backticked span, else its first token without a trailing `:,;`."""
     part = part.strip()  # O(p)
@@ -91,7 +126,8 @@ def _labelled(text: str) -> dict:  # O(s)
             continue  # O(1)
         bullet = cur is not None and ITEM.match(line)  # O(len)
         sibling = bool(bullet) and cur_ind is not None and len(line) - len(line.lstrip()) <= cur_ind  # a bullet no deeper than a bulleted open label is a sibling | O(1)
-        if sibling and RED_LINE.match(line):  # a sibling `Red run:` closes the open label | O(len)
+        head = RED_HEAD.match(line)  # O(len)
+        if cur is not None and (RED_TASK.match(line) or (head and (sibling or not head.group(1)))):  # a red header or per-task line, or a sibling `Red run:`, closes the open label | O(len)
             cur, cur_ind = None, None  # O(1)
             continue  # O(1)
         m = LABEL.match(line) if not bullet or sibling else None  # else a bullet under an open label is an item | O(len)
@@ -144,6 +180,10 @@ def _from_json(text: str) -> dict | None:  # O(s)
     status = obj.get("status")  # O(1)
     status = status.upper() if isinstance(status, str) else None  # O(1)
     red = obj.get("red", "")  # O(1)
+    json_reds = {}  # O(1)
+    if isinstance(red, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in red.items()):  # a batch worker's object keyed by task id | O(f)
+        json_reds = {k.strip(): v.strip() for k, v in red.items() if k.strip() and v.strip()}  # O(f)
+        red = ""  # O(1)
     files, tests, summary, findings = obj.get("files", []), obj.get("tests", ""), obj.get("summary", ""), obj.get("findings", [])  # O(1)
     if (status not in STATUSES or not isinstance(files, list) or not all(isinstance(x, str) for x in files)  # O(f)
             or not isinstance(tests, str) or not isinstance(red, str) or not isinstance(summary, str) or not isinstance(findings, list)
@@ -152,7 +192,7 @@ def _from_json(text: str) -> dict | None:  # O(s)
     concerns = obj.get("concerns")  # O(1)
     if not (isinstance(concerns, list) and concerns and all(isinstance(x, str) for x in concerns)):  # else the labelled lines | O(f)
         concerns = _labelled(text)["concerns"]  # O(s)
-    return {"status": status, "files": files, "tests": tests, "red": red or _red_line(text), "findings": findings, "summary": summary, "concerns": concerns, "valid": True}  # O(1)
+    return {"status": status, "files": files, "tests": tests, "red": red or _red_line(text), "reds": {**_red_tasks(text), **json_reds}, "findings": findings, "summary": summary, "concerns": concerns, "valid": True}  # O(1)
 
 
 def partial(text: str) -> bool:  # an APPROVED verdict that left packet lines unread | O(s)
@@ -167,7 +207,7 @@ def parse(text: str, label: str = "", allow_json: bool = True) -> dict:  # O(s)
     if report:  # O(1)
         return report  # O(1)
     lab = _labelled(text)  # O(s)
-    base = {"files": lab["files"], "tests": lab["tests"], "red": _red_line(text), "findings": [], "summary": lab["summary"], "concerns": lab["concerns"], "valid": False}  # O(1)
+    base = {"files": lab["files"], "tests": lab["tests"], "red": _red_line(text), "reds": _red_tasks(text), "findings": [], "summary": lab["summary"], "concerns": lab["concerns"], "valid": False}  # O(1)
     m = VERDICT.search(text)  # O(s)
     if m:  # O(1)
         found = [{"file": g[0], "line": int(g[1]), "problem": g[2], "fix": g[3], "tier": int(g[4])}  # O(f)
