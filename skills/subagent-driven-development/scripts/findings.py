@@ -225,6 +225,21 @@ def head_lines(sl_path: str, plan: Path, note: list[str], wt) -> list[str]:  # t
 
 
 
+def checkpoint_line(st: dict | None, task_id: str | None = None) -> str:  # the reviewed-version line of a fix brief | O(e)
+    entries = st.get("entries") if isinstance(st, dict) and st.get("run") else None  # O(1)
+    entries = [e for e in entries if isinstance(e, dict) and e.get("task") and e.get("sha")] if isinstance(entries, list) else []  # O(e)
+    if not entries:  # O(1)
+        return ("Reviewed version: no checkpoint yet; save `git diff -- <file>` as a patch under .superlite/ before an experiment "  # O(1)
+                "and revert with `git apply -R` of that patch, never with `git checkout --` in the shared tree.")  # O(1)
+    own = next((e for e in reversed(entries) if e["task"] == task_id), None) if task_id else None  # a task's last entry | O(e)
+    e = own or entries[-1]  # O(1)
+    ref = f"{commit_task.autocommit.REF_ROOT}/{st['run']}/{e['task']}"  # O(1)
+    what = f"{e['task']}'s checkpoint {e['sha']}" if own else f"newest checkpoint {e['sha']} ({e['task']}"  # O(1)
+    what += f" (ref {ref})" if own else f", ref {ref})"  # O(1)
+    return (f"Reviewed version: {what}: `git show {e['sha']}:<path>` prints a file as reviewed; "  # O(1)
+            "restore from it or from your own saved patch, never with `git checkout --` in the shared tree.")  # O(1)
+
+
 def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, note=(), wt=None, extras=()) -> str:  # O(k + o)
     ids = ", ".join(i["id"] for i in items)  # O(k)
     owns = task.owns  # O(o)
@@ -233,7 +248,8 @@ def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, not
     extra_outside = sorted(e for e in extras if e not in found and not nt.owns_match(e, owns))  # O(e*o)
     lines = [f"# Fix {ids} · tier {tier} · task {task.id}",  # O(1)
              *head_lines(sl_path, plan, note, wt),  # O(1)
-             f"Task: {task.id} · Owns: {', '.join(owns)}"]  # O(o)
+             f"Task: {task.id} · Owns: {', '.join(owns)}",  # O(o)
+             checkpoint_line(commit_task.autocommit.load_state(), task.id)]  # O(e)
     if extras:  # O(1)
         lines.append(f"Extra files (findings route --also; the fix may edit them too): {', '.join(extras)}")  # O(e)
     lines += ["", *note, "", "Findings:"] if note else ["", "Findings:"]  # O(note)
@@ -257,7 +273,8 @@ def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, run
     held = ", ".join(running) or "-"  # O(n)
     lines = [f"# Fix {ids} · tier {tier} · coordinator commit",  # O(1)
              *head_lines(sl_path, plan, note, wt),  # O(1)
-             f"Task: none · running: {held}"]  # O(1)
+             f"Task: none · running: {held}",  # O(1)
+             checkpoint_line(commit_task.autocommit.load_state(), None)]  # O(e)
     lines += ["", *note, "", "Findings:"] if note else ["", "Findings:"]  # O(note)
     lines += [f"- {i['id']} {i['file']}:{i['line']} - {i['problem']} - {i['fix']} (tier {i['tier']}, from {i['label']})"  # O(k)
               for i in items]  # O(k)
