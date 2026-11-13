@@ -105,3 +105,8 @@ def test_lean_plan_fields_lint(tmp_path):
         "test_a: a(1) == 2.", ""]), encoding="utf-8")
     cp = pt("lint", "--plan", plan, "--spec", plan, "--stable", cwd=tmp_path)
     assert "DISPATCH NOW: T1" in cp.out, cp.both
+
+
+def test_lean_tail_reads_both_paths():
+    assert "superlite:writing-plans. Both paths then run superlite:subagent-driven-development with fleet on" in brief()
+    assert "Both paths" not in brief(text="default")

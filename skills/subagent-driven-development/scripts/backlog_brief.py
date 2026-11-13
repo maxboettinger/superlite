@@ -100,7 +100,7 @@ LEAN_BUILD = ("Build (lean path: one issue and no batch decision): when your iss
               "`%% taskgraph` line; per task a `### Tn <title>` block with `**Owns:**`, `**Components:**`, `**LOC owned:**`, "
               "`**Tests:**`, `**Kind:**`, `**Model:**` and named tests with exact inputs and outputs; lint it with "
               "`{sl} plan_tools lint --plan <plan> --spec <plan> --stable`; an issue that names no files or asks a design question "
-              "takes the full path: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans, ")  # O(1)
+              "takes the full path: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans. Both paths then run ")  # O(1)
 CODE_RULE = ("Code questions go to a researcher worker, one pointed brief per question (the question, the files or symbols to start "
              "from, the answer you need): `{sl} fleet spawn --role research --brief <abs file> --label R<n> --wait --timeout 540000 "
              "--plan .superlite` (several at once: spawn each with --brief, then one wave wait); read a file yourself only when you "
