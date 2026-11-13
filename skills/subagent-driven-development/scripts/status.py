@@ -7,6 +7,10 @@ P is a plan file or a run folder (default: the current run folder). Lines, in or
 orchestrator mode; plan and its task count; tasks (checkpointed, running, held, open); fleet workers;
 budget; last test run; one `full run waiting: ...` line per waiting full run; and `after a crash: sl orchestrator resume ...` while a pool agent or fleet worker is
 busy. Exit 0. Stdlib only.
+
+Library for `sl run active` (#671): `busy_ids(sd)` lists the busy pool agent and fleet worker ids of a state folder;
+`active(sd)` builds the run report (kind plan run, backlog main or lead; markers; worktrees of running batches with
+their busy ids; the files hidden checkpoints hold); `active_lines(report)` prints it as text lines.
 """
 # Complexity notation:
 # t = tasks in the plan, a = pool agents, w = fleet workers, L = ledger lines
@@ -42,6 +46,89 @@ def clean_state(sd: Path) -> tuple:  # O(a + w)
     workers = fleet.get("workers")  # O(1)
     fleet["workers"] = {k: w for k, w in workers.items() if isinstance(w, dict)} if isinstance(workers, dict) else {}  # O(w)
     return pool_data, fleet  # O(1)
+
+
+def busy_ids(sd: Path) -> list[str]:  # O(a + w)
+    """Ids of busy pool agents (file order), then busy fleet workers; duplicates dropped; bad files give none."""
+    pool_data, fleet = clean_state(Path(sd))  # O(a + w)
+    ids = [str(a.get("id")) for a in pool_data["agents"] if a.get("busy")]  # O(a)
+    ids += [str(k) for k, w in fleet["workers"].items() if w.get("state") == "busy"]  # O(w)
+    return list(dict.fromkeys(ids))  # O(a + w)
+
+
+def _active_batches(p: Path) -> list:  # O(b)
+    """The running or needs_decision batches (dicts) of the backlog.json at p; missing or corrupt: none."""
+    import backlog_state  # O(1)
+    batches = backlog_state.load(p).get("batches")  # O(size)
+    return [b for b in batches if isinstance(b, dict) and b.get("state") in backlog_state.ACTIVE] \
+        if isinstance(batches, list) else []  # O(b)
+
+
+def active(sd: Path) -> dict:  # O(a + w + b + files)
+    """The run report of state folder sd (keys: active, kind, state_dir, markers, batch, worktrees,
+    checkpoint_files, edited_after_checkpoint)."""
+    import autocommit  # O(1)
+    import backlog_state  # O(1)
+    import state  # O(1)
+    sd = Path(sd)  # O(1)
+    root = state.git_root(sd) or state._abs(sd).parent  # O(d)
+    own_file = _active_batches(sd / "backlog.json")  # O(b)
+    markers = state.run_markers(sd)  # O(1)
+    import pool  # O(1)
+    try:  # a corrupt pool.json is no live run marker | O(1)
+        pool.load(sd / "pool.json")  # O(pool bytes)
+    except SystemExit:  # O(1)
+        markers = [m for m in markers if m != "pool.json"]  # O(1)
+    markers += ["backlog.json"] if own_file else []  # O(1)
+    lead = None  # O(1)
+    try:  # O(1)
+        main = backlog_state.main_root(root)  # O(1)
+        if main != root.resolve():  # O(1)
+            for b in _active_batches(backlog_state.path(main)):  # O(b) iterations
+                wt = b.get("worktree")  # O(1)
+                if wt and Path(str(wt)).resolve() == root.resolve():  # O(1)
+                    lead = b  # O(1)
+                    break  # O(1)
+    except (RuntimeError, OSError):  # O(1)
+        pass  # O(1)
+    first = {"path": str(root), "batch": lead.get("id") if lead else None, "state": lead.get("state") if lead else None,
+             "busy": busy_ids(sd)}  # O(a + w)
+    trees = [first]  # O(1)
+    for b in own_file:  # O(b) iterations
+        wt = str(b.get("worktree") or "")  # O(1)
+        trees.append({"path": wt, "batch": b.get("id"), "state": b.get("state"),
+                      "busy": busy_ids(Path(wt) / ".superlite") if wt else []})  # O(a + w)
+    kind = "lead" if lead else "backlog main" if own_file else "plan run" if markers or first["busy"] else None  # O(1)
+    held = autocommit.held_files(root)  # O(files)
+    return {"active": kind is not None, "kind": kind, "state_dir": str(state._abs(sd)), "markers": markers,
+            "batch": lead.get("id") if lead else None, "worktrees": trees, "checkpoint_files": held["covered"],
+            "edited_after_checkpoint": held["edited"]}  # O(1)
+
+
+def _count_lines(label: str, files: list) -> str:  # O(n)
+    more = f" (+{len(files) - 10} more)" if len(files) > 10 else ""  # O(1)
+    return f"{label}: {len(files)}: {', '.join(files[:10])}{more}"  # O(1)
+
+
+def active_lines(report: dict) -> list[str]:  # O(worktrees + files)
+    """The text lines of an `active` report."""
+    if not report["active"]:  # O(1)
+        out = [f"run active: none in {report['state_dir']}"]  # O(1)
+    else:  # O(1)
+        head = f"run active: {report['kind']}" + (f" {report['batch']}" if report["kind"] == "lead" else "")  # O(1)
+        head += f" in {report['state_dir']}"  # O(1)
+        if report["markers"]:  # O(1)
+            head += "; markers: " + ", ".join(report["markers"])  # O(m)
+        out = [head]  # O(1)
+        for i, w in enumerate(report["worktrees"]):  # O(worktrees) iterations
+            label = "this checkout" if i == 0 else f"{w['batch']} {w['state']}"  # O(1)
+            busy = "busy " + ", ".join(w["busy"]) if w["busy"] else "no busy workers"  # O(b)
+            out.append(f"worktree {w['path']} ({label}): {busy}")  # O(1)
+    if report["checkpoint_files"]:  # O(1)
+        out.append(_count_lines("checkpoint files", report["checkpoint_files"]))  # O(n)
+    if report["edited_after_checkpoint"]:  # O(1)
+        out.append(_count_lines("edited after checkpoint", report["edited_after_checkpoint"]))  # O(n)
+    return out  # O(1)
 
 
 def running_map(sd: Path, pool_data: dict, fleet: dict) -> dict:  # O(a + w)

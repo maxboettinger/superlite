@@ -9,7 +9,7 @@
 Default is OFF: commit_task then records a shadow checkpoint commit (never on HEAD, the
 branch or the user's index) under refs/superlite/<run>/<Tn> and the work stays uncommitted
 in the tree. `on` (or SUPERLITE_AUTOCOMMIT=1, which overrides the file) makes commit_task
-commit on the current branch as before. State: .superlite/autocommit.json and
+commit on the current branch as before. Library: `held_files(root)` lists the checkpointed files a hook can skip (read-only). State: .superlite/autocommit.json and
 .superlite/checkpoints.json. Stdlib only; commits use the user's git identity, trailers only from `apply --trailer`.
 """
 import json
@@ -68,6 +68,23 @@ def save_state(st):
     p = Path(STATE)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(st, indent=1) + "\n", encoding="utf-8")
+
+
+def held_files(root):  # O(f) plus git calls
+    """Files hidden checkpoints already hold under root: {"covered": [...], "edited": [...]}, both sorted.
+
+    covered: working-tree blob equals the newest checkpoint's; edited: differs, or the file is gone.
+    Read-only: no index, ref or state file is written. No or unreadable state: both lists empty."""
+    from orchestrator import changed_since  # lazy: orchestrator imports autocommit lazily too | O(1)
+    try:  # O(1)
+        st = json.loads((Path(root) / STATE).read_text(encoding="utf-8"))  # O(file)
+        entries = st["entries"]  # O(1)
+        files = sorted({f for e in entries for f in e["files"]})  # O(f log f)
+        newest = entries[-1]["sha"]  # O(1)
+    except (OSError, ValueError, KeyError, IndexError, TypeError):  # O(1)
+        return {"covered": [], "edited": []}  # O(1)
+    edited = changed_since(Path(root), newest, files)  # O(f) git
+    return {"covered": [f for f in files if f not in edited], "edited": edited}  # O(f)
 
 
 def base_of(st):  # O(1)

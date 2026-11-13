@@ -27,7 +27,7 @@ id), moves a pending gate (orchestrator.json, human-replies.jsonl) from the sess
 folder another live session owns (`force` takes it over). An owner is live while its binding points at the folder.
 Paths stay as given (absolute, symlinks not resolved, a relative path joined to $PWD), as the hooks see them. A
 binding also records $CLAUDE_PID, so the SessionStart hook moves it to the new id after /clear (same process). Bindings
-older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, linked_worktree, worktree_top, worktree_run, foreign_worktree, Foreign, for_plan, resolve, pool_path, bind, unbind, owner, live_owner. Stdlib only.
+older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, linked_worktree, worktree_top, worktree_run, foreign_worktree, Foreign, for_plan, resolve, pool_path, bind, unbind, owner, live_owner, ACTIVE_MARKERS, run_markers. Stdlib only.
 """
 # Complexity notation:
 #   d = depth of a path (parents walked), b = bindings in $SUPERLITE_HOME/sessions
@@ -41,6 +41,7 @@ from pathlib import Path  # O(1)
 OWNER = "session"  # .superlite/session: the id of the session bound to this folder | O(1)
 GATE_FILES = ("orchestrator.json", "human-replies.jsonl")  # a pending gate follows its session to the plan's folder | O(1)
 RUN_MARKERS = ("stable.json", "prime.md", "pool.json")  # a .superlite holding one of these is a started run | O(1)
+ACTIVE_MARKERS = RUN_MARKERS + ("orchestrator.json", "inline-flow.json")  # files that show a run is active (#671) | O(1)
 PRUNE_S = 14 * 24 * 3600  # O(1)
 _SID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")  # a session id is also a file name | O(1)
 
@@ -206,6 +207,11 @@ def bound(sid=None):  # O(d)
 def has_run(sd) -> bool:  # O(1)
     """True when the .superlite folder sd holds a run marker (stable.json, prime.md or pool.json)."""
     return any((Path(sd) / m).is_file() for m in RUN_MARKERS)  # O(1) iterations (3)
+
+
+def run_markers(sd) -> list[str]:  # O(1)
+    """The names of ACTIVE_MARKERS that are files in sd, in ACTIVE_MARKERS order."""
+    return [m for m in ACTIVE_MARKERS if (Path(sd) / m).is_file()]  # O(1) iterations (5)
 
 
 def linked_worktree(top) -> bool:  # O(1)
