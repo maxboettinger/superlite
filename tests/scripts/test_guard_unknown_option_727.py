@@ -63,6 +63,8 @@ def test_unknown_word_that_cannot_write_passes(code_proj, cmd):  # #727
     (["tar", "-xOf", "a.tar", "?"], []),  # members go to stdout
     (["tar", "-f", "?", "-x"], ["./"]),
     (["tar", "-xf", "a.tar", "-C", "/tmp/x"], ["/tmp/x/"]),  # no unknown word: unchanged
+    (["tar", "?", "-s,a,c,", "-f", "a.tar"], ["?"]),  # bsdtar -s value holds a letter that is no mode
+    (["tar", "?", "-f", "a.tar", "-s|a|t|"], ["?"]),
 ])
 def test_unknown_option_word_of_tar_727(words, want):
     assert guard_tools.targets(words) == want
