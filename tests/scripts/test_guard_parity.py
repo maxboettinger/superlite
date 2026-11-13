@@ -24,15 +24,48 @@ def parity_files():
     return [HERE / n for n in PARITY] + sorted(p for p in HERE.glob("test_guard_*.py") if p.name != own)
 
 
-def test_parity_existing_suites():
-    args = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--no-header", "-rf"]
+def _has_xdist():
     try:
         import xdist  # noqa: F401
-        args += ["-n", "auto"]
     except ImportError:
-        pass
-    r = subprocess.run(args + [str(p) for p in parity_files()], capture_output=True, text=True, cwd=str(HERE.parent.parent))
+        return False
+    return True
+
+
+def nested_files(collected):
+    return [p for p in parity_files() if p.resolve() not in collected]
+
+
+def nested_args():
+    args = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--no-header", "-rf"]
+    if _has_xdist() and not os.environ.get("PYTEST_XDIST_WORKER"):
+        args += ["-n", "auto"]
+    return args
+
+
+def test_parity_existing_suites(request):
+    # #739: a session that collects a parity file already runs it; only the rest is rerun here
+    collected = {Path(str(item.path)).resolve() for item in request.session.items}
+    files = nested_files(collected)
+    if not files:
+        pytest.skip("every parity file runs in this session (#739)")
+    r = subprocess.run(nested_args() + [str(p) for p in files], capture_output=True, text=True, cwd=str(HERE.parent.parent))
     assert r.returncode == 0, r.stdout[-6000:] + r.stderr[-1500:]
+
+
+def test_parity_files_collected_here_are_not_rerun():
+    files = parity_files()
+    resolved = {p.resolve() for p in files}
+    assert nested_files(resolved) == []
+    assert nested_files(resolved - {files[0].resolve()}) == [files[0]]
+    assert nested_files(set()) == files
+
+
+def test_nested_run_is_serial_inside_an_xdist_worker(monkeypatch):
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+    assert "-n" not in nested_args()
+    monkeypatch.delenv("PYTEST_XDIST_WORKER")
+    assert ("-n" in nested_args()) == _has_xdist()
 
 
 @pytest.mark.parametrize("cmd", [
