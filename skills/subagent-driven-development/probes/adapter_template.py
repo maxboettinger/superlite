@@ -9,6 +9,7 @@ Define only the entry kinds the project has; probes for a missing kind are skipp
                              EXPECTED_ERRORS to reject it. Any other exception is a crash.
   run(args, stdin)           CLI entry: return (returncode, stdout, stderr). A negative or
                              0xC000xxxx return code, or a Traceback in stderr, is a crash.
+                             Runs in a scratch HOME and working folder without credential variables.
   request(method, path, body)  server entry: return (status, parsed_json_or_None). The runner
                              sets PORT after calling start_server(); body is str, bytes or None.
   start_server()             start the server on port 0 and return (port, stop) where stop is a
@@ -24,11 +25,21 @@ use of each entry, used by the state probes), and health() -> bool.
 """
 # Complexity notation:
 #   n = length of the input text/body/stdin, o = bytes of output returned, E = cost of the project's own entry point
+import atexit  # O(1)
 import http.client  # O(1)
 import json  # O(1)
 import os  # O(1)
+import shutil  # O(1)
+import site  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
+import tempfile  # O(1)
+from pathlib import Path  # O(1)
+
+ROOT = Path(__file__).resolve().parents[2]  # O(1) .superlite/probes/adapter.py -> the project root; the regression copy rewrites this line
+SANDBOX_DROP = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_CONFIG_GLOBAL")  # O(1)
+_SANDBOX = []  # O(1) (home, cwd) made once per process
+_USER_BASE = site.getuserbase()  # O(1)
 
 EXPECTED_ERRORS = (ValueError,)  # O(1)
 GOOD_INPUT = "1"  # O(1)
@@ -38,7 +49,7 @@ GOOD_PATH = "/"  # O(1)
 
 PORT = None  # O(1) set by the runner set by the runner
 
-CLI = [sys.executable, "-m", "your_package"]  # O(1) edit: how to start the CLI
+CLI = [sys.executable, "-m", "your_package"]  # O(1) edit: how to start the CLI; name files as str(ROOT / "..."), since run starts it in a scratch folder
 
 
 def _timeout():  # O(1)
@@ -51,9 +62,38 @@ def call(text):  # O(E(n))
     return evaluate(text)  # O(E(n))
 
 
-def run(args, stdin):  # O(n + o) + process spawn
+def _sandbox():  # O(1) first call, then O(1)
+    if not _SANDBOX:  # O(1)
+        box = os.environ.get("SUPERLITE_PROBE_SANDBOX")  # O(1)
+        if box and os.path.isdir(box):  # O(1)
+            top = tempfile.mkdtemp(prefix="run-", dir=box)  # O(1) the worker removes its folder
+        else:  # O(1)
+            top = tempfile.mkdtemp(prefix="probe-run-")  # O(1)
+            atexit.register(shutil.rmtree, top, True)  # O(1)
+        home, cwd = os.path.join(top, "home"), os.path.join(top, "cwd")  # O(1)
+        os.mkdir(home)  # O(1)
+        os.mkdir(cwd)  # O(1)
+        _SANDBOX.append((home, cwd))  # O(1)
+    return _SANDBOX[0]  # O(1)
+
+
+def _sandbox_env(home, cwd):  # O(e) environment size
+    env = {k: v for k, v in os.environ.items() if k not in SANDBOX_DROP and k != "OLDPWD"}  # O(e)
+    env.setdefault("PYTHONUSERBASE", _USER_BASE)  # O(1) a --user install still imports
+    env.update(HOME=home, XDG_CONFIG_HOME=os.path.join(home, ".config"), XDG_CACHE_HOME=os.path.join(home, ".cache"),  # O(1)
+               XDG_DATA_HOME=os.path.join(home, ".local", "share"), XDG_STATE_HOME=os.path.join(home, ".local", "state"),  # O(1)
+               PWD=cwd, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1")  # O(1)
+    if os.name == "nt":  # O(1)
+        env.update(USERPROFILE=home, APPDATA=os.path.join(home, "AppData", "Roaming"), LOCALAPPDATA=os.path.join(home, "AppData", "Local"))  # O(1)
+    return env  # O(1)
+
+
+def run(args, stdin):  # O(n + o) + process spawn, in a scratch HOME and working folder without credential variables
+    home, cwd = _sandbox()  # O(1)
+    env = _sandbox_env(home, cwd)  # O(e)
+    env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "src"), str(ROOT)] + ([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else []))  # O(1)
     p = subprocess.run(CLI + list(args), input=stdin if isinstance(stdin, bytes) else stdin.encode("utf-8", "surrogateescape"),  # O(n + o) + process spawn
-                       capture_output=True, timeout=_timeout())  # O(1)
+                       capture_output=True, cwd=cwd, env=env, timeout=_timeout())  # O(1)
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")  # O(o)
 
 

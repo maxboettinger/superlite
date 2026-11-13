@@ -86,6 +86,7 @@ if str(HERE) not in sys.path:  # O(len sys.path)
 import dismiss  # noqa: E402 | dismissal records, beside this file  # O(1)
 
 IS_WIN = sys.platform == "win32"  # O(1)
+SANDBOX_DROP = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_CONFIG_GLOBAL")  # O(1) credential variables the worker and a run= adapter never pass on
 ENTRY_TIMEOUT = {"call": 2.0, "run": 5.0, "request": 10.0, "raw": 10.0}  # O(1)
 RUN_TIMEOUT_MAX = 60.0  # O(1)
 WARM_LIMIT = 60.0  # O(1)
@@ -115,6 +116,13 @@ FRAME_RE = re.compile(r'File "([^"]+)", line (\d+)')  # O(1)
 
 
 # ----------------------------------------------------------------------------- helpers
+def worker_env(timeout: float) -> dict[str, str]:  # O(e) environment size
+    """The probe worker's environment: the caller's without credential variables (#711), plus the probe settings."""
+    env = {k: v for k, v in os.environ.items() if k not in SANDBOX_DROP}  # O(e)
+    env.update(PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1", SUPERLITE_PROBE_TIMEOUT=str(timeout))  # O(1)
+    return env  # O(1)
+
+
 def kill_tree(proc: subprocess.Popen) -> None:  # O(1) total + taskkill spawn
     """Kill the process we started and its descendants, by PID only."""  # O(1)
     pid = proc.pid  # O(1)
@@ -447,6 +455,7 @@ def worker_main(a) -> int:  # O(steps * step cost) total, steps = messages recei
 
     root = Path(a.root).resolve()  # O(1)
     tmp = Path(tempfile.mkdtemp(prefix="probe-"))  # O(1)
+    os.environ["SUPERLITE_PROBE_SANDBOX"] = str(tmp)  # the adapter's run puts its scratch folders here; the parent removes them with tmp | O(1)
     st = _WorkerState()  # O(1)
     try:  # O(1)
         for p in (root / "src", root):  # O(2) iterations
@@ -552,8 +561,7 @@ class Worker:  # O(1) + process spawn + wait for ready <=60s
             kw["creationflags"] = 0x08000000 | 0x00000200  # O(1) | CREATE_NO_WINDOW | NEW_PROCESS_GROUP
         else:  # O(1)
             kw["start_new_session"] = True  # O(1)
-        env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",  # O(1)
-                   SUPERLITE_PROBE_TIMEOUT=str(timeout_for({"entry": "run"}, cfg)))  # O(1)
+        env = worker_env(timeout_for({"entry": "run"}, cfg))  # O(e)
         self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,  # O(1) + process spawn
                                   stderr=self.errf, text=True, encoding="utf-8", bufsize=1,  # O(1)
                                   cwd=str(cfg.root), env=env, **kw)  # O(1)
