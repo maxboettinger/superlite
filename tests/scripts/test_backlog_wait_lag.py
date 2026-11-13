@@ -1,10 +1,13 @@
 # tests/scripts/test_backlog_wait_lag.py
 import sys
+import json
 import pytest
+from backlog_fixtures import Q, batch as b
 from test_backlog_run import bk, put, get, run, running  # noqa: F401
 from test_plan_tools import SCRIPTS
 sys.path.insert(0, str(SCRIPTS))
 import backlog_run as br  # noqa: E402
+import backlog_state as bs  # noqa: E402
 
 LAST = "Outcome: BLOCKED, tui red Status: BLOCKED"
 REC = {"t": 2000, "last": LAST, "transcript": "/x/t.jsonl"}
@@ -97,3 +100,49 @@ def test_no_transcript_is_unchanged(bk, capsys, monkeypatch):
     ("work", "PONG", False), ("work", "Status: NEEDS_DECISION", True)])
 def test_lags_table(text, last, want):
     assert br._lags(text, last) is want
+
+
+def three(bk):
+    wts = []
+    for i in (1, 2, 3):
+        wt = bk.root / ".claude" / "worktrees" / f"superlite-b{i}-t"; (wt / ".superlite").mkdir(parents=True, exist_ok=True); wts.append(wt)
+    put(bk, *[b(f"B{i}", [f"{'abc'[i - 1]}.py"], "running", lead=f"W{i}", agent=f"sl-m-W{i}", worktree=str(wts[i - 1]), since=1000,
+                **({"merged": True, "pr": 200 + i, "version": "1.5.8"} if i < 3 else {})) for i in (1, 2, 3)])
+    bk.states.update({"sl-m-W1": "done", "sl-m-W2": "working", "sl-m-W3": "working"}); bk.stops["W1"] = {"t": 2000, "last": "Status: DONE"}
+    return wts
+
+
+def hook(monkeypatch, fn):
+    n = [0]
+    def sleep(s):
+        n[0] += 1; fn(n[0])
+    monkeypatch.setattr(br.time, "sleep", sleep)
+
+
+def ship2(bk, n):
+    bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B2").update(merged=True, pr=202, version="1.5.8"))
+    bk.stops["W2"] = {"t": 2000, "last": "Status: DONE"}; bk.states["sl-m-W2"] = "done"
+
+
+def test_wait_window_collects_two_ships(bk, capsys, monkeypatch):
+    three(bk); bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B3").update(state="shipped"))
+    hook(monkeypatch, lambda n: ship2(bk, n))
+    rc, out = run(capsys, "wait", "--window", "60", "--poll", "0", "--timeout", "60")
+    assert rc == 0 and [x.split()[:2] for x in out.splitlines()[:2]] == [["B1", "shipped"], ["B2", "shipped"]]
+    assert len(out.splitlines()) == 2
+
+
+def test_wait_window_returns_at_once_on_needs_decision(bk, capsys, monkeypatch):
+    wts = three(bk)
+    def ask(n):
+        (wts[1] / ".superlite" / "question.json").write_text(json.dumps(Q)); bk.stops["W2"] = {"t": 2000, "last": "Status: NEEDS_DECISION"}
+    hook(monkeypatch, ask)
+    rc, out = run(capsys, "wait", "--window", "60", "--poll", "0", "--timeout", "60")
+    assert rc == 0 and [x.split()[:2] for x in out.splitlines()] == [["B1", "shipped"], ["B2", "needs_decision"]]
+
+
+def test_wait_without_window_returns_at_first_line(bk, capsys, monkeypatch):
+    three(bk)
+    hook(monkeypatch, lambda n: ship2(bk, n))
+    rc, out = run(capsys, "wait", "--poll", "0", "--timeout", "60")
+    assert rc == 0 and [x.split()[:2] for x in out.splitlines()] == [["B1", "shipped"]]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585); unskip <issue> and reset B [--discard] undo a skip and a started batch, --help lists every subcommand, a status with only parked batches ends with next:, decide --file takes the one answer rule (a label, or a label plus a note) and a pinned skipped issue names unskip, and plan offers sl backlog ship B done --pr N for a batch whose issues a merged PR already names (#586); a file two batches only append to (append_only) shows an overlap line without a hold, and `notes B` prints a batch's notes through ship (#602)."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|run|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585); unskip <issue> and reset B [--discard] undo a skip and a started batch, --help lists every subcommand, a status with only parked batches ends with next:, decide --file takes the one answer rule (a label, or a label plus a note) and a pinned skipped issue names unskip, and plan offers sl backlog ship B done --pr N for a batch whose issues a merged PR already names (#586); a file two batches only append to (append_only) shows an overlap line without a hold, and `notes B` prints a batch's notes through ship (#602)."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -17,7 +17,7 @@ from pathlib import Path  # O(1)
 TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")  # O(1)
 MAX_BATCHES = 7  # O(1)
 ISSUE_LIMIT = 200  # O(1)
-ROUTED = ("start", "wait", "answer", "tell")  # O(1)
+ROUTED = ("start", "wait", "run", "answer", "tell")  # O(1)
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-[1-9][0-9]*$")  # O(1)
 GH_RE = re.compile(r"^#?[1-9][0-9]*$")  # O(1)
 CAP_RE = re.compile(r"^not (?:planned \(cap\)|triaged \(\d+ cap\))$")  # O(1)
@@ -776,9 +776,18 @@ def cmd_decide(a) -> int:
 NOTE_HELP = "  --note FILE  standing note: FILE's text (at most 2000 characters) goes into every lead brief from now on; an empty file clears it (backlog.py)"  # O(1) #504
 
 
+def set_standing(root: Path) -> dict:
+    """Hand the stored standing note and the open batches' files to the lead brief; returns them."""
+    import backlog_brief  # O(1)
+    import backlog_state as bs  # O(1)
+    data = bs.load(bs.path(root))  # O(size)
+    nt = data.get("note")  # O(1)
+    backlog_brief.STANDING = {"note": nt["text"] if isinstance(nt, dict) and isinstance(nt.get("text"), str) else "", "owned": open_batches(data)}  # O(b)
+    return backlog_brief.STANDING  # O(1)
+
+
 def _start(argv: list) -> int:
     """Route start: strip --note FILE, store it, hand the note and the open batches' files to the lead brief, then run it."""
-    import backlog_brief  # O(1)
     import backlog_run  # O(1)
     import backlog_state as bs  # O(1)
     rest, f, i = [], None, 0  # O(1)
@@ -809,9 +818,7 @@ def _start(argv: list) -> int:
             for b in bs.load(p)["batches"]:  # O(b)
                 if b["state"] in bs.ACTIVE and b.get("lead"):  # O(1)
                     print(f"note: {b['id']} lead {b['lead']} started before this note; sl backlog tell {b['id']} --text \"$(cat {shlex.quote(src)})\" tells it")  # O(1)
-    data = bs.load(p)  # O(1)
-    nt = data.get("note")  # O(1)
-    backlog_brief.STANDING = {"note": nt["text"] if isinstance(nt, dict) and isinstance(nt.get("text"), str) else "", "owned": open_batches(data)}  # O(b)
+    set_standing(_root())  # O(b)
     try:  # O(1)
         return backlog_run.main(["start"] + rest)  # O(start)
     except SystemExit:  # O(1)
@@ -1020,6 +1027,7 @@ def main(argv=None) -> int:
     pl.set_defaults(fn=cmd_plan)
     for name, text in (("start", "start the planned batches' leads (--note FILE stores a standing note)"),
                        ("wait", "wait for running batches to finish or ask"),
+                       ("run", "start, wait and start again until a batch needs main"),
                        ("answer", "answer a lead's question: answer B --file FILE"),
                        ("tell", "message a running lead: tell B --text T"),
                        ("ship", "ship a batch: ship B merge|done|..."),

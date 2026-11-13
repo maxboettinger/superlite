@@ -2,11 +2,12 @@
 """Backlog runner (phase 3): start batch leads, wait for them, answer an escalated lead.
 
     backlog_run.py start [B ...] [--cap 2] [--model opus] [--config NAME]
-    backlog_run.py wait [--timeout 21600] [--poll 10]
+    backlog_run.py wait [--timeout 21600] [--poll 10] [--window 0]
+    backlog_run.py run [--timeout 43200] [--poll 10] [--cap 2] [--model M] [--config NAME] [--machine-wait 100] [--over-limit] [--retry 300]
     backlog_run.py answer B --file F        (F = {"answers": {question: answer}, "by": "user"|"main"|{question: ...}})
     backlog_run.py tell B --text T          (send main's text to the running lead of B)
 
-`start` takes several ids: each refusal prints BLOCKED, the others start. A lead that does not start prints `BLOCKED: B lead did not start; ...` after its spawn's own line, sets exit 2 and the batches after it still start (#551). Each lead worktree gets a copy of the main
+`run` starts, waits and starts again until a batch needs main (needs_decision, parked, a fatal start refusal) or nothing runs; `wait --window S` keeps collecting ends for S seconds after the first (#673). `start` takes several ids: each refusal prints BLOCKED, the others start. A lead that does not start prints `BLOCKED: B lead did not start; ...` after its spawn's own line, sets exit 2 and the batches after it still start (#551). Each lead worktree gets a copy of the main
 checkout's `.superlite/test-cmd.json` before its brief, unless it already has one (#334); the copied bytes are recorded in `.superlite/test-cmd.seeded` so an unedited copy follows the main checkout's file, and a lead brief gets one `Test command:` line when the copy and the main file differ (#638). A lead whose stop text holds no
 Status line is re-prompted once (`reprompted`), then parked. A question.json is cut to the limits (header, label,
 description; each cut is reported as `shortened:`); one still invalid is sent back to the lead once
@@ -40,6 +41,7 @@ import backlog_checks as bc  # noqa: E402 | O(1)
 import backlog_state as bs  # noqa: E402 | O(1)
 import testcmd  # noqa: E402 | O(1)
 import run_config  # noqa: E402 | O(1)
+import experiment  # noqa: E402 | O(1)
 
 ACTIVE = ("running", "needs_decision")
 STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_DECISION|NEEDS_CONTEXT|BLOCKED)\b", re.I)
@@ -284,12 +286,29 @@ def cmd_start(a) -> int:
             print(f"BLOCKED: {bid} not started: worktree ensure gave {wt} ({state}), not a linked worktree under {root}/.claude/worktrees" + (f"; cause: {cause}" if cause else ""))  # O(1)
             code = 2  # O(1)
             continue  # O(1)
+        brc, arm = rc, None  # O(1)
+        if a.config is None:  # O(1)
+            try:  # O(1)
+                arm = experiment.assign(root, bid)  # O(f)
+            except experiment.ExperimentError as e:  # O(1)
+                print(f"BLOCKED: {bid} not started: experiment: {e}")  # O(1)
+                code = 2  # O(1)
+                continue  # O(1)
+        if arm:  # O(1)
+            try:  # O(1)
+                brc = run_config.resolve(arm["config"], root, {"lead": {"model": a.model}} if a.model else None)  # O(file)
+            except run_config.ConfigError as e:  # O(1)
+                print(f"BLOCKED: {bid} not started: run config: {e}")  # O(1)
+                code = 2  # O(1)
+                continue  # O(1)
+            print(f"run config: {brc['id']} for {bid} (experiment {arm['experiment']} arm {arm['arm']})", file=sys.stderr)  # O(1)
         if backlog.seed_test_cmd(root, wt):  # main's .superlite/test-cmd.json before the brief (#334), recorded so it can follow main (#638) | O(size)
             testcmd.record_seed(wt)  # O(size)
         branch = "superlite/" + wt.name.replace("superlite-", "", 1)  # O(1)
         ctx = {"sl": str(HERE / "sl"), "backlog_md": str(HERE.parent / "backlog.md"), "repo": data.get("repo", ""),
                "approved": data.get("approved_ship"), "titles": data.get("titles", {}), "summaries": summaries,
-               "resume": batch["state"] == "parked" and bool(batch.get("worktree")), "worktree": str(wt)}  # O(1)
+               "resume": batch["state"] == "parked" and bool(batch.get("worktree")), "worktree": str(wt),
+               "text": brc["lead"].get("text")}  # O(1)
         brief = wt / ".superlite" / "briefs" / "lead.md"  # O(1)
         brief.parent.mkdir(parents=True, exist_ok=True)  # O(1)
         text = backlog_brief.lead_brief(batch, ctx)  # O(size)
@@ -303,7 +322,7 @@ def cmd_start(a) -> int:
             fleet.main(["on", "--plan", str(sd)])  # O(w)
         fleet_on = True  # O(1)
         try:  # O(1)
-            rec = fleet_lead.spawn_lead(sd, wt, rc["lead"]["model"], rc=rc)  # O(1) + spawns
+            rec = fleet_lead.spawn_lead(sd, wt, brc["lead"]["model"], rc=brc)  # O(1) + spawns
         except SystemExit:  # O(1)
             print(f"BLOCKED: {bid} lead did not start; {bid} keeps its state, rerun sl backlog start {bid}")  # O(1)
             code = 2  # O(1)
@@ -316,11 +335,13 @@ def cmd_start(a) -> int:
             code = 2  # O(1)
             continue  # O(1)
 
-        def mark(d, bid=bid, rec=rec, wt=wt, branch=branch):  # O(b)
+        def mark(d, bid=bid, rec=rec, wt=wt, branch=branch, brc=brc, arm=arm):  # O(b)
             x = bs.batch(d, bid)
             x.update({"state": "running", "lead": rec["id"], "agent": rec["name"], "worktree": str(wt), "branch": branch,
-                      "since": _now_ms(), "run_config": rc["id"], "reason": "", "ship_runs": 0, "ship_waits": 0, "reprompted": False, "question_reprompted": False,
-                      "gone_seen": {}, "gone_workers": []})
+                      "since": _now_ms(), "run_config": brc["id"], "reason": "", "ship_runs": 0, "ship_waits": 0, "reprompted": False, "question_reprompted": False,
+                      "gone_seen": {}, "gone_workers": []})  # O(1)
+            if arm:  # O(1)
+                x.update({"experiment": arm["experiment"], "arm": arm["arm"]})  # O(1)
         bs.update(p, mark)  # O(size)
         print(f"{bid} running lead={rec['id']} worktree={wt}")  # O(1)
     return code  # O(1)
@@ -770,6 +791,21 @@ def run_end(root: Path, sd: Path, p: Path) -> list:
     return [head + f"fleet off (stopped workers cleared: {len(workers)})"]  # O(1)
 
 
+def urgent(line: str) -> bool:  # a line main must see now: a question or a park | O(len)
+    return bool(re.match(r"\S+ (needs_decision |parked: )", line))  # O(len)
+
+
+def retry_refusal(line: str) -> bool:  # a start refusal that a later start can clear | O(len)
+    if not line.startswith("BLOCKED:"):  # O(1)
+        return False  # O(1)
+    return any(x in line for x in ("waiting for disk:", "is still running", "no free slot", " waits for ", "shares files with running")) or line.endswith(", or --over-limit")  # O(len)
+
+
+def _no_running(root, sd, p, extra=()):  # O(w)
+    print("\n".join(["no running batch", *extra, *run_end(root, sd, p)]), flush=True)  # O(w)
+    return 0  # O(1)
+
+
 def cmd_wait(a) -> int:
     root = _root()  # O(1)
     try:  # O(1)
@@ -781,18 +817,84 @@ def cmd_wait(a) -> int:
     if not any(b["state"] == "running" or (b["state"] == "parked" and b.get("lead")) for b in bs.load(p)["batches"]):  # O(b)
         print("\n".join(["no running batch", *run_end(root, sd, p)]))  # O(w)
         return 0  # O(1)
+    window = getattr(a, "window", 0) or 0  # O(1)
     deadline = time.monotonic() + a.timeout  # O(1)
+    first = None  # when the first round with lines ended (a window only) | O(1)
     while True:  # O(timeout / poll)
         lines = _round(root, sd, p, {})  # O(b * m)
         if lines:  # O(1)
             mline = machine_park_line(lines)  # O(lines)
-            print("\n".join(([mline] if mline else []) + lines + run_end(root, sd, p)))  # O(lines)
-            return 0  # O(1)
+            if window <= 0 or any(urgent(x) for x in lines):  # O(lines)
+                print("\n".join(([mline] if mline else []) + lines + run_end(root, sd, p)))  # O(lines)
+                return 0  # O(1)
+            print("\n".join(([mline] if mline else []) + lines), flush=True)  # O(lines)
+            if first is None:  # O(1)
+                first = time.monotonic()  # O(1)
         if not any(b["state"] == "running" for b in bs.load(p)["batches"]):  # O(b)
+            if first is not None:  # O(1)
+                ends = run_end(root, sd, p)  # O(w)
+                if ends:  # O(1)
+                    print("\n".join(ends))  # O(w)
+                return 0  # O(1)
             print("\n".join(["no running batch", *run_end(root, sd, p)]))  # O(w)
+            return 0  # O(1)
+        if first is not None and (time.monotonic() - first >= window or time.monotonic() >= deadline):  # O(1)
+            ends = run_end(root, sd, p)  # O(w)
+            if ends:  # O(1)
+                print("\n".join(ends))  # O(w)
             return 0  # O(1)
         if time.monotonic() >= deadline:  # O(1)
             print("TIMEOUT")  # O(1)
+            return 0  # O(1)
+        time.sleep(a.poll)  # O(poll)
+
+
+def cmd_run(a) -> int:
+    """Start, wait, start again until a batch needs main (#673)."""
+    import contextlib
+    import io
+    if os.environ.get("SUPERLITE_FLEET_WORKER"):  # O(1)
+        return _refuse("sl backlog run runs only in the main session")  # O(1)
+    root = _root()  # O(1)
+    try:  # O(1)
+        import main_cost  # O(1)
+        main_cost.note_session(root)  # O(size)
+    except Exception:  # O(1)
+        pass  # O(1)
+    import backlog
+    sd, p = root / ".superlite", bs.path(root)  # O(1)
+    deadline = time.monotonic() + a.timeout  # O(1)
+    due, retry, last, seen = True, False, 0.0, set()  # O(1)
+    while True:  # O(timeout / poll)
+        if due or (retry and time.monotonic() - last >= a.retry):  # O(1)
+            backlog.set_standing(root)  # O(b)
+            ns = argparse.Namespace(batch=[], cap=a.cap, model=a.model, config=a.config, machine_wait=a.machine_wait, over_limit=a.over_limit)  # O(1)
+            buf = io.StringIO()  # O(1)
+            with contextlib.redirect_stdout(buf):  # O(1)
+                rc = cmd_start(ns)  # O(start)
+            due, last = False, time.monotonic()  # O(1)
+            out = [x for x in buf.getvalue().splitlines() if x != "no startable batch"]  # O(lines)
+            retry = any(retry_refusal(x) for x in out)  # O(lines)
+            show = [x for x in out if not (retry_refusal(x) and x in seen)]  # O(lines)
+            seen.update(x for x in out if retry_refusal(x))  # O(lines)
+            fatal = any(x.startswith("BLOCKED:") and not retry_refusal(x) for x in out)  # O(lines)
+            if show or fatal:  # O(1)
+                print("\n".join(show + (run_end(root, sd, p) if fatal else [])), flush=True)  # O(lines)
+            if fatal:  # O(1)
+                return 3 if rc == 3 else 2  # O(1)
+        lines = _round(root, sd, p, {})  # O(b * m)
+        if lines:  # O(1)
+            mline = machine_park_line(lines)  # O(lines)
+            end = run_end(root, sd, p) if any(urgent(x) for x in lines) else []  # O(w)
+            print("\n".join(([mline] if mline else []) + lines + end), flush=True)  # O(lines)
+            if end or any(urgent(x) for x in lines):  # O(lines)
+                return 0  # O(1)
+            due = True  # O(1)
+            continue  # O(1)
+        if not any(b["state"] == "running" for b in bs.load(p)["batches"]):  # O(b)
+            return _no_running(root, sd, p)  # O(w)
+        if time.monotonic() >= deadline:  # O(1)
+            print("TIMEOUT", flush=True)  # O(1)
             return 0  # O(1)
         time.sleep(a.poll)  # O(poll)
 
@@ -898,6 +1000,16 @@ def main(argv=None) -> int:
     w = sub.add_parser("wait")  # O(1)
     w.add_argument("--timeout", type=int, default=21600)  # O(1)
     w.add_argument("--poll", type=int, default=10)  # O(1)
+    w.add_argument("--window", type=int, default=0)  # O(1)
+    r = sub.add_parser("run")  # O(1)
+    r.add_argument("--timeout", type=int, default=43200)  # O(1)
+    r.add_argument("--poll", type=int, default=10)  # O(1)
+    r.add_argument("--cap", type=int, default=2)  # O(1)
+    r.add_argument("--model", default=None)  # O(1)
+    r.add_argument("--config", default=None)  # O(1)
+    r.add_argument("--machine-wait", type=float, default=100)  # O(1)
+    r.add_argument("--over-limit", action="store_true")  # O(1)
+    r.add_argument("--retry", type=int, default=300)  # O(1)
     an = sub.add_parser("answer")  # O(1)
     an.add_argument("batch")  # O(1)
     an.add_argument("--file", required=True)  # O(1)
@@ -905,7 +1017,7 @@ def main(argv=None) -> int:
     t.add_argument("batch")  # O(1)
     t.add_argument("--text", required=True)  # O(1)
     a = ap.parse_args(argv)  # O(1)
-    return {"start": cmd_start, "wait": cmd_wait, "answer": cmd_answer, "tell": cmd_tell}[a.cmd](a)  # O(1)
+    return {"start": cmd_start, "wait": cmd_wait, "run": cmd_run, "answer": cmd_answer, "tell": cmd_tell}[a.cmd](a)  # O(1)
 
 
 if __name__ == "__main__":
