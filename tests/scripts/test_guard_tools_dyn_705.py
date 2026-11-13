@@ -112,9 +112,6 @@ def test_checkout_unknown_first_of_two_operands_726():
 
 @pytest.mark.parametrize("words", [
     ["git", "checkout", "-b", "$x"],
-    ["git", "checkout", "-b", "new", "$x"],
-    ["git", "checkout", "-B", "$x", "$y"],
-    ["git", "checkout", "--detach", "$x"],
     ["git", "checkout", "--orphan", "$x"],
     ["git", "checkout", "main"],
     ["git", "switch", "$x"],

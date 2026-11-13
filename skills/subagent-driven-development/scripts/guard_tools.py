@@ -302,6 +302,47 @@ def _git(words: list[str], cwd: str | None = None, env=None, top: str | None = N
             why.append(f"{sub}: no git command, read as an alias while the command names {toks[0]}")  # O(1)
         return ["?"] if unk else []  # an alias from a config this cannot read  # O(1)
     args = words[i:]  # O(len(words))
+    out = _git_args(sub, args, base, cwd, why)  # O(len(args))
+    if "?" in out or any(t == "?" or t.endswith("/?") or "$" in t or "`" in t for t in out):  # the targets already hold an unknown word: its cause stays (#749)  # O(len(out))
+        return out  # O(1)
+    return _uniq(out + _git_unknown_opts(sub, args, base, cwd))  # O(len(args))
+
+
+_GIT_MAYBE = {"reset": "--hard", "switch": "-f", "checkout": "-f", "restore": "-W", "read-tree": "-u", "checkout-index": "-a"}
+_GIT_SWITCH_NEW = frozenset({"-c", "-C", "--create", "--force-create", "--orphan", "--detach", "-d"})
+
+
+def _git_unknown_opts(sub: str, args: list[str], base: str, cwd: str | None) -> list[str]:  # O(len(args)^2)
+    """An unknown word where an option may stand is read once as the subcommand's writing flag (#749)."""
+    flag = _GIT_MAYBE.get(sub)  # O(1)
+    if not flag or (sub in ("reset", "checkout") and "--" in args):  # git refuses words after -- there  # O(len(args))
+        return []  # O(1)
+    skips = _GIT_SKIP | {"-c", "-C", "--create", "--force-create"} if sub == "switch" else _GIT_SKIP  # O(1)
+    pos: list[int] = []  # O(1)
+    nops = 0  # O(1)
+    k = 0  # O(1)
+    while k < len(args):  # O(len(args))
+        a = args[k]  # O(1)
+        k += 1  # O(1)
+        if a == "--":  # O(1)
+            break  # O(1)
+        if a in skips:  # O(1)
+            k += 1  # O(1)
+        elif guard_files._unknown(a, True):  # O(len(a))
+            pos.append(k - 1)  # O(1)
+        elif not a.startswith("-"):  # O(1)
+            nops += 1  # O(1)
+    out: list[str] = []  # O(1)
+    for j in pos:  # O(len(pos))
+        if sub == "switch" and nops == 0 and not any(a in _GIT_SWITCH_NEW for a in args):  # git needs a branch operand  # O(len(args))
+            continue  # O(1)
+        if sub == "reset" and any(a in ("--soft", "--mixed") for a in args):  # one mode  # O(len(args))
+            continue  # O(1)
+        out += _git_args(sub, args[:j] + [flag] + args[j + 1:], base, cwd, None)  # O(len(args))
+    return out  # O(len(out))
+
+
+def _git_args(sub: str, args: list[str], base: str, cwd: str | None, why: list[str] | None) -> list[str]:  # O(len(args))
     paths: list[str] = []  # O(1)
     ops: list[str] = []  # O(1)
     dd, skip = False, False  # O(1)
