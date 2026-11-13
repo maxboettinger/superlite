@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 COMMAND = ROOT / "commands" / "backlog.md"
 MAIN = ROOT / "skills" / "subagent-driven-development" / "backlog-main.md"
+FLEET = ROOT / "docs" / "fleet.md"
 
 CMD_AWAY = (
     "When the user is away or pre-approved the run (unattended, overnight, \"decide yourself\"), "
@@ -35,3 +36,11 @@ def test_main_rules_name_the_absent_user_case_beside_the_fresh_session_rule():
     lines = MAIN.read_text(encoding="utf-8").splitlines()
     line = next(l for l in lines if l.startswith("Start main in a fresh session:"))
     assert line.endswith(MAIN_AWAY)
+
+
+def test_fleet_doc_names_the_absent_user_case():
+    text = FLEET.read_text(encoding="utf-8")
+    assert (
+        "runs `/clear` first, unless the user is away or pre-approved the run: "
+        "then main goes on in this session and loads no further superlite skill."
+    ) in text
