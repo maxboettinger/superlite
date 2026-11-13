@@ -55,7 +55,7 @@ def gate_spy(monkeypatch, calls):
 def test_start_below_floor_starts_nothing(bk, capsys, monkeypatch):
     gb = [12.0]; lowdisk(monkeypatch, gb); calls = []; gate_spy(monkeypatch, calls)
     put(bk, b("B7", ["a.py"]), b("B8", ["b.py"]))
-    rc, out = run(capsys, "start", "B7", "B8")
+    rc, out = run(capsys, "start", "B7", "B8", "--cap", "2")
     lines = out.splitlines()
     assert rc == 2 and len(lines) == 2
     for bid, line in zip(("B7", "B8"), lines):
@@ -71,7 +71,7 @@ def test_start_after_space_frees(bk, capsys, monkeypatch):
     put(bk, b("B7", ["a.py"]))
     assert run(capsys, "start", "B7")[0] == 2
     gb[0] = 100.0
-    rc, out = run(capsys, "start", "B7")
+    rc, out = run(capsys, "start", "B7", "--cap", "2")
     assert rc == 0 and out.startswith("B7 running lead=W1") and get(bk, "B7")["state"] == "running"
 
 def test_warn_line_prints_and_batch_starts(bk, capsys, monkeypatch):

@@ -237,9 +237,10 @@ def _is_ready(screen):  # O(s)
     return False  # O(1)
 
 
-def choose_account(sd, model, env, avoid=None):  # O(a * e + w) plus herdr and usage calls
+def choose_account(sd, model, env, avoid=None, lead=False):  # O(a * e + w) plus herdr and usage calls
     """The account a new worker starts on: (account, its config dir, the claude-profile account other sessions count it on).
 
+    A lead (`lead`, or SUPERLITE_FLEET_ROLE=lead in os.environ) skips accounts at or above `lead_weekly_max` while another is usable.
     Exit 3 with a `BLOCKED: ...` line when no account has headroom or no config dir is known."""
     sd = Path(sd)  # O(1)
     data = fs.load(sd)  # O(w)
@@ -261,10 +262,24 @@ def choose_account(sd, model, env, avoid=None):  # O(a * e + w) plus herdr and u
     for n in allowed:  # O(a)
         if machine.get(alias.get(n, n)):  # accounts nobody else uses stay out of the dict | O(1)
             running[n] = running.get(n, 0) + machine[alias.get(n, n)]  # O(1)
-    account = ac.pick_account(usage, allowed, running, model, alias)  # O(a)
+    lead = lead or os.environ.get("SUPERLITE_FLEET_ROLE") == "lead"  # O(1)
+    limit, over = None, {}  # account -> weekly_all percent, for the accounts at or above the lead cap | O(1)
+    if lead:  # O(1)
+        import backlog_cap  # noqa: PLC0415 | O(1)
+        import history  # noqa: PLC0415 | O(1)
+        limit = backlog_cap.machine_cfg(history.home())["lead_weekly_max"]  # O(k)
+    if limit is not None:  # O(1)
+        by = {u.get("name"): u for u in usage.get("accounts") or []}  # O(a)
+        over = {n: ac._pct(by[alias.get(n, n)], "weekly_all") for n in allowed if alias.get(n, n) in by and ac._pct(by[alias.get(n, n)], "weekly_all") >= limit}  # O(a * l)
+    ok = [n for n in allowed if n not in over]  # O(a)
+    account = ac.pick_account(usage, ok, running, model, alias)  # O(a)
     if account is None:  # a path entry or `current` unknown to the usage report has no usage data, not a verdict; an aliased one has, and it said no | O(a)
         known = {u.get("name") for u in usage.get("accounts") or []}  # O(a)
-        account = next((ac.entry_name(e) for e in entries if (ac.is_path(e) or e == "current") and ac.entry_name(e) not in known and ac.entry_name(e) not in alias), None)  # O(a)
+        account = next((ac.entry_name(e) for e in entries if ac.entry_name(e) in ok and (ac.is_path(e) or e == "current") and ac.entry_name(e) not in known and ac.entry_name(e) not in alias), None)  # O(a)
+    if account is None and over:  # every usable account is at the cap: the plain pick, with a note | O(a)
+        account = ac.pick_account(usage, allowed, running, model, alias)  # O(a)
+        if account in over:  # O(1)
+            print(f"{account}: weekly_all {over[account]:g}% >= lead_weekly_max {limit:g}%; no account under it", file=sys.stderr)  # O(1)
     if account is None:  # O(1)
         print("BLOCKED: no account with headroom")  # O(1)
         for r in ac.reasons(usage, allowed, model, alias):  # O(a)
@@ -316,14 +331,14 @@ def open_pane(sd, wid, cwd, env, record):  # O(w + p) plus herdr calls
     return pane  # O(1)
 
 
-def _retry_account(sd, model, env, avoid):  # O(a * e + w): another account than `avoid`, else the same one
+def _retry_account(sd, model, env, avoid, lead=False):  # O(a * e + w): another account than `avoid`, else the same one
     try:  # O(1)
         with contextlib.redirect_stdout(io.StringIO()):  # O(1)
-            return choose_account(sd, model, env, avoid=avoid)  # O(a * e + w)
+            return choose_account(sd, model, env, avoid=avoid, lead=lead)  # O(a * e + w)
     except SystemExit as e:  # no other account has headroom | O(1)
         if e.code != 3:  # O(1)
             raise  # O(1)
-    return choose_account(sd, model, env)  # O(a * e + w)
+    return choose_account(sd, model, env, lead=lead)  # O(a * e + w)
 
 
 def claude_json(config_dir, env=None):  # O(1) the .claude.json of a worker account: next to the default dir's home, else inside the dir

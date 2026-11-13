@@ -81,7 +81,7 @@ def test_start_config_flag_skips_experiment(cfg, capsys):
 def test_start_corrupt_experiment_store_blocks_batch(cfg, capsys):
     (cfg.sd / "experiments.json").write_text("not json")
     put(cfg, b("B1", ["a.py"]))
-    rc, out = run(capsys, "start", "B1")
+    rc, out = run(capsys, "start", "B1", "--cap", "2")
     assert rc == 2 and out.startswith("BLOCKED: B1 not started: experiment: ")
     assert get(cfg, "B1")["state"] == "planned" and not cfg.spawned
 
@@ -89,6 +89,6 @@ def test_start_corrupt_experiment_store_blocks_batch(cfg, capsys):
 def test_start_arm_config_unknown_blocks_batch(cfg, capsys, monkeypatch):
     put(cfg, b("B1", ["a.py"]))
     monkeypatch.setattr(experiment, "assign", lambda root, bid: {"experiment": "E1", "arm": "nope", "config": "nope"})
-    rc, out = run(capsys, "start", "B1")
+    rc, out = run(capsys, "start", "B1", "--cap", "2")
     assert rc == 2 and out.startswith("BLOCKED: B1 not started: run config: ")
     assert get(cfg, "B1")["state"] == "planned" and not cfg.spawned

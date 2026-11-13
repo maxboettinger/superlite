@@ -66,7 +66,7 @@ def test_run_start_refusal_returns_2(bk, capsys, clock, monkeypatch):
     def boom(*a, **k):
         raise SystemExit(3)
     monkeypatch.setattr(sys.modules["fleet_lead"], "spawn_lead", boom)
-    assert run(capsys, "run", "--timeout", "60", "--poll", "0") == (2, "BLOCKED: B2 lead did not start; B2 keeps its state, rerun sl backlog start B2\n")
+    assert run(capsys, "run", "--cap", "2", "--timeout", "60", "--poll", "0") == (2, "BLOCKED: B2 lead did not start; B2 keeps its state, rerun sl backlog start B2\n")
 
 
 def test_run_retries_disk_refusal(bk, capsys, clock, monkeypatch):
@@ -96,7 +96,7 @@ def test_backlog_cli_routes_run(bk, monkeypatch):
     monkeypatch.setattr(backlog_cap, "account_state", lambda *a, **k: ("unknown", []))
     monkeypatch.setenv("SUPERLITE_HOME", str(bk.root / "home"))
     monkeypatch.setattr(br, "main", lambda argv=None: seen.append(argv) or 0)
-    assert backlog.main(["run", "--timeout", "0"]) == 0 and seen == [["run", "--timeout", "0", "--cap", "2"]]
+    assert backlog.main(["run", "--timeout", "0"]) == 0 and seen == [["run", "--timeout", "0"]]
 
 
 def test_run_refreshes_standing_before_each_start(bk, capsys, clock, monkeypatch):

@@ -18,7 +18,7 @@ def test_start_stops_a_lead_whose_brief_stalls_and_starts_the_rest(bk, capsys, m
     put(bk, b("B1", ["a.py"]), b("B3", ["c.py"]))
     fail_for(bk, monkeypatch, "W1")
     w3 = bk.root / ".claude" / "worktrees" / "superlite-b3-t"
-    assert run(capsys, "start") == (2, f"BLOCKED: B1 lead W1 got no brief ({STALL}); lead stopped, rerun sl backlog start B1\nB3 running lead=W2 worktree={w3}\n")
+    assert run(capsys, "start", "--cap", "2") == (2, f"BLOCKED: B1 lead W1 got no brief ({STALL}); lead stopped, rerun sl backlog start B1\nB3 running lead=W2 worktree={w3}\n")
     assert ("stop", ["W1"]) in bk.calls
     x = get(bk, "B1")
     assert x["state"] == "planned" and x.get("lead") != "W1" and x.get("agent") != "sl-m-W1"

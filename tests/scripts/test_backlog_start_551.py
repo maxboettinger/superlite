@@ -33,7 +33,7 @@ def test_a_failed_lead_does_not_stop_the_batches_after_it(bk, capsys, monkeypatc
 def test_every_lead_failing_keeps_each_batch_and_exits_2(bk, capsys, monkeypatch):
     put(bk, b("B1", ["a.py"], "parked", reason="tui red", worktree=str(bk.root / ".claude" / "worktrees" / "superlite-b1-t")), b("B2", ["b.py"]))
     flaky(monkeypatch, {1, 2})
-    rc, out = run(capsys, "start", "B1", "B2")
+    rc, out = run(capsys, "start", "B1", "B2", "--cap", "2")
     assert rc == 2
     assert [x for x in out.splitlines() if not x.startswith("BLOCKED: W9 ")] == [
         "BLOCKED: B1 lead did not start; B1 keeps its state, rerun sl backlog start B1",
