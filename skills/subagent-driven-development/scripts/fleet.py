@@ -564,7 +564,8 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0):  # O(R * (s
     import fleet_io as fio  # noqa: E402 | O(1) lazy
     import orchestrator  # noqa: E402 | O(1) lazy
     sd = Path(sd)  # O(1)
-    plan = plan or dp.load_pool(sd / "pool.json").get("plan") or dp.nt.DEFAULT_PLAN  # as `dispatch` | O(pool bytes)
+    import plan_tools as pt  # noqa: E402 | O(1) lazy
+    plan = plan or str(pt.run_plan(sd) or dp.nt.DEFAULT_PLAN)  # as `dispatch`: stable.json, pool.json, plan.md | O(pool bytes)
     shut = orchestrator.require(plan, "dispatch")  # human mode waits for approval, as `dispatch` | O(file)
     if shut:  # O(1)
         return shut  # O(1)
@@ -640,8 +641,8 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0):  # O(R * (s
 def for_review(sd, plan, project, tasks, package=None, over=False, machine_wait=100.0, note=None):  # O(L + e + spawn + send): a package-reviewer for TASKS (or PACKAGE's committed tasks), brief written and sent
     import fleet_io as fio  # noqa: E402 | O(1) lazy
     sd = Path(sd)  # O(1)
-    pp = sd / "pool.json"  # O(1)
-    plan = plan or (pool.load(pp).get("plan") if pp.exists() else None) or fio.nt.DEFAULT_PLAN  # as for_dispatch | O(pool bytes)
+    import plan_tools as pt  # noqa: E402 | O(1) lazy
+    plan = plan or str(pt.run_plan(sd) or fio.nt.DEFAULT_PLAN)  # as for_dispatch | O(pool bytes)
     tasks = list(dict.fromkeys(tasks or []))  # O(k)
     if tasks and package:  # O(1)
         print("error: --for-review takes task ids or --package, not both", file=sys.stderr)  # O(1)
@@ -677,7 +678,8 @@ def for_review(sd, plan, project, tasks, package=None, over=False, machine_wait=
     f = sd / "briefs" / (label.replace(",", "-") + ".md")  # O(1)
     f.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     body = fio.review_brief(sd, plan, tasks, str(fio.HERE / "sl"), str(fio.HERE.parents[2]), package)  # O(L + e + B)
-    body = with_constraints(body, plan_file(sd, str(plan)))  # before the notes | O(L + B)
+    import orchestrator  # noqa: E402 | O(1) lazy
+    body = with_constraints(body, orchestrator.plan_file(sd, str(plan)))  # before the notes | O(L + B)
     if note and note.strip():  # O(len)
         body = body.rstrip("\n") + "\n\n## Coordinator notes\n\nThese notes add to the review above; review every task and file it lists all the same.\n\n" + note.strip() + "\n"  # O(B)
     f.write_text(body, encoding="utf-8")  # O(B)
@@ -750,23 +752,6 @@ def _brief_arg(argv):  # the value of the last --brief X or --brief=X, else None
         elif x.startswith("--brief="):  # O(1)
             found = x[len("--brief="):]  # O(1)
     return found  # O(1)
-
-
-def plan_file(sd, plan):  # the plan file of the run in sd: an existing --plan file, else stable.json, else pool.json; None when none names one (#635) | O(file)
-    sd = Path(sd)  # O(1)
-    if plan and Path(plan).is_file():  # O(1)
-        return Path(plan)  # O(1)
-    for name in ("stable.json", "pool.json"):  # O(1) iterations
-        try:  # O(1)
-            p = json.loads((sd / name).read_text(encoding="utf-8")).get("plan")  # O(file)
-        except (OSError, ValueError, AttributeError):  # O(1)
-            continue  # O(1)
-        if not isinstance(p, str) or not p:  # O(1)
-            continue  # O(1)
-        for c in ([Path(p)] if Path(p).is_absolute() else [Path(p), sd.parent / p]):  # O(1) iterations
-            if c.is_file():  # O(1)
-                return c  # O(1)
-    return None  # O(1)
 
 
 def with_constraints(text, plan):  # TEXT with the plan's Global constraints appended as one section; unchanged when it has them, no plan, or none stated (#635) | O(L + len)
@@ -928,7 +913,8 @@ def main(argv=None):  # O(w) plus command cost
         _follow(plan)  # O(w)
     if argv and argv[0] == "send" and _brief_arg(argv):  # the brief gains the plan's Global constraints once (#635) | O(L + len)
         try:  # O(1)
-            add_constraints(_brief_arg(argv), plan_file(_sd(argparse.Namespace(plan=plan)), plan))  # O(L + len)
+            import orchestrator  # noqa: E402 | O(1) lazy
+            add_constraints(_brief_arg(argv), orchestrator.plan_file(_sd(argparse.Namespace(plan=plan)), plan))  # O(L + len)
         except Exception:  # noqa: BLE001 | a send never fails on the constraints | O(1)
             pass  # O(1)
     if argv and argv[0] in ("send", "keys", "wait"):  # O(1)
@@ -1091,12 +1077,12 @@ def main(argv=None):  # O(w) plus command cost
                 print(f"error: {e}", file=sys.stderr)  # O(1)
                 return 2  # O(1)
         if (a.for_dispatch or a.for_review is not None or a.package) and a.plan and Path(a.plan).is_dir():  # a run folder names its plan file (#508) | O(d)
-            import orchestrator  # noqa: E402 | O(1) lazy
-            found = orchestrator.plan_file(state.plan_dir(a.plan))  # O(file)
-            if found is None:  # O(1)
-                print(f"error: --plan {a.plan} is a run folder with no plan file (stable.json, pool.json or plan.md name none); pass the plan file", file=sys.stderr)  # O(1)
+            import plan_tools as pt  # noqa: E402 | O(1) lazy
+            try:  # O(1)
+                a.plan = str(pt.resolve_plan(a.plan))  # O(d)
+            except pt.PlanError as e:  # O(1)
+                print(f"error: {e}", file=sys.stderr)  # O(1)
                 return 2  # O(1) before dispatch: no pane, no worker id
-            a.plan = str(found)  # O(1)
         if not a.for_dispatch:  # dispatch gates the disk itself (#614) | O(1)
             import trees  # noqa: E402 | O(1) lazy
             level, line = trees.disk_gate(state.git_root(sd) or sd.parent)  # O(1)
@@ -1118,7 +1104,8 @@ def main(argv=None):  # O(w) plus command cost
         if a.brief:  # O(1)
             import fleet_io as fio  # noqa: E402 | O(1) lazy
             label = a.label or Path(a.brief).stem  # O(1)
-            add_constraints(a.brief, plan_file(sd, a.plan))  # O(L + len)
+            import orchestrator  # noqa: E402 | O(1) lazy
+            add_constraints(a.brief, orchestrator.plan_file(sd, a.plan))  # O(L + len)
             try:  # O(1)
                 fio.send_brief(sd, w["id"], a.brief, a.label, **({"preface": fleet_roles_text(w)} if w.get("brief_only") else {}))  # O(w)
             except (hc.HerdrError, OSError, KeyError) as e:  # a worker that got no brief is stopped, not left ready | O(w)
