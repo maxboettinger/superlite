@@ -273,7 +273,16 @@ def _renumber(new: list, kept: list) -> list:
     for b in new:  # O(b * deps)
         b["id"] = ids[b["id"]]
         b["depends"] = [ids.get(d, d) for d in b["depends"]]
+        if isinstance(b.get("depends_why"), dict):  # O(1)
+            b["depends_why"] = {ids.get(d, d): w for d, w in b["depends_why"].items()}  # O(deps)
     return new
+
+
+def _dlines(lines: list, before: list, new: list, proposed: set = frozenset()) -> list:
+    """The prune repair lines with both batch ids renamed to the stored ids; a backlog id stays; a line naming a batch separate merged away is dropped (#742)."""
+    ids = dict(zip(before, [b["id"] for b in new]))  # O(b)
+    lines = [ln for ln in lines if all(i in ids or i not in proposed for i in re.findall(r"\bB\d+\b", ln.split(":")[1]))]  # O(lines)
+    return [re.sub(r"^(depends: )(B\d+)( (?:no longer )?waits for )(B\d+)", lambda m: m[1] + ids.get(m[2], m[2]) + m[3] + ids.get(m[4], m[4]), ln) for ln in lines]  # O(lines)
 
 
 def _tracked(root: Path) -> list[str]:
@@ -610,7 +619,10 @@ def cmd_plan(a) -> int:
         return 3
     if pin:  # O(1)
         notes += bi.blocked_lines(prop, pin, version)  # O(pin)
+    batches, dlines = bc.prune_depends(batches, [b for b in d["batches"] if b["id"] in known_b])  # O(b^2)
+    proposed = {b["id"] for b in batches}  # O(b)
     batches = bc.separate(batches)
+    before = [b["id"] for b in batches]  # O(b)
     if jira:
         for b in batches:
             b["issues"] = [back[n] for n in b["issues"]]
@@ -635,6 +647,7 @@ def cmd_plan(a) -> int:
             done = {n for b in data["batches"] if b["state"] == "shipped" for n in b.get("issues", [])}  # O(b * issues)
             data["outside"] = [o for o in data["outside"] if not isinstance(o, dict) or o.get("number") not in done]  # O(outside)
             new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
+            shown["dlines"] = _dlines(dlines, before, new, proposed)  # O(b)
             data["batches"] += new  # O(b)
             data["round"] = (data["round"] if isinstance(data.get("round"), list) else [b["id"] for b in was]) + [x["id"] for x in new]  # O(b)
             made[:] = new  # O(b)
@@ -663,6 +676,7 @@ def cmd_plan(a) -> int:
             data["source"] = {"tracker": "github"}  # O(1)
         data["max_batches"] = cap  # O(1)
         new = _renumber(copy.deepcopy(batches), data["batches"])  # O(b)
+        shown["dlines"] = _dlines(dlines, before, new, proposed)  # O(b)
         data["batches"] += new  # O(b)
         data["round"] = [x["id"] for x in new]  # O(b)
         made[:] = new  # O(b)
@@ -674,7 +688,7 @@ def cmd_plan(a) -> int:
         for b in shown["dropped"]:  # O(b)
             if b.get("worktree"):  # O(1)
                 drops += backlog_run.drop_worktree(root, b)  # O(git)
-    print("\n".join(shown["lines"] + offer_lines(made, merged) + notes + topics + cuts + drops))
+    print("\n".join(shown["lines"] + offer_lines(made, merged) + notes + shown.get("dlines", []) + topics + cuts + drops))
     return 0
 
 

@@ -65,12 +65,12 @@ def test_added_lines_unit():
 
 def test_worker_ids_and_open_depends_are_accepted(bk, capsys):
     state(bk, "running")
-    bk.batches = [{"id": "B174", "topic": "Urgent Fix", "issues": [2], "files": ["b.py"], "depends": ["B1"], "decisions": []}]
+    bk.batches = [{"id": "B174", "topic": "Urgent Fix", "issues": [2], "files": ["b.py"], "depends": [{"id": "B1", "why": "issue #2 says after #1"}], "decisions": []}]
     rc, out = cli(capsys, "plan", "--issues", "2", "--add")
     d = load(bk)
     assert rc == 0
     b2 = bs.batch(d, "B2")
-    assert b2["depends"] == ["B1"] and b2["topic"] == "urgent-fix"
+    assert b2["depends"] == ["B1"] and b2["depends_why"] == {"B1": "issue #2 says after #1"} and b2["topic"] == "urgent-fix"
     assert 'topic: "B174" "Urgent Fix" -> urgent-fix' in out
 
 

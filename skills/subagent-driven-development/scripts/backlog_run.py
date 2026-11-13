@@ -176,7 +176,7 @@ def _pick(data: dict, bids: list, cap: int, live: dict) -> tuple:
         if b["state"] not in ("planned", "parked"):  # O(1)
             msgs.append(f"{bid} is {b['state']}")  # O(1)
             continue  # O(1)
-        wait = next((d for d in b.get("depends", []) if not any(x["id"] == d and x["state"] == "shipped" for x in data["batches"])), None)  # O(depends * b)
+        wait = bs.waits_for(data, b)  # O(depends * b)
         if wait:  # O(1)
             msgs.append(f"{bid} waits for {wait}")  # O(1)
             continue  # O(1)

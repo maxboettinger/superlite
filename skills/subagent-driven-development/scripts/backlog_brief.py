@@ -365,7 +365,9 @@ def triage_brief(issues, ctx):  # O(i)
     if pin is not None:  # O(1)
         out.append(pinned_line(pin.get("head"), pin.get("version")))  # O(1)
     out.append("Rules: " + ROOT_DOC_TRIAGE + TRIAGE_RUN + "no two batches share a file unless one depends on the other or both list it in append_only (" + APPEND_TRIAGE + "); list every repo-relative file a batch "
-               "touches (at least one file per batch); depends names batches that must ship first; decisions lists each batch's major decisions, one "
+               "touches (at least one file per batch); depends lists a batch that must ship first, only when the two batches share a file or an issue\'s text names the order, as "
+               "{\"id\": \"<batch>\", \"why\": \"<the shared file, or the issue words that name the order; one line, at most 80 characters, no batch ids>\"}; "
+               "plan drops a dependency with neither a shared file nor a why, since every dependency keeps a lead idle until the other batch ships; decisions lists each batch's major decisions, one "
                "AskUserQuestion call object {\"questions\": [...]} per decision (1 to 4 distinct questions per decision, question at most 300 characters, "
                "header at most 12 characters, 2 to 4 options with distinct labels, option label at most 60 characters "
                "including a ` (Recommended)` suffix, description at most 200 characters; an over-long header, label or "
