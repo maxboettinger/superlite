@@ -33,7 +33,7 @@ Prepare: branch, base, commits ahead (`git log --oneline <base>..HEAD`), `git di
 2. Push and open a pull request
 3. Keep the branch as is
 
-If `finish` printed NOTHING WAS COMMITTED (superlite default), options 1 and 2 read "Commit, then ...": after the answer run `sl autocommit apply` (add `--trailer "Key: value"` per line your harness requires at the end of every commit message; or `/superlite:commit`), which refuses only when commits since the run touched checkpointed files or a checkpointed file changed again, and leaves unrelated changes uncommitted; option 3 leaves the work uncommitted. Never run `git commit` yourself.
+If `finish` printed NOTHING WAS COMMITTED (superlite default), options 1 and 2 read "Commit, then ...": after the answer run `sl autocommit apply` (add `--trailer "Key: value"` per line your harness requires at the end of every commit message; or `/superlite:commit`), which runs the project's commit hooks (`pre-commit`, `prepare-commit-msg`, `commit-msg`) for each commit before HEAD moves, refuses when commits since the run touched checkpointed files, a checkpointed file changed again or a hook failed (HEAD and the checkpoints stay as they were: fix the cause, run it again), and leaves unrelated changes uncommitted; give that Bash call a 600000 ms timeout when the project's `pre-commit` runs its tests; option 3 leaves the work uncommitted. Never run `git commit` yourself.
 
 No further menus or typed confirmations. Act on the answer.
 
