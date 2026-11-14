@@ -25,7 +25,8 @@ BRIEF_ONLY = ("No prime and no plan run: this brief is your whole task (no READY
               "Commit only the files you changed and their tests with plain `git add <files>` and `git commit` in the brief's folder; "
               "for this task that replaces your agent file's prime, task-message and commit rules.")
 NO_TIER = "%s takes no --tier (its agent file sets the model); --tier works for implementer, fixer, research and writer"  # O(1)
-TAIL = ["--disallowedTools", "AskUserQuestion"]  # O(1) a worker never asks the user
+GIT_DENY = ("Bash(git checkout *)", "Bash(git restore *)", "Bash(git stash)", "Bash(git stash *)")  # O(1) a worker never rewrites the shared tree (#784)
+TAIL = ["--disallowedTools", "AskUserQuestion", *GIT_DENY]  # O(1) a worker never asks the user
 RESEARCH_TAIL = TAIL + ["Edit", "Write", "NotebookEdit", "Bash"]  # O(1) research is read-only by its tools, not by prose
 
 

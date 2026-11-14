@@ -55,6 +55,7 @@ BLOCK = ("BLOCKED: human orchestrator selected, show the plan, ask for approval,
 RUN_FILES = ("stable.json", "prime.md", "prime-haiku.md", "pool.json", FILE, REPLIES,  # what `end` archives: markers, gate, | O(1)
              "progress.md", "incidents.jsonl", "metrics.jsonl", "lint-log.jsonl", "chain-rulings.json",  # and the run's logs, so
              "test-summary.json", "briefs")  # the next run starts clean (config, checkpoints and probes stay)
+KEEP_BRIEFS = ("lead.md", "lead-build.md")  # the lead's own briefs outlive `end` (#791) | O(1)
 NO_SESSION = "orchestrator: no session id (CLAUDE_CODE_SESSION_ID); set SUPERLITE_STATE_DIR instead"  # O(1)
 
 
@@ -146,7 +147,8 @@ def now() -> str:  # O(1)
 
 def end(sd: Path) -> str:  # O(files)
     """Archive the run's markers, gate files and logs into sd/runs/<time>/ and release the session; one line."""
-    present = [f for f in RUN_FILES if (sd / f).exists()]  # O(1)
+    present = [f for f in RUN_FILES if f != "briefs" and (sd / f).exists()]  # O(1)
+    kept = sorted(p.name for p in (sd / "briefs").iterdir() if p.name not in KEEP_BRIEFS) if (sd / "briefs").is_dir() else []  # briefs, one by one | O(files)
     present += sorted({p.name for pat in ("test-summary-*.json", "test-summary-*.log", "test-summary.latest")  # per-run summaries | O(files)
                        for p in sd.glob(pat)})  # O(files)
     state.unbind(sd)  # O(d)
@@ -158,7 +160,7 @@ def end(sd: Path) -> str:  # O(files)
     elif scratch.is_dir():  # O(scratch)
         shutil.rmtree(scratch, ignore_errors=True)  # a locked file must not stop the archive below | O(scratch)
     tail = "; scratch folder removed" if existed and not (scratch.is_symlink() or scratch.exists()) else ""  # O(1)
-    if not present:  # O(1)
+    if not present and not kept:  # O(1)
         return f"orchestrator: nothing to end in {sd}{tail}"  # O(1)
     dest = sd / "runs" / time.strftime("%Y%m%d-%H%M%S")  # O(1)
     while dest.exists():  # two ends in one second | O(1) amortized
@@ -166,7 +168,11 @@ def end(sd: Path) -> str:  # O(files)
     dest.mkdir(parents=True)  # O(1)
     for f in present:  # O(files)
         (sd / f).replace(dest / f)  # O(1)
-    return f"orchestrator: run ended; {len(present)} files moved to {dest}{tail}"  # O(1)
+    if kept:  # O(files)
+        (dest / "briefs").mkdir()  # O(1)
+        for f in kept:  # O(files)
+            (sd / "briefs" / f).replace(dest / "briefs" / f)  # O(1)
+    return f"orchestrator: run ended; {len(present) + bool(kept)} files moved to {dest}{tail}"  # O(1)
 
 
 foreign_worktree = state.foreign_worktree  # the #199 check and state.resolve share one test (#224) | O(1)

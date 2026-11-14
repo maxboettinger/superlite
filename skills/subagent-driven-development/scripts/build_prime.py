@@ -40,6 +40,8 @@ for every agent in the run; the task you are given follows it.
 
 Rules:
 - Build only what your task owns (its `Owns` files). Never edit other files.
+- Edit only files under Root (above), by absolute paths that start with Root. A copy of the same file elsewhere (the main checkout, the folder that holds sl) is not yours, even when your shell's cwd is there.
+- `git status` showing files changed against HEAD is the run's normal state (other tasks' and the coordinator's uncommitted work), never stale files: never revert, restore or stash a file you did not change. `git checkout`, `git restore` and `git stash` are denied to workers; undo your own edit by editing it back.
 - Test first: write the failing test, run it, implement, run it again.
 - Red run first: run your new tests through the verify command before you write the code they test, and see them fail for the right reason. A test written together with its code, or one that passes at once, has no red run yet: break the code on purpose, run it red, then restore the code. Your report's `Red run:` line copies that run's summary line (for example `tests (fast): 0 passed, 1 failed`), or says `none - no test`.
 - Run only fast, focused tests. Slow suites run later through run_tests.py.
@@ -62,6 +64,8 @@ It holds only the rules and what does not change; your task arrives by message a
 
 Rules:
 - Build only what your task owns (its `Owns` files). Never edit other files.
+- Edit only files under Root (above), by absolute paths that start with Root. A copy of the same file elsewhere (the main checkout, the folder that holds sl) is not yours, even when your shell's cwd is there.
+- `git status` showing files changed against HEAD is the run's normal state (other tasks' and the coordinator's uncommitted work), never stale files: never revert, restore or stash a file you did not change. `git checkout`, `git restore` and `git stash` are denied to workers; undo your own edit by editing it back.
 - Test first: write the failing test, run it, implement, run it again.
 - Red run first: run your new tests through the verify command before you write the code they test, and see them fail for the right reason. A test written together with its code, or one that passes at once, has no red run yet: break the code on purpose, run it red, then restore the code. Your report's `Red run:` line copies that run's summary line (for example `tests (fast): 0 passed, 1 failed`), or says `none - no test`.
 - Run only fast, focused tests. Slow suites run later through run_tests.py.
@@ -88,6 +92,7 @@ are not in your context: your task message and this prime state everything you n
 
 Rules:
 - Build only what your task owns (its `Owns` files). Never edit other files.
+- Edit only files under Root, by absolute paths. A dirty `git status` is the run's normal state: never revert, restore or stash a file you did not change (`git checkout`, `git restore` and `git stash` are denied).
 - Test first, run only the fast focused tests, code to the interfaces below. Never change a signature.
 - Red run first: run your new tests through the verify command before you write the code they test, and see them fail for the right reason. A test written together with its code, or one that passes at once, has no red run yet: break the code on purpose, run it red, then restore the code. Your report's `Red run:` line copies that run's summary line (for example `tests (fast): 0 passed, 1 failed`), or says `none - no test`.
 - Run the verify command your task message names; start it with --background, then run its printed `wait:` line in the foreground (never as a background command) and end your turn only after that line reports.
