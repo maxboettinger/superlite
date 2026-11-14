@@ -92,7 +92,8 @@ done
 subst "$cmd" "$ph" "$bs"
 cmd=$SUBST
 
-BLOCK_MSG="Blocked: this command kills processes by name or pattern, which can stop other sessions' processes. Kill only the PIDs you started (kill <PID>, taskkill /PID <PID>, Stop-Process -Id <PID>)."
+BLOCK_MSG="Blocked: this command kills processes by name or pattern, which can stop other sessions' processes. End only processes you started, in the same call that started them: helper & pid=\$!; ...; kill \$pid. If you have it, your harness's stop tool ends a background command (Claude Code: TaskStop). An auto-mode classifier may refuse kill <PID> of a process from an earlier call: leave that process to end on its own and start the next helper so it ends by itself (caffeinate -w <PID>, a loop with a deadline). Windows: taskkill /PID <PID>."
+[[ $MODE == ps ]] && BLOCK_MSG="Blocked: this command kills processes by name or pattern, which can stop other sessions' processes. End only processes you started, in the same call that started them: \$p = Start-Process <cmd> -PassThru; ...; Stop-Process -Id \$p.Id. If you have it, your harness's stop tool ends a background command (Claude Code: TaskStop). An auto-mode classifier may refuse Stop-Process -Id <PID> of a process from an earlier call: leave that process to end on its own and start the next helper so it ends by itself (a loop with a deadline)."
 block() {
   echo "$BLOCK_MSG" >&2
   exit 2
