@@ -62,3 +62,11 @@ def test_scratch_script_with_a_splat_passes(tmp_path):
     cmd = ("cat > .superlite/scratch/b.py <<'EOF'\nimport subprocess\nbase = ['git', 'status']\n"
            "subprocess.run([*base, '--short'])\nEOF\npython3 .superlite/scratch/b.py")
     assert judge(cmd, str(p), str(p), "active", (str(p / ".superlite"),)) is None
+
+
+@pytest.mark.parametrize("code", [
+    "import subprocess, sys\nsys.__dict__['executable'] = '/bin/sh'\nsubprocess.run([sys.executable, '-c', 'rm src/a.py'])\n",
+    "import subprocess, sys\nsys.__setattr__('executable', '/bin/sh')\nsubprocess.run([sys.executable, '-c', 'rm src/a.py'])\n",
+])
+def test_sys_executable_rewritten_through_a_dunder_stays_unknown(code):
+    assert "?" in _py(code)

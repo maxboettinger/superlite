@@ -1358,6 +1358,8 @@ def _py_facts(code: str) -> tuple[dict[str, list[str]], bool]:  # O(|tree|) | (l
             return {}, False  # O(1)
         if isinstance(x, ast.ImportFrom) and any(a.name == "*" for a in x.names):  # O(1)
             return {}, False  # O(1)
+        if isinstance(x, ast.Attribute) and x.attr.startswith("__") and x.attr.endswith("__"):  # sys.__dict__[...] = ... rebinds by text  # O(1)
+            return {}, False  # O(1)
         for c in ast.iter_child_nodes(x):  # O(1)
             parent[id(c)] = x  # O(1)
     bound = _bound(tree)  # O(|tree|)
