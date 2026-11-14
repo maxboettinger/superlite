@@ -17,7 +17,7 @@ A run config is a named set of launch choices for a backlog lead and its fleet w
 
 Fields and built-in defaults:
 
-- `lead.model`: `opus`. `lead.effort`: `xhigh` (`low|medium|high|xhigh|max`). `lead.autocompact`: `null`, which uses main's window. `lead.build_model`: `null` (one lead plans and builds); set, the planning lead stops after the plan and a build lead on that model runs it. `lead.build_effort`: `null` (the lead's effort), or an effort for the build lead.
+- `lead.model`: `opus`. `lead.effort`: `xhigh` (`low|medium|high|xhigh|max`). `lead.autocompact`: `null`, which uses main's window. `lead.build_model`: `null` (one lead plans and builds); set, the planning lead stops after the plan and a build lead on that model runs it. `lead.build_effort`: `null` (the lead's effort), or an effort for the build lead. `lead.idle_minutes`: absent (10); minutes a running lead may stay silent (no stop event, no command running, no session-file write) before `backlog wait` re-prompts it once and then parks the batch; `0` turns the check off.
 - `lead.deny`: tools the lead does not get: `AskUserQuestion Artifact ArtifactComments ArtifactData ListAgents ReadNotifications ReportFindings ScheduleWakeup Workflow`. `lead.mcp`: `project`, the MCP servers kept. `lead.text`: `default`, the lead brief text variant id.
 - `cache_ttl.lead` and `cache_ttl.workers`: `1h` (or `5m`).
 - `workers`: a model per role; `null` keeps the agent file's model.
