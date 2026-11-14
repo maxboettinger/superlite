@@ -1,7 +1,9 @@
 """sl backlog plan --issues takes GitHub numbers, and issues an earlier cap left out are ranked first (#433)."""
+import re
+
 import pytest
 
-from test_backlog_cli import bk, briefed, cli, load, BATCH, bl, bs  # noqa: F401  bk is the CLI fixture
+from test_backlog_cli import ISSUES, bk, briefed, cli, load, BATCH, bl, bs  # noqa: F401  bk is the CLI fixture
 import backlog_brief as bb  # noqa: E402
 from test_backlog_jira_208 import jk  # noqa: F401  jk is the acli fixture
 
@@ -41,9 +43,139 @@ def test_issues_takes_github_numbers(bk, capsys, no_acli):
     assert d["outside"] == [] and d["titles"] == {"1": "One", "2": "Two"}
 
 
-def test_issues_number_not_open_is_blocked(bk, capsys, no_acli):
-    assert cli(capsys, "plan", "--issues", "9") == (3, "BLOCKED: GitHub issue #9 not found among the open issues\n")
+DIRECT = re.compile(r"repos/\{owner\}/\{repo\}/issues/(\d+)")
+GONE = "gh: Not Found (HTTP 404)"
+
+
+def rest(n, title, assoc="OWNER", state="open", pull=False, login="max"):
+    """One issue as ISSUE_JQ shapes the REST answer of issues/N (#776)."""
+    return {"number": n, "title": title, "body": f"body {n}", "author": {"login": login}, "authorAssociation": assoc,
+            "state": state, "pull": pull}
+
+
+def lagging(bk, monkeypatch, read):
+    """gh whose open-issue list holds only ISSUES (1 to 3); issues/N answers from read, any other number is a 404 (#776)."""
+    def gh(args):
+        bk.gh.append(args)
+        if args[:2] == ["repo", "view"]:
+            return {"nameWithOwner": "o/r", "visibility": bk.vis}
+        m = DIRECT.fullmatch(args[1]) if args[0] == "api" and len(args) > 1 else None
+        if m:
+            n = int(m.group(1))
+            if n not in read:
+                raise RuntimeError(f"gh api repos/{{owner}}/{{repo}}/issues/{n} failed: {GONE}")
+            return read[n]
+        return ISSUES
+    monkeypatch.setattr(bl, "_gh", gh)
+
+
+def direct_reads(bk):
+    return [int(DIRECT.fullmatch(a[1]).group(1)) for a in bk.gh if a[0] == "api" and len(a) > 1 and DIRECT.fullmatch(a[1])]
+
+
+def test_pinned_issue_missing_from_the_list_is_read_by_number_776(bk, capsys, monkeypatch, no_acli):
+    lagging(bk, monkeypatch, {4: rest(4, "Four")})
+    bk.batches = [{**BATCH, "issues": [4]}]
+    rc, out = cli(capsys, "plan", "--issues", "4")
+    assert rc == 0 and "B1 | #4 | planned" in out and "not found" not in out
+    assert nums(bk) == [4] and "body 4" in brief(bk)
+    assert ["api", "repos/{owner}/{repo}/issues/4", "--jq", bl.ISSUE_JQ] in bk.gh
+    assert load(bk)["titles"] == {"4": "Four"}
+
+
+def test_listed_pins_read_nothing_by_number_776(bk, capsys, monkeypatch, no_acli):
+    lagging(bk, monkeypatch, {})
+    assert cli(capsys, "plan", "--issues", "2,1")[0] == 0
+    assert direct_reads(bk) == []
+
+
+def test_partial_miss_plans_the_rest_and_prints_not_found_on_stdout_776(bk, capsys, monkeypatch, no_acli):
+    lagging(bk, monkeypatch, {})
+    bk.batches = [{**BATCH, "issues": [1]}]
+    rc, out = cli(capsys, "plan", "--issues", "1,9")
+    line = f"not found: #9 (not in the open-issue list; read by number: {GONE}); sl backlog plan --issues 9 --add retries it"
+    assert rc == 0 and line in out.splitlines()
+    assert out.index("B1 | #1 | planned") < out.index(line)
+    assert nums(bk) == [1] and [b["issues"] for b in load(bk)["batches"]] == [[1]]
+    assert direct_reads(bk) == [9]
+
+
+def test_every_pin_missing_blocks_with_the_reason_776(bk, capsys, monkeypatch, no_acli):
+    lagging(bk, monkeypatch, {})
+    assert cli(capsys, "plan", "--issues", "9,8") == (
+        3, f"BLOCKED: GitHub issue #9 not found among the open issues nor read by number ({GONE})\n")
     assert load(bk)["batches"] == []
+
+
+def test_closed_issue_and_pull_request_are_not_found_776(bk, capsys, monkeypatch, no_acli):
+    lagging(bk, monkeypatch, {8: rest(8, "Eight", state="closed"), 7: rest(7, "Seven", pull=True)})
+    bk.batches = [{**BATCH, "issues": [1]}]
+    rc, out = cli(capsys, "plan", "--issues", "1,8,7")
+    lines = out.splitlines()
+    assert rc == 0 and nums(bk) == [1]
+    assert "not found: #8 (not in the open-issue list; read by number: closed)" in lines
+    assert "not found: #7 (not in the open-issue list; read by number: a pull request)" in lines
+
+
+def test_issue_read_by_number_keeps_the_trust_check_776(bk, capsys, monkeypatch, no_acli):
+    lagging(bk, monkeypatch, {5: rest(5, "Five", assoc="NONE", login="eve")})
+    bk.batches = [{**BATCH, "issues": [1]}]
+    assert cli(capsys, "plan", "--issues", "1,5")[0] == 0
+    assert nums(bk) == [1] and load(bk)["outside"] == [{"number": 5, "title": "Five", "author": "eve"}]
+
+
+def test_add_reads_a_fresh_issue_by_number_776(bk, capsys, monkeypatch, no_acli):
+    for k in ("SUPERLITE_FLEET_ROLE", "SUPERLITE_FLEET_PARENT_DIR", "SUPERLITE_FLEET_WORKER", "SUPERLITE_STATE_DIR"):
+        monkeypatch.delenv(k, raising=False)
+    bk.batches = [{**BATCH, "issues": [1]}]
+    assert cli(capsys, "plan")[0] == 0
+    bs.update(bs.path(bk.root), lambda d: bs.batch(d, "B1").update(state="running"))
+    lagging(bk, monkeypatch, {4: rest(4, "Four")})
+    bk.batches = [{**BATCH, "topic": "urgent", "issues": [4], "files": ["b.py"]}]
+    rc, out = cli(capsys, "plan", "--issues", "4", "--add")
+    assert rc == 0 and "B2 | #4 | planned" in out
+    assert [b["issues"] for b in load(bk)["batches"]] == [[1], [4]]
+
+
+def test_pinned_issues_reads_only_missing_numbers_776(monkeypatch):
+    reads = []
+    monkeypatch.setattr(bl, "read_issue", lambda n: reads.append(n) or (None, "closed"))
+    gone = []
+    assert bl.pinned_issues(ISSUES, [2, 9, 1], gone) == [ISSUES[1], ISSUES[0]]
+    assert reads == [9] and gone == [(9, "closed")]
+    with pytest.raises(RuntimeError, match=r"^GitHub issue #9 not found among the open issues nor read by number \(closed\)$"):
+        bl.pinned_issues(ISSUES, [9])
+
+
+def test_read_issue_answer_shapes_776(monkeypatch):
+    seen = []
+    answers = {4: rest(4, "Four"), 8: rest(8, "Eight", state="closed"), 7: rest(7, "Seven", pull=True),
+               6: [rest(6, "Six")], 5: rest(3, "Three")}
+    fails = {9: f"failed:   gh: Not Found\n(HTTP 404)", 10: "failed: " + "x" * 300, 11: "failed: "}
+
+    def gh(args):
+        seen.append(args)
+        n = int(DIRECT.fullmatch(args[1]).group(1))
+        if n in fails:
+            raise RuntimeError(f"gh api repos/{{owner}}/{{repo}}/issues/{n} {fails[n]}")
+        return answers[n]
+    monkeypatch.setattr(bl, "_gh", gh)
+    assert bl.read_issue(4) == ({"number": 4, "title": "Four", "body": "body 4", "author": {"login": "max"},
+                                 "authorAssociation": "OWNER"}, None)
+    assert seen[0] == ["api", "repos/{owner}/{repo}/issues/4", "--jq", bl.ISSUE_JQ]
+    assert bl.read_issue(8) == (None, "closed")
+    assert bl.read_issue(7) == (None, "a pull request")
+    assert bl.read_issue(6) == (None, "no issue in the answer")
+    assert bl.read_issue(5) == (None, "no issue in the answer")
+    assert bl.read_issue(9) == (None, GONE)
+    assert bl.read_issue(10) == (None, "x" * 120)
+    assert bl.read_issue(11) == (None, "gh failed")
+
+
+def test_issue_jq_keeps_the_listing_fields_776():
+    for field in ("number", "title", "body", "author: {login: .user.login}", "authorAssociation: .author_association"):
+        assert field in bl.ISSUES_JQ and field in bl.ISSUE_JQ
+    assert "state" in bl.ISSUE_JQ and 'pull: has("pull_request")' in bl.ISSUE_JQ
 
 
 def test_bad_pin_lists_refused_before_any_call(bk, capsys, no_acli):
