@@ -116,3 +116,27 @@ def test_copy_of_a_heredoc_source_carries_its_text(proj):
     bad = ok.replace("echo hi", "rm -rf src")
     v = _j(proj, bad)
     assert v is not None and v.kind == "code" and v.rel != "?"
+
+
+CHAINED_LOOPS = [
+    "mkdir -p {d}/p/tests && cd {d}/p/tests && git init -q && for i in 1 2; do printf x > t$i.py; done",
+    "S={d}/m; rm -rf $S; mkdir -p $S/proj/tests && cd $S/proj/tests && for i in 1 2; do printf x > t$i.py; done",
+    "cd {d}/p && git init -q && if true; then printf x > t1.py; fi",
+    "cd {d}/p && git init -q && while false; do printf x > t1.py; done",
+]
+
+
+@pytest.mark.parametrize("cmd", CHAINED_LOOPS)
+def test_block_after_a_chained_cd_runs_in_its_folder(proj, cmd):
+    assert _j(proj, cmd.format(d=os.path.dirname(proj) + "/o")) is None
+
+
+@pytest.mark.parametrize("cmd", CHAINED_LOOPS)
+def test_block_after_a_chained_cd_into_the_project_blocks(proj, cmd):
+    v = _j(proj, cmd.replace("{d}/p/tests", "src").replace("{d}/m", "src").replace("{d}/p", "src"))
+    assert v is not None and v.rel.split("/")[0] == "src"
+
+
+def test_block_after_an_unsure_cd_keeps_the_start_folder(proj):
+    v = _j(proj, f"cd {os.path.dirname(proj)}/o/p/tests; git init -q; for i in 1 2; do printf x > t$i.py; done")
+    assert v is not None and v.rel == "t1.py"
