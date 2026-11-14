@@ -10,7 +10,7 @@
 A `run end:` output also names a stored standing note and the command that clears it (#777).
 `run` starts, waits and starts again until a batch needs main (needs_decision, parked, a fatal start refusal) or nothing runs; `wait --window S` keeps collecting ends for S seconds after the first (#673). `start` takes several ids: each refusal prints BLOCKED, the others start. A lead that does not start prints `BLOCKED: B lead did not start; ...` after its spawn's own line, sets exit 2 and the batches after it still start (#551). Each lead worktree gets a copy of the main
 checkout's `.superlite/test-cmd.json` before its brief, unless it already has one (#334); the copied bytes are recorded in `.superlite/test-cmd.seeded` so an unedited copy follows the main checkout's file, and a lead brief gets one `Test command:` line when the copy and the main file differ (#638). A lead whose stop text holds no
-Status line is re-prompted once (`reprompted`; a planning lead's re-prompt names `DONE planned: <plan path>`), then parked. A question.json is cut to the limits (header, label,
+Status line is re-prompted once (`reprompted`; a planning lead's re-prompt names `DONE planned: <plan path>`), then parked. A running lead with no stop record, no shell child process, no session-file write, no ship lock and no unanswered question for lead.idle_minutes (IDLE_MIN, 10; 0 is off) is re-prompted once (`idle_reprompted`, `idle_at`), then parked after a second idle period (#769). A question.json is cut to the limits (header, label,
 description; each cut is reported as `shortened:`); one still invalid is sent back to the lead once
 (`question_reprompted`), then parked. A stop record whose transcript lags (blank, or
 without the status its `last` holds) is re-read for fleet_io.READ_MS, then parked "(transcript unread)".
@@ -69,6 +69,11 @@ TELL = "superlite: main says (sl backlog tell): {text}"
 
 CLEANUP = Path(".superlite") / "cleanup-cmd.json"  # O(1)
 CLEANUP_TIMEOUT = 600  # O(1)
+IDLE_MIN = 10  # O(1) minutes of silence before an idle lead is re-prompted (run config lead.idle_minutes overrides; 0 is off)
+IDLE = ("superlite: backlog wait saw no stop event, no command running and no session-file write from you for {minutes} min. "
+        "Go on with the batch where you left off; never end a turn while your workers run, and end your turn only with a Status line "
+        "(Status: DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED), or write .superlite/question.json and end with Status: NEEDS_DECISION.")  # O(1)
+SHELLS = ("sh", "bash", "zsh", "dash", "fish", "ksh", "tcsh", "csh")  # O(1)
 GONE_MS = 30000  # O(1)
 GONE = ("superlite: the Herdr panes of your fleet workers {ids} are gone (a crash?), so their tasks will never report. "
         "Run `{sl} fleet stop {ids} --plan .superlite`, then dispatch their unfinished tasks again.")
@@ -145,6 +150,90 @@ def _gone(p, sd, b: dict, states: dict) -> list:
     ids = " ".join(due)  # O(w)
     rc = fleet_io.main(["send", b["lead"], "--text", GONE.format(ids=ids, sl=HERE / "sl"), "--plan", str(sd)])  # O(w)
     return [f"{bid} worker panes gone: {ids}; lead {b['lead']} " + ("not told (send failed)" if rc else "told")]  # O(1)
+
+
+def _lead_pid(sid: str, wt: Path):
+    import state
+    try:  # O(1)
+        lines = (state.home() / "sessions" / sid).read_text(encoding="utf-8").splitlines()  # O(1)
+        if len(lines) > 1 and lines[1].strip().isdigit():  # O(1)
+            return int(lines[1].strip())  # O(1)
+    except OSError:  # O(1)
+        pass  # O(1)
+    own = json.loads((wt / ".superlite" / "fleet.json").read_text(encoding="utf-8"))  # O(1)
+    pid = own.get("owner_pid")  # O(1)
+    return pid if own.get("owner_session") == sid and isinstance(pid, int) else None  # O(1)
+
+
+def _probe(sd, data: dict, b: dict, states: dict):
+    import fleet
+    import fleet_io
+    import fleet_state
+    import machine_load
+    import run_config
+    import ship_lock
+    wt = Path(b["worktree"])  # O(1)
+    lim = (run_config.active(wt / ".superlite").get("lead") or {}).get("idle_minutes")  # O(1)
+    lim = IDLE_MIN if lim is None else int(lim)  # O(1)
+    if lim <= 0 or _unanswered(b):  # O(q)
+        return None  # O(1)
+    held = ship_lock.holder(ship_lock.lock_path(data.get("repo", "")))  # O(1)
+    if isinstance(held, dict) and held.get("batch") == b["id"]:  # O(1)
+        return None  # O(1)
+    if "rows" not in states:  # O(1)
+        states["rows"] = fleet.hc.agents()  # O(w)
+    row = next((r for r in states["rows"] if r.get("name") == b.get("agent")), None)  # O(w)
+    w = fleet_state.load(sd).get("workers", {}).get(b["lead"]) or {}  # O(w)
+    sid = fleet.hc.session_of(row) if row else None  # O(1)
+    if not row or not (sid or w.get("session")):  # O(1)
+        return None  # O(1)
+    sid = sid or w["session"]  # O(1)
+    launch = w.get("launch") or {}  # O(1)
+    cfg = Path((launch.get("env") or {}).get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")  # O(1)
+    pd = cfg / "projects" / fleet_io.project_dir(launch.get("cwd") or b["worktree"])  # O(1)
+    files = [pd / f"{sid}.jsonl", *(pd / sid).rglob("*.jsonl")]  # O(files)
+    mt = [int(f.stat().st_mtime * 1000) for f in files if f.is_file()]  # O(files)
+    if not mt:  # O(1)
+        return None  # O(1)
+    sil = _now_ms() - max(max(mt), int(b.get("since") or 0), int(b.get("idle_at") or 0))  # O(1)
+    if sil < lim * 60000:  # O(1)
+        return None  # O(1)
+    pid = _lead_pid(sid, wt)  # O(1)
+    if not pid:  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        os.kill(pid, 0)  # O(1)
+    except PermissionError:  # O(1)
+        pass  # alive, another user's process
+    except OSError:  # O(1)
+        return None  # O(1)
+    if any(pp == pid and Path(c.split()[0] if c.split() else "").name.lstrip("-") in SHELLS for _, pp, _, c in machine_load._ps()):  # O(p)
+        return None  # O(p)
+    return sil  # O(1)
+
+
+def idle_silence(sd, data: dict, b: dict, states: dict):
+    """Silence in ms when the lead is idle (no shell child, no session-file write, no ship lock, no open question), else None; never raises."""
+    try:  # O(1)
+        return _probe(sd, data, b, states)  # O(w + files + p)
+    except Exception:  # O(1)
+        return None  # O(1)
+
+
+def _idle(p, sd, data: dict, b: dict, states: dict) -> list:
+    sil = idle_silence(sd, data, b, states)  # O(w + files + p)
+    if sil is None:  # O(1)
+        return []  # O(1)
+    import fleet_io
+    bid, m, out = b["id"], sil // 60000, []  # O(1)
+    if b.get("idle_reprompted"):  # O(1)
+        _park(p, sd, data.get("repo", ""), b, f"idle {m} min after an idle re-prompt (no child process, no session-file write, no stop event)", out)  # O(size)
+        return out  # O(1)
+    bs.update(p, lambda d: bs.batch(d, bid).update({"idle_reprompted": True, "idle_at": _now_ms()}))  # O(size)
+    if fleet_io.main(["send", b["lead"], "--text", IDLE.format(minutes=m), "--plan", str(sd)]):  # O(w)
+        _park(p, sd, data.get("repo", ""), b, f"idle {m} min: re-prompt not delivered", out)  # O(size)
+        return out  # O(1)
+    return [f"{bid} idle {m} min: re-prompted"]  # O(1)
 
 
 def _stop(sd, lead):  # O(w)
@@ -417,7 +506,7 @@ def cmd_start(a) -> int:
         def mark(d, bid=bid, rec=rec, wt=wt, branch=branch, brc=brc, arm=arm, phase=phase, lrc=lrc, replan=replan):  # O(b)
             x = bs.batch(d, bid)
             x.update({"state": "running", "lead": rec["id"], "agent": rec["name"], "worktree": str(wt), "branch": branch,
-                      "since": _now_ms(), "run_config": brc["id"], "reason": "", "ship_runs": 0, "ship_waits": 0, "reprompted": False, "question_reprompted": False,
+                      "since": _now_ms(), "run_config": brc["id"], "reason": "", "ship_runs": 0, "ship_waits": 0, "reprompted": False, "question_reprompted": False, "idle_reprompted": False, "idle_at": 0,
                       "gone_seen": {}, "gone_workers": [], "phase": phase, "plan_returned": False,
                       "leads": list(x.get("leads") or []) + [{"id": rec["id"], "phase": phase, "model": lrc["lead"]["model"]}]})  # O(1)
             if replan:  # O(1)
@@ -717,7 +806,7 @@ def _build_start(p, sd, data, b, wt, plan, fleet_io) -> list:  # the planning le
         x = bs.batch(d, bid)
         x.update({"lead": rec["id"], "agent": rec["name"], "since": _now_ms(), "phase": "build", "plan": plan,
                   "leads": list(x.get("leads") or []) + [{"id": rec["id"], "phase": "build", "model": model}],
-                  "reprompted": False, "question_reprompted": False, "gone_seen": {}, "gone_workers": []})  # O(1)
+                  "reprompted": False, "question_reprompted": False, "idle_reprompted": False, "idle_at": 0, "gone_seen": {}, "gone_workers": []})  # O(1)
     bs.update(p, mark)  # O(size)
     out.append(f"{bid} building lead={rec['id']} model={model} plan={plan}")  # O(1)
     return out  # O(1)
@@ -759,6 +848,7 @@ def _round(root, sd, p, states) -> list:
                 _park(p, sd, data.get("repo", ""), b, "lead pane gone", out)  # O(size)
             elif isinstance(states["v"], dict) and b.get("agent") in states["v"] and b.get("worktree"):  # O(1)
                 out.extend(_gone(p, sd, b, states["v"]))  # O(w)
+                out.extend(_idle(p, sd, data, b, states))  # O(w + files)
             continue  # O(1)
         q = wt / ".superlite" / "question.json"  # O(1)
         try:  # O(1)
@@ -1112,7 +1202,7 @@ def cmd_answer(a) -> int:
         x.setdefault("answers", {}).update(ans)
         x.setdefault("answered_by", {}).update(by)
         ba.add_steps(x, steps) if steps else None
-        x.update({"questions": n, "state": "running", "since": _now_ms(), "reprompted": False, "question_reprompted": False})
+        x.update({"questions": n, "state": "running", "since": _now_ms(), "reprompted": False, "question_reprompted": False, "idle_reprompted": False, "idle_at": 0})
     bs.update(p, mark)  # O(size)
     if "main" in by.values():  # O(4)
         msg = ANSWER_MAIN.format(af=af)  # O(1)
