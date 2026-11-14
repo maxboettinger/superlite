@@ -156,6 +156,26 @@ class _Slow(Exception):  # O(1)
         self.wid, self.account, self.why = wid, account, why  # O(1)
 
 
+class _SignedOut(_Slow):  # O(1)
+    """A start that stands on Claude Code's sign-in screen: the account is marked, `spawn` runs it once more on another account."""
+
+
+SIGNED_OUT_TTL_MS = 900000  # O(1) a signed-out account stays out of `choose_account` this long
+SIGNED_OUT_WHY = "signed out: Claude Code sign-in screen"  # O(1)
+
+
+def mark_signed_out(sd, account):  # O(w)
+    with fs.locked(sd):  # O(1) plus wait
+        data = fs.load(sd)  # O(w)
+        data["signed_out"] = {**(data.get("signed_out") or {}), account: int(time.time() * 1000)}  # O(a)
+        fs.save(sd, data)  # O(w)
+
+
+def signed_out_accounts(sd, now_ms=None):  # accounts marked within SIGNED_OUT_TTL_MS | O(w)
+    now = int(time.time() * 1000) if now_ms is None else now_ms  # O(1)
+    return {a for a, t in (fs.load(sd).get("signed_out") or {}).items() if isinstance(t, (int, float)) and now - t < SIGNED_OUT_TTL_MS}  # O(a)
+
+
 def _slow(e):  # O(len)
     return e.code in ("agent_prompt_stalled", "timeout") or SLOW_MSG in (getattr(e, "message", "") or "")  # O(len)
 
@@ -247,6 +267,8 @@ def choose_account(sd, model, env, avoid=None, lead=False):  # O(a * e + w) plus
     usage, listing = ac.read_usage(env), ac.read_listing(env)  # O(1) plus subprocess time
     entries = data.get("accounts") or [a["name"] for a in (usage.get("accounts") or listing.get("accounts") or [])] or ["current"]  # O(a)
     entries = [e for e in entries if ac.entry_name(e) != avoid]  # the account of a slow first try | O(a)
+    out = signed_out_accounts(sd)  # O(a)
+    entries = [e for e in entries if ac.entry_name(e) not in out]  # accounts that showed the sign-in screen lately | O(a)
     allowed = [ac.entry_name(e) for e in entries]  # config dir paths go by basename | O(a)
     entry_of = {ac.entry_name(e): e for e in entries}  # O(a)
     alias = ac.aliases(listing, entries, env)  # `current` and config dir entries -> the claude-profile account they use | O(a * e)
@@ -284,6 +306,8 @@ def choose_account(sd, model, env, avoid=None, lead=False):  # O(a * e + w) plus
         print("BLOCKED: no account with headroom")  # O(1)
         for r in ac.reasons(usage, allowed, model, alias):  # O(a)
             print(r)  # O(1)
+        for n in sorted(out):  # O(a)
+            print(f"{n}: signed out (Claude Code sign-in screen)")  # O(1)
         raise SystemExit(3)  # O(1)
     cdir = ac.account_dir(listing, entry_of.get(account, account), env)  # O(a)
     if cdir is None:  # O(1)
@@ -381,7 +405,7 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=
     kw = {**({"output": output} if output is not None else {}), **({"brief": True} if brief else {}), **({"plain": False} if not plain else {})}  # only the non-default flags, so an older _spawn signature still fits | O(1)
     try:  # O(1)
         return _spawn(sd, plan, tier, project, cfg, env, role, None, **kw)  # O(a * e + w)
-    except (_Slow, NoShell) as first:  # O(1)
+    except (_Slow, NoShell) as first:  # _SignedOut is a _Slow  # O(1)
         return _spawn(sd, plan, tier, project, cfg, env, role, first, **kw)  # O(a * e + w)
 
 
@@ -472,12 +496,21 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=Fa
             fs.register_agent(name, shared)  # other sessions count this worker on its claude-profile account | O(1)
     except hc.HerdrError as e:  # O(1)
         _blocked(sd, wid, account, f"startup: {e.message or e.code}{tail}")  # O(1)
-    def fail(why, screen=None, named=True, slow=False, shell=False):  # O(s + w)
+    def fail(why, screen=None, named=True, slow=False, shell=False, signed_out=False):  # O(s + w)
         fs.set_state(sd, wid, "blocked")  # O(w)
+        if signed_out:  # O(1)
+            mark_signed_out(sd, account)  # O(w)
+            why = SIGNED_OUT_WHY  # O(1)
         try:  # O(1)
             hc.close_pane(pane)  # O(1)
         except hc.HerdrError:  # O(1)
             pass  # O(1)
+        if signed_out and after is None:  # the caller starts it once more on another account | O(1)
+            _keep(sd, wid, why, screen, "fleet spawn retry")  # O(s)
+            raise _SignedOut(wid, account, why)  # O(1)
+        if signed_out:  # O(1)
+            var = "" if ac.is_default_dir(cdir, base) else f"CLAUDE_CONFIG_DIR={cdir} "  # O(1)
+            why += f"; sign in once ({var}claude, then /login), then rerun"  # O(1)
         if slow and after is None:  # the caller starts it once more on another account | O(1)
             _keep(sd, wid, why, screen, "fleet spawn retry")  # O(s)
             raise _Slow(wid, account, why)  # O(1)
@@ -504,12 +537,14 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=Fa
                 retried = getattr(e, "retried", "")  # O(1)
                 fail(f"startup: {e.message if shell else first_line(screen, e)}{retried}", screen, slow=_slow(e), shell=shell)  # O(s)
             _accept_trust(name)  # O(1)
+        seen = ""  # a failed read is an empty screen, as in fleet_lead | O(1)
+        try:  # O(1)
+            seen = hc.read_screen(name, SCREEN_ROWS)  # O(s)
+        except hc.HerdrError:  # O(1)
+            pass  # O(1)
+        if ac.sign_in_screen(seen):  # the account is signed out (#782) | O(s)
+            fail("", seen, signed_out=True)  # O(s)
         if not launch["prime"]:  # a one-turn worker may stand on the trust dialog too (#514) | O(1)
-            seen = ""  # a failed read is an empty screen, as in fleet_lead | O(1)
-            try:  # O(1)
-                seen = hc.read_screen(name, SCREEN_ROWS)  # O(s)
-            except hc.HerdrError:  # O(1)
-                pass  # O(1)
             if _trust_open(seen):  # O(s)
                 _accept_trust(name)  # O(1)
         if launch["prime"]:  # a one-turn worker gets its brief as the first message, no prime | O(1)
@@ -535,6 +570,8 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=Fa
         except (hc.HerdrError, KeyError):  # O(1)
             pass  # O(1)
         gone = "" if (sd / prime).is_file() else f"; no {sd.resolve() / prime}"  # the prime vanished while the worker started | O(1)
+        if ac.sign_in_screen(screen):  # O(s)
+            fail("", screen, signed_out=True)  # O(s)
         if _trust_open(screen):  # O(s)
             fail(f"no READY: the folder trust dialog is still open in {cwd}; accept it once per account (start claude there on account {account}), then rerun", screen, named=False)  # O(s)
         fail("no READY" + size + gone, screen, named=False)  # O(s)
