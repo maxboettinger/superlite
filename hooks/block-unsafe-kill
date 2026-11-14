@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook (Bash, PowerShell): block commands that kill processes by name or pattern
+# PreToolUse hook (Bash, PowerShell, Monitor): block commands that kill processes by name or pattern
 # (pkill, killall, taskkill /IM or /FI, Stop-Process -Name, Get-Process | Stop-Process, kill ... -1)
 # and `kill PID` of a service shared with the user (Xcode, the Simulator, herdr, claude, launchd ...).
 # Killing your own PIDs is allowed.
@@ -21,7 +21,7 @@ LC_ALL=C
 
 [[ $input == *'"tool_name"'* ]] || exit 0
 t=${input#*\"tool_name\"}
-re_tool='^[[:space:]]*:[[:space:]]*"(Bash|PowerShell)"'
+re_tool='^[[:space:]]*:[[:space:]]*"(Bash|PowerShell|Monitor)"'   # Monitor runs its command in the Bash shell
 [[ $t =~ $re_tool ]] || exit 0
 MODE=bash
 [[ ${BASH_REMATCH[1]} == PowerShell ]] && MODE=ps

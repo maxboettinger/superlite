@@ -147,8 +147,49 @@ def test_other_tools_ignored(proj):
 def test_hooks_json_registers_hook():
     data = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     e = data["hooks"]["PreToolUse"][1]
-    assert e["matcher"] == "Edit|Write|NotebookEdit|Bash|PowerShell|Agent"
+    assert e["matcher"] == "Edit|Write|NotebookEdit|Bash|PowerShell|Monitor|Agent"
     assert e["hooks"][0]["command"] == 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/block-coordinator-edits"'
+
+
+def monitor(proj, cmd):
+    return run(proj, "Monitor", {"command": cmd, "description": "watch", "timeout_ms": 300000})
+
+
+def test_monitor_write_blocked_837(proj):
+    r = monitor(proj, "echo hi > src/app.py")
+    assert r.returncode == 2 and "src/app.py" in r.stderr
+
+
+def test_monitor_protected_file_blocked_837(tmp_path):
+    (tmp_path / ".superlite").mkdir()   # no pool.json: no run; a protected file blocks in every state
+    r = monitor(tmp_path, f"echo x >> {tmp_path.as_posix()}/.superlite/human-replies.jsonl")
+    assert r.returncode == 2
+
+
+def test_monitor_read_only_passes_837(proj):
+    r = monitor(proj, "tail -f .superlite/incidents.jsonl | grep --line-buffered rule-block")
+    assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
+
+
+def test_monitor_ws_only_passes_837(proj):
+    r = run(proj, "Monitor", {"ws": {"url": "wss://events.example.com/stream"}, "description": "events", "timeout_ms": 300000})
+    assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
+
+
+def test_monitor_block_row_names_monitor_837(proj):
+    assert monitor(proj, "echo hi > src/app.py").returncode == 2
+    rows = [json.loads(x) for x in (proj / ".superlite" / "incidents.jsonl").read_text().splitlines()]
+    assert any(r["kind"] == "rule-block" and r["tool"] == "Monitor" for r in rows)
+    assert not any(r.get("tool") == "Bash" for r in rows)
+
+
+def test_monitor_backlog_guard_837(proj, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_FLEET_WORKER", "W1")
+    monkeypatch.setenv("SUPERLITE_FLEET_ROLE", "lead")
+    r = monitor(proj, "sl backlog decide B1")
+    assert r.returncode == 2 and "runs only in the main session" in r.stderr
+    r = monitor(proj, "cat > docs/x.md <<'EOF'\nsl backlog decide\nEOF")
+    assert "runs only in the main session" not in r.stderr
 
 
 def test_hook_has_lf_endings():

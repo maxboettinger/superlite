@@ -137,12 +137,12 @@ def test_hooks_json_registers():
     pre = {(e["matcher"], h["command"]) for e in data["PreToolUse"] for h in e["hooks"]}
     assert ("Skill", mark) in pre
     assert ("Edit|Write|NotebookEdit", guard) in pre
-    for old in (("Bash|PowerShell", 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/block-unsafe-kill"'),
-                ("Edit|Write|NotebookEdit|Bash|PowerShell|Agent", 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/block-coordinator-edits"'),
-                ("Bash", 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/rewrite-test-runs"')):
+    for old in (("Bash|PowerShell|Monitor", 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/block-unsafe-kill"'),
+                ("Edit|Write|NotebookEdit|Bash|PowerShell|Monitor|Agent", 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/block-coordinator-edits"'),
+                ("Bash|Monitor", 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/rewrite-test-runs"')):
         assert old in pre
     assert [e["matcher"] for e in data["PreToolUse"][:3]] == [
-        "Bash|PowerShell", "Edit|Write|NotebookEdit|Bash|PowerShell|Agent", "Bash"]   # existing indices stay
+        "Bash|PowerShell|Monitor", "Edit|Write|NotebookEdit|Bash|PowerShell|Monitor|Agent", "Bash|Monitor"]   # existing indices stay
     for name in ("SessionStart", "PostToolUse", "SubagentStop", "Stop"):
         assert name in data
 

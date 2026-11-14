@@ -146,7 +146,7 @@ def test_plugin_root_env_used(proj):
 def test_hooks_json_registers_hook():
     data = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     cmds = [(e["matcher"], e["hooks"][0]["command"]) for e in data["hooks"]["PreToolUse"]]
-    assert ("Bash", 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/rewrite-test-runs"') in cmds
+    assert ("Bash|Monitor", 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/rewrite-test-runs"') in cmds
 
 
 def test_lf_endings():
@@ -380,3 +380,72 @@ def test_rewrite_row_cuts_and_cleans(proj):
 def test_subagent_marker_with_file_allowed(proj):
     r = run(proj, "pytest -m integration tests/integration", agent_id="a1")
     assert r.returncode == 0 and r.stdout == ""
+
+
+USUAL = ("Start the run with `sl run_tests --full --background` (focused: `sl run_tests --fast <file>`), "
+         "then wait with `sl run_tests --wait`.")
+
+
+def mon(proj, cmd, **extra):
+    return run(proj, raw=json.dumps({"tool_name": "Monitor",
+                                     "tool_input": {"command": cmd, "description": "watch", "timeout_ms": 300000}, **extra}))
+
+
+def rows(proj):
+    return [json.loads(x) for x in (proj / ".superlite" / "incidents.jsonl").read_text().splitlines()]
+
+
+@pytest.mark.parametrize("cmd", ["pytest -x", "cd app && npm test", "python -m pytest tests/test_a.py"])
+def test_monitor_raw_test_run_denied_837(proj, cmd):
+    r = mon(proj, cmd)
+    assert r.returncode == 2 and r.stdout == "", cmd
+    assert "Monitor" in r.stderr and USUAL in r.stderr
+
+
+def test_monitor_deny_names_bash_command_837(proj):
+    r = mon(proj, "pytest tests/test_a.py")
+    assert r.returncode == 2 and "sl run_tests --fast tests/test_a.py" in r.stderr
+
+
+def test_monitor_deny_row_837(proj):
+    assert mon(proj, "pytest -x").returncode == 2
+    rec = rows(proj)[-1]
+    assert rec["kind"] == "rule-block" and rec["agent"] == "coordinator"
+    assert rec["tool"] == "Monitor" and rec["rule"] == "monitor-test-run"
+    assert not any(r["kind"] == "rule-rewrite" for r in rows(proj))
+
+
+@pytest.mark.parametrize("cmd", ["tail -f .superlite/test-output.log | grep --line-buffered -E 'passed|failed'",
+                                 "sl run_tests --wait", "git status"])
+def test_monitor_non_test_passes_837(proj, cmd):
+    r = mon(proj, cmd)
+    assert r.returncode == 0 and r.stdout == "" and r.stderr == "", cmd
+
+
+def test_monitor_ws_only_passes_837(proj):
+    raw = json.dumps({"tool_name": "Monitor", "tool_input": {"ws": {"url": "wss://events.example.com/stream"},
+                                                             "description": "events", "timeout_ms": 300000}})
+    r = run(proj, raw=raw)
+    assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
+
+
+def test_monitor_hidden_wait_denied_837(proj):
+    r = mon(proj, "until pytest -x; do sleep 5; done")
+    assert r.returncode == 2 and "never wait on tests through a loop" in r.stderr
+    rec = rows(proj)[-1]
+    assert rec["tool"] == "Monitor" and rec["rule"] == "hidden-test-wait"
+
+
+def test_monitor_without_run_passes_837(tmp_path):
+    (tmp_path / ".superlite").mkdir()   # no pool.json: no active run
+    r = mon(tmp_path, "pytest -x")
+    assert r.returncode == 0 and r.stdout == ""
+
+
+def test_monitor_deny_advice_not_cut_837(proj):
+    files = [f"tests/test_module_number_{i:02d}_with_a_long_name.py" for i in range(8)]
+    r = mon(proj, "pytest " + " ".join(files))
+    assert r.returncode == 2
+    advice = [ln for ln in r.stderr.splitlines() if ln.startswith("Run it as a Bash call instead:")][0]
+    assert len(advice) > 200 and advice.endswith(files[-1] + "`"), advice
+    assert len(rows(proj)[-1]["target"]) < 600
