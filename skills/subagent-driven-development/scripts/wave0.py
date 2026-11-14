@@ -190,6 +190,13 @@ def stub_picks(plan, root: Path | None = None) -> list[tuple]:  # O(n*q*s)
     return out  # O(n)
 
 
+def stubbed_ids(plan, root: Path | None = None) -> set[str]:  # O(n*q*s)
+    """Ids of the tasks Wave 0 stubs: none when the plan header says `**Wave0:** none`, else the `stub_picks` tasks."""
+    if plan.header_wave0_off():  # O(L)
+        return set()  # O(1)
+    return {t.id for t, _, _ in stub_picks(plan, root)}  # O(n*q*s)
+
+
 def stub_files(plan, root: Path | None = None) -> list[str]:  # O(n*q*s)
     """Non-test files of every task that needs a stub, in plan order, deduped."""
     out: list[str] = []  # O(1)

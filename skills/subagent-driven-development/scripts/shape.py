@@ -93,6 +93,8 @@ def removable_edges(plan, graph, skip=()) -> list:  # O(e*q)
     An edge that carries no consumed interface is never removable (its tests may run the producer's code), nor is a hard
     edge (`A -->|hard| B` or `%% hard: A->B`: the consumer needs the producer built, e.g. a compiled package)."""
     hard = pt.hard_edges(plan)  # O(L*s)
+    import wave0  # O(1)
+    stubbed = wave0.stubbed_ids(plan, pt.stable_root(str(plan.path)) if getattr(plan, "path", None) else None)  # a producer with no stub is not faked: keep its edge | O(n*q*s)
     by_pair: dict = {}  # O(1)
     for cid, sig, cands in resolve_consumes(plan):  # O(q)
         for pid, psig in cands:  # O(cands)
@@ -101,7 +103,7 @@ def removable_edges(plan, graph, skip=()) -> list:  # O(e*q)
     for b, deps in graph.items():  # O(n)
         for a in deps:  # O(deg)
             items = by_pair.get((a, b))  # O(1)
-            if items and all(ok for _, ok in items) and b not in skip and a in plan.by_id and (a, b) not in hard:  # O(items)
+            if items and all(ok for _, ok in items) and b not in skip and a in plan.by_id and a in stubbed and (a, b) not in hard:  # O(items)
                 out.append((a, b))  # O(1)
     return out  # O(e)
 

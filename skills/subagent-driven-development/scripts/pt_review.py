@@ -697,6 +697,10 @@ for mod_name, chain in json.loads(sys.argv[1]):
             except AttributeError:
                 raise AttributeError("%s not found in %s" % (".".join(chain[:i + 1]), mod_name))
         bases = [c.__name__ for c in inspect.getmro(obj)[1:]] if inspect.isclass(obj) else None
+        if bases is not None and issubclass(obj, tuple) and hasattr(obj, "_fields"):
+            bases.append("NamedTuple")
+        if bases is not None and issubclass(obj, dict) and hasattr(obj, "__required_keys__"):
+            bases.append("TypedDict")
         try:
             sig = inspect.signature(obj)
         except ValueError:
@@ -1757,8 +1761,13 @@ def norm_path(root: Path, file: str) -> str:  # O(m + d) path syscalls total
         return f  # O(1)
     f = _rel(f, root)  # O(m)
     parts = f.split("/")  # O(m)
-    while len(parts) > 2 and parts[0] == parts[1] and not (root / "/".join(parts)).exists() and (root / "/".join(parts[1:])).exists():  # O(d) iterations
-        parts = parts[1:]  # O(d)
+    k = len(parts) // 2  # O(1)
+    while k >= 1:  # O(d) iterations
+        if parts[:k] == parts[k:2 * k] and not (root / "/".join(parts)).exists() and (root / "/".join(parts[k:])).exists():  # O(d)
+            parts = parts[k:]  # O(d)
+            k = len(parts) // 2  # O(1)
+        else:  # O(1)
+            k -= 1  # O(1)
     return "/".join(parts)  # O(m)
 
 
