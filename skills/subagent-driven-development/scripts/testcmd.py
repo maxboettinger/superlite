@@ -1244,6 +1244,9 @@ def merge_parsed(parts: list[tuple[str, dict]]) -> dict:  # one parse_output-sha
     names: list[str] = []  # O(1)
     for _, p in parts:  # O(parts)
         names += [n for n in p.get("names", []) if n not in names]  # O(names)
+    skipped_names: list[str] = []  # O(1)
+    for _, p in parts:  # O(parts)
+        skipped_names += [n for n in p.get("skipped_names", []) if n not in skipped_names]  # O(names)
     counted = bool(parts) and all(p.get("counted") for _, p in parts)  # O(parts)
     bad = [p for _, p in parts if p.get("failed", 0) > 0] or [p for _, p in parts]  # O(parts)
     tail = [ln for p in bad for ln in p.get("tail", [])][-40:]  # O(parts*o)
@@ -1255,6 +1258,8 @@ def merge_parsed(parts: list[tuple[str, dict]]) -> dict:  # one parse_output-sha
         for k, v in p.get("reasons", {}).items():  # O(names)
             reasons.setdefault(k, v)  # O(1)
     extra = {"reasons": reasons} if reasons else {}  # the key only when a part had ids: an exact-shape caller stays valid | O(1)
+    if skipped_names:  # likewise only when a part named a skipped test | O(1)
+        extra["skipped_names"] = skipped_names[:50]  # O(1)
     return {"passed": sum(p.get("passed", 0) for _, p in parts), "failed": sum(p.get("failed", 0) for _, p in parts), "skipped": sum(p.get("skipped", 0) for _, p in parts),  # O(parts)
             "names": names[:50], "tail": tail, "empty": empty, "counted": counted, "error": error, "marker": marker, **extra}  # O(1)
 
@@ -1303,7 +1308,7 @@ def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
             "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src, "origin": origin, "lock": lock_enabled(cfg), "destinations": destinations(cfg), "not_code": not_code_globs(cfg), "paths_dropped": dropped}  # O(1)
 
 
-NAME_PATTERNS = [r"^--- FAIL: (\S+)", r"^test (\S+) \.\.\. FAILED", r"^\s*(?:FAIL|✗|×|✕)\s+(.+?)\s*$", r"^\s*Failed\s+(\S+)",  # O(1)
+NAME_PATTERNS = [r"^--- FAIL: (\S+)", r"^test (\S+) \.\.\. FAILED", r"^\s*(?:FAIL|✗|×|✕)\s+(.+?)\s*$", r"^\s*Failed\s+((?:[\w`]+(?:\.|::|/))+[\w`]\S*)",  # a dotted, `::` or path name: "Failed to connect" is no test | O(1)
                  r"^\s*\d+\)\s+(.+?)\s*$"]
 COUNT_PASSED = [r"(\d+)\s+passed", r"Passed!?.*?Passed:\s*(\d+)", r"test result: \w+\. (\d+) passed", r"^ok\s+\S+", ]  # O(1)
 
@@ -1314,6 +1319,7 @@ def _parse_xcode(lines: list, rc: int):  # Swift Testing + XCTest counts, summed
     st_names: list[str] = []  # O(1)
     st_passed: dict[str, int] = {}  # distinct Swift Testing names that passed | O(t)
     st_skipped: dict[str, int] = {}  # O(t)
+    xc_skip_names: list[str] = []  # XCTest `C.t` of each skipped case | O(t)
     ended: set[str] = set()  # every test that passed, failed or was skipped, in any launch | O(t)
     open_now: set[str] = set()  # started and not ended in this launch | O(t)
     crashed: dict[str, int] = {}  # started, then the process died | O(t)
@@ -1368,13 +1374,16 @@ def _parse_xcode(lines: list, rc: int):  # Swift Testing + XCTest counts, summed
         m = re.match(r"\s*Test Case '-\[(?:\w+\.)?(\w+) (\w+)\]' failed", ln)  # O(w)
         if m and f"{m.group(1)}.{m.group(2)}" not in names:  # O(1)
             names.append(f"{m.group(1)}.{m.group(2)}")  # O(1)
+        m = re.match(r"\s*Test Case '-\[(?:\w+\.)?(\w+) (\w+)\]' skipped", ln)  # O(w)
+        if m and f"{m.group(1)}.{m.group(2)}" not in xc_skip_names:  # O(t)
+            xc_skip_names.append(f"{m.group(1)}.{m.group(2)}")  # O(1)
         m = re.match(r"\s*Test case '(.+)' (passed|failed) on ", ln)  # parallel testing prints one line per test | O(w)
         if m:  # O(1)
             (par_fail if m.group(2) == "failed" else par_pass)[m.group(1)] = 1  # O(1)
     if not seen and (par_pass or par_fail):  # parallel run: distinct tests, a failure beats a pass | O(t)
         fails = list(dict.fromkeys(n for n in par_fail))  # O(t)
         passed = len([n for n in par_pass if n not in par_fail])  # O(t)
-        return {"passed": passed, "failed": len(fails) or (1 if rc else 0), "skipped": 0, "names": fails[:50], "tail": lines[-40:], "empty": "", "counted": True, "reasons": {}, **_error_marker(lines)}  # O(t)
+        return {"passed": passed, "failed": len(fails) or (1 if rc else 0), "skipped": 0, "names": fails[:50], "tail": lines[-40:], "empty": "", "counted": True, "reasons": {}, "skipped_names": [], **_error_marker(lines)}  # O(t)
     if not seen and not st_passed and not st_names:  # O(1)
         return None  # O(1)
     if not top_seen:  # O(1)
@@ -1389,7 +1398,7 @@ def _parse_xcode(lines: list, rc: int):  # Swift Testing + XCTest counts, summed
         fail = len(st_names) + xc_failed  # O(1)
         passed = max(st_total + xc_total - fail - skipped, 0)  # O(1)
     return {"passed": passed, "failed": fail or (1 if rc else 0), "skipped": skipped,  # O(1)
-            "names": (st_names + [f"{n} (crashed)" for n in gone] + names)[:50], "tail": lines[-40:], "empty": "", "counted": True, "reasons": {}, **_error_marker(lines)}  # O(1)
+            "names": (st_names + [f"{n} (crashed)" for n in gone] + names)[:50], "tail": lines[-40:], "empty": "", "counted": True, "reasons": {}, "skipped_names": (list(st_skipped) + xc_skip_names)[:50], **_error_marker(lines)}  # O(t)
 
 
 def _error_marker(lines: list) -> dict:  # first compiler error line and the last ** ... ** marker | O(o)
@@ -1496,7 +1505,7 @@ def xcsift_summary(lines: list[str], rc: int) -> dict | None:  # counts, failing
     else:  # O(1)
         error = mk["error"]  # O(1)
     empty = "" if counted else "xcsift summary: 0 passed, 0 failed tests"  # O(1)
-    return {"passed": passed, "failed": failed, "skipped": skipped, "names": names, "reasons": reasons, "sites": sites, "counted": counted, "empty": empty, "format": "xcsift", "error": error, "marker": mk["marker"], "tail": lines[-40:]}  # O(1)
+    return {"passed": passed, "failed": failed, "skipped": skipped, "names": names, "reasons": reasons, "sites": sites, "counted": counted, "empty": empty, "format": "xcsift", "error": error, "marker": mk["marker"], "skipped_names": [], "tail": lines[-40:]}  # O(1)
 
 
 def parse_output(text: str, rc: int) -> dict:  # O(o)
@@ -1540,7 +1549,7 @@ def parse_output(text: str, rc: int) -> dict:  # O(o)
     if rc and not failed:  # a red exit with nothing parsed is one failure, not counted | O(1)
         failed = 1  # O(1)
     empty = "" if counted else next((ln.strip() for ln in lines if re.search(r"\bno tests? (?:files? )?(?:found|ran|to run)|\b0 tests? (?:ran|run|found)|\bno matching tests?(?: cases?)?\b", ln, re.I)), "")  # the runner's own "no tests" line | O(o)
-    return {"passed": passed, "failed": failed, "skipped": skipped, "names": names, "tail": lines[-40:], "empty": empty, "counted": counted, "reasons": reasons, **_error_marker(lines)}  # O(1)
+    return {"passed": passed, "failed": failed, "skipped": skipped, "names": names, "tail": lines[-40:], "empty": empty, "counted": counted, "reasons": reasons, "skipped_names": [], **_error_marker(lines)}  # O(1)
 
 
 def main(argv=None):  # O(m + f)
