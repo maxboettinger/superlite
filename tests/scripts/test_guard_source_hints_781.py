@@ -126,3 +126,8 @@ def test_scratch_note_names_readable_programs(proj, monkeypatch, capsys):
 ])
 def test_print_only_read_after_a_source_or_eval_stays_unknown(proj, cmd):  # F-T2-9
     assert _j(proj, cmd) is not None
+
+
+def test_print_only_read_after_a_link_stays_unknown(proj):  # F-T2-12
+    v = _j(proj, "ln -s x .superlite/scratch/y; source <(cat tools/defs.sh)")
+    assert v is not None and v.rel == "?"
