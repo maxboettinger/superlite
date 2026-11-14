@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook (Bash): during an active superlite run, rewrite the COORDINATOR's raw test runs
+# PreToolUse hook (Bash and Monitor; Monitor's raw runs are denied, not rewritten): during an active superlite run, rewrite the COORDINATOR's raw test runs
 # (pytest, npm test, npx vitest|jest, go test, cargo test, dotnet test, ...) into a background
 # `sl run_tests --full`, or `sl run_tests --fast <files>` when the raw command names test/source paths.
 # Subagents (agent_id) and fleet workers (SUPERLITE_FLEET_WORKER): bare full-suite runners are DENIED (exit 2), and so is a
@@ -28,8 +28,9 @@ fleet_worker=""
 re_agent='"agent_id"[[:space:]]*:[[:space:]]*"'
 has_agent=0
 [[ $input =~ $re_agent ]] && has_agent=1
-re_tool='"tool_name"[[:space:]]*:[[:space:]]*"Bash"'
+re_tool='"tool_name"[[:space:]]*:[[:space:]]*"(Bash|Monitor)"'
 [[ $input =~ $re_tool ]] || exit 0
+tool="${BASH_REMATCH[1]}"
 
 # jstr KEY: first JSON string value for KEY, decoded, into REPLY (empty if absent).
 jstr() {
@@ -344,16 +345,27 @@ hidden_rest() {
 deny() {
   local t="${cmd:0:400}"; t="${t//[\"\\$'\n\r\t']/ }"
   t="${t//$ph1/>&}"; t="${t//$ph2/&>}"
-  printf '{"kind":"rule-block","agent":"coordinator","tool":"Bash","target":"hidden test wait: %s","rule":"hidden-test-wait","cwd":"%s"}\n' "$t" "$cwdv" \
+  printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"hidden test wait: %s","rule":"hidden-test-wait","cwd":"%s"}\n' "$tool" "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
     'Blocked: never wait on tests through a loop, and never hide a test run'"'"'s output (an until/while around a test runner, or a test run sent to /dev/null): a hung run then looks like a slow one, and the loop bypasses the test wrapper.' \
     'Start the run with `sl run_tests --full --background` (focused: `sl run_tests --fast <file>`), then wait with `sl run_tests --wait`.' >&2
   exit 2
 }
+deny_monitor() {
+  local t="$orig -> $short"
+  t="${t//[\"\\]/ }"
+  printf '{"kind":"rule-block","agent":"coordinator","tool":"Monitor","target":"monitor test run: %s","rule":"monitor-test-run","cwd":"%s"}\n' "$t" "$cwdv" \
+    >> "$sd/incidents.jsonl" 2>/dev/null
+  printf '%s\n' \
+    'Blocked: a raw test run inside Monitor skips sl run_tests and its machine-wide full-suite lock, and this hook cannot rewrite it there: a background sl run_tests breaks how Monitor streams its output.' \
+    'Start the run with `sl run_tests --full --background` (focused: `sl run_tests --fast <file>`), then wait with `sl run_tests --wait`.' \
+    "Run it as a Bash call instead: \`$shortfull\`" >&2
+  exit 2
+}
 deny_subagent_full() {
   local t="${cmd:0:400}"; t="${t//[\"\\$'\n\r\t']/ }"
-  printf '{"kind":"rule-block","agent":"subagent","tool":"Bash","target":"full suite: %s","rule":"subagent-full-suite","cwd":"%s"}\n' "$t" "$cwdv" \
+  printf '{"kind":"rule-block","agent":"subagent","tool":"%s","target":"full suite: %s","rule":"subagent-full-suite","cwd":"%s"}\n' "$tool" "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
     'Blocked: subagents must not run the full test suite during a superlite run.' \
@@ -364,7 +376,7 @@ deny_subagent_full() {
 deny_isolate() {
   local t="${cmd:0:400}" task="$1"; t="${t//[\"\\$'\n\r\t']/ }"
   t="${t//$ph1/>&}"; t="${t//$ph2/&>}"
-  printf '{"kind":"rule-block","agent":"subagent","tool":"Bash","target":"isolated test run: %s","rule":"isolated-test-run","cwd":"%s"}\n' "$t" "$cwdv" \
+  printf '{"kind":"rule-block","agent":"subagent","tool":"%s","target":"isolated test run: %s","rule":"isolated-test-run","cwd":"%s"}\n' "$tool" "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
     'Blocked: this project'"'"'s tests build one shared tree, where another agent'"'"'s half-edit breaks the run, so a raw run of its test command is not allowed here.' \
@@ -473,10 +485,11 @@ out="${out//$ph1/>&}"; out="${out//$ph2/&>}"
 # The rule-rewrite row: original and rewritten command (control characters become spaces, 200 characters at most), rule, cwd.
 orig="${cmd//$ph1/>&}"; orig="${orig//$ph2/&>}"; orig="${orig//[[:cntrl:]]/ }"; orig="${orig:0:200}"
 short="${out//"bash \"$root/skills/subagent-driven-development/scripts/sl\""/sl}"
-short="${short//[[:cntrl:]]/ }"; short="${short#"${short%%[![:space:]]*}"}"; short="${short%"${short##*[![:space:]]}"}"; short="${short:0:200}"
+short="${short//[[:cntrl:]]/ }"; short="${short#"${short%%[![:space:]]*}"}"; short="${short%"${short##*[![:space:]]}"}"; shortfull="$short"; short="${short:0:200}"
+if [ "$tool" = Monitor ]; then deny_monitor; fi
 esc orig; esc short
-printf '{"kind":"rule-rewrite","agent":"coordinator","tool":"Bash","target":"%s -> %s","rule":"raw-test-run","cwd":"%s","command":"%s","rewritten":"%s"}\n' \
-  "$orig" "$short" "$cwdv" "$orig" "$short" >> "$sd/incidents.jsonl" 2>/dev/null
+printf '{"kind":"rule-rewrite","agent":"coordinator","tool":"%s","target":"%s -> %s","rule":"raw-test-run","cwd":"%s","command":"%s","rewritten":"%s"}\n' \
+  "$tool" "$orig" "$short" "$cwdv" "$orig" "$short" >> "$sd/incidents.jsonl" 2>/dev/null
 
 esc out
 if [ "$used_fast" = 1 ]; then mode=fast; else mode=full; fi
