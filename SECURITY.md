@@ -6,7 +6,10 @@ Security fixes are applied to the latest release on `main`. Older tagged release
 
 ## Reporting a vulnerability
 
-Please report security issues privately: open a [GitHub security advisory](https://github.com/maxboettinger/superlite/security/advisories/new) on this repository (maxboettinger/superlite).
+Please report security issues privately:
+
+- Open a [GitHub security advisory](https://github.com/maxboettinger/superlite/security/advisories/new) on this repository (maxboettinger/superlite), or
+- Email the maintainer listed in the repository profile
 
 Do not file a public issue for vulnerabilities that could affect users who install superlite as an agent plugin (hooks, command execution, credential handling).
 
