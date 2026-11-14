@@ -116,3 +116,13 @@ def test_scratch_note_names_readable_programs(proj, monkeypatch, capsys):
     rc, err = _block(proj, "printf x > src/a.py", monkeypatch, capsys)
     assert rc == 2
     assert any(line.endswith(NOTE) for line in err)
+
+
+@pytest.mark.parametrize("cmd", [
+    "source tools/b.sh; source <(cat tools/defs.sh)",
+    "eval 'true'; source <(cat tools/defs.sh)",
+    ". tools/b.sh; . <(cat tools/defs.sh)",
+    "bash -c 'source tools/b.sh'; source <(cat tools/defs.sh)",
+])
+def test_print_only_read_after_a_source_or_eval_stays_unknown(proj, cmd):  # F-T2-9
+    assert _j(proj, cmd) is not None
