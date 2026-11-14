@@ -40,7 +40,7 @@ def test_owned_swift_file_with_if_os_warns(tmp_path):
     src(tmp_path, IOS)
     assert notes(plan(tmp_path), tmp_path) == [
         "WARNING: PLATFORM: T1 has code behind #if os(iOS) (Sources/App/Haptics.swift); a build for the host platform skips it: "
-        "put that platform's build in the task's steps (e.g. xcodebuild build -destination 'generic/platform=iOS') and set **Tests:** slow"]
+        "put that platform's build in the task's steps or in its cmd=, joined with && (e.g. **Tests:** slow cmd=<tests> && xcodebuild build -destination 'generic/platform=iOS'), and set **Tests:** slow"]
 
 
 def test_condition_in_task_text_warns(tmp_path):

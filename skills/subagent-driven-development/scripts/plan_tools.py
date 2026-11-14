@@ -1164,6 +1164,20 @@ def review_focus_cases(plan: Plan) -> dict[str, set[str]]:  # O(L)
     return out  # O(1)
 
 
+def testcmd_doc_ext() -> tuple:  # O(1) testcmd imported lazily, as tests_issues does
+    if str(SCRIPT_DIR) not in sys.path:  # O(1)
+        sys.path.insert(0, str(SCRIPT_DIR))  # O(1)
+    import testcmd  # lazy | O(1)
+    return tuple(testcmd.DOC_EXT)  # O(1)
+
+
+def testcmd_task_command(tests_field: str) -> str | None:  # O(s)
+    if str(SCRIPT_DIR) not in sys.path:  # O(1)
+        sys.path.insert(0, str(SCRIPT_DIR))  # O(1)
+    import testcmd  # lazy | O(1)
+    return testcmd.task_command(tests_field)  # O(s)
+
+
 def not_mechanical_reasons(task: Task, focus: dict[str, set[str]]) -> list[str]:  # O(k*s + pkgs)
     feats = task.explicit_features  # O(k*s)
     why: list[str] = []  # O(1)
@@ -1181,7 +1195,10 @@ def not_mechanical_reasons(task: Task, focus: dict[str, set[str]]) -> list[str]:
     txt = task.text  # O(1)
     named = (re.search(r"\btest_\w+", txt)  # O(len text)
              and re.search(r"==|\bassert\b|\bexpect|->|\breturns?\b", txt, re.I))  # O(len text)
-    if not (re.search(r"test code", txt, re.I) or named):  # O(len text)
+    docs_cmd = False  # O(1)
+    if task.owns and all(o.lower().endswith(testcmd_doc_ext()) for o in task.owns):  # O(k*s)
+        docs_cmd = bool(testcmd_task_command(task.field_text("tests")))  # O(s)
+    if not (re.search(r"test code", txt, re.I) or named or docs_cmd):  # O(len text)
         why.append("no test code or contract with exact inputs and outputs")  # O(1)
     return why  # O(1)
 
@@ -2369,23 +2386,28 @@ def platform_notes(plan: Plan, root: Path | None) -> list[str]:  # O(n*(text + f
             srcs.append("task text")  # O(1)
         shown = ", ".join(conds[:3]) + (f" +{len(conds) - 3} more" if len(conds) > 3 else "")  # O(c)
         out.append(f"WARNING: PLATFORM: {t.id} has code behind #if {shown} ({', '.join(srcs)}); a build for the host platform skips it: "  # O(s)
-                   "put that platform's build in the task's steps (e.g. xcodebuild build -destination 'generic/platform=iOS') and set **Tests:** slow")  # O(1)
+                   "put that platform's build in the task's steps or in its cmd=, joined with && (e.g. **Tests:** slow cmd=<tests> && xcodebuild build -destination 'generic/platform=iOS'), and set **Tests:** slow")  # O(1)
     return out  # O(1)
 
 
 def tests_issues(plan: Plan, root: Path | None) -> list[Issue]:  # O(n*(o + p)) #475: a task whose verify paths the project's test command cannot run must name its own `cmd=`
     if root is None:  # O(1)
         return []  # O(1)
+    out: list[Issue] = []  # O(1)
+    for t in plan.tasks:  # O(n*s)
+        cmd = None if t.status == "draft" else testcmd_task_command(t.field_text("tests"))  # O(s)
+        if cmd and subprocess.run(["sh", "-n", "-c", cmd], capture_output=True, text=True).returncode != 0:  # O(s)
+            out.append(Issue(f"TESTS: {t.id} cmd= is not valid shell: the whole rest of the Tests field runs in `sh`; "  # O(s)
+                             "join steps with && and put prose in Notes", [t.id]))  # O(1)
     try:  # O(1)
         if str(SCRIPT_DIR) not in sys.path:  # O(1)
             sys.path.insert(0, str(SCRIPT_DIR))  # O(1)
         import testcmd  # lazy | O(1)
         spec = testcmd.resolve(root, ())  # O(m + f)
     except Exception:  # noqa: BLE001 | O(1)
-        return []  # O(1)
+        return out  # O(1)
     if not spec:  # O(1)
-        return []  # O(1)
-    out: list[Issue] = []  # O(1)
+        return out  # O(1)
     for t in plan.tasks:  # O(n)
         if t.status == "draft" or t.repo or t.features.get("tests") == "build" or testcmd.task_command(t.field_text("tests")):  # O(k*s)
             continue  # O(1)
