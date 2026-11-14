@@ -1096,7 +1096,7 @@ SHADOWED = re.compile(r"\bPATH\+?=|\b(?:alias|unalias|builtin|command|enable|has
 
 def _written_below(keys, st, only=None):  # O(k * s) | does a path in keys equal a key this call wrote, lie below one, or match one holding an unknown part (`?`, `$`) whose literal prefix leads it? (#780)
     for k in (*st.shared["wrote"], *st.shared["scripts"]) if only is None else only:  # O(s)
-        pre = re.split(r"[?$]", k, 1)[0]  # O(p)
+        pre = re.split(r"[?$]", k, maxsplit=1)[0]  # O(p)
         for x in keys:  # O(k)
             if x == k or x.startswith(k.rstrip("/") + "/") or (pre != k and x.startswith(pre)):  # O(p)
                 return True  # O(1)
