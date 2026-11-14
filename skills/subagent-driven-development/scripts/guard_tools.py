@@ -1330,6 +1330,10 @@ def _bound(tree: ast.AST) -> dict[str, int]:  # O(|tree|) | how often each name 
             names = [x.name]  # O(1)
         elif isinstance(x, ast.ExceptHandler) and x.name:  # O(1)
             names = [x.name]  # O(1)
+        elif isinstance(x, (ast.MatchAs, ast.MatchStar)) and x.name:  # O(1)
+            names = [x.name]  # O(1)
+        elif isinstance(x, ast.MatchMapping) and x.rest:  # O(1)
+            names = [x.rest]  # O(1)
         elif isinstance(x, (ast.Global, ast.Nonlocal)):  # O(1)
             names = list(x.names)  # O(1)
         for i in names:  # O(1)
@@ -1337,13 +1341,23 @@ def _bound(tree: ast.AST) -> dict[str, int]:  # O(|tree|) | how often each name 
     return n  # O(|tree|)
 
 
-def _sp_call(x: ast.AST | None) -> bool:  # O(1) | is x a call of a subprocess function?
+def _sp_trust(tree: ast.AST, bound: dict[str, int]) -> set[str]:  # O(|tree|) | the names that stand for subprocess or one of its functions: bound once, by an import
+    ok: set[str] = set()  # O(1)
+    for x in ast.walk(tree):  # O(|tree|)
+        if isinstance(x, ast.Import):  # O(1)
+            ok.update(a.name for a in x.names if a.name == "subprocess" and a.asname is None and bound.get("subprocess") == 1)  # O(1)
+        elif isinstance(x, ast.ImportFrom) and x.module == "subprocess" and not x.level:  # O(1)
+            ok.update(a.name for a in x.names if a.asname is None and a.name in _SP_FUNCS and bound.get(a.name) == 1)  # O(1)
+    return ok  # O(|tree|)
+
+
+def _sp_call(x: ast.AST | None, trust: set[str]) -> bool:  # O(1) | is x a call of a subprocess function?
     if not isinstance(x, ast.Call):  # O(1)
         return False  # O(1)
     f = x.func  # O(1)
     if isinstance(f, ast.Attribute):  # O(1)
-        return isinstance(f.value, ast.Name) and f.value.id == "subprocess" and f.attr in _SP_FUNCS  # O(1)
-    return isinstance(f, ast.Name) and f.id in _SP_FUNCS  # O(1)
+        return isinstance(f.value, ast.Name) and f.value.id == "subprocess" and f.attr in _SP_FUNCS and "subprocess" in trust  # O(1)
+    return isinstance(f, ast.Name) and f.id in _SP_FUNCS and f.id in trust  # O(1)
 
 
 @functools.lru_cache(maxsize=32)
@@ -1363,6 +1377,7 @@ def _py_facts(code: str) -> tuple[dict[str, list[str]], bool]:  # O(|tree|) | (l
         for c in ast.iter_child_nodes(x):  # O(1)
             parent[id(c)] = x  # O(1)
     bound = _bound(tree)  # O(|tree|)
+    trust = _sp_trust(tree, bound)  # O(|tree|)
     lists: dict[str, list[str]] = {}  # O(1)
     for x in ast.walk(tree):  # O(|tree|)
         if (isinstance(x, ast.Assign) and len(x.targets) == 1 and isinstance(x.targets[0], ast.Name)
@@ -1373,7 +1388,7 @@ def _py_facts(code: str) -> tuple[dict[str, list[str]], bool]:  # O(|tree|) | (l
         if isinstance(x, ast.Name) and x.id in lists and isinstance(x.ctx, ast.Load):  # O(1)
             p = parent.get(id(x))  # O(1)
             ok = (isinstance(p, ast.Starred) and isinstance(parent.get(id(p)), (ast.List, ast.Tuple))) or (
-                _sp_call(p) and p.args and p.args[0] is x)  # type: ignore[union-attr]  # O(1)
+                _sp_call(p, trust) and p.args and p.args[0] is x)  # type: ignore[union-attr]  # O(1)
             if not ok:  # O(1)
                 del lists[x.id]  # O(1)
     sysok = False  # O(1)
@@ -1544,6 +1559,9 @@ def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the pat
     return _uniq(out)  # O(len(out))
 
 
+_CALL_FN: list[str] = [""]  # O(1) | the function name of the call being read
+
+
 def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(raw)) | os.system, subprocess.run, ...
     found = _cmd_words(raw, lang)  # O(len(raw))
     if found is None or _depth[0] >= 4:  # O(1)
@@ -1560,8 +1578,10 @@ def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(ra
     if named:  # O(1)
         _CALL_DIR[0] = None if prev is None or d is None else _join(prev, d)  # O(len(d))
     _depth[0] += 1  # O(1)
+    sh = _CALL_FN[0] in ("getoutput", "getstatusoutput") or any(
+        v != "False" and v != "0" for v in re.findall(r"\bshell\s*=\s*(\w+)", raw))  # shell=True: words[0] is shell text  # O(len(raw))
     try:  # O(1)
-        out = _shell(words[0]) if len(words) == 1 else _argv(words)  # O(len(raw))
+        out = _shell(words[0]) if len(words) == 1 or sh else _argv(words)  # O(len(raw))
     finally:  # O(1)
         _depth[0] -= 1  # O(1)
         _CALL_DIR[0] = prev  # O(1)
@@ -2006,6 +2026,7 @@ def _code1(code: str, lang: str, scan: str | None = None) -> list[str]:  # O(len
         for m in re.finditer(pat, scan):  # O(len(code))
             at = m.end() - 1 if code[m.end() - 1] == "(" else m.end()  # the opening ( is part of the argument list  # O(1)
             args, end = _parse_args(code, at, lang, lang in ("rb", "pl"))  # O(len(code))
+            _CALL_FN[0] = re.sub(r"\W.*", "", m.group(0).split(".")[-1])  # O(len(m))
             for c in _expand(args):  # O(64)
                 out.extend(action(c, code[at:end]))  # type: ignore[operator]  # O(len(args))
     if lang == "py":  # O(1)

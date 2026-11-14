@@ -70,3 +70,27 @@ def test_scratch_script_with_a_splat_passes(tmp_path):
 ])
 def test_sys_executable_rewritten_through_a_dunder_stays_unknown(code):
     assert "?" in _py(code)
+
+
+@pytest.mark.parametrize("code", [
+    "import subprocess\ncmd = ['ls']\nmatch sys_x:\n    case [*cmd]:\n        pass\nsubprocess.run(cmd)\n",
+    "import subprocess\ncmd = ['ls']\nmatch y:\n    case [1] as cmd:\n        pass\nsubprocess.run(cmd)\n",
+    "import subprocess\ncmd = ['ls']\nmatch y:\n    case {'a': 1, **cmd}:\n        pass\nsubprocess.run(cmd)\n",
+])
+def test_match_bindings_make_a_list_name_unknown(code):
+    assert "?" in _py(code)
+
+
+@pytest.mark.parametrize("code", [
+    "import subprocess\ndef run(c):\n    c.append('src')\ncmd = ['ls']\nrun(cmd)\nsubprocess.run(cmd)\n",
+    "import subprocess\ndef run(c):\n    c.append('src')\ncmd = ['ls']\nrun(cmd)\n",
+    "import subprocess\nsubprocess = obj\ncmd = ['ls']\nsubprocess.run(cmd)\n",
+])
+def test_unbound_subprocess_name_leaves_a_list_name_unknown(code):
+    assert "?" in _py(code)
+
+
+def test_shell_true_judges_the_first_word_as_shell_text():
+    assert "src" in " ".join(_py("import subprocess\nsubprocess.run(['rm -rf src', 'x'], shell=True)\n"))
+    assert "src" in " ".join(_py("import subprocess\ncmd = ['rm -rf src', 'x']\nsubprocess.run(cmd, shell=True)\n"))
+    assert _py("import subprocess\nsubprocess.run(['ls -l', 'x'], shell=True)\n") == []
