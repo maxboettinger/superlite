@@ -20,12 +20,18 @@ def _run(sub, env):  # O(1) plus subprocess time
     binary = e.get("SUPERLITE_CLAUDE_PROFILE_BIN") or "claude-profile"  # O(1)
     try:  # O(1)
         r = subprocess.run([binary, sub, "--json"], capture_output=True, text=True, timeout=40, check=False, env=dict(e))  # O(1)
-        if r.returncode != 0:  # O(1)
-            return {}  # O(1)
-        data = json.loads(r.stdout)  # O(output)
+        data = json.loads(r.stdout)  # a failed run (one account errored) still prints a valid report | O(output)
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):  # O(1)
         return {}  # O(1)
     return data if isinstance(data, dict) else {}  # O(1)
+
+
+SIGN_IN_MARKS = ("Select login method:", "Paste code here if prompted", "Browser didn't open? Use the url below to sign in", "Opening browser to sign in")  # O(1) Claude Code sign-in screen lines
+_TUI = " \t\u23fa\u25cf\u2022\u25e6\u00b7\u25aa\u2502\u2503\u256d\u256e\u2570\u256f\u2500\u2501\u276f>"  # O(1) the characters fleet._is_ready strips, plus the prompt arrows
+
+
+def sign_in_screen(screen):  # True when a screen line starts with a sign-in mark; a line quoting one mid-text does not | O(s)
+    return any(line.strip(_TUI).startswith(SIGN_IN_MARKS) for line in (screen or "").splitlines())  # O(s)
 
 
 def read_usage(env=None):  # O(1) plus subprocess time
