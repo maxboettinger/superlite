@@ -16,12 +16,12 @@ def _disallowed(argv):
 
 def test_research_launch_disallows_every_writing_tool():
     for tier in (None, "sonnet"):
-        assert _disallowed(fr.launch("research", tier, CFG)["argv"]) == ["AskUserQuestion"] + WRITERS
+        assert _disallowed(fr.launch("research", tier, CFG)["argv"]) == ["AskUserQuestion", *fr.GIT_DENY] + WRITERS
 
 
 def test_other_roles_keep_their_disallowed_tools():
     for role in ("implementer", "fixer", "package-reviewer", "final-reviewer"):
-        assert _disallowed(fr.launch(role, None, CFG)["argv"]) == ["AskUserQuestion"]
+        assert _disallowed(fr.launch(role, None, CFG)["argv"]) == ["AskUserQuestion", *fr.GIT_DENY]
 
 
 def test_researcher_agent_file_has_no_writing_tool():

@@ -7,7 +7,7 @@ import fleet_roles as fr  # noqa: E402
 import routing  # noqa: E402
 
 CFG = routing.load_cfg()
-TAIL = ["--disallowedTools", "AskUserQuestion"]
+TAIL = fr.TAIL
 
 def test_implementer_keeps_model_and_prime_and_gets_effort():
     assert fr.launch("implementer", "sonnet", CFG) == {

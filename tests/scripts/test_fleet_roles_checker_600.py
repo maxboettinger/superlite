@@ -7,7 +7,7 @@ import fleet_roles as fr  # noqa: E402
 import routing  # noqa: E402
 
 CFG = routing.load_cfg()
-TAIL = ["--disallowedTools", "AskUserQuestion"]
+TAIL = fr.TAIL
 
 
 def test_checker_launch_reads_its_agent_file(tmp_path):
