@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# PreToolUse hook (Edit, Write, NotebookEdit, Bash, PowerShell, Agent): guards the COORDINATOR, i.e.
-# the main session, whose calls carry no agent_id. Subagent calls and fleet worker sessions always pass. Four rules, in order
+# PreToolUse hook (Edit, Write, NotebookEdit, Bash, PowerShell, Monitor, Agent): guards the COORDINATOR, i.e.
+# the main session (a Monitor command runs in the Bash shell and is judged as Bash), whose calls carry no agent_id. Subagent calls and fleet worker sessions always pass. Four rules, in order
 # (rule 4 is checked first for an Agent call):
 #  1. Protected files, in every state: .superlite/orchestrator.json (changed only by `sl orchestrator`)
 #     and .superlite/human-replies.jsonl (written only by hooks/record-human-reply) are never written
@@ -311,7 +311,7 @@ bl_data() {
 # a Bash call without a readable command and a line over 4096 characters keep the raw match. Only a fleet session pays
 # for it (builtin string work, no spawn); the idle coordinator path is untouched.
 if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then
-  re_bl_tool='"tool_name"[[:space:]]*:[[:space:]]*"(Bash|PowerShell)"'
+  re_bl_tool='"tool_name"[[:space:]]*:[[:space:]]*"(Bash|PowerShell|Monitor)"'
   if [[ $input =~ $re_bl_tool ]]; then
     bl_tool="${BASH_REMATCH[1]}"
     bl="${input//\\\\/$'\x01'}"; bl="${bl//\\t/ }"; bl="${bl//\\n/ }"; bl="${bl//$'\x01'/}"; bl="${bl//\\/}"; bl="${bl//\"/}"; bl="${bl//\'/}"
@@ -321,7 +321,7 @@ if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then
       shopt -u nocasematch
       BLHIT="${BASH_REMATCH[2]}"; bl_block=1
       re_bl_cmd='"command"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
-      if [ "$bl_tool" = Bash ] && [[ $input =~ $re_bl_cmd ]]; then
+      if [ "$bl_tool" != PowerShell ] && [[ $input =~ $re_bl_cmd ]]; then
         blc="${BASH_REMATCH[1]}"
         blc="${blc//\\\\/$'\x01'}"   # JSON \\ first, so \\" and \\n keep their shell meaning
         blc="${blc//\\\"/\"}"; blc="${blc//\\t/$'\t'}"; blc="${blc//\\r/}"; blc="${blc//\\n/$'\n'}"
@@ -342,7 +342,9 @@ re_agent='"agent_id"[[:space:]]*:[[:space:]]*"'
 re_tool='"tool_name"[[:space:]]*:[[:space:]]*"([A-Za-z]+)"'
 [[ $input =~ $re_tool ]] || exit 0
 tool="${BASH_REMATCH[1]}"
-case "$tool" in Edit|Write|NotebookEdit|MultiEdit|Bash|PowerShell|Agent|Task) ;; *) exit 0 ;; esac
+case "$tool" in Edit|Write|NotebookEdit|MultiEdit|Bash|PowerShell|Monitor|Agent|Task) ;; *) exit 0 ;; esac
+tool_name="$tool"   # the payload's own name, for the incident rows
+[ "$tool" = Monitor ] && tool=Bash   # Monitor runs its command in the Bash shell: judged as Bash
 
 # jstr KEY: first JSON string value for KEY, still JSON-escaped, into REPLY (empty if absent).
 jstr() {
@@ -472,7 +474,7 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         writer) frole="writer" ;;
       esac
       if [ -n "$frole" ]; then
-        printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)","rule":"fleet","cwd":"%s"}\n' "$tool" "$REPLY" "$cwdv" \
+        printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s (fleet on)","rule":"fleet","cwd":"%s"}\n' "$tool_name" "$REPLY" "$cwdv" \
           >> "$FSD/incidents.jsonl" 2>/dev/null
         again="It is blocked on every call while fleet is on: do not retry it."
         fread=" Fleet state read: $FSD0/fleet.json."
@@ -700,7 +702,7 @@ wt_rel() {
 guard_error() {
   local w="${1:0:160}"
   w="${w//[[:cntrl:]]/ }"; w="${w//[\"\\]/}"
-  printf '{"kind":"guard-error","agent":"coordinator","tool":"%s","target":"%s"}\n' "$tool" "$w" \
+  printf '{"kind":"guard-error","agent":"coordinator","tool":"%s","target":"%s"}\n' "$tool_name" "$w" \
     >> "$sd/incidents.jsonl" 2>/dev/null
 }
 
@@ -904,7 +906,7 @@ rule=code
 [ "$human" = 1 ] && rule=human
 [ "$prot" = 1 ] && rule=protected
 [ "$prot" = 2 ] && rule=cache
-printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s","rule":"%s","cwd":"%s"}\n' "$tool" "$hit" "$rule" "$cwdv" \
+printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s","rule":"%s","cwd":"%s"}\n' "$tool_name" "$hit" "$rule" "$cwdv" \
   >> "$sd/incidents.jsonl" 2>/dev/null
 
 if [ "$prot" = 2 ]; then
