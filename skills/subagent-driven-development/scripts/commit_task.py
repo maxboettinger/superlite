@@ -38,7 +38,7 @@ task owns are left uncommitted; when its owner is committed and not running and 
 checkpoint, `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` says so. A file another task claims (`--also` or `--claim` ruling) prints nothing when its claimer is in this call or the file equals the newest checkpoint, else `left uncommitted (claimed by T2, changed after its checkpoint; run commit_task T2): F` (claimer committed, not running) or `left uncommitted (claimed by T2; commit_task T2 commits it once T2 is done): F`. Each stderr note
 prints once per call, not once per task). A file this task owns that a running sibling (busy in pool.json, outside this call) also owns and that
 differs from the newest checkpoint is held out: one `left uncommitted (shared with running T2; commit_task T1 again once it is done): F` note per task;
-a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held, py_compile plus an import check on each touched .py file (a file under a `fixtures/` folder is a data script and is skipped, noted `import check skipped (fixture): F`; a ModuleNotFoundError for a package found in the repo outside the import roots names the `"pythonpath"` fix), commit
+a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held, py_compile plus an import check on each touched .py file (a file under a `fixtures/` folder is a data script and is skipped, noted `import check skipped (fixture): F`; a `__main__.py` is compiled but not imported, noted `import check skipped (__main__ runs the program): F`; an import that blocks fails `import F:0 TimeoutExpired: import did not finish in N s ...` naming the file, `SUPERLITE_IMPORT_TIMEOUT` (seconds) overrides the 120 s limit; a ModuleNotFoundError for a package found in the repo outside the import roots names the `"pythonpath"` fix), commit
 with the task title, append the SHA to the progress ledger, then launch in the
 background `sl probe_run --commit SHA [--plan P]` and, for every seam of the task graph
 (`sl plan_tools taskgraph --format full`) that involves this task and whose both
@@ -95,6 +95,8 @@ COMMIT_LINE = re.compile(r"^\s*[-*+]?\s*commit\s+([A-Z]{1,3}\d+[A-Za-z]?)\s+[0-9
 SURROGATE = re.compile("[\ud800-\udfff]")  # lone surrogates from argv cannot be written as UTF-8 | O(1)
 TASK_ID = re.compile(r"\b[A-Z]{1,3}\d+[A-Za-z]?\b")  # O(1)
 
+IMPORT_TIMEOUT = 120  # seconds one import batch may run unless SUPERLITE_IMPORT_TIMEOUT says otherwise | O(1)
+IMPORT_MARK = "@import-check "  # stdout line the driver prints before each import; the last one names a blocking file | O(1)
 IMPORT_DRIVER = r"""
 # a file inside a package imports by its dotted name from the package base
 import importlib, importlib.util, json, os, sys, traceback
@@ -127,6 +129,7 @@ for rel in files:
         dotted = os.path.relpath(path, base)[:-3].replace("\\", "/").split("/")
         if dotted[-1] == "__init__":
             dotted = dotted[:-1]
+    print("@IMPORT_MARK@" + rel, flush=True)
     try:
         if parts and all(p.isidentifier() for p in parts):
             importlib.import_module(".".join(parts))
@@ -155,7 +158,7 @@ for rel in files:
         failures.append({"file": rel, "line": line,
                          "error": f"{type(e).__name__}: {e}"[:150]})
 print(json.dumps(failures))
-"""  # O(1)
+""".replace("@IMPORT_MARK@", IMPORT_MARK)  # O(len driver)
 
 
 def git(*args, check=True):  # O(output) + process spawn
@@ -255,18 +258,34 @@ def optional_deps(root):  # O(pyproject size)
     return _pyproject_deps(root)[1]  # O(size)
 
 
+def import_timeout():  # seconds one import batch may run: SUPERLITE_IMPORT_TIMEOUT when a positive number, else IMPORT_TIMEOUT | O(1)
+    try:  # O(1)
+        secs = float(os.environ.get("SUPERLITE_IMPORT_TIMEOUT", ""))  # O(1)
+    except ValueError:  # O(1)
+        return IMPORT_TIMEOUT  # O(1)
+    return secs if 0 < secs < float("inf") else IMPORT_TIMEOUT  # zero, negative, nan (compares false) and inf fall back to the default | O(1)
+
+
 def import_errors(files, roots=None, root=".", notes=None):  # O(m_py * import cost) + 1 process spawn (batched)
     """Import every file once under the project's own interpreter (root/.venv, VIRTUAL_ENV, else ours).
     Files no import can name are skipped; a missing optional dependency is a warning. Both go to notes."""
     if not files:  # O(1)
         return []  # O(1)
     py = _pyrun.project_python(root)  # O(1) file lookups, never run
+    secs = import_timeout()  # O(1)
     try:  # O(1)
         r = subprocess.run([py, "-I", "-c", IMPORT_DRIVER, str(root), json.dumps(list(roots or [])), *files],  # O(output) + process spawn
-                           capture_output=True, text=True, encoding="utf-8", timeout=120,  # O(1)
+                           capture_output=True, text=True, encoding="utf-8", timeout=secs,  # O(1)
                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})  # O(1)
     except OSError as e:  # a venv interpreter that cannot start (not executable, wrong platform): a block, not a traceback | O(1)
         return [(files[0], 0, f"import check crashed under {os.path.abspath(py)}: {e}"[:300])]  # O(1)
+    except subprocess.TimeoutExpired as e:  # a top-level import that blocks: a check result naming the file, not a crash | O(output)
+        got = e.stdout or ""  # bytes or None after the kill | O(1)
+        got = got.decode("utf-8", errors="replace") if isinstance(got, bytes) else got  # O(output)
+        marks = [ln[len(IMPORT_MARK):] for ln in got.splitlines() if ln.startswith(IMPORT_MARK)]  # O(output)
+        msg = (f"TimeoutExpired: import did not finish in {secs:g} s "  # O(1)
+               '(top-level code that blocks: move it under if __name__ == "__main__":)')  # O(1)
+        return [(marks[-1] if marks else files[0], 0, msg)]  # O(1)
     try:  # O(1)
         out = json.loads(r.stdout.strip().splitlines()[-1])  # O(output)
     except (IndexError, json.JSONDecodeError):  # O(1)
@@ -300,7 +319,7 @@ def is_fixture(path):  # a script under a fixtures/ folder is data for a test, n
 def is_module(path):  # O(len path)
     name = Path(path).name  # O(1)
     return (path.endswith(".py") and not name.startswith("test_")  # O(1)
-            and not name.endswith("_test.py") and name != "conftest.py"  # O(1)
+            and not name.endswith("_test.py") and name not in ("conftest.py", "__main__.py")  # O(1)
             and not is_fixture(path))  # O(len path)
 
 
@@ -876,6 +895,8 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         for f in py:  # O(m_py) iterations
             if is_fixture(f):  # O(1)
                 print(f"import check skipped (fixture): {f}", file=sys.stderr)  # O(1)
+            elif Path(f).name == "__main__.py":  # O(1)
+                print(f"import check skipped (__main__ runs the program): {f}", file=sys.stderr)  # O(1)
         problems = import_errors([f for f in py if is_module(f)], a.roots, notes=gate)  # O(m_py * import cost) + process spawn
         for kind, f, line, msg in gate:  # O(notes) iterations
             if kind == "skip":  # O(1)
