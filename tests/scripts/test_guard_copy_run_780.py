@@ -171,3 +171,27 @@ def test_heredoc_append_after_a_heredoc_write_passes(proj):  # F-T2-5
     cmd = ("cat > .superlite/scratch/x.sh <<'E'\necho a\nE\ncat >> .superlite/scratch/x.sh <<'E'\necho b\nE\n"
            "bash .superlite/scratch/x.sh")
     assert _j(proj, cmd) is None
+
+
+def test_copy_n_may_skip_so_an_older_destination_blocks(proj):  # F-T2-6
+    (Path(proj) / ".superlite" / "m.sh").write_text("echo hi\n")
+    (Path(proj) / ".superlite" / "scratch" / "x.sh").write_text("rm -rf src\n")
+    v = _j(proj, "cp -n .superlite/m.sh .superlite/scratch/x.sh; bash .superlite/scratch/x.sh")
+    assert v is not None
+
+
+def test_hard_link_copy_follows_a_later_source_write(proj):  # F-T2-6
+    (Path(proj) / ".superlite" / "m.sh").write_text("echo hi\n")
+    cmd = ("cp -l .superlite/m.sh .superlite/scratch/y.sh; echo 'rm -rf src' > .superlite/m.sh; "
+           "bash .superlite/scratch/y.sh")
+    assert _j(proj, cmd) is not None
+
+
+def test_symlink_source_copy_is_not_read(proj):  # F-T2-6
+    os.symlink(Path(proj) / ".superlite" / "bad.sh", Path(proj) / ".superlite" / "ln.sh")
+    assert _j(proj, "cp .superlite/ln.sh .superlite/scratch/z.sh; bash .superlite/scratch/z.sh") is not None
+
+
+def test_plain_force_copy_still_passes(proj):  # F-T2-6
+    (Path(proj) / ".superlite" / "m.sh").write_text("echo hi\n")
+    assert _j(proj, "cp -f .superlite/m.sh .superlite/scratch/w.sh; bash .superlite/scratch/w.sh") is None
