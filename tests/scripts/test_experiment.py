@@ -190,9 +190,15 @@ def test_history_rows_carry_the_experiment_of_the_run(tmp_path, monkeypatch):
     sl = setup_run(tmp_path)
     cp = run(HISTORY, "write", "--plan", p, "--dir", sl, "--run", "r0", cwd=tmp_path)
     assert cp.returncode == 0, cp.both
+    rows = [json.loads(x) for x in (home / "history.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rows and {(r["run"], r["experiment"]) for r in rows} == {("r0", None)}
+    # a rerun of one run is deduped (#840): start the second write from empty histories
+    (sl / "history.jsonl").unlink()
+    home2 = tmp_path / "home2"
+    monkeypatch.setenv("SUPERLITE_HOME", str(home2))
     (sl / "experiment.json").write_text(json.dumps({"id": "53-old-settings", "plan": str(p.resolve()), "prime": "full", "batch": 1}),
                                         encoding="utf-8")
     cp = run(HISTORY, "write", "--plan", p, "--dir", sl, "--run", "r1", cwd=tmp_path)
     assert cp.returncode == 0, cp.both
-    rows = [json.loads(x) for x in (home / "history.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert {r["run"]: r["experiment"] for r in rows} == {"r0": None, "r1": "53-old-settings"}
+    rows = [json.loads(x) for x in (home2 / "history.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rows and {(r["run"], r["experiment"]) for r in rows} == {("r1", "53-old-settings")}

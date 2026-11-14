@@ -8,6 +8,7 @@
 
 Files: `$SUPERLITE_HOME/history.jsonl` (default `~/.superlite/`), append-only, plus `stats.json` there and a
 per-project copy of both under `.superlite/`. Aggregates only: no code, prompts or file contents.
+Readers count rows with an equal content key once (`unique_rows`); `write` skips a run's rows the project history already holds.
 
 ROW SCHEMA (v1), one JSON object per line:
   v 1, date (YYYY-MM-DD), run (id), source ("run" | "import"), language (python, typescript, javascript,
@@ -66,6 +67,24 @@ def band_of(kind, loc, tests) -> str:  # O(1)
     return f"{kind or 'design'}/{lb}/{tests or 'fast'}"  # O(1)
 
 
+def row_key(row) -> str:  # O(w) the content key: date, language, task, duration, tokens in and out, model
+    tk = row.get("tokens") if isinstance(row, dict) else None  # O(1)
+    tk = tk if isinstance(tk, dict) else {}  # O(1)
+    parts = [row.get(k) for k in ("date", "language", "task", "duration_s")] + [tk.get("in"), tk.get("out"), row.get("model")]  # O(1)
+    return json.dumps(parts, sort_keys=True, default=str)  # O(w)
+
+
+def unique_rows(rows: list) -> list:  # O(R*w) the first row of each content key, in order
+    seen: set = set()  # O(1)
+    out = []  # O(1)
+    for r in rows:  # O(R)
+        k = row_key(r)  # O(w)
+        if k not in seen:  # O(1)
+            seen.add(k)  # O(1)
+            out.append(r)  # O(1)
+    return out  # O(R)
+
+
 def read_rows(path=None) -> list:  # O(R*w)
     p = Path(path) if path else home() / "history.jsonl"  # O(1)
     out = []  # O(1)
@@ -77,7 +96,7 @@ def read_rows(path=None) -> list:  # O(R*w)
                 continue  # O(1)
             if isinstance(e, dict):  # O(1)
                 out.append(e)  # O(1)
-    return out  # O(R*w)
+    return unique_rows(out)  # O(R*w)
 
 
 def append_rows(rows: list, path=None) -> Path:  # O(n*w)
@@ -220,10 +239,17 @@ def run_rows(plan_path, sl_dir=".superlite", run_id=None) -> list:  # O(M + B + 
 
 def record_run(plan_path, sl_dir=".superlite", run_id=None) -> list:  # O(R + n*w)
     """Append this run's rows (global and project) and refresh both stats files."""
-    rows = run_rows(plan_path, sl_dir, run_id)  # O(M + B)
+    proj = Path(sl_dir) / "history.jsonl"  # O(1)
+    have = read_rows(proj)  # O(R*w)
+    seen = {(r.get("run"), r.get("task")) for r in have}  # O(R)
+    keys = {row_key(r) for r in have}  # O(R*w)
+    rows = [r for r in unique_rows(run_rows(plan_path, sl_dir, run_id)) if (r.get("run"), r.get("task")) not in seen and row_key(r) not in keys]  # O(M + B + n*w)
+    held = {row_key(g) for g in read_rows()}  # O(R*w)
+    fresh = [r for r in rows if row_key(r) not in held]  # O(n*w)
+    if fresh:  # O(1)
+        append_rows(fresh)  # O(n*w)
     if rows:  # O(1)
-        append_rows(rows)  # O(n*w)
-        append_rows(rows, Path(sl_dir) / "history.jsonl")  # O(n*w)
+        append_rows(rows, proj)  # O(n*w)
     write_stats(read_rows(), home() / "stats.json")  # O(R log R)
     write_stats(read_rows(Path(sl_dir) / "history.jsonl"), Path(sl_dir) / "stats.json")  # O(R log R)
     return rows  # O(1)
