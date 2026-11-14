@@ -103,7 +103,7 @@ def test_hooks_json_has_both_entries():
     data = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     assert "SessionStart" in data["hooks"]
     pre = data["hooks"]["PreToolUse"]
-    assert pre[0]["matcher"] == "Bash|PowerShell"
+    assert pre[0]["matcher"] == "Bash|PowerShell|Monitor"
     assert pre[0]["hooks"][0]["command"] == 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/block-unsafe-kill"'
 
 
@@ -296,3 +296,27 @@ def test_docs_name_the_way_out_830():
     line = next(ln for ln in text.splitlines() if ln.startswith("- `block-unsafe-kill`: always on"))
     for word in ("#830", "TaskStop", "`$!`", "-PassThru", "auto-mode classifier"):
         assert word in line, word
+
+
+def mon(cmd):
+    return run(None, raw=json.dumps({"tool_name": "Monitor",
+                                     "tool_input": {"command": cmd, "description": "watch", "timeout_ms": 300000}}))
+
+
+def test_monitor_kill_by_name_blocked_837():
+    for cmd in ("pkill -f server", "killall node", "kill -9 -1",
+                "tail -f app.log | grep --line-buffered x; pkill node"):
+        assert mon(cmd).returncode == 2, cmd
+
+
+def test_monitor_reads_and_pid_kills_pass_837():
+    for cmd in ("tail -f app.log | grep --line-buffered ERROR", "kill 1234", "sleep 30 & p=$!; kill $p", "echo pkill"):
+        r = mon(cmd)
+        assert r.returncode == 0 and r.stdout == "" and r.stderr == "", cmd
+
+
+def test_monitor_ws_only_passes_837():
+    raw = json.dumps({"tool_name": "Monitor", "tool_input": {"ws": {"url": "wss://events.example.com/stream"},
+                                                             "description": "events", "timeout_ms": 300000}})
+    r = run(None, raw=raw)
+    assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
