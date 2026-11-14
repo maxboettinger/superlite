@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|run|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585); unskip <issue> and reset B [--discard] undo a skip and a started batch, --help lists every subcommand, a status with only parked batches ends with next:, decide --file takes the one answer rule (a label, or a label plus a note) and a pinned skipped issue names unskip, and plan offers sl backlog ship B done --pr N for a batch whose issues a merged PR already names (#586); a file two batches only append to (append_only) shows an overlap line without a hold, and `notes B` prints a batch's notes through ship (#602)."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|run|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585); unskip <issue> and reset B [--discard] undo a skip and a started batch, --help lists every subcommand, a status with only parked batches ends with next:, decide --file takes the one answer rule (a label, or a label plus a note) and a pinned skipped issue names unskip, and plan offers sl backlog ship B done --pr N for a batch whose issues a merged PR already names (#586); a file two batches only append to (append_only) shows an overlap line without a hold, and `notes B` prints a batch's notes through ship (#602); plan --issues reads a pinned GitHub issue the lagging open-issue list misses by number, plans the found pins and prints a not-found line for the rest beside the batch table (#776)."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -53,6 +53,7 @@ def seed_test_cmd(root: Path, wt: Path) -> bool:
 
 ISSUES_JQ = (".[] | select(has(\"pull_request\") | not) | {number, title, body, author: {login: .user.login}, "
              "authorAssociation: .author_association}")
+ISSUE_JQ = '{number, title, body, author: {login: .user.login}, authorAssociation: .author_association, state, pull: has("pull_request")}'
 BODY_LIMIT = 4000  # characters of one issue body kept in the triage brief
 
 
@@ -153,13 +154,38 @@ def pin_list(text: str) -> tuple:
     raise ValueError(f"not a GitHub issue number or Jira key: {items[0]}")  # O(1)
 
 
-def pinned_issues(issues: list, nums: list) -> list:
-    """The fetched issues of nums, in nums order; a number not among them raises."""
+def read_issue(n: int) -> tuple:
+    """(issue, None) for open issue n read by number, else (None, reason) (#776)."""
+    try:  # O(1)
+        r = _gh(["api", f"repos/{{owner}}/{{repo}}/issues/{n}", "--jq", ISSUE_JQ])  # O(network)
+    except RuntimeError as e:  # O(1)
+        return None, " ".join(str(e).split(" failed: ", 1)[-1].split())[:120] or "gh failed"  # O(1)
+    if not isinstance(r, dict) or r.get("number") != n:  # O(1)
+        return None, "no issue in the answer"  # O(1)
+    if r.get("pull"):  # O(1)
+        return None, "a pull request"  # O(1)
+    if str(r.get("state", "open")).lower() != "open":  # O(1)
+        return None, "closed"  # O(1)
+    return {k: v for k, v in r.items() if k not in ("state", "pull")}, None  # O(1)
+
+
+def pinned_issues(issues: list, nums: list, missing: list | None = None) -> list:
+    """The issues of nums in nums order; one the list misses is read by number (#776). A miss is added to
+    missing as (number, reason); without missing the first miss raises."""
     by = {i["number"]: i for i in issues}  # O(i)
+    gone = []  # O(1)
     for n in nums:  # O(nums)
         if n not in by:  # O(1)
-            raise RuntimeError(f"GitHub issue #{n} not found among the open issues")  # O(1)
-    return [by[n] for n in nums]  # O(nums)
+            got, why = read_issue(n)  # O(network)
+            if got:  # O(1)
+                by[n] = got  # O(1)
+            else:  # O(1)
+                gone.append((n, why))  # O(1)
+    if gone and missing is None:  # O(1)
+        raise RuntimeError(f"GitHub issue #{gone[0][0]} not found among the open issues nor read by number ({gone[0][1]})")  # O(1)
+    if missing is not None:  # O(1)
+        missing.extend(gone)  # O(gone)
+    return [by[n] for n in nums if n in by]  # O(nums)
 
 
 def carry_rounds(outside) -> dict:
@@ -534,11 +560,17 @@ def cmd_plan(a) -> int:
     else:
         issues = _gh(["api", "--paginate", "repos/{owner}/{repo}/issues?state=open&per_page=100", "--jq", ISSUES_JQ])
         if pin is not None:  # O(1)
-            try:  # O(1)
-                issues = pinned_issues(issues, pin)  # O(i)
-            except RuntimeError as e:  # O(1)
-                print(f"BLOCKED: {e}")  # O(1)
+            gone = []  # O(1)
+            issues = pinned_issues(issues, pin, gone)  # O(i)
+            if gone and len(gone) == len(pin):  # O(1)
+                print(f"BLOCKED: GitHub issue #{gone[0][0]} not found among the open issues nor read by number ({gone[0][1]})")  # O(1)
                 return 3  # O(1)
+            for n, why in gone:  # O(pin)
+                hint = "" if why in ("closed", "a pull request") else f"; sl backlog plan --issues {n} --add retries it"  # O(1)
+                notes.append(f"not found: #{n} (not in the open-issue list; read by number: {why}){hint}")  # O(1)
+            if gone:  # O(1)
+                lost = {g[0] for g in gone}  # O(gone)
+                pin = [n for n in pin if n not in lost]  # O(pin)
     carry = carry_rounds(d["outside"])  # O(outside)
     issues = sorted(issues, key=lambda i: -carry.get(i["number"], 0))  # O(i log i)
     rest = issues[ISSUE_LIMIT:]
