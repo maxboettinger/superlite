@@ -108,3 +108,11 @@ def test_numeric_loop_into_the_project_names_the_file(proj):
 def test_unreadable_loop_words_stay_unknown(proj, pre, words):
     out = os.path.dirname(proj) + "/sp"
     assert _j(proj, f"{pre}for i in {words}; do printf x > {out}/t$i; done") is not None
+
+
+def test_copy_of_a_heredoc_source_carries_its_text(proj):
+    ok = "cat > .superlite/a.sh <<'E'\necho hi\nE\ncp .superlite/a.sh .superlite/scratch/a.sh; bash .superlite/scratch/a.sh"
+    assert _j(proj, ok) is None
+    bad = ok.replace("echo hi", "rm -rf src")
+    v = _j(proj, bad)
+    assert v is not None and v.kind == "code" and v.rel != "?"
