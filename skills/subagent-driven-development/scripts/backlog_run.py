@@ -7,6 +7,7 @@
     backlog_run.py answer B --file F        (F = {"answers": {question: answer}, "by": "user"|"main"|{question: ...}})
     backlog_run.py tell B --text T          (send main's text to the running lead of B)
 
+A `run end:` output also names a stored standing note and the command that clears it (#777).
 `run` starts, waits and starts again until a batch needs main (needs_decision, parked, a fatal start refusal) or nothing runs; `wait --window S` keeps collecting ends for S seconds after the first (#673). `start` takes several ids: each refusal prints BLOCKED, the others start. A lead that does not start prints `BLOCKED: B lead did not start; ...` after its spawn's own line, sets exit 2 and the batches after it still start (#551). Each lead worktree gets a copy of the main
 checkout's `.superlite/test-cmd.json` before its brief, unless it already has one (#334); the copied bytes are recorded in `.superlite/test-cmd.seeded` so an unedited copy follows the main checkout's file, and a lead brief gets one `Test command:` line when the copy and the main file differ (#638). A lead whose stop text holds no
 Status line is re-prompted once (`reprompted`; a planning lead's re-prompt names `DONE planned: <plan path>`), then parked. A question.json is cut to the limits (header, label,
@@ -889,12 +890,25 @@ def sync_main(root: Path, repo: str = "") -> list:
 
 
 def run_end(root: Path, sd: Path, p: Path) -> list:
-    """The run end line (#590): every batch shipped or parked and the fleet still on; never stops a live worker."""
+    """The run end line (#590): every batch shipped or parked and the fleet still on; never stops a live worker.
+    A stored standing note adds one more line after it (#777)."""
+    data = bs.load(p)  # O(size)
+    lines = _run_end_lines(root, sd, data)  # O(w)
+    nt = data.get("note")  # O(1)
+    if not lines or bs.note_line(data) is None:  # O(1)
+        return lines  # O(1)
+    cl = lambda v: re.sub(r"[\x00-\x1f\x7f]", " ", str(v))  # O(len)
+    n = len(nt["text"].split("\n"))  # O(len)
+    return lines + [f"run end: standing note from {cl(nt.get('file'))} ({cl(nt.get('time'))}, {n} line{'' if n == 1 else 's'}) "
+                    "still goes into every later lead brief; sl backlog start --note /dev/null clears it"]  # O(len)
+
+
+def _run_end_lines(root: Path, sd: Path, data: dict) -> list:
     import contextlib
     import io
     if os.environ.get("SUPERLITE_FLEET_WORKER"):  # O(1)
         return []  # O(1)
-    batches = bs.load(p)["batches"]  # O(b)
+    batches = data["batches"]  # O(b)
     if not batches or any(b["state"] in ("planned", "running", "needs_decision") for b in batches):  # O(b)
         return []  # O(1)
     import fleet
