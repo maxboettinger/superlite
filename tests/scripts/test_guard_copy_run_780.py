@@ -195,3 +195,25 @@ def test_symlink_source_copy_is_not_read(proj):  # F-T2-6
 def test_plain_force_copy_still_passes(proj):  # F-T2-6
     (Path(proj) / ".superlite" / "m.sh").write_text("echo hi\n")
     assert _j(proj, "cp -f .superlite/m.sh .superlite/scratch/w.sh; bash .superlite/scratch/w.sh") is None
+
+
+def test_write_through_real_path_drops_heredoc_text_of_link_key(proj):
+    os.makedirs(proj + "/.superlite/scratch/real")
+    os.symlink(proj + "/.superlite/scratch/real", proj + "/.superlite/scratch/link")
+    cmd = ("cat > .superlite/scratch/link/x.sh <<'E'\necho hi\nE\n"
+           "cp .superlite/bad.sh .superlite/scratch/real/x.sh; bash .superlite/scratch/link/x.sh")
+    v = _j(proj, cmd)
+    assert v is not None
+
+
+def test_copy_onto_read_only_destination_records_no_text(proj):
+    ro = Path(proj) / ".superlite" / "scratch" / "ro.sh"
+    ro.write_text("rm -rf src\n")
+    ro.chmod(0o444)
+    try:
+        if os.access(str(ro), os.W_OK):
+            pytest.skip("read-only files stay writable here")
+        v = _j(proj, "cp tools/defs.sh .superlite/scratch/ro.sh; bash .superlite/scratch/ro.sh")
+        assert v is not None
+    finally:
+        ro.chmod(0o644)
