@@ -23,6 +23,7 @@ Plan conventions read here (per task section `### Tn ...`):
       a default naming a constant (`tid=TID`) must be a name in the code too (a literal or a call there is a mismatch); any other non-literal default is not compared
       a class item `pkg.errors.ParseError(Exception)` lists its bases, a dotted base (`errors.Base`) matched by its last name, checked against the class's MRO; a class without a signature of its own is checked by existence and bases only
   **Probe entry:** call=pkg.mod.fn · run=python -m pkg · serve=pkg.server.create_server(Workbook())
+      serve= arguments are read with ast, never eval: literals, names of the serve module and calls of the project's own code; anything else is SyntaxError "serve arguments unparsable"
   Data contract lines (any line, anchored at the start, bullets allowed):
       POST /api/cells {"ref":"A1"} -> 200 {cells: dict, note?: str}
   Review Focus section lines:  - <package>: deep, numeric, encoding, state
@@ -1185,13 +1186,118 @@ def call_in_contract(call: Call, contract: list[ContractLine]) -> bool:  # O(C*s
 
 _SERVE_SNIPPET = r'''
 def _make_server(target, args_src):
-    import importlib, inspect
+    import ast, importlib, inspect, os, site, sysconfig
     mod_name, _, fn_name = target.rpartition(".")
     mod = importlib.import_module(mod_name)
     fn = getattr(mod, fn_name)
-    def _cap(*a, **k):
-        return a, k
-    pos, kw = eval("_cap(%s)" % args_src, dict(vars(mod), _cap=_cap)) if args_src is not None else ((), {})
+    ns = vars(mod)
+    _lit = ast.literal_eval
+    def _bad(why):
+        raise SyntaxError("serve arguments unparsable: %s; write literals, names of %s and calls of the project's own code"
+                          % (why, mod_name))
+    def _is_lit(n):
+        try:
+            _lit(n)
+            return True
+        except Exception:
+            return False
+    def _roots():
+        found = [v for k, v in sysconfig.get_paths().items() if k in ("stdlib", "platstdlib", "purelib", "platlib")]
+        found += site.getsitepackages() if hasattr(site, "getsitepackages") else []
+        found += [site.getusersitepackages()] if hasattr(site, "getusersitepackages") else []
+        return [os.path.realpath(r) for r in found if r]
+    def _own(callee):
+        f = getattr(inspect.getmodule(callee), "__file__", None)
+        if not f:
+            return False
+        rp = os.path.realpath(f)
+        return not any(rp == r or rp.startswith(r + os.sep) for r in _roots())
+    def _name(n):
+        if n.id.startswith("__") or n.id not in ns:
+            _bad("name %r" % n.id)
+    def _attr(n):
+        if n.attr.startswith("__"):
+            _bad("attribute %r" % n.attr)
+    def _chain(f):
+        if isinstance(f, ast.Name):
+            _name(f)
+            return ns[f.id], f.id
+        if isinstance(f, ast.Attribute):
+            _attr(f)
+            base, label = _chain(f.value)
+            return getattr(base, f.attr), label + "." + f.attr
+        return _bad("callee %s" % type(f).__name__)
+    def _check_args(call):
+        for a in call.args:
+            _check(a.value if isinstance(a, ast.Starred) else a)
+        for k in call.keywords:
+            _check(k.value)
+    def _check(n):
+        if _is_lit(n):
+            return
+        if isinstance(n, (ast.List, ast.Tuple, ast.Set)):
+            for e in n.elts:
+                _check(e)
+        elif isinstance(n, ast.Dict):
+            for k, v in zip(n.keys, n.values):
+                if k is None:
+                    _bad("dict ** entry")
+                _check(k)
+                _check(v)
+        elif isinstance(n, ast.Name):
+            _name(n)
+        elif isinstance(n, ast.Attribute):
+            _attr(n)
+            _check(n.value)
+        elif isinstance(n, ast.Call):
+            callee, label = _chain(n.func)
+            if not _own(callee):
+                _bad("%s is not the project's own code" % label)
+            _check_args(n)
+        else:
+            _bad(type(n).__name__)
+    def _ev(n):
+        if _is_lit(n):
+            return _lit(n)
+        if isinstance(n, ast.List):
+            return [_ev(e) for e in n.elts]
+        if isinstance(n, ast.Tuple):
+            return tuple(_ev(e) for e in n.elts)
+        if isinstance(n, ast.Set):
+            return {_ev(e) for e in n.elts}
+        if isinstance(n, ast.Dict):
+            return {_ev(k): _ev(v) for k, v in zip(n.keys, n.values)}
+        if isinstance(n, ast.Name):
+            return ns[n.id]
+        if isinstance(n, ast.Attribute):
+            return getattr(_ev(n.value), n.attr)
+        p, k = _call_args(n)
+        return _ev(n.func)(*p, **k)
+    def _call_args(call):
+        p, k = [], {}
+        for a in call.args:
+            if isinstance(a, ast.Starred):
+                p.extend(_ev(a.value))
+            else:
+                p.append(_ev(a))
+        for kw_ in call.keywords:
+            if kw_.arg is None:
+                k.update(_ev(kw_.value))
+            else:
+                k[kw_.arg] = _ev(kw_.value)
+        return p, k
+    if args_src is None:
+        pos, kw = (), {}
+    else:
+        try:
+            tree = ast.parse("_cap(%s)" % args_src, mode="eval").body
+        except SyntaxError as e:
+            raise SyntaxError("serve arguments unparsable: " + str(e.msg))
+        if not (isinstance(tree, ast.Call) and isinstance(tree.func, ast.Name) and tree.func.id == "_cap"):
+            _bad("not one argument list")
+        _check_args(tree)
+        p, kw = _call_args(tree)
+        pos = tuple(p)
     sig = inspect.signature(fn)
     if "port" in sig.parameters and "port" not in kw:
         kw["port"] = 0
