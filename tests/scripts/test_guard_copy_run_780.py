@@ -140,3 +140,34 @@ def test_block_after_a_chained_cd_into_the_project_blocks(proj, cmd):
 def test_block_after_an_unsure_cd_keeps_the_start_folder(proj):
     v = _j(proj, f"cd {os.path.dirname(proj)}/o/p/tests; git init -q; for i in 1 2; do printf x > t$i.py; done")
     assert v is not None and v.rel == "t1.py"
+
+
+def test_folder_write_drops_the_heredoc_text_below_it(proj):  # F-T2-3
+    cmd = ("cat > .superlite/scratch/bad.sh <<'E'\necho hi\nE\n"
+           "cp -t .superlite/scratch .superlite/bad.sh; bash .superlite/scratch/bad.sh")
+    assert _j(proj, cmd) is not None
+
+
+def test_copy_into_a_tracked_folder_blocks_a_print_only_read(proj, tmp_path):  # F-T2-3
+    (tmp_path / "x.sh").write_text("echo hi\n")
+    (Path(proj) / "tools" / "x.sh").write_text("echo old\n")
+    subprocess.run(["git", "-C", proj, "add", "tools/x.sh"], check=True, env=GIT_ENV)
+    v = _j(proj, f"cp {tmp_path}/x.sh tools/; source <(cat tools/x.sh)")
+    assert v is not None
+
+
+def test_copy_into_a_folder_made_in_the_same_call_uses_the_source_text(proj):  # F-T2-4
+    v = _j(proj, "mkdir -p .superlite/scratch/d; cp .superlite/bad.py .superlite/scratch/d; python3 .superlite/scratch/d/bad.py")
+    assert v is not None and v.kind == "code"
+
+
+def test_heredoc_append_keeps_the_lines_already_in_the_file(proj):  # F-T2-5
+    (Path(proj) / ".superlite" / "scratch" / "x.sh").write_text("rm -rf src\n")
+    cmd = "cat >> .superlite/scratch/x.sh <<'E'\necho hi\nE\nbash .superlite/scratch/x.sh"
+    assert _j(proj, cmd) is not None
+
+
+def test_heredoc_append_after_a_heredoc_write_passes(proj):  # F-T2-5
+    cmd = ("cat > .superlite/scratch/x.sh <<'E'\necho a\nE\ncat >> .superlite/scratch/x.sh <<'E'\necho b\nE\n"
+           "bash .superlite/scratch/x.sh")
+    assert _j(proj, cmd) is None
