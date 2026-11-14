@@ -44,7 +44,7 @@ def test_zero_count_stop_names_command_exit_and_log(tmp_path):
     assert os.path.isfile(log) and os.path.dirname(log).endswith(".superlite")
     text = open(log, encoding="utf-8").read()
     assert "command: " in text and "exit: 0" in text and "nothing here" in text
-    assert inc["target"] == f"exit 0 from `{cmd}`; log {log}"
+    assert inc["target"] == f"no test count; exit 0 from `{cmd}`; log {log}"
     assert f"run_tests: no-result log {log}" in cp.err
 
 

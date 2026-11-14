@@ -401,7 +401,7 @@ def root_relative(x, cwd, root):  # O(len x) x against cwd, unless only the root
     mine = os.path.relpath(os.path.join(cwd, x), root)  # O(len)
     bare = x.split("::", 1)[0]  # O(len)
     prefix = os.path.relpath(cwd, root).replace(os.sep, "/") + "/"  # O(len) the cwd's own root-relative prefix; only a doubled prefix is read from the root
-    if "..." in x or not x.replace(os.sep, "/").startswith(prefix) or os.path.exists(os.path.join(root, mine.split("::", 1)[0])) or not os.path.exists(os.path.join(root, bare)):  # O(1) stats
+    if "..." in x or not (x.replace(os.sep, "/").rstrip("/") + "/").startswith(prefix) or os.path.exists(os.path.join(root, mine.split("::", 1)[0])) or not os.path.exists(os.path.join(root, bare)):  # O(1) stats
         return mine  # O(len)
     print(f"run_tests: --fast {x} read from the root", file=sys.stderr)  # O(1)
     return x  # O(1)
@@ -889,8 +889,16 @@ def no_result_log(summary, command, cwd, rc, lines):  # O(L) + file write, keeps
         return ""  # O(1)
 
 
-def no_result_target(command, rc, log, cause=None):  # O(1) the feedback target of a no-result stop
-    return (f"nothing collected: {cause}; " if cause else "") + f"exit {rc} from `{command[:200]}`; log {log or 'not written'}"  # O(1)
+JUNIT_FLAGS = re.compile(r"(?:--junit-?xml|--outputFile\.junit)[= ]\s*(\S+)|--reporter[= ]\s*junit\b.*?--outputFile[= ]\s*(\S+\.xml)|--outputFile[= ]\s*(\S+\.xml)\b.*?--reporter[= ]\s*junit\b")  # O(1) compiled
+
+
+def command_junit(command):  # O(len command) the JUnit path a test command line names (--junitxml, --junit-xml, --outputFile.junit, junit reporter with --outputFile), else None
+    m = JUNIT_FLAGS.search(command)  # O(len)
+    return next((g.strip("'\"") for g in m.groups() if g), None) if m else None  # O(1)
+
+
+def no_result_target(command, rc, log, cause=None, kind=None):  # O(1) the feedback target of a no-result stop: the kind (why there was no result) leads
+    return (f"nothing collected: {cause}; " if cause else f"{kind}; " if kind else "") + f"exit {rc} from `{command[:200]}`; log {log or 'not written'}"  # O(1)
 
 
 def signal_name(rc):  # O(1) the signal a return code means (-9 or 128+9 -> SIGKILL), None for an ordinary exit code
@@ -911,10 +919,10 @@ def killed_reason(sig, rc):  # O(1) the summary error of a run whose test proces
     return f"test run killed by {sig} (exit {rc}): its test processes were killed, not failed" + (f"; {snap}" if snap else "")  # O(1)
 
 
-def record_no_result(a, reason, command, rc, lines, tree=None, cause=None, sig=None):  # O(L + c) log the stop's trace, print its path, log the incident
+def record_no_result(a, reason, command, rc, lines, tree=None, cause=None, sig=None, kind=None):  # O(L + c) log the stop's trace, print its path, log the incident
     log = no_result_log(a.summary, command, str(tree) if tree else str(Path.cwd()), rc, lines)  # O(L)
     print(f"run_tests: no-result log {log}", file=sys.stderr)  # O(1)
-    extra = {"target": no_result_target(command, rc, log, cause), "command": command[:300], "exit": rc, "log": log}  # O(1)
+    extra = {"target": no_result_target(command, rc, log, cause, kind), "command": command[:300], "exit": rc, "log": log}  # O(1)
     if tree:  # O(1)
         extra["cwd"] = str(tree)  # O(1)
     if sig:  # O(1)
@@ -1497,7 +1505,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         save_output(a, e.command, -9, e.text)  # O(len text)
         write_summary(a.summary, "fast" if narrowed(a) else "full", {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], secs, error=reason)  # O(1)
         publish_summary(a)  # O(summary size)
-        record_no_result(a, reason, e.command, -9, e.text.splitlines(), None)  # O(L + c)
+        record_no_result(a, reason, e.command, -9, e.text.splitlines(), None, kind="wall-clock limit")  # O(L + c)
         print(f"0 0 0 {secs:.1f}")  # O(1)
         return 2  # O(1)
     except LockBusy as e:  # O(1)
@@ -1626,7 +1634,8 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
         sub = (lambda f: lambda s: f(s).replace("{junit}", str(xml_path)))(sub)  # noqa: E731 | O(len)
         subenv = lambda s: (root_superlite(s, root, raw=True) if cwd else s).replace("{junit}", str(xml_path))  # noqa: E731 | env is never shell-parsed | O(len)
         env = child_env({**{k: subenv(str(v)) for k, v in (spec.get("env") or {}).items()}, **(getattr(a, "cli_env", None) or {})})  # --env wins over the config | setup and command, no SUPERLITE_FLEET_* (#219) | O(env)
-        literal = Path(spec["junit"]) if spec["junit"] and "{junit}" not in spec["junit"] else None  # a path the runner always writes | O(1)
+        cj = None if spec["junit"] else command_junit(sub(spec["command"]))  # a report the command line itself names (#778) | O(len)
+        literal = Path(spec["junit"]) if spec["junit"] and "{junit}" not in spec["junit"] else Path(cj) if cj and cj != str(xml_path) else None  # a path the runner always writes | O(1)
         alt = None  # the tree copy of a .superlite/ report, used when the root has none | O(1)
         if literal and cwd and not literal.is_absolute():  # the runner writes it inside its tree, .superlite/ at the root | O(1)
             if literal.parts[:1] == (".superlite",):  # O(1)
@@ -1653,9 +1662,10 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
         if label == "full":  # a full run names the declared platforms it did not build (#598) | O(entries)
             declared = testcmd.declared_platforms(root)  # O(entries)
             built = [p for p in dict.fromkeys(testcmd.destination_platform(d) for d in dests) if p] if dests else testcmd.command_platforms(spec["command"])  # O(d)
-            WARNING = platform_warning(declared, built)  # O(d)
-            if WARNING:  # O(1)
-                print(f"run_tests: WARNING: {WARNING}", file=sys.stderr)  # O(1)
+            plat = platform_warning(declared, built)  # O(d)
+            if plat:  # O(1)
+                WARNING = f"{WARNING}; {plat}" if WARNING else plat  # O(1)
+                print(f"run_tests: WARNING: {plat}", file=sys.stderr)  # O(1)
         t0, w0 = time.monotonic(), gate.waited if gate else 0.0  # O(1)
         results = [(d, (gate.run if gate else run_captured)(c, limit=a.limit, shell=True, env=env, cwd=cwd)) for d, c in runs]  # one run per destination, in order | O(o) + the runs
         seconds = time.monotonic() - t0 - ((gate.waited - w0) if gate else 0.0)  # the admission wait is not test time | O(1)
@@ -1677,7 +1687,7 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
                 p = testcmd.merge_parsed([(d, testcmd.parse_output(strip_ansi(t), x.returncode)) for (d, t), (_, x) in zip(texts, results)])  # O(o)
             else:  # O(1)
                 p = testcmd.parse_output(strip_ansi(text), r.returncode)  # O(o)
-            counts = {"passed": p["passed"], "failed": p["failed"], "skipped": p["skipped"], "skipped_tests": []}  # O(1)
+            counts = {"passed": p["passed"], "failed": p["failed"], "skipped": p["skipped"], "skipped_tests": list(p.get("skipped_names") or [])}  # O(sk)
             last = next((ln for ln in reversed(p["tail"]) if ln.strip()), "no output")  # O(1)
             files = {}  # O(1)
             reasons = p.get("reasons", {})  # pytest ids with their message and line (B119) | O(1)
@@ -1727,7 +1737,7 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
                 print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
                 write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
                 publish_summary(a)  # O(summary size)
-                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*p["tail"]], cwd)  # O(40 + c)
+                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*p["tail"]], cwd, kind="test runner unreachable")  # O(40 + c)
                 print(f"0 0 0 {seconds:.1f}")  # O(1)
                 return 2  # O(1)
             sig = signal_name(r.returncode) if r.returncode and not (p["counted"] or p["passed"] or p["skipped"] or p["names"]) else None  # a kill with no result at all | O(1)
@@ -1736,7 +1746,7 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
                 print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
                 write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
                 publish_summary(a)  # O(summary size)
-                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*p["tail"]], cwd, sig=sig)  # O(40 + c)
+                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*p["tail"]], cwd, sig=sig, kind=f"killed by {sig}")  # O(40 + c)
                 print(f"0 0 0 {seconds:.1f}")  # O(1)
                 return 2  # O(1)
             if r.returncode in (126, 127) and not (p["counted"] or p["names"]):  # the shell could not start the command: no result, not a failing test | O(1)
@@ -1744,7 +1754,7 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
                 print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
                 write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
                 publish_summary(a)  # O(summary size)
-                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*p["tail"]], cwd)  # O(40 + c)
+                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*p["tail"]], cwd, kind="not executable" if r.returncode == 126 else "command not found")  # O(40 + c)
                 print(f"0 0 0 {seconds:.1f}")  # O(1)
                 return 2  # O(1)
             if len(results) > 1:  # each red destination is named (#598) | O(d)
@@ -1767,7 +1777,7 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
                 print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
                 write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], seconds, error=reason)  # O(1)
                 publish_summary(a)  # O(summary size)
-                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*kept, *p["tail"]], cwd)  # O(40 + c)
+                record_no_result(a, reason, sub(spec["command"]), r.returncode, [*kept, *p["tail"]], cwd, kind="no test count" + (f" (runner: {p['empty'][:80]})" if p["empty"] else ""))  # O(40 + c)
                 print(f"0 0 0 {seconds:.1f}")  # O(1)
                 return 1  # O(1)
     if label == "full" and spec.get("lock") is False and r.returncode:  # a red remote run in a worktree behind the main checkout may only lack its fix (#638) | O(1)
@@ -1942,17 +1952,37 @@ def stable_plan():  # O(S) the plan path `plan_tools lint --stable` recorded, el
         return None  # O(1)
 
 
+def task_plan(a):  # O(1) (plan path or None, the `tried` text): --plan a file, --plan a folder (its run's plan), else stable.json's plan, else the default
+    if a.plan:  # O(1)
+        if Path(a.plan).is_dir():  # O(1)
+            found = nt.sibling("plan_tools").run_plan(Path(a.plan))  # O(1)
+            return (str(found) if found else None), a.plan  # O(1)
+        return (a.plan if Path(a.plan).is_file() else None), a.plan  # O(1)
+    sp = stable_plan()  # O(S)
+    plan = next((p for p in (sp, nt.DEFAULT_PLAN) if p and Path(p).is_file()), None)  # O(1)
+    return plan, ", ".join(x for x in (sp and f"{sp} (.superlite/stable.json)", nt.DEFAULT_PLAN) if x)  # O(1)
+
+
+def task_note(a, text):  # O(1) the one stderr line for a --task run that got no cmd= lookup; it joins the summary warning
+    global WARNING  # O(1)
+    note = f"--task {a.task}: {text}; ran the project's test command, not a **Tests:** cmd="  # O(1)
+    print(f"run_tests: {note}", file=sys.stderr)  # O(1)
+    WARNING = f"{WARNING}; {note}" if WARNING else note  # O(1)
+
+
 def task_cmd_spec(a):  # O(L + m + f) the spec of the `cmd=` in --task's plan **Tests:** field, else None
     if not getattr(a, "task", None):  # O(1)
         return None  # O(1)
-    plan = a.plan or next((p for p in (stable_plan(), nt.DEFAULT_PLAN) if p and Path(p).is_file()), None)  # O(1)
+    plan, tried = task_plan(a)  # O(S)
     if not plan or not Path(plan).is_file():  # O(1)
+        task_note(a, f"no plan found (tried {tried})")  # O(1)
         return None  # O(1)
     try:  # O(1)
         info = nt.parse_plan(plan)  # O(L)
     except Exception:  # an unreadable plan is the old path's usage error, not ours  # O(1)
         return None  # O(1)
     if a.task not in info:  # O(1)
+        task_note(a, f"not in {plan}")  # O(1)
         return None  # O(1)
     cmd = testcmd.task_command(nt._field(info[a.task]["body"], "Tests"))  # O(len body)
     if not cmd:  # O(1)
@@ -2059,12 +2089,10 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             tree = None  # O(1)
             key = a.task or (worker_tree_name() if paths and spec.get("isolate", False) else None)  # a fleet worker's --fast run without --task gets worker-<Wn> (#479) | O(env)
             if key and spec.get("isolate", False):  # compiled stack: test own files only, in an isolated tree | O(1)
-                sp = stable_plan()  # O(S)
-                plan = a.plan or next((p for p in (sp, nt.DEFAULT_PLAN) if p and Path(p).is_file()), None)  # --plan, else the first existing of stable.json's plan and the default | O(1)
+                plan, tried = task_plan(a)  # --plan (a file or a run folder), else the first existing of stable.json's plan and the default | O(S)
                 if not a.task:  # a worker has no task of its own: no plan just means no unfinished tasks to hold back | O(1)
                     info = nt.parse_plan(plan) if plan and Path(plan).is_file() else {}  # O(L)
                 elif not plan or not Path(plan).is_file():  # O(1)
-                    tried = a.plan or ", ".join(x for x in (sp and f"{sp} (.superlite/stable.json)", nt.DEFAULT_PLAN) if x)  # O(1)
                     reason = f"--task {a.task} needs its plan: pass --plan PLAN (tried {tried}, not found)"  # O(1)
                     return usage_error(a, label, reason)  # O(summary size)
                 else:  # O(1)
@@ -2146,7 +2174,7 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                                              "skipped_tests": []}, [], seconds,  # O(1)
                           error=reason)  # O(1)
             publish_summary(a)  # O(summary size)
-            record_no_result(a, reason, shlex.join(cmd), r.returncode, (r.stdout + r.stderr).splitlines(), cause=cause, sig=sig)  # O(O + c)
+            record_no_result(a, reason, shlex.join(cmd), r.returncode, (r.stdout + r.stderr).splitlines(), cause=cause, sig=sig, kind=f"killed by {sig}" if sig else "pytest produced no results")  # O(O + c)
             print(f"0 0 0 {seconds:.1f}")  # O(1)
             return 1 if r.returncode == 5 else 2  # O(1)
         counts, failures, files = parsed or parse_junit(xml_path)  # O(X + T*d)
