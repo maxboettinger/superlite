@@ -96,6 +96,13 @@ REFUSED = "Refused command: {} (none of this Bash call ran; run its other comman
 MAX_TREE = 2000  # entries a folder may hold for rm -r to pass as housekeeping | O(1)
 UNRESOLVED_HINT = ("The guard cannot resolve this target: name the path literally in the command, or write the file (a findings report, "
                    "a plan edit, a fixer brief, a wait file under .superlite/ or a plans folder) with the Write or Edit tool.")  # O(1)
+SOURCE_HINT = ("The guard cannot read a program given as `<(...)`: `source <(...)` passes only as a print-only `sed -n`, `cat`, "
+               "`head` or `tail` of git-tracked files. Else write the lines to {scratch}/defs.sh in one call, then run "
+               "`. {scratch}/defs.sh` in the next; a script there is judged by its text.")  # O(1)
+EVAL_HINT = ("eval runs text the guard cannot read (a captured `wait:` line, a variable): print the text in one call, then run "
+             "the printed command literally in the next.")  # O(1)
+MANY_HINT = ("A variable has more values than the guard follows (a list built in a loop): write the words literally in the "
+             "command; `sl commit_task Tn --also A B C` takes several paths after one --also.")  # O(1)
 WRAP = {  # wrapper: (short options that take a value, long options that take a value) | O(1)
     "env": ("CuaPS", ("chdir", "unset", "argv0", "split-string", "block-signal", "default-signal", "ignore-signal")),
     "sudo": ("CDghprtTUu", ("chdir", "user", "group", "host", "prompt", "role", "type", "close-from", "other-user",
@@ -1071,6 +1078,62 @@ def _eval_resolve(part):  # O(p) | the part with each resolvable echo/printf sub
     return EVAL_SUBST.sub(sub, part)  # O(p)
 
 
+SED_SCRIPT = re.compile(r"(?:(?:\d+|\$|/[^/\\]*/)(?:,(?:\d+|\$|/[^/\\]*/))?)?p")  # a print-only sed script | O(1)
+SHADOWED = re.compile(r"\bPATH\+?=|\b(?:alias|unalias|builtin|command|enable|hash)\b")  # a command that may swap the program | O(1)
+
+
+def _print_only(body, c, st, ctx):  # O(t * d + git) | is the body one `cat`/`head`/`tail`/`sed -n 'Np'` of literal git-tracked files (not scratch, not written by this call)? (#781)
+    segs = guard_lex.split(body)  # O(n)
+    if len(segs) != 1:  # O(1)
+        return False  # O(1)
+    sg = segs[0]  # O(1)
+    w = sg.words  # O(w)
+    if (not w or sg.redirects or sg.heredocs or sg.bodies or sg.subshell is not None or sg.sep or sg.arith is not None
+            or any(sg.dyn) or any(sg.globs) or any(not x for x in w) or "PATH" in c.cmdenv):  # O(w)
+        return False  # O(w)
+    name = w[0]  # O(1)
+    if name not in ("cat", "head", "tail", "sed") or SHADOWED.search(ctx.text) or re.search(  # O(n)
+            r"(?:\b" + name + r"\s*\(\s*\)|\bfunction\s+" + name + r"\b)", ctx.text):  # a function of that name | O(n)
+        return False  # O(n)
+    rest, files = w[1:], []  # O(w)
+    if name in ("head", "tail"):  # O(1)
+        if len(rest) >= 2 and rest[0] == "-n" and re.fullmatch(r"\d+", rest[1]):  # O(1)
+            rest = rest[2:]  # O(1)
+        elif rest and re.fullmatch(r"-n\d+", rest[0]):  # O(1)
+            rest = rest[1:]  # O(1)
+        files = rest  # O(w)
+    elif name == "cat":  # O(1)
+        files = rest  # O(w)
+    else:  # sed -n with -e scripts, or one script word | O(1)
+        if not rest or rest[0] != "-n":  # O(1)
+            return False  # O(1)
+        rest, scripts = rest[1:], []  # O(w)
+        while len(rest) >= 2 and rest[0] == "-e":  # O(w)
+            scripts.append(rest[1])  # O(1)
+            rest = rest[2:]  # O(1)
+        if not scripts:  # O(1)
+            if not rest:  # O(1)
+                return False  # O(1)
+            scripts, rest = [rest[0]], rest[1:]  # O(1)
+        if any(not SED_SCRIPT.fullmatch(x) for x in scripts):  # O(w)
+            return False  # O(w)
+        files = rest  # O(w)
+    if not files or any(x.startswith(("-", "~")) or "\0" in x or re.search(r"[$`*?\[{]", x) for x in files):  # O(w)
+        return False  # O(w)
+    scr = [os.path.join(os.path.realpath(d), "scratch").lower().rstrip("/") + "/" for d in ctx.sds]  # O(s)
+    for d in c.inn:  # O(d)
+        if d is None:  # O(1)
+            return False  # O(1)
+        for x in files:  # O(w)
+            full = _clean(_winpath(x) if x.startswith("/") else d + "/" + x)  # O(p)
+            real = _real(full)  # O(p)
+            if full in st.shared["wrote"] or real in st.shared["wrote"] or any(real.lower().startswith(q) for q in scr):  # O(s)
+                return False  # O(s)
+            if not os.path.isfile(real) or _git_rc(["ls-files", "--error-unmatch", "--", os.path.basename(real)], os.path.dirname(real), ctx) != 0:  # O(git)
+                return False  # O(git)
+    return True  # O(1)
+
+
 def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and source/. run in the shell's own state
     if base == "eval":  # O(1)
         parts = [_expand(w, st, ctx, False) if d else w for w, d in zip(words[1:], dyn[1:])]  # O(w * p)
@@ -1092,6 +1155,9 @@ def _source_or_eval(base, words, dyn, c, st, ctx, depth):  # O(n) | eval and sou
         return None  # O(1)
     operand = words[1] if len(words) > 1 else None  # source / . | O(1)
     if operand is not None and operand.startswith(("<(", ">(")):  # O(1)
+        if len(words) == 2 and not dyn[0] and operand.startswith("<(") and operand.endswith(")") and _print_only(operand[2:-1], c, st, ctx):  # O(n)
+            c.ok = c.fail = (None,)  # the sourced lines may cd | O(1)
+            return None  # O(1)
         return _unknown(ctx, operand)  # O(1)
     if operand in ("/dev/stdin", "/dev/fd/0") or (operand is None and c.docs):  # O(1)
         if c.docs:  # O(1)
@@ -2210,8 +2276,9 @@ MESSAGES = {  # O(1)
              "- A throwaway script (count lines, compare outputs, time a command): write it under {scratch}/ and run it from "
              "there. The folder is git-ignored and `sl orchestrator end` removes it; a run of a script there is judged like a "
              "heredoc script, so it may read the project but not write project code. A subprocess call whose program is "
-             "not a string literal (`[prog, ...]`, `sys.executable`) is judged unknown; a later argument that is not a "
-             "literal is judged like an unknown shell variable.",
+             "not a string literal (`[prog, ...]`) is judged unknown; a list name bound once to a literal list (used "
+             "only as the call's argument or a `*` splat) counts as that list, `sys.executable` as python3, and a later "
+             "argument that is not a literal is judged like an unknown shell variable.",
              "- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete "
              ".superlite by hand."],
 }  # O(1)
@@ -2219,6 +2286,14 @@ MESSAGES = {  # O(1)
 
 def _scratch_hint(project, sd):  # O(p) | the coordinator's throwaway-script folder: project-relative when the state folder lies in the project
     return sd[len(project) + 1:] + "/scratch" if sd.startswith(project + "/") else sd + "/scratch"  # O(p)
+
+
+def _hint(word):  # O(1) | the way out for the kind of word the guard could not resolve
+    if word.startswith(("<(", ">(")):  # O(1)
+        return SOURCE_HINT  # O(1)
+    if word.startswith("eval ") and word.endswith(": text the guard cannot resolve"):  # O(1)
+        return EVAL_HINT  # O(1)
+    return MANY_HINT if word == "too many variable values" else UNRESOLVED_HINT  # O(1)
 
 
 def _flat(s, limit=120):  # O(len) | one line, no control characters
@@ -2316,7 +2391,7 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
         if v.why:  # why the target is no housekeeping, right after the refused line | O(len)
             _err(f"Not housekeeping: {_flat(v.why, 300)}")  # O(len)
         if v.word:  # the word the guard could not resolve | O(len)
-            _err(UNRESOLVED_HINT)  # the supported way, right before the word so the last lines stay as before | O(len)
+            _err(_hint(v.word).replace("{scratch}", _scratch_hint(project, sd)))  # the way out for the cause, right before the word so the last lines stay as before | O(len)
             _err(f"Unresolved word: {_flat(v.word, 500)}")  # O(len)
         if named:  # the absolute path on its own line; the last line stays `Blocked target: <rel>` as before | O(len)
             _err(f"Absolute target: {_flat(v.abs, 500)}")  # O(len)
