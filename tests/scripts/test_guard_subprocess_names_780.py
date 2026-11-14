@@ -103,3 +103,14 @@ def test_shell_true_judges_the_first_word_as_shell_text():
     assert "src" in " ".join(_py("import subprocess\nsubprocess.run(['rm -rf src', 'x'], shell=True)\n"))
     assert "src" in " ".join(_py("import subprocess\ncmd = ['rm -rf src', 'x']\nsubprocess.run(cmd, shell=True)\n"))
     assert _py("import subprocess\nsubprocess.run(['ls -l', 'x'], shell=True)\n") == []
+
+
+@pytest.mark.parametrize("code", [
+    "import subprocess, importlib\ncmd = ['ls']\ngetattr(importlib.import_module('__ma'+'in__'), 'c'+'md')[:] = ['rm', 'src/a.py']\nsubprocess.run(cmd)\n",
+    "import subprocess\ncmd = ['ls']\ngetattr(m, 'cmd')[:] = ['rm', 'src/a.py']\nsubprocess.run(cmd)\n",
+    "import subprocess, sys, gc\ngc.get_referents(sys)[0]['executable'] = '/bin/sh'\nsubprocess.run([sys.executable, '-c', 'rm src/a.py'])\n",
+    "import subprocess, sys, importlib\nimportlib.import_module('sys').executable = '/bin/sh'\nsubprocess.run([sys.executable, '-c', 'rm src/a.py'])\n",
+    "import subprocess, sys, ctypes\nsubprocess.run([sys.executable, '-c', 'rm src/a.py'])\n",
+])
+def test_getattr_gc_importlib_keep_names_unknown(code):
+    assert "?" in _py(code)

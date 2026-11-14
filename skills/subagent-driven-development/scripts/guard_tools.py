@@ -1313,7 +1313,7 @@ def unresolved() -> str:  # O(1) | the first reason the last targets() call reco
 
 _CODE: list[str | None] = [None]  # O(1) | the Python code in hand, for the list names and sys.executable it reads (#780)
 _SP_FUNCS = frozenset(("run", "call", "check_call", "check_output", "Popen", "getoutput", "getstatusoutput"))  # O(1)
-_DYN_NAMES = frozenset(("globals", "locals", "vars", "exec", "eval", "setattr", "__import__", "compile"))  # O(1)
+_DYN_NAMES = frozenset(("globals", "locals", "vars", "exec", "eval", "setattr", "__import__", "compile", "getattr", "delattr"))  # O(1)
 
 
 def _bound(tree: ast.AST) -> dict[str, int]:  # O(|tree|) | how often each name is bound anywhere in the code
@@ -1361,7 +1361,7 @@ def _sp_call(x: ast.AST | None, trust: set[str]) -> bool:  # O(1) | is x a call 
 
 
 _REBIND_ATTRS = frozenset(("getattr", "setattr", "modules", "f_globals", "f_locals"))  # O(1)
-_REBIND_MODS = frozenset(("__main__", "builtins", "inspect"))  # O(1)
+_REBIND_MODS = frozenset(("__main__", "builtins", "inspect", "gc", "importlib", "ctypes"))  # O(1)
 
 
 @functools.lru_cache(maxsize=32)
