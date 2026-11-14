@@ -248,3 +248,28 @@ def test_copy_of_a_hard_linked_source_written_through_its_other_name_blocks(proj
 def test_plain_copy_of_a_python_source_still_passes(proj):  # F-T2-10
     cmd = "cp .superlite/m.py .superlite/scratch/m.py; python3 .superlite/scratch/m.py"
     assert _j(proj, cmd) is None
+
+
+@pytest.mark.parametrize("link", [
+    "ln -s a.sh .superlite/scratch/b.sh",
+    "ln .superlite/scratch/a.sh .superlite/scratch/b.sh",
+    "link .superlite/scratch/a.sh .superlite/scratch/b.sh",
+    "cp -l .superlite/scratch/a.sh .superlite/scratch/b.sh",
+    "cp --symbolic-link a.sh .superlite/scratch/b.sh",
+])
+def test_write_through_a_link_made_in_the_call_blocks(proj, link):  # F-T2-12
+    cmd = ("cat > .superlite/scratch/a.sh <<'E'\necho hi\nE\n"
+           f"{link}; echo 'rm -rf src' > .superlite/scratch/b.sh; sh .superlite/scratch/a.sh")
+    assert _j(proj, cmd) is not None
+
+
+def test_case_variant_write_drops_the_heredoc_text(proj):  # F-T2-13
+    cmd = ("cat > .superlite/scratch/a.sh <<'E'\necho hi\nE\n"
+           "echo 'rm -rf src' > .superlite/scratch/A.sh; sh .superlite/scratch/a.sh")
+    assert _j(proj, cmd) is not None
+
+
+def test_case_variant_write_blocks_a_copy_read(proj):  # F-T2-13
+    (Path(proj) / ".superlite" / "m.sh").write_text("echo hi\n")
+    v = _j(proj, "echo x > .superlite/M.sh; cp .superlite/m.sh .superlite/scratch/m.sh; sh .superlite/scratch/m.sh")
+    assert v is not None and v.rel == "?"
