@@ -51,6 +51,15 @@ def test_resolved_program_is_judged_by_its_words(code, want):
     "import subprocess, sys\nsubprocess.run(['git', *sys.argv[1:]])\n",
     "import subprocess, sys\nsys.executable = '/bin/sh'\nsubprocess.run([sys.executable, '-c', 'rm -rf src'])\n",
     "import subprocess\nimport os as sys\nsubprocess.run([sys.executable, '-c', 'print(1)'])\n",
+    "import subprocess, sys, builtins\nbuiltins.setattr(sys, 'executable', '/bin/sh')\nsubprocess.run([sys.executable, '-c', 'rm -rf src'])\n",
+    "import subprocess, builtins\ncmd = ['ls']\ngetattr(builtins, 'setattr')(__import__('sys'), 'x', 1)\nsubprocess.run(cmd)\n",
+    "import subprocess, __main__\ncmd = ['ls']\n__main__.cmd[:] = ['rm', 'src/a.py']\nsubprocess.run(cmd)\n",
+    "import subprocess, sys\ncmd = ['ls']\nsys.modules[__name__].cmd[:] = ['rm', 'src/a.py']\nsubprocess.run(cmd)\n",
+    "import subprocess, inspect\ncmd = ['ls']\ninspect.currentframe().f_globals['cmd'][:] = ['rm', 'src/a.py']\nsubprocess.run(cmd)\n",
+    "import subprocess, sys\ncmd = ['ls']\nsys.modules['x'].f_globals['cmd'][:] = ['rm']\nsubprocess.run(cmd)\n",
+    "import subprocess, sys\ncmd = ['ls']\nx = sys.getattr\nsubprocess.run(cmd)\n",
+    "import subprocess, sys\ncmd = ['ls']\nsys.foo.cmd[:] = ['rm', 'src/a.py']\nsubprocess.run(cmd)\n",
+    "import subprocess, sys\ncmd = ['ls']\nd = {'cmd': 1}\nsubprocess.run(cmd)\n",
 ])
 def test_unreadable_program_stays_unknown(code):
     assert "?" in _py(code)

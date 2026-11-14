@@ -1360,6 +1360,10 @@ def _sp_call(x: ast.AST | None, trust: set[str]) -> bool:  # O(1) | is x a call 
     return isinstance(f, ast.Name) and f.id in _SP_FUNCS and f.id in trust  # O(1)
 
 
+_REBIND_ATTRS = frozenset(("getattr", "setattr", "modules", "f_globals", "f_locals"))  # O(1)
+_REBIND_MODS = frozenset(("__main__", "builtins", "inspect"))  # O(1)
+
+
 @functools.lru_cache(maxsize=32)
 def _py_facts(code: str) -> tuple[dict[str, list[str]], bool]:  # O(|tree|) | (list names bound once to a literal list or tuple of strings, sys.executable readable) (#780)
     try:  # O(len(code))
@@ -1373,6 +1377,12 @@ def _py_facts(code: str) -> tuple[dict[str, list[str]], bool]:  # O(|tree|) | (l
         if isinstance(x, ast.ImportFrom) and any(a.name == "*" for a in x.names):  # O(1)
             return {}, False  # O(1)
         if isinstance(x, ast.Attribute) and x.attr.startswith("__") and x.attr.endswith("__"):  # sys.__dict__[...] = ... rebinds by text  # O(1)
+            return {}, False  # O(1)
+        if isinstance(x, ast.Attribute) and (x.attr in _DYN_NAMES or x.attr in _REBIND_ATTRS):  # module objects rebind names by text  # O(1)
+            return {}, False  # O(1)
+        if isinstance(x, ast.Import) and any(a.name.split(".")[0] in _REBIND_MODS for a in x.names):  # O(|names|)
+            return {}, False  # O(|names|)
+        if isinstance(x, ast.ImportFrom) and (x.module or "").split(".")[0] in _REBIND_MODS:  # O(1)
             return {}, False  # O(1)
         for c in ast.iter_child_nodes(x):  # O(1)
             parent[id(c)] = x  # O(1)
@@ -1391,6 +1401,9 @@ def _py_facts(code: str) -> tuple[dict[str, list[str]], bool]:  # O(|tree|) | (l
                 _sp_call(p, trust) and p.args and p.args[0] is x)  # type: ignore[union-attr]  # O(1)
             if not ok:  # O(1)
                 del lists[x.id]  # O(1)
+    for x in ast.walk(tree):  # an attribute name or a string equal to a list name may reach it through a module object  # O(|tree|)
+        if (isinstance(x, ast.Attribute) and x.attr in lists) or (isinstance(x, ast.Constant) and isinstance(x.value, str) and x.value in lists):  # O(1)
+            return {}, False  # O(1)
     sysok = False  # O(1)
     if bound.get("sys") == 1:  # O(1)
         sysok = any(isinstance(x, ast.Import) and any(a.name == "sys" and a.asname is None for a in x.names) for x in ast.walk(tree))  # O(|tree|)
