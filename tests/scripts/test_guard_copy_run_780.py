@@ -217,3 +217,34 @@ def test_copy_onto_read_only_destination_records_no_text(proj):
         assert v is not None
     finally:
         ro.chmod(0o644)
+
+
+def test_copy_after_a_folder_copy_over_the_source_blocks(proj, tmp_path):  # F-T2-10
+    d = tmp_path / "out" / "d"
+    d.mkdir(parents=True)
+    (d / "m.sh").write_text("rm -rf src\n")
+    (Path(proj) / ".superlite" / "scratch" / "m.sh").write_text("echo hi\n")
+    cmd = (f"cp -r {d}/. .superlite/scratch/; cp .superlite/scratch/m.sh .superlite/scratch/n.sh; "
+           "bash .superlite/scratch/n.sh")
+    assert _j(proj, cmd) is not None
+    cmd = (f"cp -r {d}/. .superlite/; cp .superlite/m.sh .superlite/scratch/m.sh; bash .superlite/scratch/m.sh")
+    assert _j(proj, cmd) is not None
+
+
+def test_copy_of_a_hard_linked_source_written_through_its_other_name_blocks(proj):  # F-T2-10
+    sd = Path(proj) / ".superlite"
+    (sd / "scratch" / "m.sh").write_text("echo hi\n")
+    os.link(sd / "scratch" / "m.sh", sd / "scratch" / "h.sh")
+    cmd = ("echo 'rm -rf src' > .superlite/scratch/h.sh; cp .superlite/scratch/m.sh .superlite/scratch/n.sh; "
+           "bash .superlite/scratch/n.sh")
+    assert _j(proj, cmd) is not None
+    (sd / "m.sh").write_text("echo hi\n")
+    os.link(sd / "m.sh", sd / "h.sh")
+    cmd = ("echo 'rm -rf src' > .superlite/h.sh; cp .superlite/m.sh .superlite/scratch/m.sh; "
+           "bash .superlite/scratch/m.sh")
+    assert _j(proj, cmd) is not None
+
+
+def test_plain_copy_of_a_python_source_still_passes(proj):  # F-T2-10
+    cmd = "cp .superlite/m.py .superlite/scratch/m.py; python3 .superlite/scratch/m.py"
+    assert _j(proj, cmd) is None
