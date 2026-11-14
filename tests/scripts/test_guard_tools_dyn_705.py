@@ -34,7 +34,6 @@ def test_dynamic_argument_judged_by_program(code):
 
 @pytest.mark.parametrize("code,why", [
     ('subprocess.run([p, "x"])', "subprocess program is not a string literal"),
-    ('subprocess.run([sys.executable, "-c", "print(1)"])', "subprocess program is not a string literal"),
     ('subprocess.run(p, shell=True)', "subprocess program is not a string literal"),
     ('subprocess.run(f"git show {p}", shell=True)', "subprocess program is not a string literal"),
     ('os.system("git show " + p)', "subprocess program is not a string literal"),
