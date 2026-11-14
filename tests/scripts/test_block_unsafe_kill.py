@@ -7,6 +7,13 @@ from pathlib import Path
 
 import pytest
 
+try:
+    import resource
+except ImportError:  # Windows: no child CPU time; _child_seconds falls back to wall time
+    resource = None
+
+needs_rusage = pytest.mark.skipif(resource is None, reason="no child CPU time on this OS")
+
 ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "block-unsafe-kill"
 # Git Bash on Windows (WSL's bash.exe in System32 would not see Windows paths), bash elsewhere.
@@ -31,6 +38,19 @@ def run(payload, tool="Bash", raw=None):
     return subprocess.run(
         [BASH, str(HOOK)], input=raw, capture_output=True, text=True
     )
+
+
+def _child_seconds(fn):
+    """Call fn once; return (its result, seconds). Seconds is the children's CPU time (#792): unlike wall time
+    it does not grow while a parallel suite keeps the hook waiting for a core. Wall time where `resource` is missing."""
+    if resource is None:
+        t0 = time.monotonic()
+        result = fn()
+        return result, time.monotonic() - t0
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    result = fn()
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return result, (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
 
 
 def test_blocks_taskkill_im():
@@ -199,10 +219,9 @@ def test_long_inputs_stay_fast_666():
     body = "\n".join(f"pkill -f server{i}  # kill {i}" for i in range(3000))
     code = "\n".join(f'print("pkill -f server{i}")' for i in range(3000))
     for cmd in (f"cat > notes.txt <<'EOF'\n{body}\nEOF\necho done", f"python3 -c '{code}'"):
-        start = time.monotonic()
-        r = run(cmd)
+        r, seconds = _child_seconds(lambda: run(cmd))
         assert r.returncode == 0
-        assert time.monotonic() - start < 10
+        assert seconds < 10, seconds
 
 
 def test_docs_name_the_command_word_rule_666():
@@ -227,3 +246,53 @@ def test_unquoted_heredoc_runs_its_substitutions_666():
     for cmd in passes:
         r = run(cmd)
         assert r.returncode == 0 and r.stderr == "", cmd
+
+
+# --- #792: the speed bound counts the hook's CPU time, which does not grow while it waits for a core
+
+
+@needs_rusage
+def test_child_seconds_ignore_waiting_792():
+    r, seconds = _child_seconds(lambda: subprocess.run([BASH, "-c", "sleep 1"]))
+    assert r.returncode == 0
+    assert seconds < 0.5, seconds
+
+
+@needs_rusage
+def test_child_seconds_count_cpu_792():
+    r, seconds = _child_seconds(lambda: subprocess.run([BASH, "-c", "i=0; while ((i < 100000)); do ((i++)); done"]))
+    assert r.returncode == 0
+    assert seconds > 0.02, seconds
+
+
+# --- #830: the block names ways to end your own processes that an auto-mode classifier allows
+
+
+def test_block_names_same_call_kill_830():
+    r = run("pkill -f server")
+    assert r.returncode == 2
+    for part in ("helper & pid=$!; ...; kill $pid", "Claude Code: TaskStop", "auto-mode classifier",
+                 "kill <PID>", "caffeinate -w <PID>", "Windows: taskkill /PID <PID>"):
+        assert part in r.stderr, part
+    assert "Kill only the PIDs you started" not in r.stderr
+
+
+def test_powershell_block_names_passthru_830():
+    r = run("Stop-Process -Name node", "PowerShell")
+    assert r.returncode == 2
+    for part in ("$p = Start-Process <cmd> -PassThru; ...; Stop-Process -Id $p.Id", "Claude Code: TaskStop",
+                 "auto-mode classifier", "Stop-Process -Id <PID>"):
+        assert part in r.stderr, part
+    assert "$!" not in r.stderr
+
+
+def test_advised_forms_pass_the_hook_830():
+    assert run("sleep 30 & pid=$!; sleep 1; kill $pid").returncode == 0
+    assert run("$p = Start-Process sleep -PassThru; Stop-Process -Id $p.Id", "PowerShell").returncode == 0
+
+
+def test_docs_name_the_way_out_830():
+    text = (ROOT / "docs" / "hooks.md").read_text(encoding="utf-8")
+    line = next(ln for ln in text.splitlines() if ln.startswith("- `block-unsafe-kill`: always on"))
+    for word in ("#830", "TaskStop", "`$!`", "-PassThru", "auto-mode classifier"):
+        assert word in line, word
