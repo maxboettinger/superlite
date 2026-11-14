@@ -1311,7 +1311,119 @@ def unresolved() -> str:  # O(1) | the first reason the last targets() call reco
     return _WHY[0] if _WHY else ""  # O(1)
 
 
+_CODE: list[str | None] = [None]  # O(1) | the Python code in hand, for the list names and sys.executable it reads (#780)
+_SP_FUNCS = frozenset(("run", "call", "check_call", "check_output", "Popen", "getoutput", "getstatusoutput"))  # O(1)
+_DYN_NAMES = frozenset(("globals", "locals", "vars", "exec", "eval", "setattr", "__import__", "compile", "getattr", "delattr"))  # O(1)
+
+
+def _bound(tree: ast.AST) -> dict[str, int]:  # O(|tree|) | how often each name is bound anywhere in the code
+    n: dict[str, int] = {}  # O(1)
+    for x in ast.walk(tree):  # O(|tree|)
+        names: list[str] = []  # O(1)
+        if isinstance(x, ast.Name) and not isinstance(x.ctx, ast.Load):  # O(1)
+            names = [x.id]  # O(1)
+        elif isinstance(x, ast.arg):  # O(1)
+            names = [x.arg]  # O(1)
+        elif isinstance(x, ast.alias):  # O(1)
+            names = [(x.asname or x.name).split(".")[0]]  # O(1)
+        elif isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):  # O(1)
+            names = [x.name]  # O(1)
+        elif isinstance(x, ast.ExceptHandler) and x.name:  # O(1)
+            names = [x.name]  # O(1)
+        elif isinstance(x, (ast.MatchAs, ast.MatchStar)) and x.name:  # O(1)
+            names = [x.name]  # O(1)
+        elif isinstance(x, ast.MatchMapping) and x.rest:  # O(1)
+            names = [x.rest]  # O(1)
+        elif isinstance(x, (ast.Global, ast.Nonlocal)):  # O(1)
+            names = list(x.names)  # O(1)
+        for i in names:  # O(1)
+            n[i] = n.get(i, 0) + 1  # O(1)
+    return n  # O(|tree|)
+
+
+def _sp_trust(tree: ast.AST, bound: dict[str, int]) -> set[str]:  # O(|tree|) | the names that stand for subprocess or one of its functions: bound once, by an import
+    ok: set[str] = set()  # O(1)
+    for x in ast.walk(tree):  # O(|tree|)
+        if isinstance(x, ast.Import):  # O(1)
+            ok.update(a.name for a in x.names if a.name == "subprocess" and a.asname is None and bound.get("subprocess") == 1)  # O(1)
+        elif isinstance(x, ast.ImportFrom) and x.module == "subprocess" and not x.level:  # O(1)
+            ok.update(a.name for a in x.names if a.asname is None and a.name in _SP_FUNCS and bound.get(a.name) == 1)  # O(1)
+    return ok  # O(|tree|)
+
+
+def _sp_call(x: ast.AST | None, trust: set[str]) -> bool:  # O(1) | is x a call of a subprocess function?
+    if not isinstance(x, ast.Call):  # O(1)
+        return False  # O(1)
+    f = x.func  # O(1)
+    if isinstance(f, ast.Attribute):  # O(1)
+        return isinstance(f.value, ast.Name) and f.value.id == "subprocess" and f.attr in _SP_FUNCS and "subprocess" in trust  # O(1)
+    return isinstance(f, ast.Name) and f.id in _SP_FUNCS and f.id in trust  # O(1)
+
+
+_REBIND_ATTRS = frozenset(("getattr", "setattr", "modules", "f_globals", "f_locals"))  # O(1)
+_REBIND_MODS = frozenset(("__main__", "builtins", "inspect", "gc", "importlib", "ctypes"))  # O(1)
+
+
+@functools.lru_cache(maxsize=32)
+def _py_facts(code: str) -> tuple[dict[str, list[str]], bool]:  # O(|tree|) | (list names bound once to a literal list or tuple of strings, sys.executable readable) (#780)
+    try:  # O(len(code))
+        tree = ast.parse(code)  # O(len(code))
+    except (SyntaxError, ValueError, RecursionError):  # O(1)
+        return {}, False  # O(1)
+    parent: dict[int, ast.AST] = {}  # O(1)
+    for x in ast.walk(tree):  # O(|tree|)
+        if isinstance(x, ast.Name) and x.id in _DYN_NAMES:  # code that binds or runs names by text: nothing is readable  # O(1)
+            return {}, False  # O(1)
+        if isinstance(x, ast.ImportFrom) and any(a.name == "*" for a in x.names):  # O(1)
+            return {}, False  # O(1)
+        if isinstance(x, ast.Attribute) and x.attr.startswith("__") and x.attr.endswith("__"):  # sys.__dict__[...] = ... rebinds by text  # O(1)
+            return {}, False  # O(1)
+        if isinstance(x, ast.Attribute) and (x.attr in _DYN_NAMES or x.attr in _REBIND_ATTRS):  # module objects rebind names by text  # O(1)
+            return {}, False  # O(1)
+        if isinstance(x, ast.Import) and any(a.name.split(".")[0] in _REBIND_MODS for a in x.names):  # O(|names|)
+            return {}, False  # O(|names|)
+        if isinstance(x, ast.ImportFrom) and (x.module or "").split(".")[0] in _REBIND_MODS:  # O(1)
+            return {}, False  # O(1)
+        for c in ast.iter_child_nodes(x):  # O(1)
+            parent[id(c)] = x  # O(1)
+    bound = _bound(tree)  # O(|tree|)
+    trust = _sp_trust(tree, bound)  # O(|tree|)
+    lists: dict[str, list[str]] = {}  # O(1)
+    for x in ast.walk(tree):  # O(|tree|)
+        if (isinstance(x, ast.Assign) and len(x.targets) == 1 and isinstance(x.targets[0], ast.Name)
+                and isinstance(x.value, (ast.List, ast.Tuple)) and bound.get(x.targets[0].id) == 1
+                and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in x.value.elts)):  # O(|elts|)
+            lists[x.targets[0].id] = [e.value for e in x.value.elts]  # type: ignore[attr-defined]  # O(|elts|)
+    for x in ast.walk(tree):  # every other use is a subprocess call's first argument or a `*` splat in a list  # O(|tree|)
+        if isinstance(x, ast.Name) and x.id in lists and isinstance(x.ctx, ast.Load):  # O(1)
+            p = parent.get(id(x))  # O(1)
+            ok = (isinstance(p, ast.Starred) and isinstance(parent.get(id(p)), (ast.List, ast.Tuple))) or (
+                _sp_call(p, trust) and p.args and p.args[0] is x)  # type: ignore[union-attr]  # O(1)
+            if not ok:  # O(1)
+                del lists[x.id]  # O(1)
+    for x in ast.walk(tree):  # an attribute name or a string equal to a list name may reach it through a module object  # O(|tree|)
+        if (isinstance(x, ast.Attribute) and x.attr in lists) or (isinstance(x, ast.Constant) and isinstance(x.value, str) and x.value in lists):  # O(1)
+            return {}, False  # O(1)
+    sysok = False  # O(1)
+    if bound.get("sys") == 1:  # O(1)
+        sysok = any(isinstance(x, ast.Import) and any(a.name == "sys" and a.asname is None for a in x.names) for x in ast.walk(tree))  # O(|tree|)
+        sysok = sysok and not any(isinstance(x, ast.Attribute) and x.attr == "executable" and not isinstance(x.ctx, ast.Load)
+                                  for x in ast.walk(tree))  # O(|tree|)
+    return lists, sysok  # O(1)
+
+
+def _facts() -> tuple[dict[str, list[str]], bool]:  # O(|tree|) | _py_facts of the Python code in hand
+    return _py_facts(_CODE[0]) if _CODE[0] is not None else ({}, False)  # O(|tree|)
+
+
+def _bare_list(raw: str) -> list[str] | None:  # O(len(raw)) | the list a subprocess call's first argument names, when it is a readable list name
+    m = re.match(r"\s*\(?\s*([A-Za-z_]\w*)\s*(?=[,)\n]|$)", raw)  # O(len(raw))
+    return _facts()[0].get(m.group(1)) if m else None  # O(len(raw))
+
+
 def _elem(part: str, lang: str) -> str | None:  # O(len(part)) | one argv element's literal value, None when it is not a literal
+    if lang == "py" and part.strip() == "sys.executable" and _facts()[1]:  # O(len(part))
+        return "python3"  # O(1)
     m = _LIT.match(part)  # O(len(part))
     if m and not part[m.end():].strip():  # O(len(part))
         return _unq(m, lang)  # O(len(part))
@@ -1328,6 +1440,17 @@ def _cmd_words(raw: str, lang: str) -> tuple[list[str], list[int]] | None:  # O(
         s = s[1:]  # O(len(raw))
     words: list[str] = []  # O(1)
     kinds: list[int] = []  # O(1)
+    if lang == "py":  # a list name bound once stands for its list (#780)  # O(len(raw))
+        nm = re.match(r"([A-Za-z_]\w*)\s*(?=[,)\n]|$)", s)  # O(len(s))
+        known = _facts()[0].get(nm.group(1)) if nm else None  # O(len(s))
+        if nm and known is not None:  # O(1)
+            words, kinds = list(known), [0] * len(known)  # O(len(known))
+            s = s[nm.end():].lstrip(" \t")  # O(len(s))
+            if s.startswith(","):  # O(1)
+                s = s[1:]  # O(len(s))
+            elif s and s[0] not in ");\n":  # O(1)
+                return None  # O(1)
+            return (words, kinds) if words else None  # the rest are options  # O(1)
     while True:  # O(len(raw))
         s = s.lstrip(" \t\r\n")  # O(len(s))
         if not s or s[0] in ");":  # O(1)
@@ -1343,6 +1466,19 @@ def _cmd_words(raw: str, lang: str) -> tuple[list[str], list[int]] | None:  # O(
                 p = part.strip()  # O(len(part))
                 if not p:  # O(1)
                     return None  # O(1)
+                if p.startswith("*") and lang == "py":  # a splat of a readable list is its words (#780)  # O(len(p))
+                    inner = p[1:].strip()  # O(len(p))
+                    flat = _facts()[0].get(inner) if re.fullmatch(r"[A-Za-z_]\w*", inner) else None  # O(len(p))
+                    if flat is None and inner.startswith("[") and _scan_close(inner, 0) == len(inner) - 1:  # O(len(p))
+                        sub = [q.strip() for q in _split_top(inner[1:-1])]  # O(len(p))
+                        if sub and not sub[-1]:  # O(1)
+                            sub.pop()  # O(1)
+                        vals = [None if (not q or q.startswith("*")) else _elem(q, lang) for q in sub]  # O(len(p))
+                        flat = None if any(x is None for x in vals) else vals  # type: ignore[assignment]  # O(len(p))
+                    if flat is not None:  # O(1)
+                        words.extend(flat)  # O(len(flat))
+                        kinds.extend([0] * len(flat))  # O(len(flat))
+                        continue  # O(1)
                 v = None if p.startswith("*") else _elem(p, lang)  # O(len(p))
                 words.append("?" if v is None else v)  # O(1)
                 kinds.append(2 if p.startswith("*") else int(v is None))  # an unpacked list: any number of words  # O(1)
@@ -1436,6 +1572,9 @@ def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the pat
     return _uniq(out)  # O(len(out))
 
 
+_CALL_FN: list[str] = [""]  # O(1) | the function name of the call being read
+
+
 def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(raw)) | os.system, subprocess.run, ...
     found = _cmd_words(raw, lang)  # O(len(raw))
     if found is None or _depth[0] >= 4:  # O(1)
@@ -1452,8 +1591,10 @@ def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(ra
     if named:  # O(1)
         _CALL_DIR[0] = None if prev is None or d is None else _join(prev, d)  # O(len(d))
     _depth[0] += 1  # O(1)
+    sh = _CALL_FN[0] in ("getoutput", "getstatusoutput") or any(
+        v != "False" and v != "0" for v in re.findall(r"\bshell\s*=\s*(\w+)", raw))  # shell=True: words[0] is shell text  # O(len(raw))
     try:  # O(1)
-        out = _shell(words[0]) if len(words) == 1 else _argv(words)  # O(len(raw))
+        out = _shell(words[0]) if len(words) == 1 or sh else _argv(words)  # O(len(raw))
     finally:  # O(1)
         _depth[0] -= 1  # O(1)
         _CALL_DIR[0] = prev  # O(1)
@@ -1552,7 +1693,7 @@ _CALLS: dict[str, list[tuple[str, object]]] = {
         (_PYP + r"(?:remove|removedirs|unlink|rmdir|rmtree|truncate)\s*\(", _a_arg(0)),
         (r"(?<![\w.])(?:os\.)?(?:system|popen)\s*\(", _a_sh),
         (r"(?<![\w.])(?:subprocess\.)?(?:run|call|check_call|check_output|Popen|getoutput|getstatusoutput)\s*\(",
-         lambda a, r: _a_sh(a, r) if re.match(r"\s*\(?\s*(?:\[|[rRbBuU]{0,2}['\"])", r) else _why("subprocess program is not a string literal")),
+         lambda a, r: _a_sh(a, r) if re.match(r"\s*\(?\s*(?:\[|[rRbBuU]{0,2}['\"])", r) or _bare_list(r) is not None else _why("subprocess program is not a string literal")),
         (r"\bsubprocess\.\w+\s*\(", _a_sh),
         (r"(?<![\w.])(?:os\.)?(?:exec[lv]p?e?|spawn[lv]p?e?)\s*\(|\bpty\.spawn\s*\(", _a_unknown),
         (r"(?<![\w.])(?:fileinput\.)?(?:input|FileInput)\s*\((?=[^)]*inplace\s*=\s*(?:True|1))", _a_arg(0)),
@@ -1869,8 +2010,9 @@ def temp_root(text: str | None) -> str | None:  # O(len(text)) | tempfile's temp
 
 
 def _code(code: str, lang: str, root: str | None = None, file: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
-    prev, prev_t = _NAMES[0], _TEMP[0]  # O(1)
+    prev, prev_t, prev_c = _NAMES[0], _TEMP[0], _CODE[0]  # O(1)
     _TEMP[0] = root  # O(1)
+    _CODE[0] = code if lang == "py" else None  # O(1)
     scan = code  # O(1)
     data = False  # strings are data, so no code can reach a helper by its name as text  # O(1)
     if lang == "py":  # strings and comments are data unless the code can run text  # O(1)
@@ -1887,7 +2029,7 @@ def _code(code: str, lang: str, root: str | None = None, file: str | None = None
             _NAMES[0] = {**_NAMES[0], "__file__": [file]}  # O(len(names))
         return _code1(code, lang, scan)  # O(len(code) * |patterns|)
     finally:  # O(1)
-        _NAMES[0], _TEMP[0] = prev, prev_t  # O(1)
+        _NAMES[0], _TEMP[0], _CODE[0] = prev, prev_t, prev_c  # O(1)
 
 
 def _code1(code: str, lang: str, scan: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
@@ -1897,6 +2039,7 @@ def _code1(code: str, lang: str, scan: str | None = None) -> list[str]:  # O(len
         for m in re.finditer(pat, scan):  # O(len(code))
             at = m.end() - 1 if code[m.end() - 1] == "(" else m.end()  # the opening ( is part of the argument list  # O(1)
             args, end = _parse_args(code, at, lang, lang in ("rb", "pl"))  # O(len(code))
+            _CALL_FN[0] = re.sub(r"\W.*", "", m.group(0).split(".")[-1])  # O(len(m))
             for c in _expand(args):  # O(64)
                 out.extend(action(c, code[at:end]))  # type: ignore[operator]  # O(len(args))
     if lang == "py":  # O(1)

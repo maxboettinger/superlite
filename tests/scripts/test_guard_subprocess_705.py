@@ -10,8 +10,9 @@ ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "block-coordinator-edits"
 BASH = shutil.which("bash")
 HEAD = "import os, subprocess, sys\np = input()\n"
-NOTE = ("A subprocess call whose program is not a string literal (`[prog, ...]`, `sys.executable`) is judged unknown; "
-        "a later argument that is not a literal is judged like an unknown shell variable.")
+NOTE = ("A subprocess call whose program is not a string literal (`[prog, ...]`) is judged unknown; a list name bound "
+        "once to a literal list (used only as the call's argument or a `*` splat) counts as that list, `sys.executable` "
+        "as python3, and a later argument that is not a literal is judged like an unknown shell variable.")
 
 
 @pytest.fixture

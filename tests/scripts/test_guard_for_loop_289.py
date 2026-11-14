@@ -104,7 +104,7 @@ def test_stale_value_not_reused(P):
     assert run("f=.superlite/a; for f in src/*.py; do echo > $f; done", P) == UNK
 
 
-@pytest.mark.parametrize("lst", ["src/*.py", '"$(ls)"', "$UNSET", '"a b"', '"x*"', "{1..3}"])
+@pytest.mark.parametrize("lst", ["src/*.py", '"$(ls)"', "$UNSET", '"a b"', '"x*"', "{a..c}"])
 def test_unreadable_list_is_unknown(P, lst):
     assert run(f"for f in {lst}; do echo > .superlite/$f; done", P) == UNK
 
