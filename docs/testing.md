@@ -11,6 +11,15 @@ superlite has four test layers. Each one covers a different kind of change, and 
 
 Every e2e test runs the agent on `--model haiku`, caps turns at 8 or fewer, and runs in an isolated session: no inherited `CLAUDE_CODE_*` or `SUPERLITE_*` session variables, `--setting-sources ""`, `--plugin-dir` set to this repo, stdin from `/dev/null`, and a fresh temporary working directory. One run of the whole e2e layer stays under about $0.30 and 6 minutes. The plain unit suite stays quota-free.
 
+## Fresh clone
+
+The unit suite's dependencies (pytest, pytest-xdist) are the `dev` dependency group in `pyproject.toml`, pinned by the committed `uv.lock`. On a fresh clone, with `uv` installed:
+
+    uv run --group dev pytest tests/scripts -q -x --co    # collects the script tests, runs none
+    uv run --group dev pytest -q -n auto                  # the whole suite; the e2e tests skip without SUPERLITE_E2E=1
+
+`pyproject.toml` sets `testpaths = ["tests"]`, so a bare `pytest`, and `sl run_tests --full` without a configured test command, collect what `pytest tests` collects. It registers two markers: `slow` (deselect with `-m "not slow"`) and `live` (a real agent turn that spends quota). The worker count stays in the command, never in `addopts`, which would also apply to `--fast` runs and nested xdist runs. A machine's `.superlite/test-cmd.json` still sets the command `sl run_tests` runs. The project table's version is a fixed `0.0.0`, not the plugin's version (`.version-bump.json` holds that), so a version bump never touches `pyproject.toml` or `uv.lock`.
+
 ## Stamps
 
 A layer is stale when its hash is not among the green hashes stored for it. The hash is a SHA-256 over the sorted `path` and per-file digest pairs of all files the layer maps to. Two rules keep it stable:
