@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A fleet worker on a saved Herdr machine: spawn, send a brief, read the states, stop (research and final-reviewer roles).
+"""A fleet worker on a saved Herdr machine: spawn, send a brief, read the states, stop (research, final-reviewer, implementer, fixer and package-reviewer roles).
 
 The worker runs in its own tree on the host (`fleet_remote.push`) and loads superlite from a tree of this checkout's commit
 (`claude --plugin-dir`); every Herdr call for it runs inside `herdr_client.on(machine)`. Its worker record carries `machine`
@@ -7,6 +7,8 @@ and `remote` (label, tree, sd, name, plugin, project, offset, tr); stop records 
 """
 # Complexity notation:
 # w = workers, a = agents of a machine, p = path pairs, l = length of a message
+import os  # O(1)
+import re  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
 from pathlib import Path  # O(1)
@@ -15,14 +17,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import fleet  # noqa: E402 | O(1)
 import fleet_io as fio  # noqa: E402 | O(1)
 import fleet_remote as fr  # noqa: E402 | O(1)
+import fleet_remote_account as fra  # noqa: E402 | O(1)
 import fleet_report  # noqa: E402 | O(1)
 import fleet_roles  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
 import herdr_client as hc  # noqa: E402 | O(1)
+import plan_tools as pt  # noqa: E402 | O(1)
+import remote_apply as ra  # noqa: E402 | O(1)
 import routing  # noqa: E402 | O(1)
 import trees  # noqa: E402 | O(1)
 
-ROLES = ("research", "final-reviewer")  # O(1)
+WRITE_ROLES = ("implementer", "fixer", "package-reviewer")  # a write worker takes one task or brief; its tree comes home as a snapshot | O(1)
+ROLES = ("research", "final-reviewer") + WRITE_ROLES  # O(1)
 GIT_TIMEOUT_S = 30  # bound of each git call of the working-state listing | O(1)
 SUPERLITE_ROOT = str(Path(__file__).resolve().parents[3])  # the checkout whose commit the host loads | O(1)
 
@@ -32,35 +38,73 @@ def _blocked(label, why):  # O(1)
     raise SystemExit(3)  # O(1)
 
 
-def spawn(sd, role, tier, project, label, cfg=None):  # O(w) plus remote and herdr calls
+def spawn(sd, role, tier, project, label, cfg=None, task=None, plan=None, brief=None):  # O(w + f) plus remote and herdr calls
     sd, project = Path(sd), Path(project)  # O(1)
     if role not in ROLES:  # O(1)
         raise ValueError(f"role {role} cannot run on a remote machine yet; remote roles: {', '.join(ROLES)}")  # O(1)
     why = fr.check(label)  # O(1)
     if why:  # no pane, no worker id for a machine that is down | O(1)
         _blocked(label, why)  # O(1)
-    launch = fleet_roles.launch(role, tier, cfg or routing.load_cfg())  # a ValueError reaches the caller | O(file)
+    launch = fleet_roles.launch(role, tier, cfg or routing.load_cfg(), brief=bool(brief))  # a ValueError reaches the caller | O(file)
+    prime = "prime-haiku.md" if launch["model"] == "haiku" else "prime.md"  # O(1)
+    if launch["prime"] and not (sd / prime).is_file():  # no pane, account or worker id for a worker that cannot read its prime | O(1)
+        _blocked(label, f"no {sd.resolve() / prime}; run build_prime --plan PLAN first, or pass --brief FILE for a brief-only task")  # O(1)
     wid = fs.next_id(sd)  # O(w)
+    name_, write = fr.tree_name(sd, wid), role in WRITE_ROLES  # O(l)
+    start_ref = f"refs/superlite/remote/{name_}/start"  # O(1)
+    snap_ref = f"refs/superlite/remote/{name_}/stop"  # O(1)
+    owns = None  # O(1)
     try:  # O(1)
         plugin = fr.plugin(label, SUPERLITE_ROOT)  # O(1)
+        home = fr.remote_home(plugin)  # O(l)
+        tree = f"{home}/.maxapp/trees/{_repo_name(project)}/{name_}"  # the project's own store, as `maxapp remote tree` names it | O(1)
+        account, cdir = fra.pick(sd, label, launch["model"] or "sonnet", dict(os.environ), home)  # a SystemExit(3) prints its own BLOCKED line | O(a * e + w)
         base = trees.base_commit(project)  # O(1)
-        tree = fr.push(label, str(project), fr.tree_name(sd, wid), base, _working_files(project, base))  # O(f)
-    except (fr.RemoteError, RuntimeError, OSError) as e:  # a git failure or timeout is a BLOCKED line | O(1)
-        _blocked(label, str(e))  # O(1)
-    name, account = fs.agent_name(sd, wid), f"default@{label}"  # O(1)
+        mapped = _mapper(sd, project, tree, plugin, plan)  # O(p log p)
+        blobs = {}  # O(1)
+        if launch["prime"]:  # O(1)
+            blobs[f".superlite/{prime}"] = mapped((sd / prime).read_bytes())  # O(b)
+        if plan:  # O(1)
+            blobs[f".superlite/{Path(plan).name}"] = mapped(Path(plan).read_bytes())  # O(b)
+        for extra in ("test-cmd.json", "stable.json"):  # O(1)
+            if (sd / extra).is_file():  # O(1)
+                blobs[f".superlite/{extra}"] = mapped((sd / extra).read_bytes())  # O(b)
+        if brief:  # the mapped brief rides in the start commit | O(1)
+            rel = Path(brief).resolve().relative_to(project.resolve())  # ValueError: outside the project | O(1)
+            blobs[rel.as_posix()] = mapped(Path(brief).read_bytes())  # O(b)
+        if task and plan and role == "implementer":  # the task's own changes only | O(1)
+            owns = list(pt.Plan.load(str(plan)).by_id[task].owns)  # KeyError for an unknown task | O(L)
+            copy, delete = trees.own_changes(str(project), base, owns)  # O(f * o)
+            files = copy + delete  # O(f)
+        else:  # O(1)
+            files = _working_files(project, base)  # O(f)
+        start = ra.start_commit(str(project), base, files, blobs, start_ref)  # O(f + b)
+        pushed = fr.push(label, str(project), name_, start, [])  # O(1)
+        if pushed != tree:  # the mapped prime names the predicted tree | O(1)
+            raise fr.RemoteError(f"tree of {name_} is {pushed}, expected {tree}")  # O(1)
+    except (fr.RemoteError, RuntimeError, OSError, ValueError, KeyError) as e:  # a git failure or timeout is a BLOCKED line | O(1)
+        _drop(label, project, sd, wid)  # O(1)
+        _blocked(label, str(e) if not isinstance(e, KeyError) else f"no task {e} in the plan")  # O(1)
+    name = fs.agent_name(sd, wid)  # O(1)
     argv = ["--plugin-dir", plugin] + fleet.lean_argv(launch["argv"])  # O(n)
     env = {**fleet.worker_env(sd, wid, launch["agent"], "", {}), **fleet_roles.env(role)}  # O(1)
-    env.pop("CLAUDE_CONFIG_DIR", None)  # the host's default account | O(1)
+    env.pop("CLAUDE_CONFIG_DIR", None)  # the host's default account unless `pick` names a folder | O(1)
+    if cdir:  # O(1)
+        env["CLAUDE_CONFIG_DIR"] = cdir  # O(1)
     env["SUPERLITE_STATE_DIR"] = f"{tree}/.superlite"  # O(1)
+    if write:  # the stop hook snapshots a write worker's tree under this ref | O(1)
+        env["SUPERLITE_REMOTE_SNAPSHOT"] = snap_ref  # O(1)
+    remote = {"label": label, "tree": tree, "sd": f"{tree}/.superlite", "name": name_, "plugin": plugin, "project": str(project), "offset": 0, "tr": {},  # O(1)
+              "write": write, "start": start, "snapshot_ref": snap_ref if write else None, "owns": [*owns, "tests/regression/**"] if owns is not None else None}
     record = {"name": name, "account": account, "agent": launch["agent"], "tier": tier or launch["model"], "state": "starting", "task": None, "role": role,  # O(1)
-              "one_turn": launch["one_turn"], "launch": {"argv": argv, "env": env, "cwd": tree}, "machine": label,
-              "remote": {"label": label, "tree": tree, "sd": f"{tree}/.superlite", "name": fr.tree_name(sd, wid), "plugin": plugin, "project": str(project), "offset": 0, "tr": {}},
+              "one_turn": launch["one_turn"], "launch": {"argv": argv, "env": env, "cwd": tree}, "machine": label, "remote": remote,
               "state_dir": str(sd / "remote" / wid)}
     try:  # O(1)
         pane = fleet.open_pane(sd, wid, tree, env, record, machine=label)  # O(w + p)
     except hc.HerdrError as e:  # O(1)
         _drop(label, project, sd, wid)  # O(1)
         fleet._blocked(sd, wid, account, f"startup: {e.message or e.code}")  # O(1)
+    ask, screen = f"Read {tree}/.superlite/{prime}, then reply READY", ""  # O(1)
     try:  # O(1)
         with hc.on(label):  # O(1)
             try:  # O(1)
@@ -70,8 +114,15 @@ def spawn(sd, role, tier, project, label, cfg=None):  # O(w) plus remote and her
                     raise  # O(1)
                 fleet._accept_trust(name)  # O(1)
             seen = hc.read_screen(name, fleet.SCREEN_ROWS)  # O(s)
+            if fra.login_screen(seen):  # O(s)
+                return _signed_out(sd, wid, label, account, pane, project)  # O(1)
             if fleet._trust_open(seen):  # a one-turn worker may stand on the trust dialog | O(s)
                 fleet._accept_trust(name)  # O(1)
+            if launch["prime"]:  # an implementer with a plan reads its prime first | O(1)
+                hc.prompt(name, ask, ["idle", "done", "blocked"], 180000)  # O(1)
+                screen = hc.read_screen(name, fleet.SCREEN_ROWS)  # O(s)
+                if fra.login_screen(screen):  # O(s)
+                    return _signed_out(sd, wid, label, account, pane, project)  # O(1)
             fleet._store_session(sd, wid, name)  # O(w)
     except hc.HerdrError as e:  # O(1)
         fs.set_state(sd, wid, "blocked")  # O(w)
@@ -83,6 +134,25 @@ def spawn(sd, role, tier, project, label, cfg=None):  # O(w) plus remote and her
     fleet._launch_line(sd, wid, launch["agent"], launch["model"], account, pane)  # O(1)
     print(f"{wid} account={account} pane={pane} agent={launch['agent']} role={role} machine={label}")  # O(1)
     return {"id": wid, "account": account, "pane_id": pane, "agent": launch["agent"], "model": launch["model"], "role": role, "machine": label}  # O(1)
+
+
+def _signed_out(sd, wid, label, account, pane, project):  # the pane closes, the tree goes, the spawn is BLOCKED | O(1)
+    fs.set_state(sd, wid, "blocked")  # O(w)
+    with _quiet():  # O(1)
+        hc.close_pane(pane)  # O(1)
+    _drop(label, project, sd, wid)  # O(1)
+    _blocked(label, f"account {account.split('@')[0]} is not signed in on {label}")  # O(1)
+
+
+def _mapper(sd, project, tree, plugin, plan):  # bytes -> bytes: every local path of the run names its host copy | O(p log p)
+    pairs = [(str(project), tree), (str(project.resolve()), tree), (SUPERLITE_ROOT, plugin)]  # O(1)
+    sdr = Path(sd).resolve()  # O(1)
+    if sdr != project.resolve() / ".superlite":  # an sd outside the project maps to the host's state dir | O(1)
+        pairs.append((str(sdr), f"{tree}/.superlite"))  # O(1)
+    if plan:  # O(1)
+        pairs += [(str(Path(plan).resolve()), f"{tree}/.superlite/{Path(plan).name}"), (str(plan), f"{tree}/.superlite/{Path(plan).name}")]  # O(1)
+    text = fr.mapper(list(dict.fromkeys(pairs)))  # O(p log p)
+    return lambda data: text(data.decode("utf-8", "surrogateescape")).encode("utf-8", "surrogateescape")  # O(l)
 
 
 def _git_lines(project, *args):  # NUL-separated git output as a list, bounded by a timeout | O(output)
@@ -97,10 +167,23 @@ def _git_lines(project, *args):  # NUL-separated git output as a list, bounded b
     return [x for x in p.stdout.decode("utf-8", "replace").split("\0") if x]  # O(output)
 
 
+def _repo_name(project):  # the repository name max-core's remote_tree derives from the git common dir | O(1)
+    d = _git_lines(project, "rev-parse", "--git-common-dir")[0].rstrip("\n")  # O(1)
+    d = os.path.normpath(os.path.join(str(project), d)).rstrip("/")  # absolute and normalised | O(1)
+    base = os.path.basename(d)  # O(1)
+    if base == ".git":  # O(1)
+        base = os.path.basename(os.path.dirname(d))  # O(1)
+    elif base.endswith(".git"):  # O(1)
+        base = base[:-4]  # O(1)
+    base = re.sub(r"[^A-Za-z0-9._]", "-", base)  # O(1)
+    if not base:  # O(1)
+        return "repo"  # O(1)
+    return "repo" + base if base[0] in "-." else base  # O(1)
+
+
 def _working_files(project, base):  # the run's uncommitted state, as paths relative to the project: files changed since base and untracked ones | O(f)
-    # A file deleted since `base` stays on the host (the tree starts from base): accepted for the read-only roles.
     names = _git_lines(project, "diff", "--name-only", "-z", "--relative", base) + _git_lines(project, "ls-files", "-z", "--others", "--exclude-standard")  # O(f)
-    return [n for n in dict.fromkeys(names) if not n.startswith(".superlite/") and (Path(project) / n).is_file()]  # O(f)
+    return [n for n in dict.fromkeys(names) if not n.startswith(".superlite/")]  # a deleted file is removed in the start commit  # O(f)
 
 
 def _drop(label, project, sd, wid):  # the tree of a worker that never started goes; a host that cannot be reached keeps it | O(1)
@@ -198,3 +281,17 @@ def stop(sd, wid):  # O(1) plus remote and herdr calls
         fr.drop(rec["label"], rec.get("project") or str(sd.resolve().parent), rec["name"])  # O(1)
     except fr.RemoteError as e:  # O(1)
         print(f"{wid} tree kept on {rec['label']}: {e}", file=sys.stderr)  # O(1)
+
+
+def send_task(sd, wid, plan, tasks, sl_path):  # O(w + n + k*s) plus herdr calls
+    sd = Path(sd)  # O(1)
+    w = fs.load(sd)["workers"][wid]  # KeyError for an unknown worker | O(w)
+    rec, project = w["remote"], Path(w["remote"]["project"])  # O(1)
+    mapped = _mapper(sd, project, rec["tree"], rec["plugin"], plan)  # O(p log p)
+    msg = mapped(fio.task_message(plan, tasks, sl_path, SUPERLITE_ROOT, w.get("tier", "sonnet")).encode("utf-8", "surrogateescape")).decode("utf-8", "surrogateescape")  # O(n + k*s)
+    label, sent = ",".join(tasks), fio.now_ms()  # O(k)
+    with hc.on(rec["label"]):  # O(1)
+        fio._prompt(fs.name_of(sd, wid, w), msg)  # O(l)
+        fio._busy(sd, wid, label, sent)  # O(w)
+        fio.pane_label(sd, wid, fio.pane_title(sd, wid, label))  # O(w)
+    print(f"{wid} {label} sent")  # O(1)

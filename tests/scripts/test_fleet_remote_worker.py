@@ -4,11 +4,12 @@ from pathlib import Path
 import pytest
 from _fixtures import FIXTURES
 from test_fleet import FakeHerdr
-from test_plan_tools import SCRIPTS
+from test_plan_tools import SCRIPTS, make_plan
 sys.path.insert(0, str(SCRIPTS))
 import fleet  # noqa: E402
 import fleet_io as fio  # noqa: E402
 import fleet_remote as fr  # noqa: E402
+import fleet_remote_account as fra  # noqa: E402
 import fleet_remote_worker as rw  # noqa: E402
 import fleet_state as fs  # noqa: E402
 import trees  # noqa: E402
@@ -41,9 +42,9 @@ class Routed(FakeHerdr):
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
-    home = tmp_path / "home"; home.mkdir(); th = tmp_path / "trees"; th.mkdir()
+    home = tmp_path / "home"; home.mkdir(); th = tmp_path / "rh" / ".maxapp" / "trees"; th.mkdir(parents=True)
     proj = tmp_path / "proj"; sd = proj / ".superlite"; (sd / "briefs").mkdir(parents=True)
-    monkeypatch.setenv("SUPERLITE_HOME", str(home)); monkeypatch.setenv("FAKE_TREE_HOME", str(th)); monkeypatch.setenv("FAKE_TREE_LOG", str(tmp_path / "log"))
+    monkeypatch.setenv("SUPERLITE_HOME", str(home)); monkeypatch.setenv("FAKE_TREE_HOME", str(th / "proj")); monkeypatch.setenv("FAKE_TREE_LOG", str(tmp_path / "log"))
     monkeypatch.delenv("SUPERLITE_STATE_DIR", raising=False)
     (home / "machine.json").write_text(json.dumps({"remote_tree": [TREE]}))
     fh = Routed()
@@ -65,9 +66,15 @@ def world(tmp_path, monkeypatch):
     root = tmp_path / "superlite-root"; root.mkdir()  # no .git: the lookup must not depend on the real checkout
     monkeypatch.setattr(rw, "SUPERLITE_ROOT", str(root))
     monkeypatch.setattr(fr, "plugin", lambda label, r, timeout_s=120: fr.push(label, r, "plugin/abc123", "abc123", [], timeout_s))
-    monkeypatch.setattr(rw.routing, "load_cfg", lambda *a, **k: {})
+    monkeypatch.setattr(rw.routing, "load_cfg", lambda *a, **k: dict(rw.routing.FALLBACK))
+    picks = []
+    def pick(sd_, label, model, env, remote_home, local_home=None):
+        picks.append({"label": label, "model": model, "remote_home": remote_home})
+        return ("claude2@box", "/rh/.cfg2") if world_cfg.get("cdir") else ("claude1@box", None)
+    world_cfg = {}
+    monkeypatch.setattr(fra, "pick", pick)
     monkeypatch.chdir(proj)
-    return type("W", (), {"git": staticmethod(git), "proj": proj, "sd": sd, "fh": fh, "panes": panes, "trees": th, "tmp": tmp_path})
+    return type("W", (), {"git": staticmethod(git), "proj": proj, "sd": sd, "fh": fh, "panes": panes, "trees": th / "proj", "tmp": tmp_path, "picks": picks, "cfg": world_cfg, "base": base})
 
 
 def started(world):
@@ -80,8 +87,8 @@ def record(world, wid="W1"):
 
 def test_spawn_calls_routed(world, capsys):
     r = started(world)
-    assert r == {"id": "W1", "account": "default@box", "pane_id": "w6:p1", "agent": "superlite:researcher", "model": "sonnet", "role": "research", "machine": "box"}
-    assert "W1 account=default@box pane=w6:p1 agent=superlite:researcher role=research machine=box" in capsys.readouterr().out
+    assert r == {"id": "W1", "account": "claude1@box", "pane_id": "w6:p1", "agent": "superlite:researcher", "model": "sonnet", "role": "research", "machine": "box"}
+    assert "W1 account=claude1@box pane=w6:p1 agent=superlite:researcher role=research machine=box" in capsys.readouterr().out
     inside, outside = world.fh.inside()
     assert outside == [] and any(c[0] == "start_agent" for c in inside)
     assert world.panes[0]["machine"] == "box"
@@ -100,8 +107,8 @@ def test_spawn_argv_plugin_dir(world):
 
 
 def test_spawn_refusals(world, capsys):
-    with pytest.raises(ValueError, match="role implementer cannot run on a remote machine yet; remote roles: research, final-reviewer"):
-        rw.spawn(world.sd, "implementer", None, world.proj, "box")
+    with pytest.raises(ValueError, match="role writer cannot run on a remote machine yet; remote roles: research, final-reviewer, implementer, fixer, package-reviewer"):
+        rw.spawn(world.sd, "writer", None, world.proj, "box")
     with pytest.raises(SystemExit) as e:
         rw.spawn(world.sd, "research", None, world.proj, "down")
     assert e.value.code == 3 and "BLOCKED: fleet spawn: machine down: unreachable: ssh: refused" in capsys.readouterr().out
@@ -230,17 +237,30 @@ def test_remote_send_brief_prints_one_line(world, capsys):
     assert capsys.readouterr().out.splitlines() == ["W1 Q1 sent"]
 
 
+def start_files(world, wid="W1"):
+    ref = f"refs/superlite/remote/{fr.tree_name(world.sd, wid)}/start"
+    return world.git("ls-tree", "-r", "--name-only", ref).splitlines(), ref
+
+
+def show(world, ref, path):
+    return world.git("show", f"{ref}:{path}")
+
+
+def push_argv(world, wid="W1"):
+    return next(e["argv"] for e in map(json.loads, (world.tmp / "log").read_text().splitlines()) if e["argv"][0] == "push" and fr.tree_name(world.sd, wid) in e["argv"])
+
+
 def test_spawn_pushes_the_working_state(world):
     (world.proj / "kept.txt").write_text("new\n"); (world.proj / "fresh.txt").write_text("fresh\n")
     (world.proj / "gone.txt").unlink(); (world.sd / "notes.md").write_text("state\n")
     (world.proj / "sub").mkdir(); (world.proj / "sub" / "deep.txt").write_text("deep\n")
     started(world)
-    tree = world.trees / fr.tree_name(world.sd, "W1")
-    assert (tree / "kept.txt").read_text() == "new\n" and (tree / "fresh.txt").read_text() == "fresh\n"
-    assert (tree / "sub" / "deep.txt").read_text() == "deep\n"
-    assert not (tree / ".superlite").exists() and not (tree / "gone.txt").exists()
-    push = next(e["argv"] for e in map(json.loads, (world.tmp / "log").read_text().splitlines()) if e["argv"][0] == "push" and fr.tree_name(world.sd, "W1") in e["argv"])
-    assert sorted(a for i, a in enumerate(push) if push[i - 1] == "--file") == ["fresh.txt", "kept.txt", "sub/deep.txt"]
+    names, ref = start_files(world)
+    assert sorted(names) == ["fresh.txt", "kept.txt", "sub/deep.txt"]
+    assert show(world, ref, "kept.txt") == "new"
+    push = push_argv(world)
+    assert push[push.index("--base") + 1] == world.git("rev-parse", ref) and "--file" not in push
+    assert record(world)["remote"]["start"] == world.git("rev-parse", ref)
 
 
 def test_spawn_git_failure_is_blocked(world, capsys, monkeypatch):
@@ -249,3 +269,100 @@ def test_spawn_git_failure_is_blocked(world, capsys, monkeypatch):
         started(world)
     out = capsys.readouterr().out
     assert e.value.code == 3 and out.startswith("BLOCKED: fleet spawn: machine box: ") and "Traceback" not in out
+
+
+def plan_for(world, owns="src/a.py"):
+    (world.sd / "prime.md").write_text(f"Root: {world.proj}\nplan {world.sd}/plan.md\n")
+    p = make_plan(world.proj, [{"id": "T3", "owns": owns}])
+    return Path(p)
+
+
+def test_start_commit_files_by_role(world):
+    (world.proj / "src").mkdir(); (world.proj / "src" / "a.py").write_text("a\n"); (world.proj / "other.py").write_text("o\n")
+    (world.proj / "kept.txt").write_text("edited\n")
+    plan = plan_for(world)
+    (world.sd / "test-cmd.json").write_text("{}"); (world.sd / "stable.json").write_text(f'{{"r": "{world.proj}"}}')
+    r = rw.spawn(world.sd, "implementer", "sonnet", world.proj, "box", task="T3", plan=str(plan))
+    names, ref = start_files(world)
+    assert "src/a.py" in names and "other.py" not in names and show(world, ref, "kept.txt") == "old"
+    assert {".superlite/prime.md", f".superlite/{plan.name}", ".superlite/test-cmd.json", ".superlite/stable.json"} <= set(names)
+    rec = record(world)["remote"]
+    assert rec["write"] is True and rec["owns"] == ["src/a.py", "tests/regression/**"] and rec["snapshot_ref"] == ref.replace("/start", "/stop")
+    assert record(world)["account"] == "claude2@box" or record(world)["account"] == "claude1@box"
+    # fixer: every changed and untracked file, no prime, mapped brief
+    b = world.sd / "briefs" / "f.md"; b.write_text(f"fix {world.proj}/x")
+    rw.spawn(world.sd, "fixer", "sonnet", world.proj, "box", brief=str(b))
+    names2, ref2 = start_files(world, "W2")
+    assert {"src/a.py", "other.py", "kept.txt", ".superlite/briefs/f.md"} <= set(names2) and ".superlite/prime.md" not in names2
+    assert record(world, "W2")["remote"]["owns"] is None and record(world, "W2")["remote"]["write"] is True
+    # research: working files, read-only
+    rw.spawn(world.sd, "research", None, world.proj, "box")
+    names3, _ = start_files(world, "W3")
+    assert "other.py" in names3 and record(world, "W3")["remote"]["write"] is False
+
+
+def test_prime_paths_mapped(world):
+    plan = plan_for(world)
+    plan.write_text(plan.read_text() + f"\nroot {world.proj}\n")
+    rw.spawn(world.sd, "implementer", "sonnet", world.proj, "box", task="T3", plan=str(plan))
+    names, ref = start_files(world)
+    tree = str(world.trees / fr.tree_name(world.sd, "W1"))
+    prime, pl = show(world, ref, ".superlite/prime.md"), show(world, ref, f".superlite/{plan.name}")
+    assert str(world.proj) not in prime + pl and tree in prime and tree in pl
+    assert f"{tree}/.superlite/plan.md" in prime or f"{tree}/.superlite/{plan.name}" in prime
+    ask = next(c for c in world.fh.calls if c[0] == "prompt")[2]
+    assert ask == f"Read {tree}/.superlite/prime.md, then reply READY"
+
+
+def test_env_and_account(world):
+    env = lambda: world.panes[-1]["env"]
+    b = world.sd / "briefs" / "f.md"; b.write_text("fix")
+    rw.spawn(world.sd, "fixer", "sonnet", world.proj, "box", brief=str(b))
+    assert env()["SUPERLITE_REMOTE_SNAPSHOT"] == f"refs/superlite/remote/{fr.tree_name(world.sd, 'W1')}/stop" and "CLAUDE_CONFIG_DIR" not in env()
+    assert world.picks[0]["remote_home"] == str(world.tmp / "rh")
+    world.cfg["cdir"] = True
+    rw.spawn(world.sd, "research", None, world.proj, "box")
+    assert "SUPERLITE_REMOTE_SNAPSHOT" not in env()
+    assert env()["CLAUDE_CONFIG_DIR"] == "/rh/.cfg2" and record(world, "W2")["account"] == "claude2@box"
+
+
+def test_login_screen_blocked(world, capsys):
+    world.fh.screen = "Select login method:\n1. Claude account"
+    world.cfg["cdir"] = True
+    with pytest.raises(SystemExit) as e:
+        started(world)
+    assert e.value.code == 3
+    assert "BLOCKED: fleet spawn: machine box: account claude2 is not signed in on box" in capsys.readouterr().out
+    assert any(c[0] == "close_pane" for c in world.fh.calls) and not (world.trees / fr.tree_name(world.sd, "W1")).exists()
+
+
+def test_part1_research_still_works(world):
+    r = started(world)
+    assert r["role"] == "research" and r["machine"] == "box" and record(world)["state"] == "ready"
+    assert record(world)["account"] == "claude1@box" and "default@" not in record(world)["account"]
+    argv = next(c for c in world.fh.calls if c[0] == "start_agent")[2]
+    assert argv[0] == "--plugin-dir"
+
+
+def test_send_task_maps_paths(world):
+    plan = plan_for(world)
+    rw.spawn(world.sd, "implementer", "sonnet", world.proj, "box", task="T3", plan=str(plan))
+    sl = str(rw.SUPERLITE_ROOT) + "/skills/subagent-driven-development/scripts/sl"
+    rw.send_task(world.sd, "W1", str(plan), ["T3"], sl)
+    msg = [c for c in world.fh.calls if c[0] == "prompt"][-1][2]
+    tree = str(world.trees / fr.tree_name(world.sd, "W1"))
+    assert str(world.proj) not in msg and tree in msg and str(rw.SUPERLITE_ROOT) not in msg
+    assert record(world)["state"] == "busy" and record(world)["task"] == "T3"
+    assert any(c[0] == "prompt" for c in world.fh.inside()[0]) and all(c[0] != "prompt" for c in world.fh.inside()[1])
+
+
+def test_tree_path_uses_the_repository_name_of_the_project(world, capsys, monkeypatch):
+    plain = world.tmp / "my app"; plain.mkdir()
+    genv = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE")}
+    def git(*a): return subprocess.run(["git", "-C", str(plain), *a], capture_output=True, text=True, check=True, env=genv).stdout.strip()
+    git("init", "-q"); (plain / "a.txt").write_text("a\n"); git("add", "a.txt"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+    base = git("rev-parse", "HEAD"); monkeypatch.setattr(trees, "base_commit", lambda root: base)
+    (plain / ".superlite").mkdir()
+    with pytest.raises(SystemExit):  # the fake pushes beside the `proj` trees, so the check reports the prediction
+        rw.spawn(plain / ".superlite", "research", None, plain, "box")
+    assert "expected " + str(world.trees.parent / "my-app") + "/" in capsys.readouterr().out
