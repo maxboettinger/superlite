@@ -42,6 +42,7 @@ TREES = ".superlite/trees"  # O(1)
 STATE = ".superlite/checkpoints.json"  # O(1) same file as autocommit.STATE
 GIB = 1024 ** 3  # O(1)
 KEY = re.compile(r"[A-Za-z0-9_-]+")  # O(1) a tree key that may be removed
+STAGE_TIMEOUT = 240  # O(1) seconds one stage git call may run; below the 300 s tree lock wait
 
 
 def git(root, *args):  # O(output) + process spawn
@@ -111,6 +112,57 @@ def lock(root, task, wait=300.0, stale=600.0):  # one prepare per task at a time
         path.unlink(missing_ok=True)  # O(1)
 
 
+def _stage_git(tree, args, paths):  # one git call with NUL pathspecs on stdin; "" or one stderr line | O(paths) + spawn
+    try:  # O(1)
+        p = subprocess.Popen(["git", "-C", str(tree), "--literal-pathspecs", *args, "--pathspec-from-file=-", "--pathspec-file-nul"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", start_new_session=True)  # own process group | O(1)
+    except OSError as e:  # O(1)
+        return str(e).strip()[:200]  # O(1)
+    try:  # O(1)
+        _, stderr = p.communicate(input="\0".join(paths) + "\0", timeout=STAGE_TIMEOUT)  # O(paths)
+    except subprocess.TimeoutExpired:  # O(1) a hanging clean filter
+        try:  # O(1)
+            os.killpg(p.pid, 9)  # the whole group: git and its filter | O(1)
+        except (OSError, AttributeError):  # no killpg on Windows | O(1)
+            p.kill()  # O(1)
+        try:  # O(1)
+            p.communicate(timeout=5)  # reap | O(1)
+        except subprocess.TimeoutExpired:  # a filter child still holds the pipes | O(1)
+            for f in (p.stdin, p.stdout, p.stderr):  # O(1)
+                try:  # O(1)
+                    if f:  # O(1)
+                        f.close()  # O(1)
+                except (OSError, ValueError):  # O(1)
+                    pass  # O(1)
+            try:  # O(1)
+                p.wait(timeout=5)  # O(1)
+            except subprocess.TimeoutExpired:  # O(1)
+                pass  # O(1)
+        msg = f"git {args[0]} timed out after {STAGE_TIMEOUT} s"  # O(1)
+        try:  # O(1)
+            lk = subprocess.run(["git", "-C", str(tree), "rev-parse", "--git-path", "index.lock"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()  # O(1) + spawn
+            lp = Path(lk) if lk else None  # O(1)
+            if lp is not None and not lp.is_absolute():  # O(1)
+                lp = Path(tree) / lp  # O(1)
+            if lp is not None and lp.exists():  # O(1)
+                lp.unlink()  # O(1)
+                msg += f"; removed {lp}"  # O(1)
+        except OSError:  # O(1)
+            pass  # O(1)
+        return msg  # O(1)
+    if p.returncode:  # O(1)
+        return " ".join((stderr.strip() or f"git exit {p.returncode}").split())[:200]  # O(len stderr)
+    return ""  # O(1)
+
+
+def stage(tree, copy, delete):  # stage the overlay in the tree's index; "" or one error line; never raises | O(paths) + two spawns
+    for args, paths in ((["add", "-A", "-f"], copy), (["rm", "-q", "--cached", "--ignore-unmatch"], delete)):  # O(2)
+        if paths:  # O(1)
+            err = _stage_git(tree, args, paths)  # O(paths)
+            if err:  # O(1)
+                return err  # O(1)
+    return ""  # O(1)
+
+
 def prepare(root, task, owns):  # O(f * o) + git checkout of the tree
     root = Path(root).resolve()  # absolute: git -C and the tree path must agree | O(1)
     with lock(root, task):  # O(1)
@@ -142,6 +194,9 @@ def _prepare(root, task, owns):  # O(f * o) + git checkout of the tree
         dst = tree / p  # O(1)
         dst.parent.mkdir(parents=True, exist_ok=True)  # O(1)
         shutil.copy2(root / p, dst)  # O(file size)
+    err = stage(tree, copy, delete)  # O(f) + spawns
+    if err:  # O(1)
+        print(f"trees: {task} tree index not updated: {err}; git-index checks in the tree see the base", file=sys.stderr)  # O(1)
     ov.write_text(json.dumps(copy + delete) + "\n", encoding="utf-8")  # O(f)
     return tree  # O(1)
 
