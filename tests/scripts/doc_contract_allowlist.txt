@@ -1,0 +1,6 @@
+# <doc path> | <call> | <reason>   (call = the tokens after sl, as the failure line prints them)
+skills/subagent-driven-development/SKILL.md | lint --stable | doc error quoted from next_tasks.py's stderr: should be sl plan_tools lint --stable; code and docs change together (follow-up)
+docs/tools.md | lint --stable | doc error quoted from next_tasks.py's stderr: should be sl plan_tools lint --stable; code and docs change together (follow-up)
+docs/config.md | setup | doc error quoted from compact_due.py's nudge: there is no sl setup tool, the command is /superlite:setup; code and docs change together (follow-up)
+docs/hooks.md | setup | doc error quoted from compact_due.py's nudge: there is no sl setup tool, the command is /superlite:setup; code and docs change together (follow-up)
+docs/mvp-flow.md | tool | not a call: the folder listing "scripts/ (sl tool)" in a code block
