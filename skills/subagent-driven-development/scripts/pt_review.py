@@ -2460,6 +2460,49 @@ def _excerpt_order(changed: list[str], hot: list[str]) -> list[str]:  # O(F^2) t
     return list(hot) + hooks + code + tests + mds  # O(F)
 
 
+def _is_diff_header(ln: str) -> bool:  # O(1) total
+    return ln.startswith(("+++ ", "--- ", "@@"))  # O(1)
+
+
+def _clip_pair(old: str, new: str, cap: int, ctx: int) -> tuple[str, str]:  # O(m) total
+    """Both lines of a -/+ pair cut to the span where they differ, with ctx chars around it."""
+    a, b = old[1:], new[1:]  # O(m)
+    p = 0  # O(1)
+    top = min(len(a), len(b))  # O(1)
+    while p < top and a[p] == b[p]:  # O(m) iterations
+        p += 1  # O(1)
+    s = 0  # O(1)
+    while s < top - p and a[len(a) - 1 - s] == b[len(b) - 1 - s]:  # O(m) iterations
+        s += 1  # O(1)
+    note = f" [line of {len(a)} chars, changed at col {p + 1}; read the file for the rest]"  # O(1)
+
+    def cut(body: str, mark: str) -> str:  # O(m)
+        end = len(body) - s  # O(1)
+        return mark + "\u2026" + body[max(0, p - ctx):p] + body[p:end][:cap] + body[end:end + ctx] + "\u2026" + note  # O(m)
+    return cut(a, old[0]), cut(b, new[0])  # O(m)
+
+
+def clip_diff_lines(lines: list[str], cap: int = 400, ctx: int = 120) -> list[str]:  # O(m) total
+    """Diff lines with every line over `cap` chars cut: a -/+ pair to its differing span, any other line to its head.
+    Header lines (`+++ `, `--- `, `@@`) and lines within the cap are returned as the same objects (#914)."""
+    out: list[str] = []  # O(1)
+    i = 0  # O(1)
+    while i < len(lines):  # O(n) iterations
+        ln = lines[i]  # O(1)
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""  # O(1)
+        if (ln.startswith("-") and nxt.startswith("+") and not _is_diff_header(ln) and not _is_diff_header(nxt)
+                and (len(ln) > cap or len(nxt) > cap)):  # O(1)
+            out.extend(_clip_pair(ln, nxt, cap, ctx))  # O(m)
+            i += 2  # O(1)
+            continue  # O(1)
+        if len(ln) > cap and not _is_diff_header(ln):  # O(1)
+            out.append(ln[:cap] + f" [+{len(ln) - cap} chars; read the file for the rest]")  # O(cap)
+        else:  # O(1)
+            out.append(ln)  # O(1)
+        i += 1  # O(1)
+    return out  # O(1)
+
+
 def changed_diffs(root: Path, base: str | None, files: list[str], ranges: RunRanges | None = None,  # O(X) + one git spawn per changed file
                   extra: list[str] | tuple[str, ...] = ()) -> tuple[list[str], list[tuple[str, list[str]]]] | None:
     """(changed files, [(file, diff lines)] in excerpt order) against base and the newest checkpoint; None outside git.
@@ -2484,7 +2527,7 @@ def changed_diffs(root: Path, base: str | None, files: list[str], ranges: RunRan
         if f in fresh:  # O(E)
             lines = (_new_file(root, f, "-U3") or "").splitlines()  # O(file size) + git spawn
             if lines:  # O(1)
-                diffs.append((f, lines))  # O(1)
+                diffs.append((f, clip_diff_lines(lines)))  # O(m)
             continue  # O(1)
         try:  # O(1)
             r = subprocess.run(["git", "-C", str(root), "diff", "-U3", *rr.of(f), "--", f],  # O(X) + git spawn
@@ -2493,7 +2536,7 @@ def changed_diffs(root: Path, base: str | None, files: list[str], ranges: RunRan
             continue  # O(1)
         lines = r.stdout.splitlines() if r.returncode == 0 else []  # O(X)
         if lines:  # O(1)
-            diffs.append((f, lines))  # O(1)
+            diffs.append((f, clip_diff_lines(lines)))  # O(m)
     return changed, diffs  # O(1)
 
 

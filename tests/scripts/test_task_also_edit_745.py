@@ -28,7 +28,7 @@ def write(tmp_path, t3_also="", body_extra=""):
 
 def test_message_lists_also_touches(tmp_path):
     plan = write(tmp_path)
-    lines = fleet_io.task_message(plan, ["T1"], "/sl/sl", "/sl").splitlines()
+    lines = fleet_io.task_message(plan, ["T1"], "/sl/sl", "/sl", tier="haiku").splitlines()
     i = lines.index("Owns: src/a.py, tests/test_a.py")
     assert lines[i + 1] == LINE
     assert lines[i + 2] == "Do not touch: tests/test_b.py, src/c.py"
@@ -47,7 +47,7 @@ def test_haiku_message_and_sl_task(tmp_path, capsys):
 
 def test_plain_task_unchanged(tmp_path):
     plan = write(tmp_path)
-    msg = fleet_io.task_message(plan, ["T2"], "/sl/sl", "/sl")
+    msg = fleet_io.task_message(plan, ["T2"], "/sl/sl", "/sl", tier="haiku")
     assert not [ln for ln in msg.splitlines() if ln.startswith("Also edit:")]
     assert "Do not touch: src/a.py, tests/test_a.py, src/c.py" in msg.splitlines()
     assert not [ln for ln in task.render(plan_tools.Plan.load(plan), "T2").splitlines() if ln.startswith("Also edit:")]
@@ -58,7 +58,7 @@ def test_batch_unions_also_touches(tmp_path):
     lines = fleet_io.task_message(plan, ["T1", "T3"], "/sl/sl", "/sl").splitlines()
     assert "Owns: src/a.py, tests/test_a.py, src/c.py" in lines
     assert lines.count(LINE) == 1
-    assert "Do not touch: tests/test_b.py" in lines
+    assert "Do not touch: any other file (1 files belong to other tasks; the prime's task list names their owners)" in lines
 
 
 def test_also_touches_parse(tmp_path):

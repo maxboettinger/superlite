@@ -44,7 +44,7 @@ def world(tmp_path, monkeypatch):
 def test_task_message_shape(world):
     m = io.task_message(world.plan, ["T3"], "/sl/sl", "/sl")
     assert m.startswith("# Task T3") and "SUPERLITE=/sl" in m and f"PLAN={world.plan.resolve()}" in m
-    assert f"/sl/sl task T3 --plan {world.plan.resolve()}" in m and "Owns:" in m and "Do not touch:" in m and "src/d.py" in m
+    assert f"/sl/sl task T3 --plan {world.plan.resolve()}" in m and "Owns:" in m and "Do not touch: any other file (1 files belong to other tasks;" in m and "src/d.py" not in m
     assert "/sl/sl run_tests --fast tests/test_c.py --task T3 --background" in m and "Status: DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED" in m
 
 def test_haiku_message_inlines_block(world):

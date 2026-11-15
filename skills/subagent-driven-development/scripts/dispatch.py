@@ -72,6 +72,15 @@ def prime_k(sl_dir, tier):  # O(1)
     return asg.prime_k(sl_dir, tier)  # O(1)
 
 
+def predictor_prefix_k():  # O(file)
+    """The predictor's fixed context prefix in k tokens (`context.prefix`); 0.0 when it cannot be read."""
+    try:  # O(1)
+        import predict  # noqa: E402 | O(1)
+        return float(predict.load_coef()["context"]["prefix"]) / 1000  # O(file)
+    except Exception:  # noqa: BLE001 | O(1)
+        return 0.0  # O(1)
+
+
 def skip_t0(ledger, plan=None, tid="T0"):  # O(c)
     if plan is not None:  # O(1)
         import plan_tools  # noqa: E402 | O(1) lazy
@@ -230,6 +239,7 @@ def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lan
     fleet = bool(fleet_state and sl_dir is not None and fleet_state.is_on(Path(sl_dir)))  # fleet mode never polls | O(1)
     fleet_busy = set(fleet_state.workers(Path(sl_dir), "busy")) if fleet else set()  # #553: a worker fleet.json marks busy, such as one answering a send --text, is never idle; pool.json stays as it is | O(w)
     idle = [ag for ag in agents if is_idle(ag) and ag.get("id") not in fleet_busy]  # O(a)
+    prefix_k = predictor_prefix_k()  # O(file)
     eligible = {}  # task -> {agent id: score} over eligible idle agents of the task's own tier | O(1)
     eligible_somewhere = set()  # O(1)
     reasons = {}  # O(1)
@@ -238,13 +248,17 @@ def plan_dispatch(plan, pool, committed, running, cap, tiers=None, cfg=None, lan
         deps = sorted({d for m in ms for d in graph.get(m, [])})  # O(d)
         owns = [o for m in ms for o in info.get(m, {}).get("owns", [])]  # O(o)
         est_context = sum(info.get(m, {}).get("est_context") or asg.DEFAULT_CONTEXT_K for m in ms)  # O(batch)
+        reuse_prefix = prefix_k * sum(1 for m in ms if info.get(m, {}).get("est_context"))  # members on the 20k default carry no predictor prefix | O(batch)
         limits = routing.tier_limits(cfg, tier(t))  # O(1)
         eligible[t] = {}  # O(1)
         for ag in idle:  # O(a) iterations
             if routing.agent_tier(ag, cfg) != tier(t):  # strict: never across tiers | O(1)
                 continue  # O(1)
-            why = asg.eligibility(ag, est_context, limits, prime_k(sl_dir, tier(t)) if sl_dir else 0.0)  # O(1)
+            pk = prime_k(sl_dir, tier(t)) if sl_dir else 0.0  # O(1)
+            why = asg.eligibility(ag, est_context, limits, pk, reuse_prefix)  # O(1)
             if why:  # O(1)
+                if why.startswith("context over"):  # the numbers behind the reason | O(1)
+                    why += f" ({asg.context_note(ag, est_context, pk, reuse_prefix)})"  # O(1)
                 reasons.setdefault(ag["id"], why)  # O(1)
                 continue  # O(1)
             eligible_somewhere.add(ag["id"])  # O(1)
