@@ -165,3 +165,23 @@ def test_a_deleted_source_is_never_untested_but_still_selects_by_name(tmp_path):
         "full": False, "selected": [], "reasons": {}, "untested": []}
     (root / "src/calc/adder.py").unlink()
     assert testcmd.select_affected(str(root), ["src/calc/adder.py"])["selected"] == ["tests/test_adder.py"]
+
+
+def test_fixture_project_tests_are_never_selected(tmp_path):
+    files = dict(PY, **{"tests/fixtures/proj/tests/test_adder.py": "from calc.adder import add\n\n\ndef test_x():\n    assert False\n"})
+    root = make(tmp_path, files)
+    assert testcmd.select_affected(str(root), ["src/calc/adder.py"])["selected"] == ["tests/test_adder.py"]
+
+
+def test_without_testpaths_only_tests_folder_is_selected(tmp_path):
+    body = "from calc.adder import add\n"
+    root = make(tmp_path, {"pyproject.toml": '[project]\nname = "calc"\n', "src/calc/adder.py": "def add(a, b):\n    return a + b\n",
+                           "tests/test_adder.py": body, "bench/test_speed.py": body})
+    assert testcmd.select_affected(str(root), ["src/calc/adder.py"])["selected"] == ["tests/test_adder.py"]
+
+
+def test_without_testpaths_and_tests_folder_bench_is_ignored(tmp_path):
+    body = "from calc.adder import add\n"
+    root = make(tmp_path, {"pyproject.toml": '[project]\nname = "calc"\n', "src/calc/adder.py": "def add(a, b):\n    return a + b\n",
+                           "test_adder.py": body, "bench/test_speed.py": body})
+    assert testcmd.select_affected(str(root), ["src/calc/adder.py"])["selected"] == ["test_adder.py"]

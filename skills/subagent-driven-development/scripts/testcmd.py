@@ -1328,9 +1328,10 @@ def _under(path: str, folder: str) -> bool:  # path is folder or below it; folde
 
 
 def _candidates(root: str, lang) -> list[str]:  # the tree's test files | O(files)
-    files = _tree_files(root)  # O(files)
+    files = [f for f in _tree_files(root) if not any(x in DATA_DIRS for x in f.split("/")[:-1])]  # fixture data is no test file | O(files)
     if lang == "python":  # O(1)
         paths = pytest_testpaths(root)  # O(file)
+        scope = [] if paths else python_full_args(Path(root))  # the full run's scope without testpaths | O(file)
         out = []  # O(1)
         for p in files:  # O(files)
             n = posixpath.basename(p)  # O(1)
@@ -1338,6 +1339,10 @@ def _candidates(root: str, lang) -> list[str]:  # the tree's test files | O(file
                 continue  # O(1)
             if paths and not any(_under(p, t) for t in paths):  # O(t)
                 continue  # O(t)
+            if scope == ["tests"] and not p.startswith("tests/"):  # O(1)
+                continue  # O(1)
+            if scope == ["--ignore=bench"] and _under(p, "bench"):  # O(1)
+                continue  # O(1)
             out.append(p)  # O(1)
         return out  # O(files)
     exts = RUNNER_EXT.get(lang, TEST_CODE_EXT)  # O(1)
