@@ -842,7 +842,7 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follow
     print(f"{wid} {label} {rep['status']} findings={n}" + (f" concerns={nc}" if nc else "") + (" partial" if part else "") + f" {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
     _ready(sd, wid, label)  # O(w)
     pane_label(sd, wid, pane_title(sd, wid, label, "reported, waiting for coordinator"))  # before the worker may be stopped | O(w)
-    if w.get("one_turn") and rep["status"] in FINAL:  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker | O(1)
+    if w.get("one_turn") and rep["status"] in FINAL and (not _write_remote(w) or rep.get("collected")):  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker; a remote write worker only once its snapshot is collected | O(1)
         _stop_worker(sd, wid)  # O(w)
     elif _write_remote(w) and rep["status"] in FINAL and rep.get("collected"):  # a remote write worker takes one task: stopped, its tree dropped, once its snapshot is collected | O(1)
         try:  # a failed stop must not lose the report | O(1)

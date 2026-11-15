@@ -418,6 +418,14 @@ def test_wait_collect_blocked_report(world, remote, rwrite, tmp_path):
     assert out[0]["status"] == "BLOCKED" and rep["status"] == "BLOCKED" and rep["concerns"] == ["remote worker W2 left no snapshot"]
     assert remote.stopped == []
 
+def test_wait_one_turn_remote_write_blocked_collect_keeps_worker(world, remote, rwrite, tmp_path):
+    stop_w2(world, tmp_path)
+    d = json.loads((world.sd / "fleet.json").read_text()); d["workers"]["W2"]["one_turn"] = True; (world.sd / "fleet.json").write_text(json.dumps(d))
+    rwrite.result = lambda r: {**r, "status": "BLOCKED", "concerns": ["remote worker W2 left no snapshot"]}
+    out = io.wait(world.sd, ["W2"], 60000)
+    assert out[0]["status"] == "BLOCKED" and remote.stopped == []
+    assert "W2" in json.loads((world.sd / "fleet.json").read_text())["workers"] and not any(c[0] == "close" for c in world.fh.calls)
+
 def test_wait_needs_context_is_neither_collected_nor_stopped(world, remote, rwrite, tmp_path):
     stop_w2(world, tmp_path, "Status: NEEDS_CONTEXT\nWhich file?")
     out = io.wait(world.sd, ["W2"], 60000)
