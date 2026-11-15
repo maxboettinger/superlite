@@ -110,6 +110,19 @@ def drop(label, root, name, timeout_s=60):  # O(1)
     return True  # O(1)
 
 
+def trees(label, root, timeout_s=30):  # O(trees)
+    """The host's trees of the store of `root`: [{name, base, path}]."""
+    try:  # O(1)
+        out = _run(label, "list", ["--json"], root, timeout_s)  # O(output)
+    except _Failed as e:  # O(1)
+        raise RemoteError(f"{label}: remote_tree list: {e}") from None  # O(1)
+    try:  # O(1)
+        found = json.loads(out.decode("utf-8", "replace"))["trees"]  # O(output)
+    except (ValueError, KeyError, TypeError):  # O(1)
+        raise RemoteError(f"{label}: remote_tree list printed no trees") from None  # O(1)
+    return [t for t in found if isinstance(t, dict)] if isinstance(found, list) else []  # O(trees)
+
+
 def tree_name(sd, wid):  # O(l)
     project = Path(sd).resolve().parent  # O(l)
     return re.sub(r"[^A-Za-z0-9._-]+", "-", project.name).strip("-") + "-" + hashlib.sha256(str(project).encode()).hexdigest()[:6] + "/" + wid  # O(l)

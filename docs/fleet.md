@@ -139,6 +139,23 @@ Escalation: a lead that needs a major decision lets its workers finish, writes `
 - Disk gate: `dispatch` and `fleet spawn` refuse under 20 GB free (`BLOCKED: ... disk: ...`, exit 3, nothing dispatched) and warn on stderr under 50 GB. `SUPERLITE_DISK_FLOOR_GB` and `SUPERLITE_DISK_WARN_GB` set the two levels, read at call time.
 - Cleanup: each `dispatch` round first sweeps orphan Xcode DerivedData (folders of trees that no longer exist), then drops the trees of committed tasks and stopped workers that no live process marks busy (`dispatch: removed N tree(s) nothing needs: ...`) and the tree of an evicted worker. `trees clean [--module-cache-hours H]` removes every tree under `.superlite/trees` and the orphaned DerivedData; with the option it also removes ModuleCache.noindex entries untouched for H hours. Backlog cleanup of a shipped batch's worktree also removes Xcode build folders in that worktree's session scratchpads.
 
+## Remote machines
+
+A worker can run on a saved Herdr machine instead of this Mac (#919).
+
+Setup:
+- `herdr machine add <label>` saves the machine; the account folders the fleet uses must be signed in on the host under the same paths.
+- `~/.superlite/machine.json` names two commands: `{"remote_tree": ["<tree-cmd>"], "remote_room": ["<room-cmd>"]}`. `remote_tree` pushes, reads, fetches and drops the worker's tree on a host (`push`, `read`, `fetch`, `drop`). `remote_room` prints `{"machines": [{"name": "<label>", "state": "ready", "room": N}, ...]}`; the entry named like this Mac's hostname is the local room. Without both keys nothing changes: every worker starts here.
+
+Placement (on by default once both keys exist):
+- A new worker of a remote-capable role starts where the most room is. A remote machine scores its room minus its live workers minus a margin of 2; this Mac scores its room minus its live workers; a tie goes local. Remote workers count as live workers of their machine.
+- The room answer is cached for 60 s. A machine that is not a saved enabled Herdr machine, not `ready`, or scores 0 or less is not used. A remote start that fails prints `placement: <label> unavailable (<reason>); local`, starts the worker here and keeps the machine out of placement for 10 minutes. Placement never blocks a spawn.
+- A project with an `.xcodeproj`, `.xcworkspace` or `Package.swift` at its root, or `"language": "swift"` in `.superlite/test-cmd.json`, always runs local.
+- Roles: research, final-reviewer, implementer, fixer and package-reviewer may run remote; checker, writer and leads always run here. Haiku (Wave 0) and `agent=Wn` dispatch lines stay local. A `fresh` or `poll` dispatch line is placed per task: a remote task gets one new remote worker.
+- `--machine <label>` on `fleet spawn` forces that machine; `--machine local` forces this Mac and skips placement. `sl fleet placement local` turns placement off for the run, `sl fleet placement spread` turns it on again, `sl fleet placement` shows the mode and the room of each machine.
+
+How work comes back: a remote write worker starts from a start commit (the base plus the files as on disk, and the brief) pushed to its tree. When it stops, its tree is recorded as a snapshot commit (never `.superlite/`) and applied to the local tree by a three-state compare: a path is copied when the local file still equals the start or already equals the result; any conflicting path writes nothing and the stop is reported BLOCKED. Stop records and transcripts are mirrored into `<run>/.superlite/remote/<worker>/`. The host loads superlite from a tree of this checkout's HEAD commit (`claude --plugin-dir`); old unused plugin trees are removed after 24 hours.
+
 ## Limits
 
 - Workers share the checkout, so tasks must own disjoint files (the plan already guarantees this).
