@@ -53,6 +53,17 @@ class FakeHerdr:
         self.calls.append(("close_pane", pane_id))
         if pane_id in self.tab_panes: self.tab_panes.remove(pane_id)
     def close_workspace(self, ws): self.calls.append(("close_workspace", ws))
+    def on(self, machine):
+        import contextlib
+        @contextlib.contextmanager
+        def cm():
+            if machine: self.calls.append(("on", machine))
+            try: yield
+            finally:
+                if machine: self.calls.append(("off", machine))
+        return cm()
+    def machines(self): return [{"label": "box"}]
+    def machine_status(self, label, timeout_ms=10000): return "reachable"
     def call(self, args, timeout_ms=30000, env=None): self.calls.append(("call", args)); return {}  # pane rename
 
 @pytest.fixture
@@ -384,3 +395,82 @@ def test_status_hides_stopped_rows(world, capsys):
     assert "fleet: on" in out and "W2 ready" in out and "W1" not in out and "W3" not in out
     fleet.main(["status", "--all"]); out = capsys.readouterr().out
     assert "W1 stopped" in out and "W2 ready" in out and "W3 blocked" in out
+
+
+# --- remote workers (#919) ---
+def _remote_rec(machine, pane, state="ready"):
+    return {"name": "sl-proj-w", "state": state, "pane_id": pane, "machine": machine, "role": "research", "account": f"default@{machine}"}
+
+@pytest.mark.skipif(REAL, reason="call list is read from the in-process fake")
+def test_open_pane_machine_workspace_is_its_own(world):
+    r1 = fleet.open_pane(world.sd, "W1", "/h/t", {}, _remote_rec("box", None), machine="box")
+    assert r1 == "w6:p1"
+    data = json.loads((world.sd / "fleet.json").read_text())
+    assert data["machines"] == {"box": {"workspace_id": "w6", "root_pane": "w6:p1"}} and data["workspace_id"] is None
+    assert world.fh.calls[0] == ("on", "box") and ("create_workspace", "sl:fleet", {}) in world.fh.calls and world.fh.calls[-1] == ("off", "box")
+
+@pytest.mark.skipif(REAL, reason="call list is read from the in-process fake")
+def test_open_pane_splits_only_from_same_machine(world):
+    fleet.open_pane(world.sd, "W1", "/h/t", {}, _remote_rec("box", None), machine="box")
+    fleet.open_pane(world.sd, "W2", "/p", {}, {"name": "sl-proj-w2", "state": "ready", "role": "implementer"})  # local: own workspace
+    splits = [c for c in world.fh.calls if c[0] == "split_pane"]
+    assert splits == [] and [c[0] for c in world.fh.calls].count("create_workspace") == 2
+    fleet.open_pane(world.sd, "W3", "/h/t", {}, _remote_rec("box", None), machine="box")
+    assert [c for c in world.fh.calls if c[0] == "split_pane"][0][1] == "w6:p1"
+
+def test_spawn_machine_hands_off(world, monkeypatch):
+    import fleet_remote_worker as frw
+    seen = []
+    monkeypatch.setattr(frw, "spawn", lambda *a: seen.append(a) or {"id": "W1"})
+    monkeypatch.setattr(fleet.ml, "gate", lambda *a, **k: pytest.fail("local machine gate ran"))
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj, role="research", machine="box") == {"id": "W1"}
+    assert seen == [(world.sd, "research", "sonnet", world.proj, "box", None)]
+
+def test_status_does_not_probe_remote_worker(world, monkeypatch, capsys):
+    fleet.main(["on"]); fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
+    data = json.loads((world.sd / "fleet.json").read_text())
+    data["workers"]["W7"] = _remote_rec("box", "w9:p9")
+    (world.sd / "fleet.json").write_text(json.dumps(data)); capsys.readouterr()
+    probed = []
+    monkeypatch.setattr(fleet, "agent_gone", lambda name: probed.append(name) or True)
+    fleet.main(["status"]); out = capsys.readouterr().out
+    assert "W7 ready" in out and "dead: W7" not in out and "sl-proj-w" not in probed
+    assert "dead: W1" in out and len(probed) == 1
+
+@pytest.mark.skipif(REAL, reason="call list is read from the in-process fake")
+def test_stop_remote_worker(world, monkeypatch):
+    import fleet_remote_worker as frw
+    fleet.main(["on"]); fleet.spawn(world.sd, world.plan, "sonnet", world.proj)
+    d = json.loads((world.sd / "fleet.json").read_text()); d["workers"]["W2"] = _remote_rec("box", "w6:p9"); d["next"] = 3
+    d["machines"] = {"box": {"workspace_id": "w9", "root_pane": "w9:p1"}}; (world.sd / "fleet.json").write_text(json.dumps(d))
+    stopped = []
+    monkeypatch.setattr(frw, "stop", lambda sd, wid: (stopped.append(wid), fleet.fs.set_state(sd, wid, "stopped")))
+    assert fleet.stop(world.sd, ["W2"]) == ["W2"] and stopped == ["W2"]
+    assert not any(c[0] == "exit_agent" for c in world.fh.calls)
+    fleet.stop(world.sd, ["W1"])
+    assert [c[0] for c in world.fh.calls].count("exit_agent") == 1 and stopped == ["W2"]
+
+@pytest.mark.skipif(REAL, reason="call list is read from the in-process fake")
+def test_last_remote_stop_closes_its_workspace(world, monkeypatch):
+    import fleet_remote_worker as frw
+    d = fleet.fs.default(); d["workers"] = {"W1": _remote_rec("box", "w9:p1"), "W2": _remote_rec("box", "w9:p2")}
+    d["machines"] = {"box": {"workspace_id": "w9", "root_pane": "w9:p1"}}; fleet.fs.save(world.sd, d)
+    monkeypatch.setattr(frw, "stop", lambda sd, wid: fleet.fs.set_state(sd, wid, "stopped"))
+    fleet.stop(world.sd, ["W1"])
+    assert not any(c[0] == "close_workspace" for c in world.fh.calls)
+    fleet.stop(world.sd, ["W2"])
+    assert ("close_workspace", "w9") in world.fh.calls and ("on", "box") in world.fh.calls
+    assert json.loads((world.sd / "fleet.json").read_text())["machines"] == {}
+
+def test_cli_machine_needs_plain_spawn(world, capsys):
+    fleet.main(["on"])
+    assert fleet.main(["spawn", "--for-dispatch", "--machine", "box"]) == 2
+    assert "--machine works with a plain spawn (--role R --brief F) for now" in capsys.readouterr().err
+    assert fleet.main(["spawn", "--role", "research", "--machine", "box"]) == 2
+
+def test_cli_machine_passed_to_spawn(world, monkeypatch):
+    seen = {}; fleet.main(["on"])
+    monkeypatch.setattr(fleet, "spawn", lambda *a, **k: seen.update(k) or (_ for _ in ()).throw(ValueError("stop here")))
+    brief = world.proj / "b.md"; brief.write_text("q")
+    assert fleet.main(["spawn", "--role", "research", "--brief", str(brief), "--machine", "box"]) == 2
+    assert seen["machine"] == "box"

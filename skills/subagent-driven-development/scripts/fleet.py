@@ -323,19 +323,25 @@ def choose_account(sd, model, env, avoid=None, lead=False):  # O(a * e + w) plus
     return account, cdir, alias.get(account, account)  # O(1)
 
 
-def open_pane(sd, wid, cwd, env, record):  # O(w + p) plus herdr calls
+def open_pane(sd, wid, cwd, env, record, machine=None):  # O(w + p) plus herdr calls
     """Open the pane of worker `wid` (workspace, split or tab), save `record` plus its pane id as the worker, return the pane id.
 
+    With `machine` the pane opens inside `hc.on(machine)`, in that machine's own workspace (`machines.<label>` in fleet.json),
+    split from the newest open pane of that machine's workers only; a local spawn never splits from a remote pane.
     A HerdrError propagates; the caller reports it."""
     sd = Path(sd)  # O(1)
-    with fs.locked(sd):  # layout decision and herdr call are one step; fs write helpers lock too, so save directly | O(1) plus wait
+    with fs.locked(sd), (hc.on(machine) if machine else contextlib.nullcontext()):  # older doubles have no `on` | O(1)  # layout decision and herdr call are one step; fs write helpers lock too, so save directly | O(1) plus wait
         data = fs.load(sd)  # O(w)
         for attempt in (0, 1):  # a split from a pane closed outside fleet fails once; the retry uses another pane | O(1)
-            live = [v for v in data["workers"].values() if v.get("state") != "stopped"]  # O(w)
+            live = [v for v in data["workers"].values() if v.get("state") != "stopped" and v.get("machine") == machine]  # this machine's workers only | O(w)
             src = [v["pane_id"] for v in live if v.get("state") != "blocked"]  # panes still open | O(w)
-            if not data.get("workspace_id") or not src:  # O(1)
+            slot = (data.get("machines") or {}).get(machine) or {} if machine else data  # where this machine's workspace id is kept | O(1)
+            if not slot.get("workspace_id") or not src:  # O(1)
                 ws, pane = hc.create_workspace(data.get("label") or "sl:fleet", cwd, env)  # O(1)
-                data.update({"workspace_id": ws, "root_pane": pane})  # O(1)
+                if machine:  # O(1)
+                    data.setdefault("machines", {})[machine] = {"workspace_id": ws, "root_pane": pane}  # O(1)
+                else:  # O(1)
+                    data.update({"workspace_id": ws, "root_pane": pane})  # O(1)
                 break  # O(1)
             bad, how = src[-1], "tab"  # the pane a failing herdr call points at: the layout read first, then the split | O(1)
             try:  # O(1)
@@ -348,13 +354,13 @@ def open_pane(sd, wid, cwd, env, record):  # O(w + p) plus herdr calls
                 if attempt:  # O(1)
                     raise  # O(1)
                 for k, v in data["workers"].items():  # the pane is dead: stop its worker, drop it from the pool | O(w)
-                    if v.get("pane_id") == bad and v.get("state") != "stopped":  # O(1)
+                    if v.get("pane_id") == bad and v.get("state") != "stopped" and v.get("machine") == machine:  # O(1)
                         v.update({"state": "stopped", "task": None})  # O(1)
                         _pool_drop(sd, k)  # we hold fs.locked(sd); pool.json uses the same lock | O(w)
                 fs.save(sd, data)  # O(w)
                 continue  # O(1)
             if how == "tab":  # a full or short tab: the next worker opens a new one in the same workspace | O(1)
-                pane = hc.create_tab(data["workspace_id"], cwd, env)[1]  # O(1)
+                pane = hc.create_tab(slot["workspace_id"], cwd, env)[1]  # O(1)
             break  # O(1)
         data["workers"][wid] = {**record, "pane_id": pane}  # O(1)
         fs.save(sd, data)  # O(w)
@@ -400,10 +406,13 @@ def _live_names():  # names of the live herdr agents on this machine; no agent l
         return set()  # O(1)
 
 
-def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0, output=None, brief=False, plain=True):  # O(a * e + w) plus herdr calls
+def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0, output=None, brief=False, plain=True, machine=None):  # O(a * e + w) plus herdr calls
     """One worker; a start that stays slow is retried once on another account.
     Implementers, fixers and package reviewers keep the MCP servers their project names or the stack default (`xcode` for an Xcode project), each checked first (#576).
     Every worker starts lean (#377): no MCP server (`--strict-mcp-config`; the exception is the line above), Chrome, skills or slash commands; Artifact, ListAgents, ReadNotifications and ReportFindings denied (LEAN_FLAGS, LEAN_DENY)."""
+    if machine:  # a worker on a saved Herdr machine: its own gates and life, no local machine gate | O(1)
+        import fleet_remote_worker as frw  # noqa: E402 | O(1) lazy: it imports this module
+        return frw.spawn(sd, role, tier, project, machine, cfg)  # O(w) plus remote calls
     busy = ml.gate(f"fleet spawn ({role})", machine_wait, over)  # the first attempt only; the retry below is the same spawn | O(wait)
     if busy:  # O(1)
         print(f"BLOCKED: {BUSY_HEAD}{busy}{BUSY_TAIL}")  # O(1)
@@ -799,6 +808,22 @@ def for_review(sd, plan, project, tasks, package=None, over=False, machine_wait=
     return 0  # O(1)
 
 
+def _close_machine_workspace(sd, machine):  # the last live worker of `machine` stopped: forget and close its workspace | O(w) plus a herdr call
+    with fs.locked(sd):  # O(1) plus wait
+        data = fs.load(sd)  # O(w)
+        if [v for v in data["workers"].values() if v.get("machine") == machine and v.get("state") != "stopped"]:  # O(w)
+            return  # O(1)
+        slot = (data.get("machines") or {}).pop(machine, None)  # O(1)
+        if not slot:  # O(1)
+            return  # O(1)
+        fs.save(sd, data)  # state first, as for the local workspace | O(w)
+    try:  # O(1)
+        with hc.on(machine):  # O(1)
+            hc.close_workspace(slot["workspace_id"])  # O(1)
+    except hc.HerdrError:  # O(1)
+        pass  # O(1)
+
+
 def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr calls
     sd = Path(sd)  # O(1)
     live = {k: v for k, v in fs.workers(sd).items() if v.get("state") != "stopped"}  # O(w)
@@ -806,6 +831,13 @@ def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr cal
     p = sd / "pool.json"  # O(1)
     pdata = pool.load(p) if p.exists() else None  # O(w)
     for wid in targets:  # O(w)
+        if live[wid].get("machine"):  # a remote worker: exit, close and tree drop run on its machine | O(1)
+            import fleet_remote_worker as frw  # noqa: E402 | O(1) lazy
+            frw.stop(sd, wid)  # O(1) plus remote calls
+            if pdata is not None:  # O(1)
+                pool.remove(pdata, wid)  # O(w)
+            _close_machine_workspace(sd, live[wid]["machine"])  # O(w)
+            continue  # O(1)
         if live[wid].get("role") == "lead" and live[wid].get("lead_sd") and Path(live[wid]["lead_sd"]).is_dir():  # a lead's workers exit before the lead | O(w)
             try:  # O(1)
                 stop(Path(live[wid]["lead_sd"]), all_=True)  # O(w)
@@ -832,7 +864,7 @@ def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr cal
     if pdata is not None and targets:  # O(1)
         pool.save(p, pdata)  # O(w)
     data = fs.load(sd)  # O(w)
-    if data.get("workspace_id") and not [v for v in data["workers"].values() if v.get("state") != "stopped"]:  # O(w)
+    if data.get("workspace_id") and not [v for v in data["workers"].values() if v.get("state") != "stopped" and not v.get("machine")]:  # O(w)
         fs.set_workspace(sd, None, None)  # state first: closing the workspace kills the pane of a caller that runs inside it | O(w)
         if not keep_workspace:  # `off` closes it itself, after it has said so | O(1)
             try:  # O(1)
@@ -1037,6 +1069,9 @@ def _stopped_line(name, secs, text=None):  # the one BLOCKED line of a stopped o
 
 
 def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `spawn`: its exit code | O(R * (spawn + send))
+    if a.machine and (a.for_dispatch or a.for_review is not None or a.package or not a.brief):  # O(1)
+        print("error: --machine works with a plain spawn (--role R --brief F) for now", file=sys.stderr)  # O(1)
+        return 2  # O(1) before any pane
     if (a.for_dispatch or a.for_review is not None or a.package) and a.plan and Path(a.plan).is_dir():  # a run folder names its plan file (#508) | O(d)
         import plan_tools as pt  # noqa: E402 | O(1) lazy
         try:  # O(1)
@@ -1057,8 +1092,9 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
     if a.for_review is not None or a.package:  # O(1)
         ids = [x for v in a.for_review or [] for x in re.split(r"[,\s]+", v) if x]  # O(len)
         return for_review(sd, a.plan, state.git_root(sd) or sd.parent, ids, a.package, a.over_limit, a.machine_wait, note)  # O(L + e + spawn + send)
+    mkw = {"machine": a.machine} if a.machine else {}  # only a remote spawn passes it | O(1)
     try:  # O(1)
-        w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=bool(a.brief))  # O(w)
+        w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=bool(a.brief), **mkw)  # O(w)
     except ValueError as e:  # an unknown role or tier | O(1)
         print(f"error: {e}", file=sys.stderr)  # O(1)
         return 2  # O(1)
@@ -1128,6 +1164,7 @@ def main(argv=None):  # O(w) plus command cost
     s.add_argument("--timeout", default=None)  # O(1) with --wait: ms, 580s, 9m
     s.add_argument("--over-limit", action="store_true")  # O(1) skip the machine gate (memory floor and count cap) for every spawn
     s.add_argument("--machine-wait", type=float, default=100.0)  # O(1) seconds a spawn waits for room on the machine
+    s.add_argument("--machine", default=None)  # O(1) a saved Herdr machine: the worker runs there (plain spawn only)
     s.add_argument("--for-dispatch", action="store_true")  # O(1) run dispatch, spawn per `fresh` line, send each line's tasks
     s = sub.add_parser("stop", help="close workers")  # O(1)
     s.add_argument("ids", nargs="*")  # O(1)
@@ -1188,7 +1225,7 @@ def main(argv=None):  # O(w) plus command cost
         pooled = {x["id"]: x for x in pool.load(sd / "pool.json").get("agents") or []}  # O(w)
         newly, ended = [], []  # O(1)
         for wid, w in fs.workers(sd).items():  # probe: a gone agent is dead, an unreachable herdr changes nothing | O(w)
-            if w.get("state") in ("ready", "busy") and w.get("role") != "layer" and agent_gone(fs.name_of(sd, wid, w)):  # O(1)
+            if w.get("state") in ("ready", "busy") and w.get("role") != "layer" and not w.get("machine") and agent_gone(fs.name_of(sd, wid, w)):  # O(1)
                 mark_dead(sd, wid)  # O(w)
                 newly.append(wid)  # O(1)
         for wid, w in fs.workers(sd).items():  # O(w)
