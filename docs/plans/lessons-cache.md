@@ -276,12 +276,12 @@ e.g. first_pass_by_task(sd) with no fleet/reports folder -> {}
 **Covers:** 4
 **Consumes:** none
 **Produces:** lessons_score.u_score(obs: dict) -> float | None · lessons_score.observe(rec: dict, run_task: str, shown: bool, hit: bool) -> None · lessons_score.settle(lessons: dict, cap: int = 50) -> list[str]
-e.g. u_score({"r1:T1": [1, 1], "r1:T2": [1, 1], "r2:T1": [1, 0], "r2:T4": [0, 0], "r3:T1": [0, 1]}) -> 0.1
+e.g. u_score({"r1:T1": [1, 1], "r1:T2": [1, 1], "r2:T1": [1, 0], "r2:T4": [0, 0], "r3:T1": [0, 1]}) -> 0.1 (rounded to 6 places: (2+1)/(3+2) - (1+1)/(2+2))
 e.g. u_score({"r1:T1": [1, 1], "r1:T2": [0, 1]}) -> None
 e.g. settle({"review:a.py": {"status": "candidate", "runs": ["r1", "r2"], "pinned": False, "obs": {}}}) -> ["review:a.py"] and its status is "active"
 **Review Focus:** numeric: `test_u_score_examples` (the two above; `{}` -> None); state: `test_admit_at_two_runs_not_one`, `test_retire_when_u_not_positive_after_grace`, `test_pinned_never_retired_or_evicted`, `test_dropped_never_changes`, `test_cap_retires_lowest_u_none_ranks_high`, `test_observe_upserts_and_keeps_newest_20_per_side` (21 shown keys -> the first shown is gone, 3 not-shown keys all kept; re-observing a kept key keeps 20), `test_u_score_survives_many_shown` (25 shown then 2 not shown observations -> U is a number).
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
-**Notes:** constants `ADMIT_RUNS = 2`, `GRACE = 3`, `WINDOW = 20` (per side: shown and not shown), `CAP = 50`; pure functions, no file access.
+**Notes:** `u_score` returns `round(U, 6)`, so tests compare with `==`; constants `ADMIT_RUNS = 2`, `GRACE = 3`, `WINDOW = 20` (per side: shown and not shown), `CAP = 50`; pure functions, no file access.
 
 ### T5 sync · Complexity 4 · Est. context 40k
 **Owns:** skills/subagent-driven-development/scripts/lessons_sync.py, tests/scripts/test_lessons_sync_853.py
@@ -394,7 +394,7 @@ e.g. _arm_values([{"grade": {"tasks": 4, "first_time_pass": 3, "package_findings
 **Covers:** 5
 **Consumes:** lessons_block.block(sd: Path, files: list[str], role: str, task: str, mode: str | None = None, log: bool = True) -> str (T6)
 **Produces:** none
-**Review Focus:** state: `test_lead_brief_appends_block_for_batch_files`, `test_lead_brief_unchanged_when_off`, `test_backlog_run_passes_lessons_mode` (run config `lead.lessons: on` -> `ctx["lessons"] == "on"` and `ctx["lessons_sd"]` is `_write_brief`'s `sd`; absent -> `"shadow"`).
+**Review Focus:** state: `test_lead_brief_appends_block_for_batch_files`, `test_lead_brief_unchanged_when_off`, `test_backlog_run_passes_lessons_mode` (calls `_write_brief` with a plain `brc` dict, not a validated run config, so it needs no T8 change: `lead.lessons: on` -> `ctx["lessons"] == "on"` and `ctx["lessons_sd"]` is `_write_brief`'s `sd`; absent -> `"shadow"`).
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
 **Notes:** backlog_brief.py and backlog_run.py are listed by planned batches B228 and B229 today: the build batch takes this task after they ship or names it a follow-up.
 
