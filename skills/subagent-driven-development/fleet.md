@@ -48,4 +48,7 @@ Low memory: Claude Code stops an idle session's background commands when the mac
 
 `"$SL" fleet status` lists workers; `reported` means the turn ended and `fleet wait Wn` collects it (`fleet report Wn` reads it first), `dead` (also `Wn <label> DEAD` from wait) means its agent is gone: the line names the fresh `fleet spawn`. `fleet send` to a stopped or dead worker exits 2 with that spawn line. `fleet stop Wn` or `--all` closes them. At freeze, `"$SL" fleet stop --all` runs before `trees clean` (no-op without fleet mode).
 
+Remote machines (#919): with `remote_room` and `remote_tree` in `~/.superlite/machine.json`, `fleet spawn` places a research, final-reviewer, implementer, fixer or package-reviewer worker on the machine with the most room and falls back to this Mac when a remote fails (`placement: <label> unavailable (...); local`); `--machine <label>` forces a machine, `--machine local` forces here, `fleet placement local|spread` switches it for the run.
+A remote write worker's result comes back as a snapshot applied to the local tree; a conflict is BLOCKED and writes nothing, so treat it like any BLOCKED worker. See docs/fleet.md "Remote machines".
+
 Batch leads and backlog mode (`/superlite:backlog`): main reads `backlog-main.md`, a lead reads `backlog.md`.
