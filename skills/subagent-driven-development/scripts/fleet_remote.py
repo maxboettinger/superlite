@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Remote fleet workers: the configured `remote_tree` command (push, read, drop) and the mirror of a remote worker's stop records.
+"""Remote fleet workers: the configured `remote_tree` command (push, read, drop, fetch) and the mirror of a remote worker's stop records.
 
 `<home>/machine.json` `{"remote_tree": ["<cmd>", ...]}` names the command; `push --host H --name N [--base REV] [--file PATH]... --timeout S`
-prints the remote tree's path, `read --host H PATH --offset N --timeout S` prints bytes, `drop --host H --name N --timeout S` removes the tree
+prints the remote tree's path, `read --host H PATH --offset N --timeout S` prints bytes, `fetch --host H --name N --ref R --timeout S` fetches the host tree's ref into the local repository and prints its sha, `drop --host H --name N --timeout S` removes the tree
 (exit 0 ok, 1 failed, 2 usage, 3 unreachable). Every call gets `timeout_s + 10` s; a failure is a `RemoteError`, never a dead worker.
 `sync(sd, wid)` copies the worker's new stop lines of the remote `metrics.jsonl` and the transcripts they name into `<sd>/remote/<wid>/`.
 """
@@ -63,7 +63,7 @@ def _run(label, verb, args, cwd, timeout_s):  # O(output)
     if p.returncode == 3:  # O(1)
         raise RemoteError(f"{label} unreachable: {last}")  # O(1)
     if p.returncode != 0:  # O(1)
-        if verb == "push" or p.returncode == 2:  # O(1)
+        if verb in ("push", "fetch") or p.returncode == 2:  # O(1)
             raise RemoteError(f"{label}: remote_tree {verb}: {last}")  # O(1)
         raise _Failed(last)  # O(1)
     return p.stdout  # O(output)
@@ -76,6 +76,19 @@ class _Failed(Exception):  # exit 1 of read or drop: the caller decides | O(1)
 def push(label, root, name, base, files, timeout_s=120):  # O(files)
     args = ["--name", name, *(["--base", base] if base else []), *[x for f in files for x in ("--file", f)]]  # O(files)
     return _run(label, "push", args, root, timeout_s).decode("utf-8", "replace").strip()  # O(output)
+
+
+def fetch(label, root, name, ref, timeout_s=120):  # O(objects)
+    """Bring the host tree's `ref` into the repository at `root` (as refs/maxapp/<label>/<name>/<ref without refs/>); the printed sha."""
+    out = _run(label, "fetch", ["--name", name, "--ref", ref], root, timeout_s)  # O(objects)
+    return out.decode("utf-8", "replace").strip()  # O(1)
+
+
+def remote_home(tree):  # O(l)
+    head, sep, _ = tree.partition("/.maxapp/trees/")  # O(l)
+    if not sep or not head:  # O(1)
+        raise RemoteError(f"cannot tell the home folder from tree path {tree}")  # O(1)
+    return head  # O(1)
 
 
 def read(label, path, offset=0, timeout_s=30):  # O(B)

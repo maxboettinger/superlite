@@ -4,8 +4,9 @@
     remote-tree push --host H --name N [--base REV] [--file PATH]... --timeout S   (prints the tree path)
     remote-tree read --host H PATH --offset N --timeout S                          (prints the bytes; missing: exit 1)
     remote-tree drop --host H --name N --timeout S                                 (missing: `not found` on stderr)
+    remote-tree fetch --host H --name N --ref R --timeout S                        (git fetch of the host tree into refs/maxapp/H/N/<R without refs/>; prints the sha; missing ref: exit 1 `no such ref`)
 Host `down` exits 3; `$FAKE_TREE_SLEEP` seconds of sleep before answering."""
-import json, os, shutil, sys, time
+import json, os, shutil, subprocess, sys, time
 from pathlib import Path
 
 a = sys.argv[1:]
@@ -23,7 +24,7 @@ def opt(name, many=False):
     return vals if many else (vals[0] if vals else None)
 
 
-if not a or a[0] not in ("push", "read", "drop"):
+if not a or a[0] not in ("push", "read", "drop", "fetch"):
     sys.stderr.write("usage: remote-tree push|read|drop\n")
     sys.exit(2)
 if opt("--host") == "down":
@@ -37,6 +38,19 @@ if a[0] == "push":
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(f, dst)
     print(tree)
+elif a[0] == "fetch":
+    tree, ref = home / opt("--name"), opt("--ref")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    sha = subprocess.run(["git", "-C", str(tree), "rev-parse", "--verify", "-q", ref], capture_output=True, text=True, env=env)
+    if sha.returncode != 0:
+        sys.stderr.write("no such ref: %s\n" % ref)
+        sys.exit(1)
+    dst = "refs/maxapp/%s/%s/%s" % (opt("--host"), opt("--name"), ref[len("refs/"):])
+    r = subprocess.run(["git", "fetch", "-q", str(tree), "+%s:%s" % (ref, dst)], capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr)
+        sys.exit(1)
+    print(sha.stdout.strip())
 elif a[0] == "read":
     pos = [x for i, x in enumerate(a[1:], 1) if not x.startswith("--") and a[i - 1] not in ("--host", "--offset", "--timeout")]
     p = Path(pos[0])
