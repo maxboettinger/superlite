@@ -1435,7 +1435,7 @@ def select_affected(root: str, changed: list[str]) -> dict:  # tests a change to
         if stem:  # O(1)
             word = re.compile(rf"\b{re.escape(stem)}\b")  # O(len)
             hit = add([c for c in cands if c != p and word.search(text(c))], "mention") or hit  # O(files*file)
-        if not hit and not is_test_path(p) and p not in untested:  # O(u)
+        if not hit and not is_test_path(p) and p not in untested and (Path(root) / p).exists():  # a deleted path is never untested | O(u)
             untested.append(p)  # O(1)
     return {"full": False, "selected": sorted(reasons), "reasons": dict(sorted(reasons.items())), "untested": untested}  # O(r log r)
 

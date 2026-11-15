@@ -85,7 +85,7 @@ def test_related_template_maps_a_source(tmp_path):
 
 
 def test_untested_lists_changed_files_no_test_covers(tmp_path):
-    root = make(tmp_path, PY)
+    root = make(tmp_path, {**PY, "README.md": "# calc\n"})
     r = testcmd.select_affected(str(root), ["src/calc/orphan.py", "README.md", "tests/test_misc.py", "src/calc/orphan.py"])
     assert r["selected"] == ["tests/test_misc.py"]
     assert r["untested"] == ["src/calc/orphan.py", "README.md"]
@@ -157,3 +157,11 @@ def test_changed_test_file_selects_tests_that_mention_it(tmp_path):
     root = make(tmp_path, files)
     r = testcmd.select_affected(str(root), ["tests/test_misc.py"])
     assert r["reasons"] == {"tests/test_misc.py": "changed", "tests/test_user.py": "mention"}
+
+
+def test_a_deleted_source_is_never_untested_but_still_selects_by_name(tmp_path):
+    root = make(tmp_path, PY)
+    assert testcmd.select_affected(str(root), ["src/calc/gone.py"]) == {
+        "full": False, "selected": [], "reasons": {}, "untested": []}
+    (root / "src/calc/adder.py").unlink()
+    assert testcmd.select_affected(str(root), ["src/calc/adder.py"])["selected"] == ["tests/test_adder.py"]
