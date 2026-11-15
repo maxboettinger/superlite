@@ -141,3 +141,23 @@ def test_executable_stays_executable(repo):
     git(repo, "reset", "-q", "--hard", start); (repo / "run.sh").unlink()
     r = ra.apply(str(repo), start, stop, None)
     assert r["applied"] == ["run.sh"] and os.access(repo / "run.sh", os.X_OK)
+
+
+def test_mode_only_change_is_applied(repo):
+    start = git(repo, "rev-parse", "HEAD")
+    os.chmod(repo / "a.py", 0o755)
+    stop = ra.snapshot(str(repo), "refs/x/stop")
+    git(repo, "reset", "-q", "--hard", start); os.chmod(repo / "a.py", 0o644)
+    r = ra.apply(str(repo), start, stop, None)
+    assert r["applied"] == ["a.py"] and r["conflicts"] == [] and os.access(repo / "a.py", os.X_OK)
+
+
+def test_local_mode_changed_since_start_is_conflict(repo):
+    start = git(repo, "rev-parse", "HEAD")
+    put(repo, "a.py", "new\n"); os.chmod(repo / "a.py", 0o755)
+    stop = ra.snapshot(str(repo), "refs/x/stop")
+    git(repo, "reset", "-q", "--hard", start)
+    put(repo, "a.py", "base\n"); os.chmod(repo / "a.py", 0o755)
+    r = ra.apply(str(repo), start, stop, None)
+    assert r["conflicts"] == ["a.py"] and r["applied"] == []
+    assert (repo / "a.py").read_text() == "base\n"
