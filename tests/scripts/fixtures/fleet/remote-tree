@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Fake `remote_tree` command for tests: trees live under $FAKE_TREE_HOME, every call is logged to $FAKE_TREE_LOG.
+
+    remote-tree push --host H --name N [--base REV] [--file PATH]... --timeout S   (prints the tree path)
+    remote-tree read --host H PATH --offset N --timeout S                          (prints the bytes; missing: exit 1)
+    remote-tree drop --host H --name N --timeout S                                 (missing: `not found` on stderr)
+Host `down` exits 3; `$FAKE_TREE_SLEEP` seconds of sleep before answering."""
+import json, os, shutil, sys, time
+from pathlib import Path
+
+a = sys.argv[1:]
+log = os.environ.get("FAKE_TREE_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(json.dumps({"argv": a, "cwd": os.getcwd()}) + "\n")
+if os.environ.get("FAKE_TREE_SLEEP"):
+    time.sleep(float(os.environ["FAKE_TREE_SLEEP"]))
+home = Path(os.environ.get("FAKE_TREE_HOME", "."))
+
+
+def opt(name, many=False):
+    vals = [a[i + 1] for i, x in enumerate(a) if x == name and i + 1 < len(a)]
+    return vals if many else (vals[0] if vals else None)
+
+
+if not a or a[0] not in ("push", "read", "drop"):
+    sys.stderr.write("usage: remote-tree push|read|drop\n")
+    sys.exit(2)
+if opt("--host") == "down":
+    sys.stderr.write("cannot reach down\n")
+    sys.exit(3)
+if a[0] == "push":
+    tree = home / opt("--name")
+    tree.mkdir(parents=True, exist_ok=True)
+    for f in opt("--file", True):
+        dst = tree / f
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(f, dst)
+    print(tree)
+elif a[0] == "read":
+    pos = [x for i, x in enumerate(a[1:], 1) if not x.startswith("--") and a[i - 1] not in ("--host", "--offset", "--timeout")]
+    p = Path(pos[0])
+    if not p.is_file():
+        sys.stderr.write("no such file: %s\n" % p)
+        sys.exit(1)
+    sys.stdout.buffer.write(p.read_bytes()[int(opt("--offset") or 0):])
+else:
+    tree = home / opt("--name")
+    if not tree.is_dir():
+        sys.stderr.write("not found\n")
+        sys.exit(1)
+    shutil.rmtree(tree)
