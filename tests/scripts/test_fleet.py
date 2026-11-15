@@ -472,10 +472,10 @@ def test_last_remote_stop_closes_its_workspace(world, monkeypatch):
     assert ("close_workspace", "w9") in world.fh.calls and ("on", "box") in world.fh.calls
     assert json.loads((world.sd / "fleet.json").read_text())["machines"] == {}
 
-def test_cli_machine_needs_plain_spawn(world, capsys):
+def test_cli_machine_needs_supported_spawn(world, capsys):
     fleet.main(["on"])
-    assert fleet.main(["spawn", "--for-dispatch", "--machine", "box"]) == 2
-    assert "--machine works with a plain spawn (--role R --brief F) for now" in capsys.readouterr().err
+    assert fleet.main(["spawn", "--package", "X", "--machine", "box"]) == 2
+    assert "--machine works with --for-dispatch, --for-review Tn or a plain spawn (--role R --brief F)" in capsys.readouterr().err
     assert fleet.main(["spawn", "--role", "research", "--machine", "box"]) == 2
 
 def test_cli_machine_passed_to_spawn(world, monkeypatch):
@@ -484,3 +484,107 @@ def test_cli_machine_passed_to_spawn(world, monkeypatch):
     brief = world.proj / "b.md"; brief.write_text("q")
     assert fleet.main(["spawn", "--role", "research", "--brief", str(brief), "--machine", "box"]) == 2
     assert seen["machine"] == "box"
+
+
+@pytest.fixture
+def rdisp(world, monkeypatch, capsys):
+    """Remote dispatch: scripted dispatch lines, fleet_remote_worker.spawn/send_task record their calls."""
+    import dispatch, fleet_remote_worker as frw
+    fleet.main(["on"]); capsys.readouterr()
+    plan = make_plan(world.proj, [{"id": t, "owns": f"src/{t.lower()}.py"} for t in ("T1", "T2", "T3")], name="plan2.md")
+    r = types.SimpleNamespace(**vars(world), plan2=plan, lines=[], spawns=[], sends=[], n=[0])
+    monkeypatch.setattr(dispatch, "run", lambda *a, **k: (list(r.lines), {}))
+    def spawn(sd, role, tier, project, label, cfg=None, task=None, plan=None, brief=None):
+        r.n[0] += 1; wid = f"W{r.n[0]}"; r.spawns.append((role, tier, label, task, plan, brief))
+        d = fleet.fs.load(sd); d["workers"][wid] = {"state": "ready", "role": role, "machine": label}; fleet.fs.save(sd, d)
+        return {"id": wid}
+    def send_task(sd, wid, plan, tasks, sl_path):
+        r.sends.append((wid, list(tasks)))
+    monkeypatch.setattr(frw, "spawn", spawn); monkeypatch.setattr(frw, "send_task", send_task)
+    return r
+
+
+def test_for_dispatch_machine_never_reuses(rdisp, capsys):
+    rdisp.lines = [("T1,T2", "fresh tier=sonnet agent=superlite:implementer"), ("T3", "agent=W9 tier=haiku")]
+    d = fleet.fs.load(rdisp.sd); d["workers"]["W9"] = {"state": "ready", "role": "implementer", "machine": "box"}; fleet.fs.save(rdisp.sd, d)
+    assert fleet.main(["spawn", "--for-dispatch", "--machine", "box", "--plan", str(rdisp.plan2)]) == 0
+    assert capsys.readouterr().out.splitlines()[:3] == ["W1 T1 sent machine=box", "W2 T2 sent machine=box", "W3 T3 sent machine=box"]
+    assert [x[:4] for x in rdisp.spawns] == [("implementer", "sonnet", "box", "T1"), ("implementer", "sonnet", "box", "T2"), ("implementer", "haiku", "box", "T3")]
+    assert rdisp.sends == [("W1", ["T1"]), ("W2", ["T2"]), ("W3", ["T3"])]
+    assert fleet.fs.load(rdisp.sd)["workers"]["W9"]["state"] == "ready"  # an idle remote worker is neither reused nor stopped
+
+
+def test_dropped_ready_skips_remote_workers(world):
+    d = fleet.fs.default(); d["workers"] = {"W1": {"state": "ready", "role": "implementer", "machine": "box"}, "W2": {"state": "ready", "role": "implementer"}}
+    fleet.fs.save(world.sd, d)
+    (world.sd / "pool.json").write_text(json.dumps({"agents": []}))
+    assert fleet._dropped_ready(world.sd) == ["W2"]
+
+
+def test_for_dispatch_machine_blocked_spawn_continues(rdisp, capsys, monkeypatch):
+    import fleet_remote_worker as frw
+    real = frw.spawn
+    def spawn(sd, role, tier, project, label, cfg=None, task=None, plan=None, brief=None):
+        if task == "T1":
+            print(f"BLOCKED: fleet spawn: machine {label}: account claude2 is not signed in on {label}"); raise SystemExit(3)
+        return real(sd, role, tier, project, label, cfg, task, plan, brief)
+    monkeypatch.setattr(frw, "spawn", spawn)
+    rdisp.lines = [("T1,T2", "fresh tier=sonnet agent=superlite:implementer")]
+    assert fleet.main(["spawn", "--for-dispatch", "--machine", "box", "--plan", str(rdisp.plan2)]) == 3
+    out = capsys.readouterr().out
+    assert "BLOCKED: T1 not sent (" in out and "not signed in" in out and "W1 T2 sent machine=box" in out
+
+
+def test_local_dispatch_unchanged(rdisp, capsys):
+    import fleet_remote_worker as frw
+    rdisp.lines = [("T1", "fresh tier=sonnet agent=superlite:implementer")]
+    assert fleet.main(["spawn", "--for-dispatch", "--plan", str(rdisp.plan2)]) in (0, 3)
+    assert rdisp.spawns == [] and rdisp.sends == []
+
+
+def test_spawn_machine_passes_task_and_brief(world, monkeypatch):
+    import fleet_remote_worker as frw
+    seen = []
+    monkeypatch.setattr(frw, "spawn", lambda *a, **k: seen.append((a, k)) or {"id": "W1"})
+    fleet.spawn(world.sd, world.plan, "sonnet", world.proj, role="fixer", machine="box", remote_brief="/p/b.md")
+    fleet.spawn(world.sd, world.plan, "sonnet", world.proj, role="implementer", machine="box", task="T1")
+    assert seen[0][1] == {"brief": "/p/b.md"} and seen[1][1] == {"task": "T1", "plan": str(world.plan)}
+
+
+def test_cli_machine_fixer_brief_reaches_remote_spawn(world, monkeypatch):
+    import fleet_remote_worker as frw
+    import fleet_io as fio
+    fleet.main(["on"]); seen, sent = [], []
+    brief = world.proj / "b.md"; brief.write_text("fix")
+    monkeypatch.setattr(frw, "spawn", lambda *a, **k: seen.append((a, k)) or {"id": "W1"})
+    monkeypatch.setattr(fio, "send_brief", lambda sd, wid, b, label="", **k: sent.append((wid, b)) or label)
+    assert fleet.main(["spawn", "--role", "fixer", "--brief", str(brief), "--machine", "box"]) == 0
+    assert seen[0][0][1] == "fixer" and seen[0][1]["brief"] == str(brief) and sent == [("W1", str(brief))]
+
+
+def test_for_review_machine_spawns_remote_reviewer(world, monkeypatch, capsys):
+    import fleet_remote_worker as frw
+    import fleet_io as fio
+    plan = world.proj / "rp.md"; plan.write_text("# Plan\n\n### T1 first · Complexity 3 (O-1) · Est. context 40k\n**Owns:** src/a.py\n")
+    fleet.main(["on"]); capsys.readouterr()
+    (world.sd / "progress.md").write_text("- commit T1 abc1234 first\n")
+    seen, sent = [], []
+    monkeypatch.setattr(fio, "review_brief", lambda *a, **k: "BRIEF\n")
+    monkeypatch.setattr(frw, "spawn", lambda *a, **k: seen.append((a, k)) or {"id": "W1"})
+    monkeypatch.setattr(fio, "send_brief", lambda sd, wid, b, label="", **k: sent.append((wid, b)) or label)
+    d = fleet.fs.load(world.sd); d["workers"]["W1"] = {"state": "ready", "role": "package-reviewer", "machine": "box"}; fleet.fs.save(world.sd, d)
+    assert fleet.main(["spawn", "--for-review", "T1", "--machine", "box", "--plan", str(plan)]) == 0
+    assert seen[0][0][1] == "package-reviewer" and seen[0][0][4] == "box" and seen[0][1]["brief"].endswith("review-T1.md") and sent[0][0] == "W1"
+
+
+def test_for_dispatch_machine_poll_line_gets_fresh_workers(rdisp, capsys):
+    rdisp.lines = [("T1,T2", "poll W7,W8 tier=sonnet")]
+    assert fleet.main(["spawn", "--for-dispatch", "--machine", "box", "--plan", str(rdisp.plan2)]) == 0
+    assert capsys.readouterr().out.splitlines()[:2] == ["W1 T1 sent machine=box", "W2 T2 sent machine=box"]
+    assert [x[3] for x in rdisp.spawns] == ["T1", "T2"]
+
+
+def test_for_dispatch_machine_wave0_says_run_without_machine(rdisp, capsys):
+    rdisp.lines = [("T0", "wave0 tier=haiku")]
+    assert fleet.main(["spawn", "--for-dispatch", "--machine", "box", "--plan", str(rdisp.plan2)]) == 3
+    assert "run Wave 0 without --machine" in capsys.readouterr().out and rdisp.spawns == []
