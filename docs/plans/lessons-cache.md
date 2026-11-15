@@ -21,8 +21,8 @@ Ruling: lessons are pitfalls only, one per (source, file): `review:<file>`, `inc
 Ruling: the store lives in `<main checkout>/.superlite/lessons/lessons.json`, found as `run_archive.archive_dir(sd).parent / "lessons"` (because archive_dir already resolves the main checkout through `--git-common-dir` without importing fcntl, and falls back to the run folder for a bare repository) - cost if wrong: none, one function to change.
 Ruling: a lesson matches a task only when its file is one of the task's Owns paths, exactly (because a directory match in a repo with 84 scripts in one folder would hand every task every lesson) - cost if wrong: fewer deliveries, raised by a later prefix rule.
 Ruling: default mode `shadow`: lessons are matched and logged but not shown, so every run builds the not-shown baseline from day one and agents see nothing until the owner turns `on` after the measurement (because #853 asks for a measurement before default-on) - cost if wrong: none to agents.
-Ruling: fixers and the final reviewer get no block (because a fixer works one known finding and the final reviewer must stay unanchored); `dispatch.py` needs no change, it calls `fleet_io.task_message` - cost if wrong: one more caller of `lessons_block.block`.
-Ruling: backlog ship syncs at the start of `merge`, before `maxapp ship` (because a shipped `maxapp ship` removes the worktree and its run folder, `backlog_ship.py:502` sets `cleaned=True`) - cost if wrong: a batch's last fixer round is not counted.
+Ruling: fixers and the final reviewer get no block (because a fixer works one known finding and the final reviewer must stay unanchored); `dispatch.py` needs no change: it only picks the ready tasks and their agents; the implementer's text is built by `fleet_io.send` (`fleet_io.py:672`) through `task_message` - cost if wrong: one more caller of `lessons_block.block`.
+Ruling: backlog ship syncs in `backlog_ship._merge` (`backlog_ship.py:459`) beside its read of the lead's notes, before `project_cleanup` and `maxapp ship -C <wt>`, on the batch's run folder `Path(wt) / ".superlite"` (not `ctx["sd"]`, which is the main checkout's) with plan None, so the run id comes from that folder's `lessons-run.json` (because a shipped `maxapp ship` removes the worktree and its run folder, `backlog_ship.py:502` sets `cleaned=True`) - cost if wrong: a batch's last fixer round is not counted.
 Ruling: `Detail: contracts` (because the build batch re-plans against the code of its day; named tests with exact values are the contract) - cost if wrong: the build lead raises it to `tests`.
 Ruling: the doc holds the design and the plan in one file (`**Max chars:** 40000`), as brainstorming writes it for an AI orchestrator - cost if wrong: none.
 Ruling: MISSED TARGET accepted: the critical path T4 -> T5 is the scoring rules and the sync that applies them; the build lead may stub T4 to cut it - cost if wrong: a few minutes of wall time.
@@ -38,7 +38,7 @@ flowchart LR
   end
   CT["commit_task.py"] --> SY["lessons_sync.sync"]
   FI["finish.py"] --> SY
-  SH["backlog_ship.py merge"] --> SY
+  SH["backlog_ship._merge"] --> SY
   INC --> SIG["lessons_signals.read_signals"]
   REP --> SIG
   FULL --> SIG
@@ -74,7 +74,7 @@ Learn from this repository's own runs, keep what is learned per repository so it
 - `text`: the newest two distinct problem texts of the key, each cleaned (`lessons_signals.clean`) and cut at 95 characters, joined by ` | `; at most 200 characters.
 - `runs`: distinct run ids with a signal for the key, newest last, at most 10.
 - `status`: `candidate` → `active` (admission) → `retired` (score or cap); `dropped` only by hand.
-- `obs`: one observation per `run:task` that matched the lesson: `[shown, hit]` as 0/1; the newest 20 kept (insertion order, an upsert moves nothing).
+- `obs`: one observation per `run:task` that matched the lesson: `[shown, hit]` as 0/1; the newest 20 shown and the newest 20 not shown are kept, each side trimmed on its own (insertion order, an upsert moves nothing), so a lesson shown in every run keeps its not-shown baseline.
 Per run, in the run folder `sd` (gone with the worktree): `lessons-run.json` `{"plan": "<abs plan>", "run": "<12 hex>", "offsets": {...}}` and `lessons-deliveries.jsonl`, one row per block call: `{"t": "<iso>", "task": "T2,T3", "role": "implementer", "shown": ["L7"], "matched": ["L7", "L9"]}`.
 
 ### 3. What feeds the store (T2, T3, T5, T9)
@@ -90,7 +90,7 @@ Triggers, each one call `lessons_sync.sync(sd, plan)` that never fails its calle
 |---|---|---|
 | task commit | `commit_task.py` after the commit and ledger line | runs that never reach finish or ship still count; observations stay provisional until a later sync |
 | run finish | `finish.py` after `history_section` | the run's final state |
-| backlog ship | `backlog_ship.py` `merge`, before `maxapp ship` | the worktree and its run folder are removed by a shipped merge |
+| backlog ship | `backlog_ship._merge`, on `Path(wt) / ".superlite"`, before `project_cleanup` and `maxapp ship` | the worktree and its run folder are removed by a shipped merge |
 | findings | none: `findings.py` is the reader sync uses | a fixer round adds reports the next sync reads |
 Sync is idempotent: `offsets` in `lessons-run.json` skip bytes and reports already read (incidents by byte offset and the first line's hash, reports by name and mtime, the full summary by its `started`); `runs` is a set; observations are upserts by `run:task`. The run id is made on the first call for a plan and kept in `lessons-run.json`; another plan path makes a new id.
 
@@ -278,9 +278,9 @@ e.g. first_pass_by_task(sd) with no fleet/reports folder -> {}
 e.g. u_score({"r1:T1": [1, 1], "r1:T2": [1, 1], "r2:T1": [1, 0], "r2:T4": [0, 0], "r3:T1": [0, 1]}) -> 0.1
 e.g. u_score({"r1:T1": [1, 1], "r1:T2": [0, 1]}) -> None
 e.g. settle({"review:a.py": {"status": "candidate", "runs": ["r1", "r2"], "pinned": False, "obs": {}}}) -> ["review:a.py"] and its status is "active"
-**Review Focus:** numeric: `test_u_score_examples` (the two above; `{}` -> None); state: `test_admit_at_two_runs_not_one`, `test_retire_when_u_not_positive_after_grace`, `test_pinned_never_retired_or_evicted`, `test_dropped_never_changes`, `test_cap_retires_lowest_u_none_ranks_high`, `test_observe_upserts_and_keeps_newest_20` (21 distinct keys -> the first is gone; re-observing a kept key keeps 20).
+**Review Focus:** numeric: `test_u_score_examples` (the two above; `{}` -> None); state: `test_admit_at_two_runs_not_one`, `test_retire_when_u_not_positive_after_grace`, `test_pinned_never_retired_or_evicted`, `test_dropped_never_changes`, `test_cap_retires_lowest_u_none_ranks_high`, `test_observe_upserts_and_keeps_newest_20_per_side` (21 shown keys -> the first shown is gone, 3 not-shown keys all kept; re-observing a kept key keeps 20), `test_u_score_survives_many_shown` (25 shown then 2 not shown observations -> U is a number).
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
-**Notes:** constants `ADMIT_RUNS = 2`, `GRACE = 3`, `WINDOW = 20`, `CAP = 50`; pure functions, no file access.
+**Notes:** constants `ADMIT_RUNS = 2`, `GRACE = 3`, `WINDOW = 20` (per side: shown and not shown), `CAP = 50`; pure functions, no file access.
 
 ### T5 sync · Complexity 4 · Est. context 40k
 **Owns:** skills/subagent-driven-development/scripts/lessons_sync.py, tests/scripts/test_lessons_sync_853.py
@@ -331,7 +331,7 @@ e.g. mode "shadow", the same store -> "" and the row {"task": "T2", "role": "imp
 e.g. pooled({"lessons": {"review:a.py": {"obs": {"r1:T1": [1, 1], "r1:T2": [0, 0]}}}}) -> {"shown": {"n": 1, "hits": 1}, "unshown": {"n": 1, "hits": 0}, "diff": 1.0, "low": <float>, "high": <float>}
 **Review Focus:** protocol: `test_list_active_with_u`, `test_list_all_includes_retired_and_dropped`, `test_drop_needs_why_then_sync_keeps_dropped`, `test_undrop_and_pin_unpin`, `test_unknown_id_exits_2`, `test_block_preview_does_not_log` (`sl lessons block --files src/a.py --role implementer` prints the `on` text and writes no delivery row); numeric: `test_report_pools_shown_and_unshown`.
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
-**Notes:** subcommands `list [--all]`, `show ID`, `drop ID --why TEXT`, `undrop ID`, `pin ID`, `unpin ID`, `sync [--plan P]`, `block --files A,B [--role R]`, `report`; every one takes `--plan .superlite` like other tools; exit 2 for an unknown id or a missing `--why`.
+**Notes:** subcommands `list [--all]`, `show ID`, `drop ID --why TEXT`, `undrop ID`, `pin ID`, `unpin ID`, `sync [--plan-file P]`, `block --files A,B [--role R]`, `report`; every one takes `--dir .superlite` for the run folder, as `report.py:557` does; exit 2 for an unknown id or a missing `--why`.
 
 ### T8 implementer and reviewer delivery · Complexity 3 · Est. context 27k
 **Owns:** skills/subagent-driven-development/scripts/fleet_io.py, skills/subagent-driven-development/scripts/run_config.py, tests/scripts/test_lessons_delivery_853.py
@@ -363,7 +363,7 @@ e.g. task_message(plan, ["T2"], sl, root) -> exactly today's text
 **Produces:** none
 **Review Focus:** state: `test_commit_task_syncs_after_commit`, `test_finish_syncs_after_history`, `test_ship_merge_syncs_before_maxapp_ship` (a fake `maxapp ship` records the call order: sync first); file: `test_sync_error_keeps_exit_codes` (sync raising inside each caller -> the caller's exit code and output unchanged).
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
-**Notes:** each call is `lessons_sync.sync(sd, plan)` wrapped in `try/except Exception`, so even an import error stays silent; tests fake `lessons_sync.sync`.
+**Notes:** commit_task and finish call `lessons_sync.sync(sd, plan)` with their own run folder and plan; backlog_ship calls it in `_merge` as the ship Ruling says, naming the run folder once for both the notes read and the sync, so the file's `.superlite` count does not grow (#854's ratchet); each call is wrapped in `try/except Exception`, so even an import error stays silent; tests fake `lessons_sync.sync`.
 
 ### T10 experiment metrics and docs · Complexity 2 · Est. context 26k
 **Owns:** skills/subagent-driven-development/scripts/report.py, docs/experiments.md, docs/tools.md, tests/scripts/test_experiment_lessons_metrics_853.py
@@ -380,7 +380,7 @@ e.g. _arm_values([{"grade": {"tasks": 4, "first_time_pass": 3, "package_findings
 e.g. _arm_values([{"grade": {"tasks": 4, "first_time_pass": 3, "package_findings": 2}}], "findings_per_task") -> [0.5]
 **Review Focus:** numeric: `test_arm_stats_has_rates`, `test_rows_without_tasks_skipped` (grade without `tasks` or with 0 -> no value); protocol: `test_experiment_report_lists_new_metrics`.
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
-**Notes:** report.py is at 589 lines: keep the change under 11 lines or move the two helpers to batch_grade.py; docs/experiments.md gains the lessons arm recipe (two run configs, `lead.lessons` shadow and on) and section 6's default-on rule; docs/tools.md gains the `lessons` row.
+**Notes:** report.py is at 589 lines: keep the change within 11 lines (#854's ratchet defaults to 600; batch_grade.py is T3's); docs/experiments.md gains the lessons arm recipe (two run configs, `lead.lessons` shadow and on) and section 6's default-on rule; docs/tools.md gains the `lessons` row.
 
 ### T11 lead delivery · Complexity 2 · Est. context 26k
 **Owns:** skills/subagent-driven-development/scripts/backlog_brief.py, skills/subagent-driven-development/scripts/backlog_run.py, tests/scripts/test_lessons_lead_853.py

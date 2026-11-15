@@ -1,7 +1,7 @@
 # Superlite: shared base for the scripts, one plan reader and one git helper (#854, design)
 
 **Goal:** design and plan for #854: one plan reader (`planfile.py`), one git, JSON and lock helper (`base.py`) and one module that spells the run folder's name (`state.py`), reached in small steps that each ship alone, green on the full suite, so backlog batches can take them one at a time; a ratchet test first, so the state stops getting worse while the steps run.
-**Architecture:** step 1 adds `tests/scripts/shape_ratchet.py` and its test: per-file ceilings for four counts (lines, `.superlite` spellings, plan-parser patterns, git argument lists) in an append-only `tests/scripts/shape_ceilings.txt`. Step 2 adds `base.py` (new file only). Step 3 moves the plan reader out of `plan_tools.py` into `planfile.py`, guarded by a corpus test that runs every plan through every parser. Steps 4-12 each move one group of files onto the new modules; step 13 lowers the ceilings.
+**Architecture:** step 1 adds `tests/scripts/ratchet.py` and its test: per-file ceilings for four counts (lines, `.superlite` spellings, plan-parser patterns, git argument lists) in an append-only `tests/scripts/ratchet_ceilings.txt`. Step 2 adds `base.py` (new file only). Step 3 moves the plan reader out of `plan_tools.py` into `planfile.py`, guarded by a corpus test that runs every plan through every parser. Steps 4-12 each move one group of files onto the new modules; step 13 lowers the ceilings.
 **Tech stack:** Python 3.10+ stdlib, pytest (through `sl run_tests`).
 **Spec:** this file, section Design; issue #854.
 **Detail:** contracts
@@ -22,13 +22,14 @@ Ruling: the run folder's name stays in the existing `state.py` (`DIR_NAME`), not
 Ruling: steps 4-12 group files by caller, each group moving its git calls, plan parsing and `.superlite` spellings at once (because a file a step touches is held from other batches; touching each hot file once holds it least) - cost if wrong: larger steps; a group can split along the same lines.
 Ruling: this doc plans steps 1-3 to task level; steps 4-13 are a step list each later batch plans against the code of its day (because those files change daily under other batches) - cost if wrong: none, each step's batch writes its own plan.
 Ruling: `Detail: contracts` - cost if wrong: the build lead raises it to `tests`.
+Ruling: the checker is `tests/scripts/ratchet.py`, not a `shape` name, because `scripts/shape.py` already means build shape (prune, chain ids) - cost if wrong: none.
 Ruling: MISSED TARGET accepted: S1 -> T3 is forced (the corpus test is the net the move runs under) - cost if wrong: a few minutes of wall time.
 Ruling: lint's PYTHONPATH warnings are expected: tests here import scripts through `sys.path.insert`, as every test in tests/scripts does; the build lead adds the `pythonpath` entry to `.superlite/test-cmd.json` only if commit_task's import check fails - cost if wrong: one config line.
 LAYERS: unit
 
 ```mermaid
 flowchart LR
-  S1["step 1: shape ratchet + state.DIR_NAME"] --> S4
+  S1["step 1: ratchet + state.DIR_NAME"] --> S4
   S2["step 2: base.py git, main_checkout, json, lock"] --> S4["steps 4-12: file groups move onto base, planfile, state"]
   S3["step 3: planfile.py out of plan_tools + parser corpus test"] --> S4
   S4 --> S13["step 13: tighten ceilings"]
@@ -51,6 +52,7 @@ Stop each script carrying its own plan parser, git wrapper and `.superlite` spel
 - 84 scripts, 41,823 lines; 14 over 600: plan_tools 3,627, pt_review 3,453, guard_judge 2,472, run_tests 2,317, guard_tools 2,206, testcmd 1,627, backlog_run 1,276, fleet 1,264, backlog 1,171, fleet_io 1,151, commit_task 1,116, finish 759, metrics 717, backlog_ship 674.
 - Plan parsers: `next_tasks.parse_plan` (`next_tasks.py:153`, a dict per task, 8 call sites), `pt_review.parse_plan` (`pt_review.py:195`, its own `Plan`, 24 test files), `plan_tools.Plan.load` (`plan_tools.py:362`, used by lint, task, findings, report, history, status), plus header regexes in `start_gate.py:32`, `coverage.py:22-103` and `build_prime.header_lines`. They disagree: heading levels (`###` only; `##`-`####`; `###`-`####`), id suffix (`T1B` only in next_tasks, `T1ab` only in plan_tools), field spelling (`pt_review.LABEL_RE` takes a bullet and a colon outside the bold), Owns splitting (`·` only in pt_review), fence indent (pt_review takes 4+ spaces).
 - Git: 13 wrappers in four behaviours: never raise and return `(rc, out, err)` (worktree, backlog_run, plan_tools, render_edit); raise on failure (commit_task, trees, suite_stamp, autocommit); add env and stdin (autocommit's index file, literal pathspecs, editor); scrub `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` with a 1 s deadline (guard_judge). Inline git lists besides: backlog_ship 18, backlog_run 11, pt_review 11, orchestrator 7, run_tests 5. Main-checkout lookups: `backlog_state.main_root` (7 callers, imports fcntl at top level), `testcmd._main_checkout_root`, inline `--git-common-dir` in suite_stamp, fleet_mcp, worktree (twice), run_archive.
+- Task-id pattern text (`[A-Z]{1,3}\d+`) or `%% taskgraph`: 14 scripts; besides the three parsers most are ledger or label readers (budget, fleet_io, findings, fleet_report, hold, routing, shape, commit_task, finish, orchestrator, backlog_brief).
 - `.superlite`: 52 of 84 scripts, 367 occurrences; state.py 37, run_tests 33, backlog_run 24, guard_judge 21, backlog_brief 19, pt_review 16.
 - No ratchet, size baseline or allowlist test exists (`test_docs_contract.py:64` caps one skill at 1,500 characters).
 
@@ -74,10 +76,10 @@ Stop each script carrying its own plan parser, git wrapper and `.superlite` spel
 **`state.py`** (step 1 adds the constant; later steps use it): `DIR_NAME = ".superlite"`, then `run_dir(root) -> Path` and `main_state_dir(start) -> Path | None` (= `base.main_checkout(start) / DIR_NAME`) in step 5. `state.home()` keeps the home folder.
 
 ### 4. The ratchet (step 1)
-- `tests/scripts/shape_ratchet.py` counts per script in `skills/subagent-driven-development/scripts/*.py`: `lines`; `superlite` = matches of `\.superlite\b`; `parsers` = lines holding `%% taskgraph` or the regex text `[A-Z]{1,3}\d+` (a plan heading or task id pattern); `git` = lines matching `\[\s*["']git["']` (an argument list that starts with git).
-- `tests/scripts/shape_ceilings.txt`: lines `<script name> <count> <max>  # <reason>`; blank and `#` lines skipped; a later line for the same script and count wins; a line without a `# ` reason is an error. Defaults without a line: `lines` 600, the other three 0; `state.py` has no `superlite` limit, `planfile.py` no `parsers` limit, `base.py` no `git` limit.
+- `tests/scripts/ratchet.py` counts per script in `skills/subagent-driven-development/scripts/*.py`: `lines`; `superlite` = matches of `\.superlite\b`; `parsers` = lines holding `%% taskgraph` or the regex text `[A-Z]{1,3}\d+` (a plan heading or task id pattern); `git` = lines matching `\[\s*["']git["']` (an argument list that starts with git).
+- `tests/scripts/ratchet_ceilings.txt`: lines `<script name> <count> <max>  # <reason>`; blank and `#` lines skipped; a later line for the same script and count wins; a line without a `# ` reason is an error. Defaults without a line: `lines` 600, the other three 0; `state.py` has no `superlite` limit, `planfile.py` no `parsers` limit, `base.py` no `git` limit.
 - The test fails on any count over its ceiling, naming script, count, actual, ceiling and the fix: lines: move code into a module of its own, or append a raise with a reason; superlite: use `state.DIR_NAME`; parsers: read plans with `planfile.read` (`plan_tools.Plan` before step 3); git: use `base.git` (a wrapper of the file's own before step 2).
-- `python3 tests/scripts/shape_ratchet.py --baseline` prints the step-1 lines (section's Ruling on headroom); `--tighten` prints a lower line for every count below its ceiling, for step 13 or any step that shrank a file.
+- `python3 tests/scripts/ratchet.py --baseline` prints the step-1 lines (section's Ruling on headroom); `--tighten` prints a lower line for every count below its ceiling, for step 13 or any step that shrank a file.
 - The file is append-only: AGENTS.md gains one line saying so; a batch that must raise a ceiling appends one line with `# B<n>: <why>` and names it in its notes; main lists the file as `append_only` for such a batch.
 - Answer to #854's question: yes, first, because it costs one fast test (84 files read, under a second) and turns every later regression into a named failure with its fix.
 
@@ -86,7 +88,7 @@ Each step is one backlog batch, green on `sl run_tests --full` and the ratchet, 
 
 | Step | Files | Moves | Needs |
 |---|---|---|---|
-| 1 | shape_ratchet.py, its test, shape_ceilings.txt, state.py, AGENTS.md | ratchet, `state.DIR_NAME` | - |
+| 1 | ratchet.py, its test, ratchet_ceilings.txt, state.py, AGENTS.md | ratchet, `state.DIR_NAME` | - |
 | 2 | base.py, its test | new module | - |
 | 3 | planfile.py, plan_tools.py, two tests | reader out of plan_tools, re-exported | - |
 | 4 | worktree, trees, render_edit, suite_stamp, fleet_mcp, run_archive, finish | git, main checkout | 2 |
@@ -97,8 +99,8 @@ Each step is one backlog batch, green on `sl run_tests --full` and the ratchet, 
 | 9 | run_tests | git, parse_plan calls, 33 spellings | 2, 3 |
 | 10 | pt_review | parser onto planfile (its extra headings and probe entries kept), 11 git calls | 2, 3 |
 | 11 | guard_judge | `_git_run`, `_git_rc` onto `git(clean_env=True)`; Opus security review | 2 |
-| 12 | the scripts the ratchet still lists with `superlite` above 0, six per batch, most first | spellings | 1 |
-| 13 | shape_ceilings.txt | `--tighten`; `parsers` above 0 only in planfile, `git` only in base plus guard_tools' command-parsing literals with a reason | 4-12 |
+| 12 | the scripts the ratchet still lists with `superlite` or `parsers` above 0, six per batch, most first | spellings; a task-id pattern equal to `planfile.TASK_ID` imports it, a ledger or label pattern that differs keeps a ceiling line whose reason says so | 1, 3 |
+| 13 | ratchet_ceilings.txt | `--tighten`; `parsers` above 0 only in planfile plus ruled ledger and label patterns, `git` only in base plus guard_tools' command-parsing literals with a reason | 4-12 |
 
 Callers that move first: the small git users (step 4) and the lookups (step 5), since they touch files few batches hold; `pt_review` (step 10) last of the parsers, since it has the most tests and the most disagreements.
 
@@ -112,7 +114,7 @@ Callers that move first: the small git users (step 4) and the lookups (step 5), 
 
 | Category | State | Basis |
 |---|---|---|
-| Scope and success criteria | ruled | after step 13: `parsers` above 0 only in planfile.py, `git` only in base.py (plus ruled literals), `superlite` only in state.py; every step green on the full suite; size not a goal |
+| Scope and success criteria | ruled | after step 13: `parsers` above 0 only in planfile.py (plus ceiling lines ruled as ledger or label patterns), `git` only in base.py (plus ruled literals), `superlite` only in state.py; every step green on the full suite; size not a goal |
 | Domain and data model | ruled | section 3: `Plan`, `Task`, `GitResult`, `GitError`; ceilings lines `<script> <count> <max>  # <reason>` |
 | Persistence and migration | ruled | one append-only text file; no data migration |
 | Interfaces and contracts | ruled | re-exports keep `plan_tools.*`, `next_tasks.parse_plan`, `backlog_state.main_root` working until their last caller moves |
@@ -120,7 +122,7 @@ Callers that move first: the small git users (step 4) and the lookups (step 5), 
 | Concurrency and state ownership | ruled | ceilings appended, never rewritten; each step holds only its row's files |
 | Error handling and recovery | ruled | `git` never raises (rc 127, 124); `git_out` raises `GitError`; ratchet failures name the fix |
 | Security and privacy | ruled | argument lists only, no shell; the guard's env scrub kept as `clean_env`; step 11 gets an Opus security review |
-| Performance and limits | ruled | ratchet under 1 s; corpus test about 275 plans through 3 parsers, `Tests: fast` while it stays under 5 s; git default timeout 30 s |
+| Performance and limits | ruled | ratchet under 1 s; corpus test about 240 plans (230 in docs/plans plus fixtures) through 3 parsers, `Tests: fast` while it stays under 5 s; git default timeout 30 s |
 | Observability | ruled | ratchet messages; `--tighten` shows progress per step |
 | Testing strategy | ruled | named unit tests per module; S1's corpus test as the characterization net; full suite per step |
 | Compatibility | ruled | Python 3.10; no top-level fcntl; old names re-exported |
@@ -128,9 +130,9 @@ Callers that move first: the small git users (step 4) and the lookups (step 5), 
 | Research unknowns | spike | S1: which parser disagreements the real plans hit |
 
 ## File structure
-- `tests/scripts/shape_ratchet.py`: counts, ceilings reader, `--baseline`, `--tighten` (T1).
-- `tests/scripts/test_shape_ratchet_854.py`: the ratchet and its self-tests (T1).
-- `tests/scripts/shape_ceilings.txt`: the ceilings (T1, appended later).
+- `tests/scripts/ratchet.py`: counts, ceilings reader, `--baseline`, `--tighten` (T1).
+- `tests/scripts/test_ratchet_854.py`: the ratchet and its self-tests (T1).
+- `tests/scripts/ratchet_ceilings.txt`: the ceilings (T1, appended later).
 - `skills/subagent-driven-development/scripts/state.py`: `DIR_NAME` (T1).
 - `AGENTS.md`: the append-only line (T1).
 - `skills/subagent-driven-development/scripts/base.py`, `tests/scripts/test_base_854.py` (T2).
@@ -140,7 +142,7 @@ Callers that move first: the small git users (step 4) and the lookups (step 5), 
 ## Task graph
 ```mermaid
 flowchart LR
-  T1[shape ratchet]
+  T1[ratchet]
   T2[base module]
   S1[parser corpus test]
   T3[planfile extraction]
@@ -170,8 +172,8 @@ App type: library (git wrapper, JSON, lock) and a test-side checker. Categories:
 Specific risks: `clean_env` leaking `GIT_DIR` from the caller's environment; a timeout that leaves a git process behind; a re-export missing a name 24 importers use; the corpus test passing because a parser returned nothing for every plan.
 **Probe entry:** none (Ruling: library functions and a test helper; their cases are named tests).
 
-### T1 shape ratchet · Complexity 3 · Est. context 30k
-**Owns:** tests/scripts/shape_ratchet.py, tests/scripts/test_shape_ratchet_854.py, tests/scripts/shape_ceilings.txt, skills/subagent-driven-development/scripts/state.py, AGENTS.md
+### T1 ratchet · Complexity 3 · Est. context 30k
+**Owns:** tests/scripts/ratchet.py, tests/scripts/test_ratchet_854.py, tests/scripts/ratchet_ceilings.txt, skills/subagent-driven-development/scripts/state.py, AGENTS.md
 **Components:** 2
 **LOC owned:** 160
 **Tests:** fast
@@ -180,13 +182,13 @@ Specific risks: `clean_env` leaking `GIT_DIR` from the caller's environment; a t
 **Est. time:** 3 min (2 components, about 160 LOC, fast tests)
 **Covers:** 4
 **Consumes:** none
-**Produces:** shape_ratchet.measure(path: Path) -> dict[str, int] · shape_ratchet.read_ceilings(path: Path) -> dict[tuple[str, str], int] · shape_ratchet.violations(scripts: Path, ceilings: dict[tuple[str, str], int]) -> list[str]
+**Produces:** ratchet.measure(path: Path) -> dict[str, int] · ratchet.read_ceilings(path: Path) -> dict[tuple[str, str], int] · ratchet.violations(scripts: Path, ceilings: dict[tuple[str, str], int]) -> list[str]
 e.g. measure(p) for a 3-line file `import re`, `X = ".superlite"`, `r = re.compile(r"[A-Z]{1,3}\d+")` -> {"lines": 3, "superlite": 1, "parsers": 1, "git": 0}
 e.g. read_ceilings(p) for `a.py lines 900  # baseline` then `a.py lines 950  # B240: one more reader` -> {("a.py", "lines"): 950}
-e.g. violations(dir_with_new_601_line_b_py, {}) -> ["b.py: lines 601 > ceiling 600 (default). Fix: move code into a module of its own, or append `b.py lines <n>  # B<n>: <why>` to tests/scripts/shape_ceilings.txt"]
+e.g. violations(dir_with_new_601_line_b_py, {}) -> ["b.py: lines 601 > ceiling 600 (default). Fix: move code into a module of its own, or append `b.py lines <n>  # B<n>: <why>` to tests/scripts/ratchet_ceilings.txt"]
 **Review Focus:** state: `test_repo_within_ceilings` (the real scripts folder and ceilings file); `test_later_line_wins`; file: `test_line_without_reason_is_an_error`, `test_unknown_count_name_is_an_error`; `test_defaults_and_exemptions` (a new 601-line file fails; `.superlite` in state.py passes, in x.py fails; `%% taskgraph` in planfile.py passes); `test_messages_name_the_fix` (one per count); `test_tighten_prints_lower_lines_only`; `test_state_dir_name` (`state.DIR_NAME == ".superlite"`).
-**Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS, 5 write shape_ceilings.txt from `python3 tests/scripts/shape_ratchet.py --baseline`
-**Notes:** `--baseline` writes line ceilings at count plus 5% rounded up to the next 10 and the other counts exact, each with `# baseline <date>`, only for counts above their default; AGENTS.md gains under Rules: "`tests/scripts/shape_ceilings.txt` is append-only: add a line with a `# B<n>: <why>` reason, never edit or delete one; the last line for a script and count wins (#854)."
+**Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS, 5 write ratchet_ceilings.txt from `python3 tests/scripts/ratchet.py --baseline`
+**Notes:** `--baseline` writes line ceilings at count plus 5% rounded up to the next 10 and the other counts exact, each with `# baseline <date>`, only for counts above their default; AGENTS.md gains under Rules: "`tests/scripts/ratchet_ceilings.txt` is append-only: add a line with a `# B<n>: <why>` reason, never edit or delete one; the last line for a script and count wins (#854)."
 
 ### T2 base module · Complexity 3 · Est. context 32k
 **Owns:** skills/subagent-driven-development/scripts/base.py, tests/scripts/test_base_854.py
@@ -219,7 +221,7 @@ e.g. main_checkout(worktree_of_repo) -> repo; main_checkout(Path(tmp_not_git)) -
 **Consumes:** none
 **Produces:** test_plan_parsers_agree_854.KNOWN: dict[tuple[str, str, str], str]
 e.g. KNOWN[("docs/plans/2026-10-02-x.md", "next_tasks", "ids")] -> "T1B: next_tasks reads a capital suffix; plan_tools stops at T1 (planfile follows plan_tools)"
-**Review Focus:** state: `test_parsers_agree_on_corpus` (for every plan in `docs/plans/*.md` without `build-report` in its name and every `plan*.md` under `tests/scripts/fixtures/`: task ids, titles and owns from `next_tasks.parse_plan`, `pt_review.parse_plan` and `plan_tools.Plan.load`, and edges from `pt_review` against `plan_tools.parse_taskgraph`, agree or the difference is in KNOWN); `test_known_entries_still_occur` (a KNOWN entry that no longer happens fails, so the list only shrinks); `test_corpus_not_empty` (at least 200 plans and at least one task per plan for plan_tools).
+**Review Focus:** state: `test_parsers_agree_on_corpus` (for every `docs/plans/*.md` whose name has no second dot (230 today; the `.progress`, `.review`, `.report`, `.spec` and `.build-report` files are not plans) and every `plan*.md` under `tests/scripts/fixtures/`: task ids, titles and owns from `next_tasks.parse_plan`, `pt_review.parse_plan` and `plan_tools.Plan.load`, and edges from `pt_review` against `plan_tools.parse_taskgraph`, agree or the difference is in KNOWN); `test_known_entries_still_occur` (a KNOWN entry that no longer happens fails, so the list only shrinks); `test_corpus_not_empty` (at least 200 plans and at least one task per plan for plan_tools).
 **Steps:** 1 write the comparison, 2 run it, 3 record every difference found in KNOWN with its ruling (plan_tools' form wins unless a real plan needs the other), 4 run: PASS
 **Notes:** this is the spike for section 3's rulings: if a difference shows that plan_tools' form drops tasks real plans use, the build lead raises a question before T3.
 
