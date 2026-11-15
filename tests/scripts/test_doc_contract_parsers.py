@@ -12,7 +12,7 @@ import doc_contract_parsers as dcp  # noqa: E402
 
 REPO = HERE.parents[1]
 # real subparsers with positionals only (or no arguments): no flag, not a routing placeholder
-NO_ARGS = {("backlog", "skip"), ("backlog", "unskip"), ("experiment", "show"), ("experiment", "clear"), ("history", "import")}
+NO_ARGS = {("backlog", "skip"), ("backlog", "unskip"), ("experiment", "show"), ("experiment", "clear"), ("history", "import"), ("golden_case", "verify"), ("golden_case", "list")}
 
 
 def _tools():

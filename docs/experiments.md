@@ -43,3 +43,7 @@ It covers prompt-level cases with graders, several runs per case, a baseline wit
 It cannot compare two run configs of the same plugin, run a fleet over several sessions, start from a repository state at a base commit with hidden tests, or produce batch cost rows. Those are what the arms above and the replay are for.
 
 Two arms that differ only in `lead.build_model` compare one lead against a planning plus a build lead: the cost row's `lead` sums both, `leads` holds each.
+
+## Golden batches
+
+Three fixed golden batches replay real merged work in a sealed copy before a minor or major release: see [release](release.md). The effort sweep is parked.

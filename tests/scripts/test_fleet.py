@@ -100,6 +100,16 @@ def test_worker_env_contents(world):
     assert env == {"CLAUDE_CONFIG_DIR": "/u/.claude-account3", "SUPERLITE_FLEET_WORKER": "W1", "SUPERLITE_FLEET_AGENT": "superlite:implementer",
                    "SUPERLITE_STATE_DIR": str(world.sd.resolve()), "SUPERLITE_FINAL_REVIEW": "off", "CLAUDE_CODE_PLUGIN_CACHE_DIR": "/u/.claude/plugins"}
 
+def test_gh_config_dir_reaches_workers_and_leads_only_when_set(world, tmp_path):
+    """A sealed golden run sets GH_CONFIG_DIR to an empty folder: herdr's explicit --env list must carry it to the lead and its workers."""
+    import fleet_lead
+    m, l = tmp_path / "m", tmp_path / "wt"
+    for base, want in (({"HOME": "/u", "GH_CONFIG_DIR": "/empty"}, {"GH_CONFIG_DIR": "/empty"}), ({"HOME": "/u"}, {})):
+        w = fleet.worker_env(world.sd, "W1", "superlite:implementer", "/u/.claude", base)
+        ld = fleet_lead.lead_env(m, l, "W2", "/u/.claude", base, [])
+        assert {k: v for k, v in w.items() if k == "GH_CONFIG_DIR"} == want
+        assert {k: v for k, v in ld.items() if k == "GH_CONFIG_DIR"} == want
+
 def _spawn_env(world, monkeypatch, accounts, env):
     seen = {}
     real = fleet.worker_env

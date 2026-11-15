@@ -68,7 +68,7 @@ import state  # noqa: E402 | O(1)
 TRUST = "Yes, I trust this folder"  # O(1)
 SHELL_PAUSE_S = 3.0  # O(1)
 SHELL_MSG = "not an available shell"  # O(1)
-PASS_THROUGH = ("CLAUDE_CODE_PLUGIN_CACHE_DIR",)  # O(1)
+PASS_THROUGH = ("CLAUDE_CODE_PLUGIN_CACHE_DIR", "GH_CONFIG_DIR")  # O(1) GH_CONFIG_DIR: a sealed golden run's empty gh folder reaches the lead and its workers
 SLOW_MSG = "timed out waiting for app response"  # O(1)
 STALL_WAIT_MS = 30000  # O(1) herdr's own prompt window is a fixed 5 s; a slow start gets this long to show working or blocked
 LEAN_FLAGS = ("--strict-mcp-config", "--no-chrome", "--disable-slash-commands")  # O(1)

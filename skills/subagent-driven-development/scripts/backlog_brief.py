@@ -210,7 +210,9 @@ def lead_brief(batch, ctx):  # O(i + f + a)
         out.append(f"You are the lead of batch {bid} in {ctx['repo']}. Read {ctx['backlog_md']} first: it holds the lead rules.")  # O(1)
     out.append(DATA_RULE)  # O(1)
     jira = _jira(batch.get("issues", []))  # O(i)
-    if jira:  # O(1)
+    if ctx.get("issue_dir") and not jira:  # O(1)
+        out.append(f"Issues (sealed run without GitHub: read each issue from {ctx['issue_dir']}/<n>.md; gh does not work here):")  # O(1)
+    elif jira:  # O(1)
         out.append("Issues (Jira keys; you have a shell: read each body yourself with "
                    "`acli jira workitem view <KEY> --fields summary,description --json`, or the Atlassian MCP getJiraIssue, and its latest 3 "
                    "comments with `acli jira workitem comment list --key <KEY> --json --limit 3 --order -created`):")  # O(1)

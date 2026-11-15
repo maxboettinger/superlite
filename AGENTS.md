@@ -14,7 +14,7 @@ A lean build-lifecycle plugin: 8 skills in `skills/`, 3 agents in `agents/`, and
 - `skills/using-superlite/SKILL.md` is injected into every session. Keep it under 1,500 characters.
 - Every harness integration must load `using-superlite` at session start. Acceptance test: open a clean session and send `Let's make a react todo list`; `brainstorming` must trigger before any code is written. Manually copied skills or per-session opt-in do not count.
 - Per-harness tool mappings live in `skills/using-superlite/references/<harness>-tools.md`. Each says how to run `agents/*.md` where plugin agents do not exist.
-- Versions are declared in `.version-bump.json`. Change them only with `scripts/bump-version.sh <version>`; run `scripts/bump-version.sh --audit` to catch missed files.
+- Versions live in `.version-bump.json`. A lead bumps the patch number at ship with `scripts/bump-version.sh <version>`; minor and major only through `sl release minor|major` on the maintainer's instruction, never by running `scripts/bump-version.sh` by hand for them (see [docs/release.md](docs/release.md)). Run `scripts/bump-version.sh --audit` to catch missed files.
 - Keep LF line endings. `hooks/session-start` uses `printf`, never a heredoc.
 - Do not touch `bench/` results or `docs/plans/` when working on a harness integration.
 

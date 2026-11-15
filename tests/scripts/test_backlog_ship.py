@@ -78,7 +78,13 @@ def test_bump(sh, capsys):
     sh.replies = {}
     assert ship(capsys, "B1", "bump") == (0, "B1 version 1.5.8\n") and b1(sh)["version"] == "1.5.8"
     assert ["bash", "scripts/bump-version.sh", "1.5.8"] in sh.calls and ["git", "commit", "-am", "Bump version to 1.5.8"] in sh.calls
-    assert ship(capsys, "B1", "bump", "--version", "1.6.0")[0] == 0 and b1(sh)["version"] == "1.6.0"
+    assert ship(capsys, "B1", "bump", "--version", "1.5.9")[0] == 0 and b1(sh)["version"] == "1.5.9"
+
+def test_bump_refuses_a_version_step_it_cannot_prove_is_a_patch(sh, capsys):
+    locked(sh, capsys)
+    (sh.wt / "scripts" / "bump-version.sh").write_text("")  # no version file: the current version is unreadable
+    assert ship(capsys, "B1", "bump", "--version", "2.0.0") == (2, "refused: a lead bumps the patch number only (sl release minor|major)\n")
+    assert not [c for c in sh.calls if c[:2] == ["bash", "scripts/bump-version.sh"]] and not b1(sh).get("version")
 
 def test_merge_records_the_pr_writes_the_summary_and_releases(sh, capsys):
     locked(sh, capsys); bs.update(bs.path(sh.root), lambda d: bs.batch(d, "B1").update({"version": "1.5.8"}))
@@ -86,11 +92,18 @@ def test_merge_records_the_pr_writes_the_summary_and_releases(sh, capsys):
     body = sh.wt / "b.md"; body.write_text("Batch B1.\n")
     sh.replies = {"maxapp ship": (0, "pr https://github.com/o/r/pull/201\nmerged #201 as abc\nnext: maxapp ship -C /wt (from outside the worktree)\n")}
     s, pb = sh.sd / "backlog" / "B1.md", sh.sd / "backlog" / "B1.pr-body.md"
-    assert ship(capsys, "B1", "merge", "--title", "B1: leads", "--body-file", str(body)) == (0, f"B1 shipped PR #201 1.5.8 summary={s}\n")
+    assert ship(capsys, "B1", "merge", "--title", "B1: leads", "--body-file", str(body)) == (0, f"tag v1.5.8 skipped: no merge commit\nB1 shipped PR #201 1.5.8 summary={s}\n")
     assert ["maxapp", "ship", "-C", str(sh.wt), "--timeout", "8", "--title", "B1: leads", "--body-file", str(pb)] in sh.calls
     assert pb.read_text() == "Batch B1.\n\nCloses #5\n" and ["gh", "issue", "view", "5", "-R", "o/r", "--json", "state", "-q", ".state"] in sh.calls
     assert s.read_text().startswith("B1 shipped: #5") and (b1(sh)["pr"], b1(sh)["merged"], b1(sh)["state"], b1(sh)["open_issues"]) == (201, True, "running", [])
     assert ship_lock.holder(sh.lock) is None
+
+def test_merge_says_when_the_patch_tag_is_skipped_for_a_bad_merge_sha(sh, capsys):
+    locked(sh, capsys); bs.update(bs.path(sh.root), lambda d: bs.batch(d, "B1").update({"version": "1.5.8"}))
+    body = sh.wt / "b.md"; body.write_text("Batch B1.\n")
+    sh.replies = {"maxapp ship": (0, "merged #201 as abc\n"), "gh pr view 201": (0, "null\n")}
+    rc, out = ship(capsys, "B1", "merge", "--title", "B1: leads", "--body-file", str(body))
+    assert rc == 0 and out.startswith("tag v1.5.8 skipped: no merge commit\nB1 shipped PR #201 1.5.8")
 
 def test_with_closes_adds_one_keyword_line_per_missing_issue():
     assert bsh.with_closes("Fixes #1, #2\n", [1, 2]) == "Fixes #1, #2\n\nCloses #2\n"

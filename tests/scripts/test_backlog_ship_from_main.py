@@ -39,7 +39,7 @@ def go(capsys, *extra):
 
 def test_from_main_ships_a_parked_batch(fm, capsys):
     sh = fm
-    assert go(capsys) == (0, f"B1 shipped PR #301 1.5.8 summary={sh.sd / 'backlog' / 'B1.md'}\n")
+    assert go(capsys) == (0, f"tag v1.5.8 skipped: no merge commit\nB1 shipped PR #301 1.5.8 summary={sh.sd / 'backlog' / 'B1.md'}\n")
     r = b1(sh)
     assert (r["state"], r["pr"], r["merged"], r["version"], r["open_issues"]) == ("shipped", 301, True, "1.5.8", [])
     assert ship_lock.holder(sh.lock) is None
@@ -57,7 +57,8 @@ def test_from_main_bumps_again_when_main_has_the_version(fm, capsys):
     rc, out = go(capsys)
     lines = out.splitlines()
     assert rc == 0 and lines[0] == "B1 version 1.5.9 (origin/main is at 1.5.8)"
-    assert lines[1] == f"B1 shipped PR #301 1.5.9 summary={sh.sd / 'backlog' / 'B1.md'}"
+    assert lines[1] == "tag v1.5.9 skipped: no merge commit"
+    assert lines[2] == f"B1 shipped PR #301 1.5.9 summary={sh.sd / 'backlog' / 'B1.md'}"
     assert ["bash", "scripts/bump-version.sh", "1.5.9"] in sh.calls and ["git", "commit", "-am", "Bump version to 1.5.9"] in sh.calls
     assert b1(sh)["version"] == "1.5.9"
     setb(sh, state="parked", merged=False, version="1.5.8")
@@ -145,7 +146,7 @@ def test_from_main_compares_versions_as_integers(fm, capsys):
     (sh.wt / "package.json").write_text('{"version": "1.5.10"}')
     sh.replies["git show origin/main:package.json"] = (0, '{"version": "1.5.9"}\n')
     rc, out = go(capsys)
-    assert rc == 0 and out.startswith("B1 shipped PR #301 1.5.10 ")
+    assert rc == 0 and any(ln.startswith("B1 shipped PR #301 1.5.10 ") for ln in out.splitlines())
     assert ["bash", "scripts/bump-version.sh", "1.5.10"] not in sh.calls and not any(c[:2] == ["bash", "scripts/bump-version.sh"] for c in sh.calls)
 
 
@@ -173,7 +174,7 @@ def test_from_main_rerun_skips_sync_and_bump(fm, capsys):
     assert rc == 4 and out.splitlines() == ["B1 version 1.5.9 (origin/main is at 1.5.8)", "RERUN: sl backlog ship B1 merge --from-main (run 1 of 5)"]
     sh.calls.clear()
     sh.replies["maxapp ship -C"] = (0, SHIPPED)
-    assert go(capsys) == (0, f"B1 shipped PR #301 1.5.9 summary={sh.sd / 'backlog' / 'B1.md'}\n")
+    assert go(capsys) == (0, f"tag v1.5.9 skipped: no merge commit\nB1 shipped PR #301 1.5.9 summary={sh.sd / 'backlog' / 'B1.md'}\n")
     assert not any(c[:2] in (["git", "fetch"], ["git", "rebase"], ["git", "show"], ["bash", "scripts/bump-version.sh"]) for c in sh.calls)
     assert any(c[:3] == ["maxapp", "ship", "-C"] for c in sh.calls)
     assert b1(sh)["version"] == "1.5.9"
