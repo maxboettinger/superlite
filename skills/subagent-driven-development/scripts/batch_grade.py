@@ -6,6 +6,7 @@
     quality(sd)          -> tasks, first_time_pass, package_findings, final_rounds, final_verdicts, fixer_rounds
     grade(quality, batch)-> quality plus ci_red, ship_reruns, ship_waits, questions, points, letter
     snapshot(sd, prices) -> {"workers", "tests", "quality"}; every reader returns its empty value for a missing folder.
+Finished runs come from run_archive.run_dirs(sd): the main checkout's archive entries of this worktree plus legacy sd/runs.
 """
 # Complexity notation:
 #   A = agent ids, M = metrics lines, B = bytes of transcripts, R = report files, S = test summaries
@@ -14,6 +15,7 @@ import re  # O(1)
 from pathlib import Path  # O(1)
 
 import metrics  # O(1)
+import run_archive  # O(1)
 
 TOKENS = ("input", "cache_read", "cache_write", "output", "thinking")  # O(1)
 SUFFIXES = ("-sonnet-high", "-sonnet", "-opus", "-haiku")  # O(1)
@@ -54,7 +56,7 @@ def workers(sd, prices=None) -> dict:  # O(M + A + B)
             roles.setdefault(str(wid), "")  # O(1)
     lines: list = []  # O(1)
     seen: set = set()  # identical records in the live file and the archives count once | O(1)
-    for f in [sd / "metrics.jsonl", *sorted(sd.glob("runs/*/metrics.jsonl"))]:  # O(F)
+    for f in [sd / "metrics.jsonl", *(r / "metrics.jsonl" for r in run_archive.run_dirs(sd))]:  # O(F)
         try:  # O(1)
             fl = f.read_text(encoding="utf-8", errors="replace").splitlines()  # O(M)
         except OSError:  # O(1)
@@ -100,7 +102,7 @@ def workers(sd, prices=None) -> dict:  # O(M + A + B)
 def test_runs(sd) -> dict:  # O(S)
     out = {"full": 0, "full_min": 0.0, "fast": 0, "fast_min": 0.0}  # O(1)
     files: dict = {}  # file name -> path, deduped by name | O(1)
-    for p in [*Path(sd).glob("test-summary-*.json"), *Path(sd).glob("runs/*/test-summary-*.json")]:  # `test-summary.json` is the newest run's copy | O(S)
+    for p in [*Path(sd).glob("test-summary-*.json"), *(p for r in run_archive.run_dirs(Path(sd)) for p in r.glob("test-summary-*.json"))]:  # `test-summary.json` is the newest run's copy | O(S)
         files.setdefault(p.name, p)  # O(1)
     for _, p in sorted(files.items()):  # O(S log S)
         d = _json(p)  # O(file)
