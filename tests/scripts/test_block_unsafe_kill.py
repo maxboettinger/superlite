@@ -320,3 +320,29 @@ def test_monitor_ws_only_passes_837():
                                                              "description": "events", "timeout_ms": 300000}})
     r = run(None, raw=raw)
     assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
+
+
+# --- #841: the bash block names how to find a PID started earlier (upstream d2823ffe, message only)
+
+
+def test_block_names_pgrep_way_out_841():
+    r = run("pkill -f server")
+    assert r.returncode == 2
+    assert "To find the PID of one you started earlier: pgrep -f <pattern>, check the list holds only yours, then kill <PID>." in r.stderr
+
+
+def test_powershell_block_has_no_pgrep_841():
+    r = run("Stop-Process -Name node", "PowerShell")
+    assert r.returncode == 2
+    assert "pgrep" not in r.stderr
+
+
+def test_pgrep_passes_the_hook_841():
+    r = run("pgrep -f server")
+    assert r.returncode == 0 and r.stderr == ""
+
+
+def test_docs_name_pgrep_841():
+    text = (ROOT / "docs" / "hooks.md").read_text(encoding="utf-8")
+    line = next(ln for ln in text.splitlines() if ln.startswith("- `block-unsafe-kill`: always on"))
+    assert "`pgrep -f <pattern>`" in line and "(#841)" in line
