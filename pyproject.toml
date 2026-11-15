@@ -1,0 +1,17 @@
+[project]
+name = "superlite"
+version = "0.0.0"  # not the plugin's version (.version-bump.json holds that); fixed so uv.lock stays valid across bumps
+requires-python = ">=3.10"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-xdist>=3.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: long-running test; deselect with -m 'not slow'",
+    "live: runs a real agent turn and spends quota; select with -m live",
+]
