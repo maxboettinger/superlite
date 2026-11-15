@@ -43,6 +43,18 @@ TESTS = re.compile(r"^\s*[-*+]?\s*tests\s+(\w+)\s+passed=(\d+)\s+failed=(\d+)"  
                    r"\s+skipped=(\d+)\s+seconds=([\d.]+)(\s+recorded)?")  # O(1)
 
 
+SCOPE = re.compile(r"^\[scope\]\s*(.*)$", re.I | re.S)  # O(1)
+
+
+def scope_rulings(rulings):  # O(G*w) the texts of the rulings tagged `[scope]`; an empty text is not one
+    out = []  # O(1)
+    for r in rulings:  # O(G)
+        m = SCOPE.match(r.strip())  # O(w)
+        if m and m.group(1).strip():  # O(1)
+            out.append(m.group(1).strip())  # O(1)
+    return out  # O(1)
+
+
 def read_ledger(path):  # O(R*w)
     p = Path(path)  # O(1)
     if not p.exists():  # O(1) stat
@@ -634,6 +646,11 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None, end_
     out.append(f"rulings: {len(rulings)}")  # O(1)
     out += [f"- {r}" for r in rulings]  # O(G)
     out.append("")  # O(1)
+    scope = scope_rulings(rulings)  # O(G*w)
+    if scope:  # O(1)
+        out.append(f"scope rulings: {len(scope)}")  # O(1)
+        out += [f"- {r}" for r in scope]  # O(G)
+        out.append("")  # O(1)
     import next_tasks  # lazy | O(1)
     held = {t: r for t, r in next_tasks.held_tasks(ledger).items() if t not in {c[0] for c in commits}}  # O(R + C)
     if held:  # O(1)
