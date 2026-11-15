@@ -429,7 +429,7 @@ def to_root(a, argv, cwd, root):  # O(len argv + p) rewrite --fast paths against
         for k, x in enumerate(argv):  # O(len argv) iterations
             if x == "--also":  # O(1)
                 in_also = True  # O(1)
-            elif x.startswith("--"):  # O(1)
+            elif x.startswith("-"):  # O(1)
                 in_also = False  # O(1)
             elif in_also:  # O(1)
                 argv[k] = x if os.path.isabs(x) else os.path.relpath(os.path.join(cwd, x), root).replace(os.sep, "/") + ("/" if x.endswith("/") else "")  # O(len)
@@ -444,7 +444,7 @@ def to_root(a, argv, cwd, root):  # O(len argv + p) rewrite --fast paths against
                 in_files = True  # O(1)
             elif x == "--files":  # O(1)
                 in_files = True  # O(1)
-            elif x.startswith("--"):  # O(1)
+            elif x.startswith("-"):  # O(1)
                 in_files = False  # O(1)
             elif in_files:  # O(1)
                 argv[k] = fix(x)  # O(len)

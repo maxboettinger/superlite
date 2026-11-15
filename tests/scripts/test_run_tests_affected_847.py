@@ -211,3 +211,31 @@ def test_to_root_tolerates_a_namespace_without_files(tmp_path, monkeypatch):
     run_tests.to_root(argparse.Namespace(also=[], fast=None), argv, str(sub), str(root))
     assert argv == ["--full"]
     os.chdir(tmp_path)
+
+
+def test_to_root_files_group_ends_at_a_short_option(tmp_path, monkeypatch):
+    import argparse
+    import run_tests
+    root, sub = tmp_path / "proj", tmp_path / "proj" / "sub"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    argv = ["--affected", "--files", "a.py", "-m", "slow"]
+    a = argparse.Namespace(also=[], fast=None, files=["a.py"])
+    run_tests.to_root(a, argv, str(sub), str(root))
+    assert argv == ["--affected", "--files", "sub/a.py", "-m", "slow"]
+    assert a.files == ["sub/a.py"]
+    os.chdir(tmp_path)
+
+
+def test_to_root_also_group_ends_at_a_short_option(tmp_path, monkeypatch):
+    import argparse
+    import run_tests
+    root, sub = tmp_path / "proj", tmp_path / "proj" / "sub"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    argv = ["--task", "T1", "--also", "x.c", "-m", "slow"]
+    a = argparse.Namespace(also=["x.c"], fast=None, files=[])
+    run_tests.to_root(a, argv, str(sub), str(root))
+    assert argv == ["--task", "T1", "--also", "sub/x.c", "-m", "slow"]
+    assert a.also == ["sub/x.c"]
+    os.chdir(tmp_path)
