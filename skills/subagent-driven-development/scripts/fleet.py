@@ -665,7 +665,51 @@ def _dispatch_machine(sd, plan, project, machine, lines, sl, fio):  # O(R * (spa
     return 3 if blocked else 0  # O(1)
 
 
-def for_dispatch(sd, plan, project, over=False, machine_wait=100.0, machine=None):  # O(R * (spawn + send)): one dispatch round, a line after the other
+def _placed(sd, role, project, tier=None):  # O(w + m): the machine placement picks for a new worker, or None for local; off, or any failure, means local
+    try:  # O(1)
+        import fleet_placement as fp  # noqa: E402 | O(1) lazy
+        if tier == "haiku" or not fp.enabled(sd):  # O(w)
+            return None  # O(1)
+        return fp.choose(sd, role, project)  # O(w + m)
+    except Exception:  # noqa: BLE001 | placement never blocks a spawn | O(1)
+        return None  # O(1)
+
+
+def _unavailable(sd, machine, why):  # O(k): say the remote start failed and keep the machine out of placement for a while
+    why = re.sub(r"^(BLOCKED: )?(fleet spawn: )?(machine " + re.escape(machine) + r": )?", "", why or "").strip() or "failed"  # O(len)
+    print(f"placement: {machine} unavailable ({why}); local")  # O(1)
+    try:  # O(1)
+        import fleet_placement as fp  # noqa: E402 | O(1) lazy
+        fp.skip(sd, machine, why)  # O(k)
+    except Exception:  # noqa: BLE001 | O(1)
+        pass  # O(1)
+
+
+def _dispatch_placed(sd, plan, project, tasks, decision, sl, fio):  # O(R * (spawn + send)): tasks of a fresh or poll line that placement puts on a machine -> (tasks left for local, blocked)
+    tier = (re.search(r"\btier=(\S+)", decision) or [None, "sonnet"])[1]  # O(len)
+    left, blocked = [], False  # O(1)
+    for t in [x for x in tasks.split(",") if x]:  # O(k)
+        m = _placed(sd, "implementer", project, tier)  # O(w + m)
+        if not m:  # O(1)
+            left.append(t)  # O(1)
+            continue  # O(1)
+        w, why = _spawn_quiet(sd, plan, tier, project, machine=m, task=t)  # O(spawn)
+        if why is not None:  # the remote start failed: this task goes local | O(1)
+            _unavailable(sd, m, why)  # O(k)
+            left.append(t)  # O(1)
+            continue  # O(1)
+        try:  # O(1)
+            import fleet_remote_worker as frw  # noqa: E402 | O(1) lazy
+            frw.send_task(sd, w["id"], plan, [t], sl)  # O(w + n)
+            print(f"{w['id']} {t} sent machine={m}")  # O(1)
+        except (fio.hc.HerdrError, OSError, KeyError) as e:  # O(1)
+            stop(sd, [w["id"]])  # O(w)
+            print(f"BLOCKED: {t} not sent ({getattr(e, 'message', '') or getattr(e, 'code', '') or str(e)})")  # O(1)
+            blocked = True  # O(1)
+    return ",".join(left), blocked  # O(k)
+
+
+def for_dispatch(sd, plan, project, over=False, machine_wait=100.0, machine=None, place=True):  # O(R * (spawn + send)): one dispatch round, a line after the other
     import dispatch as dp  # noqa: E402 | O(1) lazy: only this command needs it
     import fleet_io as fio  # noqa: E402 | O(1) lazy
     import orchestrator  # noqa: E402 | O(1) lazy
@@ -717,6 +761,11 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0, machine=None
 
     for tasks, decision in lines:  # O(R) iterations
         why, wid, brief, queued = None, None, None, False  # O(1)
+        if place and decision.startswith(("fresh", "poll")):  # placement: tasks that go to a machine get a new worker each; the rest stays below | O(k)
+            tasks, placed_blocked = _dispatch_placed(sd, plan, project, tasks, decision, sl, fio)  # O(k * spawn)
+            blocked = blocked or placed_blocked  # O(1)
+            if not tasks:  # O(1)
+                continue  # O(1)
         if decision.startswith("wave0"):  # one haiku worker, sent the Wave 0 brief that `wave0 --plan` wrote | O(1)
             brief = sd / "briefs" / "wave0.md"  # O(1)
             if brief.is_file():  # no worker for a brief that is not there | O(1)
@@ -1098,6 +1147,9 @@ def _stopped_line(name, secs, text=None):  # the one BLOCKED line of a stopped o
 
 
 def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `spawn`: its exit code | O(R * (spawn + send))
+    forced = a.machine == "local"  # forces this machine: placement is not asked | O(1)
+    if forced:  # O(1)
+        a.machine = None  # O(1)
     if a.machine and (a.package or not (a.for_dispatch or a.for_review is not None or a.brief)):  # O(1)
         print("error: --machine works with --for-dispatch, --for-review Tn or a plain spawn (--role R --brief F)", file=sys.stderr)  # O(1)
         return 2  # O(1) before any pane
@@ -1117,16 +1169,36 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
         if level == "warn":  # O(1)
             print(f"fleet: {line}", file=sys.stderr)  # O(1)
     if a.for_dispatch:  # O(1)
-        return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent, a.over_limit, a.machine_wait, a.machine)  # O(R * (spawn + send))
+        return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent, a.over_limit, a.machine_wait, a.machine, not forced)  # O(R * (spawn + send))
     if a.for_review is not None or a.package:  # O(1)
         ids = [x for v in a.for_review or [] for x in re.split(r"[,\s]+", v) if x]  # O(len)
         return for_review(sd, a.plan, state.git_root(sd) or sd.parent, ids, a.package, a.over_limit, a.machine_wait, note, a.machine)  # O(L + e + spawn + send)
+    placed = False  # the machine came from placement, not from --machine | O(1)
+    if a.brief and not a.machine and not forced:  # O(1)
+        a.machine = _placed(sd, a.role, state.git_root(sd) or sd.parent)  # O(w + m)
+        placed = bool(a.machine)  # O(1)
     mkw = {"machine": a.machine, "remote_brief": a.brief} if a.machine else {}  # only a remote spawn passes it | O(1)
     if a.machine and a.brief:  # a remote worker's start commit carries the brief, so its constraints go in first | O(L + len)
         import orchestrator  # noqa: E402 | O(1) lazy
         add_constraints(a.brief, orchestrator.plan_file(sd, a.plan))  # O(L + len)
     try:  # O(1)
-        w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=bool(a.brief), **mkw)  # O(w)
+        if placed:  # a remote failure is not a block: its output is held back and the worker starts here | O(w)
+            buf = io.StringIO()  # O(1)
+            try:  # O(1)
+                with contextlib.redirect_stdout(buf):  # O(1)
+                    w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=bool(a.brief), **mkw)  # O(w)
+            except (SystemExit, Exception) as e:  # noqa: BLE001 | O(1)
+                if isinstance(e, SystemExit) and e.code != 3:  # O(1)
+                    sys.stdout.write(buf.getvalue())  # the held-back lines of a real exit are not lost | O(s)
+                    raise  # O(1)
+                if isinstance(e, ValueError):  # a bad role or tier is the caller's error, not a machine failure | O(1)
+                    raise  # O(1)
+                _unavailable(sd, a.machine, "; ".join(x.strip() for x in buf.getvalue().splitlines() if x.strip()) or str(e))  # O(s)
+                placed, mkw = False, {}  # O(1)
+            else:  # O(1)
+                sys.stdout.write(buf.getvalue())  # O(s)
+        if not placed:  # O(1)
+            w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=bool(a.brief), **mkw)  # O(w)
     except ValueError as e:  # an unknown role or tier | O(1)
         print(f"error: {e}", file=sys.stderr)  # O(1)
         return 2  # O(1)
@@ -1198,6 +1270,9 @@ def main(argv=None):  # O(w) plus command cost
     s.add_argument("--machine-wait", type=float, default=100.0)  # O(1) seconds a spawn waits for room on the machine
     s.add_argument("--machine", default=None)  # O(1) a saved Herdr machine: the worker runs there (plain spawn only)
     s.add_argument("--for-dispatch", action="store_true")  # O(1) run dispatch, spawn per `fresh` line, send each line's tasks
+    s = sub.add_parser("placement", help="show or set where new workers start: spread (the default) or local")  # O(1)
+    s.add_argument("mode", nargs="?", choices=("spread", "local"))  # O(1)
+    s.add_argument("--plan")  # O(1)
     s = sub.add_parser("stop", help="close workers")  # O(1)
     s.add_argument("ids", nargs="*")  # O(1)
     s.add_argument("--all", action="store_true")  # O(1)
@@ -1216,6 +1291,16 @@ def main(argv=None):  # O(w) plus command cost
     sd = _sd(a)  # O(d)
     if a.cmd == "name":  # O(1) before any herdr call; fleet mode may be off
         print(fs.full_name(sd, a.ident))  # O(1)
+        return 0  # O(1)
+    if a.cmd == "placement":  # O(1) before any herdr call; fleet mode may be off
+        import fleet_placement as fp  # noqa: E402 | O(1) lazy
+        if a.mode:  # O(1)
+            fp.set_mode(sd, a.mode)  # O(w)
+            print(f"placement: {a.mode}")  # O(1)
+            return 0  # O(1)
+        print(f"placement: {fs.load(sd).get('placement') or 'spread'}" + ("" if fp.enabled(sd) else " (off: machine.json names no remote_room and remote_tree, or the mode is local)"))  # O(w)
+        for label, info in fp.room(sd).items():  # O(m)
+            print(f"{label}: {info.get('state')} room {info.get('room') if info.get('room') is not None else '?'}")  # O(1)
         return 0  # O(1)
     if a.cmd == "on":  # O(1)
         raw = a.accounts or os.environ.get("SUPERLITE_FLEET_ACCOUNTS", "")  # O(1) flag wins over env
