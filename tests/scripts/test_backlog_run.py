@@ -35,7 +35,8 @@ def bk(tmp_path, monkeypatch):
              "ship_lock": types.SimpleNamespace(lock_path=lambda repo, home=None: tmp_path / "x.lock", release=lambda p, batch: log("release", batch) or True)}
     if os.environ.get("SUPERLITE_REAL") != "1":
         fakes["backlog_brief"] = types.SimpleNamespace(lead_brief=lambda batch, ctx: f"brief {batch['id']} resume={ctx['resume']}",
-                                                      pick_summaries=lambda batch, shipped: ([x["path"] for x in shipped], 0))
+                                                      pick_summaries=lambda batch, shipped: ([x["path"] for x in shipped], 0),
+                                                      scope_rulings=__import__("backlog_brief").scope_rulings)
     for k, v in fakes.items():
         monkeypatch.setitem(sys.modules, k, v)
     monkeypatch.setattr(br, "_root", lambda: root); monkeypatch.setattr(br, "_now_ms", lambda: 5000)

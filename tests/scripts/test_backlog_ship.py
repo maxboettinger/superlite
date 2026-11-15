@@ -24,7 +24,8 @@ def sh(tmp_path, monkeypatch):
     for name, value in (("_root", lambda: root), ("_run", run), ("_live", lambda: ns.live), ("_now_ms", lambda: 10_000), ("_sleep", lambda s: None)):
         monkeypatch.setattr(bsh, name, value)
     if os.environ.get("SUPERLITE_REAL") != "1":
-        monkeypatch.setitem(sys.modules, "backlog_brief", types.SimpleNamespace(summary=lambda b, notes: f"{b['id']} shipped: #5\nPR: #{b['pr']}\n"))
+        import backlog_brief as real_brief
+        monkeypatch.setitem(sys.modules, "backlog_brief", types.SimpleNamespace(summary=lambda b, notes: f"{b['id']} shipped: #5\nPR: #{b['pr']}\n", scope_rulings=real_brief.scope_rulings))
     return ns
 
 def ship(capsys, *argv):

@@ -720,6 +720,8 @@ def _shipped(p, sd, root, b, wt, push: bool = True, head: str | None = None) -> 
     fu, un = list(b.get("followups") or []), list(b.get("undone") or [])  # O(k)
     uv = list(b.get("unverified") or [])  # O(k)
     cnt = (f" followups={len(fu)}" if fu else "") + (f" undone={len(un)}" if un else "") + (f" unverified={len(uv)}" if uv else "")  # O(1)
+    sc = list(b.get("scope") or [])  # O(k)
+    cnt += f" scope={len(sc)}" if sc else ""  # O(1)
     cnt += " design: awaits plan approval" if b.get("kind") == "design" else ""  # O(1)
     summ = sd / "backlog" / (bid + ".md")  # O(1)
     if b.get("no_change"):  # O(1)
