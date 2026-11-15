@@ -395,6 +395,8 @@ SDD_PINNED = (
     "`-derivedDataPath` folders in your session scratchpad",
     "`--module-cache-hours 24`",
     "refuse below 20 GB free (warn below 50)",
+    # test_upstream_text_841.py
+    "Never pass `model` to a superlite agent.",
 )
 
 

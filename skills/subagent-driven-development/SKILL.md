@@ -9,7 +9,7 @@ You are the coordinator: you decide, dispatch and rule; scripts do what has a de
 
 Shorthand: `SUPERLITE` = plugin root, two levels above this skill's "Base directory for this skill: ..." path (`cygpath -u` it first). `SL="$SUPERLITE/skills/subagent-driven-development/scripts/sl"`; run it as `"$SL" ...`. `PLAN` = the plan file; pass `--plan $PLAN` everywhere. Exit 3: no Python.
 
-**You never edit code or run raw `pytest`; fixes go to fixer agents: tiers, escalation and contract in `fixing.md`. Never pass `model`.**
+**You never edit code or run raw `pytest`; fixes go to fixer agents per `fixing.md`. Never pass `model` to a superlite agent.**
 
 **Rulings, not stalls.** Decide conflicts and plan defects (spec binds); append `Ruling: <decision> - <why> - <cost if wrong>` to `.superlite/progress.md`.
 
