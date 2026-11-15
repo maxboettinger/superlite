@@ -1,0 +1,27 @@
+{
+  "id": "small",
+  "size": "small",
+  "topic": "golden-small",
+  "base": "5f1148d53e2217657f5a08a0af12dcfe4b97039b",
+  "merge": "02e18282e6d59fa8de7f2323962b8ced1ff9593a",
+  "issues": [
+    {
+      "number": 848,
+      "title": "Track the test dependencies: pyproject.toml dev group and markers",
+      "body": "Port of upstream iha2/superlite `pyproject.toml` (from 569c2f94), adapted.\n\nOurs today: the unit suite's dependencies (pytest, pytest-xdist) and its parallel settings live only in an untracked `.superlite/test-cmd.json`, so a fresh clone cannot run the suite the way the maintainer does.\n\nPort: a `pyproject.toml` with a dev dependency group (pytest, pytest-xdist), `testpaths`, and `slow` and `live` markers; `uv.lock` committed; `docs/testing.md` names the command for a fresh clone (`uv run --group dev pytest ...`).\n\nNot in scope: `-n auto` in `addopts` (it would also apply to `--fast` runs and nested xdist; the worker count stays in the test command), hypothesis, and the project name upstream's file carries.\n\nAcceptance: on a fresh clone `uv run --group dev pytest tests/scripts -q -x --co` collects the suite; `scripts/bump-version.sh --audit` stays clean.\n\nSource: upstream port review, 2026-11-14.\n"
+    }
+  ],
+  "test_cmd": "uv run --no-project --with pytest python -m pytest -q -p no:cacheprovider",
+  "hidden_tests": [
+    {
+      "path": "tests/scripts/test_pyproject_dev_group_848.py",
+      "text": "\"\"\"#848: the unit suite's dependencies and pytest settings live in the tracked pyproject.toml and uv.lock.\"\"\"\nfrom __future__ import annotations\n\nimport re\nimport sys\nfrom pathlib import Path\n\nimport pytest\n\ntomllib = pytest.importorskip(\"tomllib\")  # Python 3.11+\n\nREPO = Path(__file__).resolve().parents[2]\nSCRIPTS = REPO / \"skills\" / \"subagent-driven-development\" / \"scripts\"\nsys.path.insert(0, str(SCRIPTS))\nimport testcmd  # noqa: E402\n\n\ndef _toml(name: str) -> dict:\n    return tomllib.loads((REPO / name).read_text(encoding=\"utf-8\"))\n\n\ndef _names(reqs) -> set:\n    return {re.split(r\"[<>=!~\\[; ]\", r, maxsplit=1)[0].lower() for r in reqs if isinstance(r, str)}\n\n\ndef test_dev_group_holds_pytest_and_xdist():\n    assert {\"pytest\", \"pytest-xdist\"} <= _names(_toml(\"pyproject.toml\")[\"dependency-groups\"][\"dev\"])\n\n\ndef test_project_table_is_virtual_with_a_fixed_version():\n    data = _toml(\"pyproject.toml\")\n    project = data[\"project\"]\n    assert project[\"name\"] == \"superlite\"\n    assert project[\"requires-python\"] == \">=3.10\"\n    assert project[\"version\"] == \"0.0.0\"\n    assert \"dynamic\" not in project\n    assert \"build-system\" not in data\n\n\ndef test_pytest_settings_keep_tests_and_register_markers():\n    ini = _toml(\"pyproject.toml\")[\"tool\"][\"pytest\"][\"ini_options\"]\n    assert ini[\"testpaths\"] == [\"tests\"]\n    assert \"addopts\" not in ini\n    assert {\"slow\", \"live\"} <= {m.split(\":\", 1)[0].strip() for m in ini[\"markers\"]}\n\n\ndef test_lock_matches_pyproject():\n    lock = _toml(\"uv.lock\")\n    assert lock[\"requires-python\"] == \">=3.10\"\n    pkgs = {p[\"name\"]: p for p in lock[\"package\"]}\n    assert {\"pytest\", \"pytest-xdist\"} <= set(pkgs)\n    root = pkgs[\"superlite\"]\n    assert root[\"source\"] == {\"virtual\": \".\"}\n    assert root[\"version\"] == \"0.0.0\"\n    assert {\"pytest\", \"pytest-xdist\"} <= {d[\"name\"] for d in root[\"dev-dependencies\"][\"dev\"]}\n\n\ndef test_full_run_passes_no_path():\n    assert testcmd.python_full_args(REPO) == []\n\n\ndef test_testing_doc_names_the_fresh_clone_command():\n    text = (REPO / \"docs\" / \"testing.md\").read_text(encoding=\"utf-8\")\n    assert \"## Fresh clone\" in text\n    assert \"uv run --group dev pytest tests/scripts -q -x --co\" in text\n    assert \"uv.lock\" in text\n    assert text.index(\"## Fresh clone\") < text.index(\"## Stamps\")\n"
+    }
+  ],
+  "baseline": {
+    "lead_usd": 3.588481,
+    "total_usd": 3.588481,
+    "lead_turns": 71,
+    "wall_min": 30.0
+  }
+}

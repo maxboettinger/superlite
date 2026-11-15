@@ -368,6 +368,8 @@ def _write_brief(sd, data: dict, batch: dict, wt: Path, branch: str, brc: dict, 
            "approved": data.get("approved_ship"), "titles": data.get("titles", {}), "summaries": picked,
            "resume": batch["state"] == "parked" and bool(batch.get("worktree")), "worktree": str(wt),
            "text": brc["lead"].get("text")}  # O(1)
+    if (data.get("sealed") or {}).get("issue_dir"):  # O(1)
+        ctx["issue_dir"] = data["sealed"]["issue_dir"]  # O(1)
     if rest:  # O(1)
         ctx["summaries_more"] = {"count": rest, "dir": str(Path(sd) / "backlog")}  # O(1)
     if phase != "single":  # O(1)
@@ -405,7 +407,7 @@ def cmd_start(a) -> int:
         pass  # O(1)
     sd, p = root / ".superlite", bs.path(root)  # O(1)
     data = bs.load(p)  # O(size)
-    if not data.get("approved_ship"):  # O(1)
+    if not data.get("approved_ship") and not data.get("sealed"):  # O(1)
         return _refuse("no ship approval yet (sl backlog decide --print)")  # O(1)
     if a.cap is None:  # O(1) no --cap: read the lead cap now
         import backlog_cap  # O(1)

@@ -1,0 +1,31 @@
+{
+  "id": "typical",
+  "size": "typical",
+  "topic": "golden-typical",
+  "base": "d78884f7e99f2f7b38aac1f82bc28fd9f06a6ccb",
+  "merge": "176316a70177a68a0ce33bd2cff55c7cb7b0f57a",
+  "issues": [
+    {
+      "number": 849,
+      "title": "Brainstorming and lead questions: rank open questions by cost saved and cap them",
+      "body": "Port of upstream iha2/superlite 119d4441 (\"Add a capped, cost-focused grill step after discovery\"), adapted.\n\nWhat upstream does: after the code is read, the planner asks only questions whose answer saves cost (shrinks the plan, or makes work mechanical enough for a cheaper model), at most 2 rounds of 4.\n\nOurs today: `skills/brainstorming/SKILL.md` step 2 runs a completeness pass over its categories and asks until none is open; backlog leads follow the question rules in `skills/subagent-driven-development/backlog.md` and the brief from `backlog_brief.py`.\n\nPort: in brainstorming step 2 and in the lead question rules, rank the open questions by what the answer saves, ask at most 2 rounds of 4, and rule the rest as `Ruling:` lines the user can veto. Major and uncertain questions are never dropped by the cap: they rank first.\n\nConstraint: `skills/brainstorming/SKILL.md` sits at its character cap; this change must fit under it (trim elsewhere in the skill, do not raise the cap).\n\nAcceptance: the skill text test and the evals for brainstorming pass; the lead brief test shows the cap line.\n\nSource: upstream port review, 2026-11-14.\n"
+    }
+  ],
+  "test_cmd": "uv run --no-project --with pytest python -m pytest -q -p no:cacheprovider",
+  "hidden_tests": [
+    {
+      "path": "tests/scripts/test_question_cap_lead_849.py",
+      "text": "\"\"\"#849: the lead brief and the lead rules cap a lead's questions at 2 rounds of 4, ranked by what the answer saves.\"\"\"\nimport sys\nfrom pathlib import Path\n\nfrom test_plan_tools import SCRIPTS\nsys.path.insert(0, str(SCRIPTS))\nimport backlog_brief as bb  # noqa: E402\n\nROOT = Path(__file__).resolve().parents[2]\nLCTX = {\"sl\": \"/x/sl\", \"repo\": \"o/r\", \"backlog_md\": \"b.md\"}\nBATCH = {\"id\": \"B1\", \"issues\": [7]}\n\n\ndef _lines(ctx):\n    return bb.lead_brief(BATCH, ctx).splitlines()\n\n\ndef test_cap_line_text():\n    assert bb.QUESTION_CAP.startswith(\"Question cap: rank your open questions by what the answer saves\")\n    assert \"major and uncertain first, never dropped by the cap\" in bb.QUESTION_CAP\n    assert \"ask at most 2 rounds of 4 (one .superlite/question.json each)\" in bb.QUESTION_CAP\n    assert \"rule the rest as `Ruling:` lines in .superlite/pr-body.md\" in bb.QUESTION_CAP\n    assert \"Max\" not in bb.QUESTION_CAP\n    assert \"where main and the user can veto them\" in bb.QUESTION_CAP\n\n\ndef test_cap_line_before_escalate_in_build_brief():\n    lines = _lines(LCTX)\n    assert lines.count(bb.QUESTION_CAP) == 1\n    assert lines[lines.index(bb.QUESTION_CAP) + 1].startswith(\"Escalate a new major decision:\")\n\n\ndef test_cap_line_in_plan_phase():\n    lines = _lines({**LCTX, \"phase\": \"plan\"})\n    assert lines.count(bb.QUESTION_CAP) == 1\n    assert lines[lines.index(bb.QUESTION_CAP) + 1].startswith(\"Escalate a new major decision:\")\n\n\ndef test_backlog_md_lead_rule():\n    text = (ROOT / \"skills/subagent-driven-development/backlog.md\").read_text(encoding=\"utf-8\")\n    lead = text.split(\"## Lead\")[1].split(\"## Permissions\")[0]\n    assert \"Rank your open questions by what the answer saves (major and uncertain first: the cap never drops them)\" in lead\n    assert \"ask at most 2 rounds of 4 (a round is one question.json)\" in lead\n    assert \"where main and the user can veto them\" in lead\n    assert \"main and Max\" not in lead\n"
+    },
+    {
+      "path": "tests/scripts/test_question_cap_skill_849.py",
+      "text": "\"\"\"#849: brainstorming ranks open questions by what the answer saves and asks at most 2 rounds of 4.\"\"\"\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[2]\nSKILL = (ROOT / \"skills/brainstorming/SKILL.md\").read_text(encoding=\"utf-8\")\nCOVERAGE = (ROOT / \"skills/brainstorming/coverage.md\").read_text(encoding=\"utf-8\")\n\n\ndef step2() -> str:\n    return SKILL.split(\"## 2. Explore and ask, once\")[1].split(\"## 3. Design\")[0]\n\n\ndef test_step2_ranks_by_cost_saved():\n    s = step2()\n    assert \"rank the open questions (coverage rows too) by what the answer saves\" in s\n    assert \"shrinks the plan or makes a task mechanical enough for a cheaper model\" in s\n\n\ndef test_step2_caps_two_rounds_of_four():\n    assert \"Ask at most 2 rounds of 4 (plain text: 4 per message, no 5th, the rest after the reply)\" in step2()\n\n\ndef test_step2_rules_the_rest():\n    assert \"rule the rest as `Ruling:` lines the user can veto (a coverage row: `ruled`)\" in step2()\n\n\ndef test_major_and_uncertain_never_capped():\n    assert \"major and uncertain first (the cap never rules them away)\" in step2()\n\n\ndef test_no_ask_until_none_open():\n    assert \"until none is open\" not in SKILL\n    assert \"until no row is open\" not in COVERAGE\n\n\ndef test_coverage_step3_ranks_and_caps():\n    assert \"Rank the open rows by what the answer saves (major and uncertain first\" in COVERAGE\n    assert \"recommended option first, at most 2 calls (no question tool:\" in COVERAGE\n    assert \"a major or uncertain row is never ruled away by the cap\" in COVERAGE\n\n\ndef test_skill_under_cap():\n    assert len(SKILL) <= 10000\n"
+    }
+  ],
+  "baseline": {
+    "lead_usd": 2.832449,
+    "total_usd": 2.832449,
+    "lead_turns": 53,
+    "wall_min": 33.9
+  }
+}
