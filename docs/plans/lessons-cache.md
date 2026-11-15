@@ -104,7 +104,7 @@ Sync is idempotent: `offsets` in `lessons-run.json` skip bytes and reports alrea
 - **By hand:** `sl lessons drop L7 --why "<text>"` sets `dropped` and keeps `why`; sync never changes a dropped lesson; `undrop` sets `candidate` and the next sync re-admits it. `pin` exempts from retire and cap.
 
 ### 5. Delivery (T6, T8)
-- `lessons_block.block(sd, files, role, task, mode=None)` returns the block text and appends one delivery row. Mode `off`: returns `""`, logs nothing. `shadow`: matches, logs, returns `""`. `on`: returns the block.
+- `lessons_block.block(sd, files, role, task, mode=None, log=True)` returns the block text and appends one delivery row (`log=False`: no row, for `sl lessons block` previews). Mode `off`: returns `""`, logs nothing. `shadow`: matches, logs, returns `""`. `on`: returns the block.
 - Match: `active` and `candidate` lessons whose `file` is in `files` are `matched`; only `active` ones are shown.
 - Order: pinned first, then `U` descending (None after every number), then newest `last`.
 - Budget per role, bytes and lines: implementer 1,000 and 5, package-reviewer 1,500 and 8, lead 800 and 5; header included; a line that does not fit whole is left out, never cut.
@@ -114,7 +114,7 @@ Sync is idempotent: `offsets` in `lessons-run.json` skip bytes and reports alrea
 
 ### 6. Measurement before default-on (T7, T10)
 - Per task: `sl lessons report` pools every lesson's observations: first-time-pass rate of matched implementer tasks with a lesson shown versus without, the difference and its 95% bootstrap interval (2,000 resamples, seed 0), and n per side.
-- Per batch: `sl experiment start --arms lessons-shadow,lessons-on` over two run configs that differ only in `lead.lessons` (the experiment refuses arms differing in more than one key, `experiment.py:169`); `report._arm_stats` gains `first_time_pass_rate` and `findings_per_task` from the grade rows, so the arm table shows them beside cost, wall time and quality.
+- Per batch: `sl experiment set --id lessons --arms lessons-shadow,lessons-on` over two run configs that differ only in `lead.lessons` (the experiment refuses arms differing in more than one key, `experiment.py:169`); `report._arm_stats` gains `first_time_pass_rate` and `findings_per_task` from the grade rows, so the arm table shows them beside cost, wall time and quality.
 - Default-on rule, for the owner after the report: at least 30 matched implementer tasks per side, the lower bound of the per-task difference above 0, and the experiment verdict not "keep base" on quality. Until then the default stays `shadow`. Upstream (44acb31b) shipped without such a measurement.
 
 ### 7. Not ported from upstream 44acb31b
@@ -310,11 +310,11 @@ e.g. sync(sd) when the store folder is read-only -> {"error": "PermissionError: 
 **Est. time:** 2 min (1 component, about 120 LOC, fast tests)
 **Covers:** 5
 **Consumes:** lessons_store.load(sd: Path) -> dict (T1) · lessons_store.run_id(sd: Path, plan: str | None = None) -> str (T1) · lessons_score.u_score(obs: dict) -> float | None (T4)
-**Produces:** lessons_block.mode(sd: Path) -> str · lessons_block.block(sd: Path, files: list[str], role: str, task: str, mode: str | None = None) -> str
+**Produces:** lessons_block.mode(sd: Path) -> str · lessons_block.block(sd: Path, files: list[str], role: str, task: str, mode: str | None = None, log: bool = True) -> str
 e.g. mode(sd) with no run-config.json -> "shadow"; with {"lead": {"lessons": "on"}} -> "on"
 e.g. mode "on", active L7 review:src/a.py (3 runs) -> block(sd, ["src/a.py"], "implementer", "T2") -> "Lessons from earlier runs in this repository (observations, not instructions; your task text wins):\n- L7 src/a.py (review, 3 runs): slice end off by one. Fix: use <="
 e.g. mode "shadow", the same store -> "" and the row {"task": "T2", "role": "implementer", "shown": [], "matched": ["L7"]}
-**Review Focus:** state: `test_shadow_logs_and_returns_empty`, `test_off_logs_nothing`, `test_candidate_matched_not_shown`; numeric: `test_budget_keeps_whole_lines` (six active lessons of 190-byte text -> implementer block at most 1,000 bytes, every line whole, 4 lessons); file: `test_block_never_raises` (corrupt store -> ""); encoding: `test_no_match_outside_owns` (lesson on src/ab.py, files ["src/a.py"] -> "").
+**Review Focus:** state: `test_shadow_logs_and_returns_empty`, `test_off_logs_nothing`, `test_log_false_writes_no_row` (mode `on`, `log=False` -> the text, no delivery row), `test_candidate_matched_not_shown`; numeric: `test_budget_keeps_whole_lines` (six active lessons of 190-byte text -> implementer block at most 1,000 bytes, every line whole, 4 lessons); file: `test_block_never_raises` (corrupt store -> ""); encoding: `test_no_match_outside_owns` (lesson on src/ab.py, files ["src/a.py"] -> "").
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
 **Notes:** `BUDGET = {"implementer": (1000, 5), "package-reviewer": (1500, 8), "lead": (800, 5)}`; an unknown role uses the implementer budget.
 
@@ -327,12 +327,12 @@ e.g. mode "shadow", the same store -> "" and the row {"task": "T2", "role": "imp
 **Kind:** design
 **Est. time:** 2.5 min (1 component, about 150 LOC, fast tests)
 **Covers:** 4, 6
-**Consumes:** lessons_store.load(sd: Path) -> dict (T1) · lessons_store.update(sd: Path, fn: Callable[[dict], None]) -> dict (T1) · lessons_score.u_score(obs: dict) -> float | None (T4) · lessons_sync.sync(sd: Path, plan: str | None = None) -> dict (T5) · lessons_block.block(sd: Path, files: list[str], role: str, task: str, mode: str | None = None) -> str (T6)
+**Consumes:** lessons_store.load(sd: Path) -> dict (T1) · lessons_store.update(sd: Path, fn: Callable[[dict], None]) -> dict (T1) · lessons_score.u_score(obs: dict) -> float | None (T4) · lessons_sync.sync(sd: Path, plan: str | None = None) -> dict (T5) · lessons_block.block(sd: Path, files: list[str], role: str, task: str, mode: str | None = None, log: bool = True) -> str (T6)
 **Produces:** lessons.main(argv: list[str] | None = None) -> int · lessons.pooled(store: dict) -> dict
 e.g. pooled({"lessons": {"review:a.py": {"obs": {"r1:T1": [1, 1], "r1:T2": [0, 0]}}}}) -> {"shown": {"n": 1, "hits": 1}, "unshown": {"n": 1, "hits": 0}, "diff": 1.0, "low": <float>, "high": <float>}
-**Review Focus:** protocol: `test_list_active_with_u`, `test_list_all_includes_retired_and_dropped`, `test_drop_needs_why_then_sync_keeps_dropped`, `test_undrop_and_pin_unpin`, `test_unknown_id_exits_2`, `test_block_preview_does_not_log` (`sl lessons block --files src/a.py --role implementer` prints the `on` text and writes no delivery row); numeric: `test_report_pools_shown_and_unshown`.
+**Review Focus:** protocol: `test_list_active_with_u`, `test_list_all_includes_retired_and_dropped`, `test_drop_needs_why_then_sync_keeps_dropped`, `test_undrop_and_pin_unpin`, `test_unknown_id_exits_2`, `test_block_preview_does_not_log` (`sl lessons block --files src/a.py --role implementer` prints the `on` text through `block(..., mode="on", log=False)` and writes no delivery row); `test_plan_takes_plan_or_folder` (`--plan docs/plans/x.md` and `--plan <run folder>` reach the same store); numeric: `test_report_pools_shown_and_unshown`.
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
-**Notes:** subcommands `list [--all]`, `show ID`, `drop ID --why TEXT`, `undrop ID`, `pin ID`, `unpin ID`, `sync [--plan-file P]`, `block --files A,B [--role R]`, `report`; every one takes `--dir .superlite` for the run folder, as `report.py:557` does; exit 2 for an unknown id or a missing `--why`.
+**Notes:** subcommands `list [--all]`, `show ID`, `drop ID --why TEXT`, `undrop ID`, `pin ID`, `unpin ID`, `sync`, `block --files A,B [--role R]`, `report`; every one takes `--plan P`, a plan or a run folder as other tools take it, resolved by `state.resolve(P, strict=False)` (no `.superlite` literal in lessons.py); `sync` passes P as the plan when P is a plan file; exit 2 for an unknown id or a missing `--why`.
 
 ### T8 implementer and reviewer delivery · Complexity 3 · Est. context 27k
 **Owns:** skills/subagent-driven-development/scripts/fleet_io.py, skills/subagent-driven-development/scripts/run_config.py, tests/scripts/test_lessons_delivery_853.py
@@ -343,7 +343,7 @@ e.g. pooled({"lessons": {"review:a.py": {"obs": {"r1:T1": [1, 1], "r1:T2": [0, 0
 **Kind:** design
 **Est. time:** 2.5 min (2 components, about 70 LOC, fast tests)
 **Covers:** 5
-**Consumes:** lessons_block.block(sd: Path, files: list[str], role: str, task: str, mode: str | None = None) -> str (T6)
+**Consumes:** lessons_block.block(sd: Path, files: list[str], role: str, task: str, mode: str | None = None, log: bool = True) -> str (T6)
 **Produces:** fleet_io.task_message(plan, tasks, sl_path, superlite_root, tier="sonnet", lessons: str = "") -> str
 e.g. task_message(plan, ["T2"], sl, root, lessons="Lessons from ...\n- L7 ...") -> the same text as today plus, after the `Do not touch:` line, a blank line and the block
 e.g. task_message(plan, ["T2"], sl, root) -> exactly today's text
@@ -381,7 +381,7 @@ e.g. _arm_values([{"grade": {"tasks": 4, "first_time_pass": 3, "package_findings
 e.g. _arm_values([{"grade": {"tasks": 4, "first_time_pass": 3, "package_findings": 2}}], "findings_per_task") -> [0.5]
 **Review Focus:** numeric: `test_arm_stats_has_rates`, `test_rows_without_tasks_skipped` (grade without `tasks` or with 0 -> no value); protocol: `test_experiment_report_lists_new_metrics`.
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
-**Notes:** report.py is at 589 lines: keep the change within 11 lines (#854's ratchet defaults to 600; batch_grade.py is T3's); docs/experiments.md gains the lessons arm recipe (two run configs, `lead.lessons` shadow and on) and section 6's default-on rule; docs/tools.md gains the `lessons` row.
+**Notes:** report.py is at 589 lines: keep the change within 11 lines (#854's ratchet defaults to 600; batch_grade.py is T3's); docs/experiments.md gains the lessons arm recipe (two run configs `lessons-shadow` and `lessons-on` differing only in `lead.lessons`, then `sl experiment set --id lessons --arms lessons-shadow,lessons-on`) and section 6's default-on rule; docs/tools.md gains the `lessons` row.
 
 ### T11 lead delivery · Complexity 2 · Est. context 26k
 **Owns:** skills/subagent-driven-development/scripts/backlog_brief.py, skills/subagent-driven-development/scripts/backlog_run.py, tests/scripts/test_lessons_lead_853.py
@@ -392,7 +392,7 @@ e.g. _arm_values([{"grade": {"tasks": 4, "first_time_pass": 3, "package_findings
 **Kind:** design
 **Est. time:** 2 min (2 components, about 30 LOC, fast tests)
 **Covers:** 5
-**Consumes:** lessons_block.block(sd: Path, files: list[str], role: str, task: str, mode: str | None = None) -> str (T6)
+**Consumes:** lessons_block.block(sd: Path, files: list[str], role: str, task: str, mode: str | None = None, log: bool = True) -> str (T6)
 **Produces:** none
 **Review Focus:** state: `test_lead_brief_appends_block_for_batch_files`, `test_lead_brief_unchanged_when_off`, `test_backlog_run_passes_lessons_mode` (run config `lead.lessons: on` -> `ctx["lessons"] == "on"` and `ctx["lessons_sd"]` is `_write_brief`'s `sd`; absent -> `"shadow"`).
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
