@@ -6,13 +6,22 @@ CLI: `sl accounts [--tier MODEL]` prints one headroom line per account of `claud
 # Complexity notation:
 # a = accounts in the usage report, l = limits per account, e = entries of the allowed list
 import argparse  # O(1)
+import fcntl  # O(1)
 import json  # O(1)
 import os  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
+import tempfile  # O(1)
+import time  # O(1)
+from datetime import datetime  # O(1)
+from pathlib import Path  # O(1)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+from history import home  # $SUPERLITE_HOME | O(1)
 
 FIVE_HOUR_MAX = 90  # O(1) 5-hour (`session`) percent at or above this skips the account
 WEEKLY_MAX = 100  # O(1) weekly percent at or above this skips the account
+RECENT_S = 1800  # O(1) an account whose usage reading failed takes its last good reading while that is this young (#917)
 
 
 def _run(sub, env):  # O(1) plus subprocess time
@@ -34,8 +43,92 @@ def sign_in_screen(screen):  # True when a screen line starts with a sign-in mar
     return any(line.strip(_TUI).startswith(SIGN_IN_MARKS) for line in (screen or "").splitlines())  # O(s)
 
 
-def read_usage(env=None):  # O(1) plus subprocess time
-    return _run("usage", env)  # O(1)
+def read_usage(env=None):  # O(a*l) plus subprocess time
+    """`claude-profile usage --json`, where an account whose reading failed is unknown rather than out of headroom (#917)."""
+    return with_fallback(_run("usage", env), env)  # O(a*l)
+
+
+def _store():  # O(1)
+    return home() / "usage-last.json"  # O(1)
+
+
+def _at(a, now):  # epoch seconds of a reading: its ISO `fetched_at`, else now | O(1)
+    try:  # O(1)
+        return datetime.fromisoformat(str(a.get("fetched_at"))).timestamp()  # O(1)
+    except (TypeError, ValueError):  # O(1)
+        return now  # O(1)
+
+
+def _remember(report, now):  # O(a) keep each account's last good reading in <home>/usage-last.json
+    good = {a["name"]: a for a in report.get("accounts") or [] if isinstance(a, dict) and a.get("name") and not a.get("error") and a.get("limits")}  # O(a)
+    if not good:  # O(1)
+        return  # O(1)
+    store = _store()  # O(1)
+    try:  # O(1)
+        store.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+        with open(store.with_name(store.name + ".lock"), "a") as lf:  # every session on the machine shares the store | O(1)
+            fcntl.flock(lf, fcntl.LOCK_EX)  # O(1) blocks until free; read, merge and replace as one step
+            try:  # O(1)
+                last = json.loads(store.read_text())  # O(file)
+            except (OSError, ValueError):  # O(1)
+                last = {}  # O(1)
+            last = last if isinstance(last, dict) else {}  # O(1)
+            for name, a in good.items():  # O(a)
+                last[name] = {"at": _at(a, now), "account": {k: a[k] for k in ("name", "n", "limits") if k in a}}  # no email or plan on disk | O(1)
+            fd, tmp = tempfile.mkstemp(dir=str(store.parent), prefix=store.name + ".", suffix=".tmp")  # O(1) unique temp file
+            try:  # O(1)
+                with os.fdopen(fd, "w") as fh:  # O(1)
+                    fh.write(json.dumps(last))  # O(a*l)
+                os.replace(tmp, store)  # O(1) atomic rename
+            except OSError:  # O(1)
+                Path(tmp).unlink(missing_ok=True)  # O(1)
+                raise  # O(1)
+    except OSError:  # a store that cannot be written only loses the fallback | O(1)
+        pass  # O(1)
+
+
+def with_fallback(report, env=None, now=None):  # O(a*l) plus one `list` call when an account has no recent reading
+    """The usage report with each failed reading replaced, one stderr line per replacement (#917).
+
+    A failed account takes its last good reading while that is at most RECENT_S old (`stale_s` set). Else the account the
+    coordinator's own session runs on (its CLAUDE_CONFIG_DIR, `current`) counts as usable without limits (`unknown` set),
+    unless `claude-profile list` says it is signed out; `pick_account` ranks it after every account with a reading.
+    Any other failed account keeps its error."""
+    if not isinstance(report, dict) or not isinstance(report.get("accounts"), list):  # O(1)
+        return report if isinstance(report, dict) else {}  # O(1)
+    now = time.time() if now is None else now  # O(1)
+    _remember(report, now)  # O(a)
+    failed = lambda a: isinstance(a, dict) and a.get("error") and a.get("name")  # O(1)
+    if not any(failed(a) for a in report["accounts"]):  # O(a)
+        return report  # O(1)
+    try:  # O(1)
+        last = json.loads(_store().read_text())  # O(file)
+    except (OSError, ValueError):  # O(1)
+        last = {}  # O(1)
+    last = last if isinstance(last, dict) else {}  # O(1)
+    own, listing = None, None  # O(1)
+    out = []  # O(1)
+    for a in report["accounts"]:  # O(a)
+        if not failed(a):  # O(1)
+            out.append(a)  # O(1)
+            continue  # O(1)
+        name, err = a["name"], a["error"]  # O(1)
+        prev = last.get(name) if isinstance(last.get(name), dict) else {}  # O(1)
+        age = now - prev["at"] if isinstance(prev.get("at"), (int, float)) else None  # O(1)
+        if age is not None and 0 <= age <= RECENT_S and isinstance(prev.get("account"), dict):  # O(1)
+            out.append({**prev["account"], "error": None, "stale_s": int(age)})  # O(1)
+            print("%s: usage unreadable (%s); using its reading from %d min ago" % (name, err, age // 60), file=sys.stderr)  # O(1)
+            continue  # O(1)
+        if listing is None:  # O(1) one listing call for the whole report
+            listing = read_listing(env)  # O(1) plus subprocess time
+            own = aliases(listing, ["current"], env).get("current")  # O(a)
+        entry = next((x for x in listing.get("accounts") or [] if x.get("name") == name), {})  # O(a)
+        if name == own and entry.get("signed_in") is not False:  # O(1)
+            out.append({**a, "error": None, "limits": [], "unknown": True})  # O(1)
+            print("%s: usage unreadable (%s), no reading in the last %d min; usable as the coordinator's own account" % (name, err, RECENT_S // 60), file=sys.stderr)  # O(1)
+            continue  # O(1)
+        out.append(a)  # O(1)
+    return {**report, "accounts": out}  # O(a)
 
 
 def read_listing(env=None):  # O(1) plus subprocess time
@@ -72,8 +165,8 @@ def _scoped(a, tier):  # O(l)
 
 def _skip(a, tier=None):  # O(l)
     """Reason this account is unusable, or None."""
-    if a.get("error"):  # O(1)
-        return "error %s" % a["error"]  # O(1)
+    if a.get("error"):  # O(1) a failed reading, not a full account (#917)
+        return "usage unreadable: %s" % a["error"]  # O(1)
     five = _five(a)  # O(l)
     if five >= FIVE_HOUR_MAX:  # O(1)
         return "5-hour %g%%" % five  # O(1)
@@ -87,7 +180,8 @@ def _skip(a, tier=None):  # O(l)
 
 
 def pick_account(usage, allowed, running=None, tier=None, alias=None):  # O(a*l)
-    """Best usable account of `allowed`: fewest live workers (`running`: account -> count), then lowest weekly_all, then lowest n.
+    """Best usable account of `allowed`: one with a reading before an `unknown` one (#917), then fewest live workers
+    (`running`: account -> count), then lowest weekly_all, then lowest n.
 
     `alias` maps an entry that is not a claude-profile name (`current`, a config dir basename) to the account name it uses."""
     running = running or {}  # O(1)
@@ -100,7 +194,7 @@ def pick_account(usage, allowed, running=None, tier=None, alias=None):  # O(a*l)
         a = by.get(alias.get(name, name))  # O(1)
         if a is None or _skip(a, tier):  # O(l)
             continue  # O(1)
-        key = (running.get(name, 0), _pct(a, "weekly_all"), a.get("n") if isinstance(a.get("n"), int) else 10 ** 9)  # O(l)
+        key = (bool(a.get("unknown")), running.get(name, 0), _pct(a, "weekly_all"), a.get("n") if isinstance(a.get("n"), int) else 10 ** 9)  # O(l)
         if best is None or key < best[0]:  # O(1)
             best = (key, name)  # O(1)
     return best[1] if best else None  # O(1)
@@ -187,7 +281,8 @@ def main(argv=None):  # O(a*l)
         return 3  # O(1)
     for a in accts:  # O(a)
         name, why = a.get("name") or "?", _skip(a, args.tier)  # O(l) an account without a name prints `?`
-        print("%s skip %s" % (name, why) if why else "%s ok 5h=%g%% weekly=%g%%" % (name, _five(a), _pct(a, "weekly_all")))  # O(l)
+        note = " (usage unreadable; coordinator's own account)" if a.get("unknown") else " (reading %d min old)" % (a["stale_s"] // 60) if isinstance(a.get("stale_s"), int) else ""  # O(1)
+        print("%s skip %s" % (name, why) if why else "%s ok 5h=%g%% weekly=%g%%%s" % (name, _five(a), _pct(a, "weekly_all"), note))  # O(l)
     return 0  # O(1)
 
 
