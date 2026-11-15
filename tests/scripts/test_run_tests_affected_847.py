@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "skills" / "subagent-driven-development" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
 RUN_TESTS = SCRIPTS / "run_tests.py"
 CFG = {"language": "python", "lock": False,
        "test": "echo FULL > .superlite/got.txt; echo '1 passed'",
