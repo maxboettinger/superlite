@@ -256,3 +256,33 @@ def test_nothing_selected_without_untested_names_the_changed_files(tmp_path):
     r = rt(root, "--affected")
     assert r.returncode == 2, r.stderr
     assert "--affected: no test covers the change; changed: src/calc/orphan.py; run --fast PATHS or --full" in r.stderr
+
+
+def test_run_root_below_the_git_top_reads_root_relative_changes(tmp_path):
+    top = tmp_path / "repo"
+    root = top / "proj"
+    for rel, text in {**{f"proj/{k}": v for k, v in FILES.items()}, "other/x.py": "X = 1\n"}.items():
+        (top / rel).parent.mkdir(parents=True, exist_ok=True)
+        (top / rel).write_text(text, encoding="utf-8")
+    git(top, "init", "-q")
+    (top / ".git" / "info").mkdir(parents=True, exist_ok=True)
+    (top / ".git" / "info" / "exclude").write_text(".superlite/\n", encoding="utf-8")
+    git(top, "add", "-A")
+    git(top, "commit", "-qm", "base")
+    (root / ".superlite").mkdir()
+    (root / ".superlite" / "test-cmd.json").write_text(json.dumps(CFG), encoding="utf-8")
+    edit(root, "src/calc/adder.py")
+    edit(top, "other/x.py")
+    r = rt(root, "--affected")
+    assert r.returncode == 0, r.stderr
+    assert got(root) == ["tests/test_adder.py"]
+    assert summary(root)["affected"]["changed"] == 1
+
+
+def test_shared_setup_change_with_a_marker_runs_the_narrowed_command(tmp_path):
+    root = repo(tmp_path)
+    edit(root, "tests/conftest.py")
+    r = rt(root, "--affected", "-m", "slow")
+    assert "run_tests: --affected: tests/conftest.py changed: the whole command runs, narrowed by -m or pass-through args" in r.stderr
+    assert "the whole suite runs" not in r.stderr
+    assert summary(root)["mode"] == "fast"
