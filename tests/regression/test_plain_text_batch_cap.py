@@ -25,7 +25,7 @@ PLAIN_CAP = "no question tool: at most 4 numbered questions per message and no q
 
 def test_plain_text_rounds_keep_the_cap_758():
     # #758: with no question tool a run listed 6 numbered questions in one message.
-    assert "until none is open (plain text: 4 per message, no 5th, the rest after the reply)" in SKILL.read_text()
+    assert "Ask at most 2 rounds of 4 (plain text: 4 per message, no 5th, the rest after the reply)" in SKILL.read_text()
     assert PLAIN_CAP in COVERAGE.read_text()
 
 

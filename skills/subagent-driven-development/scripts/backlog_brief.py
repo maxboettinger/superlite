@@ -110,6 +110,10 @@ LEAN_BUILD = ("Build (lean path: one issue and no batch decision): when your iss
               "`**Tests:**`, `**Kind:**`, `**Model:**` and named tests with exact inputs and outputs; lint it with "
               "`{sl} plan_tools lint --plan <plan> --spec <plan> --stable`; an issue that names no files or asks a design question "
               "takes the full path: superlite:brainstorming (AI orchestrator, no questions), superlite:writing-plans. Both paths then run ")  # O(1)
+QUESTION_CAP = ("Question cap: rank your open questions by what the answer saves (major and uncertain first, never dropped by the cap; "
+                "then those whose answer shrinks the plan or makes a task mechanical enough for a cheaper model), ask at most 2 "
+                "rounds of 4 (one .superlite/question.json each) and rule the rest as `Ruling:` lines in .superlite/pr-body.md, "
+                "where main and the user can veto them.")  # O(1)
 CODE_RULE = ("Code questions go to a researcher worker, one pointed brief per question (the question, the files or symbols to start "
              "from, the answer you need): `{sl} fleet spawn --role research --brief <abs file> --label R<n> --wait --timeout 540000 "
              "--plan .superlite` (several at once: spawn each with --brief, then one wave wait); read a file yourself only when you "
@@ -274,6 +278,7 @@ def lead_brief(batch, ctx):  # O(i + f + a)
         out.append((BUILD_HEAD.format(plan=ctx.get("plan", "")) if phase == "build" else head) + BUILD_TAIL)  # O(1)
     if phase == "plan":  # O(1)
         out.append(WAVE_WAIT.format(sl=sl))  # O(1)
+        out.append(QUESTION_CAP)  # O(1)
         out.append("Escalate a new major decision: let running workers finish, write .superlite/question.json in the "
                    "AskUserQuestion shape, end your turn with Status: NEEDS_DECISION.")  # O(1)
         out.append(PLAN_END)  # O(1)
@@ -283,6 +288,7 @@ def lead_brief(batch, ctx):  # O(i + f + a)
                f"`Simulators:` line marks its created ones) as one line to {sim}; never list one you did not create; ship cleanup "
                "shuts down and deletes each listed one; copy this sentence into every worker brief.")  # O(1)
     out.append(WAVE_WAIT.format(sl=sl))  # O(1)
+    out.append(QUESTION_CAP)  # O(1)
     out.append("Escalate a new major decision: let running workers finish, write .superlite/question.json in the "
                "AskUserQuestion shape, end your turn with Status: NEEDS_DECISION.")  # O(1)
     out.append("Evals layer red on a case your batch's files do not touch: never stamp it yourself (no `test_layers.py stamp`); "
