@@ -685,6 +685,9 @@ def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
     data = fs.load(sd)  # O(w)
     if wid not in data["workers"]:  # O(1)
         raise KeyError(wid)  # O(1)
+    if _write_remote(data["workers"][wid]):  # a remote write worker: its own module maps paths, prompts and prints the `sent` line | O(1)
+        _remote().send_task(sd, wid, plan, tasks, sl_path)  # O(w + n + k*s)
+        return ",".join(tasks)  # O(k)
     tier = data["workers"][wid].get("tier", "sonnet")  # O(1)
     msg = task_message(plan, tasks, sl_path, superlite_root, tier)  # O(n + k*s)
     sent = now_ms()  # O(1)
@@ -695,6 +698,10 @@ def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
     pane_label(sd, wid, pane_title(sd, wid, label))  # O(w)
     print(f"{wid} {label} sent")  # O(1)
     return label  # O(1)
+
+
+def _write_remote(w):  # a worker on a saved machine that writes (implementer, fixer, package-reviewer) | O(1)
+    return bool(w.get("machine") and (w.get("remote") or {}).get("write"))  # O(1)
 
 
 def _busy(sd, wid, label, sent, brief=None):  # worker busy on LABEL since SENT, in the pool too (a worker the pool lacks is fine); BRIEF is remembered for a respawn | O(w + pool bytes)
@@ -826,6 +833,8 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follow
         body = text if tail is None else "UNKNOWN (turn ended without a report)\n\n" + text + "\n\nLast pane lines:\n" + tail  # O(len)
     _write(mp, body)  # O(len)
     rep = fleet_report.parse(text, rid, allow_json=source == "transcript")  # a screen holds no trustworthy json block | O(len)
+    if _write_remote(w) and rep["status"] in FINAL:  # its snapshot comes home first (a final turn only): the report holds the collected status and concerns | O(w)
+        rep = importlib.import_module("fleet_remote_collect").collect(sd, wid, rep)  # O(1) plus remote calls
     part = rep["status"] == "APPROVED" and fleet_report.partial(text)  # O(len)
     _write(jp, json.dumps({**rep, **({"partial": True} if part else {}), "id": wid, "label": label, "role": w.get("role") or "implementer", "source": source, "report": str(mp)}, indent=2) + "\n")  # O(len)
     n = len(rep["findings"])  # O(1)
@@ -835,6 +844,11 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follow
     pane_label(sd, wid, pane_title(sd, wid, label, "reported, waiting for coordinator"))  # before the worker may be stopped | O(w)
     if w.get("one_turn") and rep["status"] in FINAL:  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker | O(1)
         _stop_worker(sd, wid)  # O(w)
+    elif _write_remote(w) and rep["status"] in FINAL and rep.get("collected"):  # a remote write worker takes one task: stopped, its tree dropped, once its snapshot is collected | O(1)
+        try:  # a failed stop must not lose the report | O(1)
+            _remote().stop(sd, wid)  # O(1) plus remote calls
+        except Exception:  # O(1)
+            pass  # O(1)
     return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n, **({"partial": True} if part else {})}  # O(1)
 
 

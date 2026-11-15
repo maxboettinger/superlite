@@ -379,3 +379,56 @@ def test_send_text_and_keys_remote_run_on_machine(world, remote):
     world.fh.calls.clear()
     assert io.main(["keys", "W2", "Enter", "--plan", str(world.plan)]) == 0
     assert world.fh.calls == [("on", "box"), ("send_keys", "sl-proj-w2", ["Enter"])]
+
+
+# --- remote write workers (#919 part 2)
+@pytest.fixture
+def rwrite(world, remote, monkeypatch):
+    d = json.loads((world.sd / "fleet.json").read_text()); d["workers"]["W2"].update({"role": "implementer", "remote": {"write": True}})
+    (world.sd / "fleet.json").write_text(json.dumps(d))
+    remote.stopped, remote.tasks = [], []
+    remote.stop = lambda sd, wid: remote.stopped.append(wid)
+    remote.send_task = lambda sd, wid, plan, tasks, sl: remote.tasks.append((wid, list(tasks)))
+    col = types.SimpleNamespace(seen=[], result=None)
+    def collect(sd, wid, report):
+        col.seen.append((wid, report["status"])); return col.result(report) if col.result else report
+    col.collect = collect
+    monkeypatch.setitem(sys.modules, "fleet_remote_collect", col)
+    return col
+
+def stop_w2(world, tmp_path, text="Status: DONE\nFiles: src/c.py"):
+    rd = world.sd / "remote" / "W2"; rd.mkdir(parents=True, exist_ok=True)
+    tr = tmp_path / "w2.jsonl"; transcript(tr, text)
+    (rd / "metrics.jsonl").write_text(json.dumps({"ev": "stop", "t": 2_000_010, "agent_id": "W2", "type": "x", "transcript": str(tr), "last": ""}) + "\n")
+    d = json.loads((world.sd / "fleet.json").read_text()); d["workers"]["W2"].update({"state": "busy", "task": "T3", "sent": 2_000_000}); (world.sd / "fleet.json").write_text(json.dumps(d))
+
+def test_wait_collects_then_stops(world, remote, rwrite, tmp_path):
+    stop_w2(world, tmp_path)
+    rwrite.result = lambda r: {**r, "collected": {"applied": ["src/c.py"], "skipped": [], "sha": "abc"}, "concerns": ["remote changes outside the task not applied: docs/n.md"]}
+    out = io.wait(world.sd, ["W2"], 60000)
+    rep = json.loads(Path(out[0]["report"]).read_text())
+    assert rwrite.seen == [("W2", "DONE")] and rep["status"] == "DONE" and rep["concerns"] == ["remote changes outside the task not applied: docs/n.md"]
+    assert remote.stopped == ["W2"] and out[0]["status"] == "DONE"
+
+def test_wait_collect_blocked_report(world, remote, rwrite, tmp_path):
+    stop_w2(world, tmp_path)
+    rwrite.result = lambda r: {**r, "status": "BLOCKED", "concerns": ["remote worker W2 left no snapshot"]}
+    out = io.wait(world.sd, ["W2"], 60000)
+    rep = json.loads(Path(out[0]["report"]).read_text())
+    assert out[0]["status"] == "BLOCKED" and rep["status"] == "BLOCKED" and rep["concerns"] == ["remote worker W2 left no snapshot"]
+    assert remote.stopped == []
+
+def test_wait_needs_context_is_neither_collected_nor_stopped(world, remote, rwrite, tmp_path):
+    stop_w2(world, tmp_path, "Status: NEEDS_CONTEXT\nWhich file?")
+    out = io.wait(world.sd, ["W2"], 60000)
+    assert out[0]["status"] == "NEEDS_CONTEXT" and rwrite.seen == [] and remote.stopped == []
+
+def test_wait_read_only_remote_not_collected(world, remote, rwrite, tmp_path):
+    d = json.loads((world.sd / "fleet.json").read_text()); d["workers"]["W2"].update({"role": "research", "remote": {}}); (world.sd / "fleet.json").write_text(json.dumps(d))
+    stop_w2(world, tmp_path)
+    out = io.wait(world.sd, ["W2"], 60000)
+    assert out[0]["status"] == "DONE" and rwrite.seen == [] and remote.stopped == []
+
+def test_send_remote_write_hands_off(world, remote, rwrite, capsys):
+    assert io.send(world.sd, world.plan, "W2", ["T3"], "/sl/sl", "/sl") == "T3"
+    assert remote.tasks == [("W2", ["T3"])] and not any(c[0] == "prompt" for c in world.fh.calls)
