@@ -13,7 +13,7 @@ State: `.superlite/orchestrator.json` {mode, approved, by, time}, in the folder 
 with --plan (the review plan's with `approve --review` and no --plan), else $SUPERLITE_STATE_DIR, the session's binding, ./.superlite.
 `set`, `approve` and `bind` bind the session (CLAUDE_CODE_SESSION_ID) to that folder, so the hooks find the same state
 whatever directory the session was launched from. `end` closes a run: it moves the run markers (stable.json, prime.md,
-prime-haiku.md, pool.json) and the gate files (orchestrator.json, human-replies.jsonl) into `.superlite/runs/<time>/` and
+prime-haiku.md, pool.json) and the gate files (orchestrator.json, human-replies.jsonl) into the main checkout's `.superlite/runs/<time>-<label>/` (with a run.json manifest and copies of the plan and its build report) and
 releases the session's binding, so the coordinator guard stops. `takeover` binds this session to a run folder another
 session owns (`bind --force` plus a one-line message), so `end` and `set` act on it; `end` refuses another live session's folder and names it. In human mode `plan_tools lint --stable`, `dispatch`,
 `wave0` and `build_prime` refuse to run (exit 4, one line) until `approve` has been recorded; `schedule --insert` and
@@ -145,12 +145,35 @@ def now() -> str:  # O(1)
     return datetime.now().isoformat(timespec="seconds")  # O(1)
 
 
-def end(sd: Path) -> str:  # O(files)
-    """Archive the run's markers, gate files and logs into sd/runs/<time>/ and release the session; one line."""
+def lead_batch(sd: Path) -> str | None:  # O(1)
+    """The batch id in the first line of briefs/lead.md (`# Lead brief: B222 (topic)` -> "B222"), None without one."""
+    try:  # O(1)
+        first = (Path(sd) / "briefs" / "lead.md").read_text(encoding="utf-8").splitlines()[0]  # O(1)
+    except (OSError, IndexError, UnicodeDecodeError):  # O(1)
+        return None  # O(1)
+    m = re.match(r"#\s*Lead brief:\s*(\S+)", first)  # O(1)
+    return m.group(1) if m else None  # O(1)
+
+
+def _branch(checkout: Path) -> str | None:  # O(1) git
+    try:  # O(1)
+        r = subprocess.run(["git", "-C", str(checkout), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True)  # O(1) git
+    except OSError:  # O(1)
+        return None  # O(1)
+    return r.stdout.strip() or None if r.returncode == 0 else None  # O(1)
+
+
+def end(sd: Path, plan: str | None = None) -> str:  # O(files)
+    """Archive the run's markers, gate files and logs into the main checkout's `.superlite/runs/<time>-<label>/`
+    (sd/runs outside git) with a run.json manifest and copies of the plan and its build report; release the session; one line."""
+    import report  # O(1)
+    import run_archive  # O(1)
+    plan_path = plan_file(sd, plan)  # resolved before stable.json moves | O(1)
     present = [f for f in RUN_FILES if f != "briefs" and (sd / f).exists()]  # O(1)
     kept = sorted(p.name for p in (sd / "briefs").iterdir() if p.name not in KEEP_BRIEFS) if (sd / "briefs").is_dir() else []  # briefs, one by one | O(files)
     present += sorted({p.name for pat in ("test-summary-*.json", "test-summary-*.log", "test-summary.latest")  # per-run summaries | O(files)
                        for p in sd.glob(pat)})  # O(files)
+    batch = lead_batch(sd)  # O(1)
     state.unbind(sd)  # O(d)
     (sd / "inline-flow.json").unlink(missing_ok=True)  # the inline-flow marker ends with the run (#148) | O(1)
     scratch = sd / "scratch"  # the coordinator's scratch folder ends with the run (#690) | O(1)
@@ -162,17 +185,27 @@ def end(sd: Path) -> str:  # O(files)
     tail = "; scratch folder removed" if existed and not (scratch.is_symlink() or scratch.exists()) else ""  # O(1)
     if not present and not kept:  # O(1)
         return f"orchestrator: nothing to end in {sd}{tail}"  # O(1)
-    dest = sd / "runs" / time.strftime("%Y%m%d-%H%M%S")  # O(1)
-    while dest.exists():  # two ends in one second | O(1) amortized
-        dest = dest.with_name(dest.name + "-1")  # O(1)
-    dest.mkdir(parents=True)  # O(1)
+    checkout = Path(sd).resolve().parent  # O(1)
+    dest = run_archive.new_run(sd, batch or checkout.name)  # O(1)
     for f in present:  # O(files)
-        (sd / f).replace(dest / f)  # O(1)
+        shutil.move(str(sd / f), str(dest / f))  # copes with another volume | O(size)
     if kept:  # O(files)
         (dest / "briefs").mkdir()  # O(1)
         for f in kept:  # O(files)
-            (sd / "briefs" / f).replace(dest / "briefs" / f)  # O(1)
-    return f"orchestrator: run ended; {len(present) + bool(kept)} files moved to {dest}{tail}"  # O(1)
+            shutil.move(str(sd / "briefs" / f), str(dest / "briefs" / f))  # O(size)
+    moved = len(present) + bool(kept)  # copies are not counted | O(1)
+    if plan_path and plan_path.is_file():  # the plan and its build report outlive the worktree | O(size)
+        shutil.copy2(plan_path, dest / "plan.md")  # O(size)
+        for src, name in zip(report.stored_paths(plan_path), ("build-report.md", "build-report.json")):  # O(1)
+            if src.is_file():  # O(1)
+                shutil.copy2(src, dest / name)  # O(size)
+    info = {"id": dest.name, "batch": batch, "branch": _branch(checkout), "worktree": str(checkout),
+            "plan": str(plan_path.resolve()) if plan_path else None, "ended": now()}  # O(1)
+    run_archive.write_manifest(dest, info)  # O(1)
+    run_archive.write_manifest(dest, {**info, "files": sorted(p.name for p in dest.iterdir())})  # run.json lists itself | O(files)
+    trimmed = run_archive.prune(dest.parent)  # O(runs)
+    more = f"; {trimmed} older runs trimmed" if trimmed else ""  # O(1)
+    return f"orchestrator: run ended; {moved} files moved to {dest}{tail}{more}"  # O(1)
 
 
 foreign_worktree = state.foreign_worktree  # the #199 check and state.resolve share one test (#224) | O(1)
@@ -431,7 +464,7 @@ def main(argv=None):  # O(1)
         if other:  # O(1)
             print(f"orchestrator: {sd} belongs to session {other}; not ended; take the run over first: sl orchestrator takeover --plan {sd}", file=sys.stderr)  # O(1)
             return 2  # O(1)
-        print(end(sd))  # O(files)
+        print(end(sd, a.plan))  # O(files)
         drop_trees(sd)  # the run's trees end with it (#614) | O(T + folders)
         return 0  # O(1)
     if a.cmd in ("bind", "set", "approve"):  # bind first: it refuses another session's folder and brings a pending gate | O(1)

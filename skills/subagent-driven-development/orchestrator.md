@@ -40,8 +40,10 @@ unattended signal (all mean AI). When no human can answer (a headless `claude -p
   launched in the same directory still wins. `bind` without `--plan` targets the launch directory's `.superlite`, never the private folder; `set` without `--plan` then uses the session's private folder
   `~/.superlite/sessions/<id>.d/.superlite` until a plan binds (see `docs/hooks.md`).
 - `end [--plan P]` closes the run: moves the run markers, `orchestrator.json`, `human-replies.jsonl`, `progress.md` and the run's logs
-  into `.superlite/runs/<time>/` and releases the binding, so the coordinator guard stops. It refuses another session's folder and a
-  `--plan` that no longer exists. Run it before removing the worktree.
+  into the main checkout's `.superlite/runs/<time>-<label>/` (with a `run.json` manifest and copies of the plan and its build report)
+  and releases the binding, so the coordinator guard stops; the run outlives its worktree, and runs past the newest 30 are trimmed
+  to their ledgers. `sl report --list` and `--show` read the archive. It refuses another session's folder and a `--plan` that no
+  longer exists.
 - `status` prints one line: `orchestrator: human, awaiting approval` / `human, approved <time> by <name>` / `AI` / `not set (ungated)`.
 - Gate: in human mode without an approval `plan_tools lint --stable`, `dispatch`, `wave0` and `build_prime` exit 4 with
   `BLOCKED: human orchestrator selected, show the plan, ask for approval, then run sl orchestrator approve`.

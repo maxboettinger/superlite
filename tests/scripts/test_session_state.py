@@ -178,10 +178,12 @@ def test_end_archives_the_run_and_releases_the_session(repo):
     r = sl(main, A, "end")
     assert r.returncode == 0, r.stderr
     assert "ended" in r.stdout
-    runs = list((sd / "runs").iterdir())
+    import run_archive
+    runs = list(run_archive.archive_dir(sd).iterdir())  # the main checkout's archive (sd/runs here: the fixture's .git is no real repository)
     assert len(runs) == 1
     assert sorted(p.name for p in runs[0].iterdir()) == sorted(
-        ["stable.json", "prime.md", "prime-haiku.md", "pool.json", "human-replies.jsonl", "orchestrator.json", "progress.md"])
+        ["stable.json", "prime.md", "prime-haiku.md", "pool.json", "human-replies.jsonl", "orchestrator.json", "progress.md",
+         "run.json"])
     assert not (sd / "progress.md").exists()  # the next run starts with a fresh ledger
     assert state.owner(sd) is None and state.bound(A) is None
     assert write(wa, A, wa / "src" / "a.py").returncode == 0  # the guard is off
