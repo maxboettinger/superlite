@@ -20,7 +20,7 @@ Hidden complexity found mid-task upgrades the size: say so and step up. A reques
 
 ## 2. Explore and ask, once
 
-Read the relevant code and recent commits first (broad sweeps: an Explore agent, model haiku, effort low). Never ask what the repo or the request already answers. `sl` below is `<skill-dir>/../subagent-driven-development/scripts/sl`.
+Read the relevant code and recent commits first (broad sweeps: an Explore agent, effort low). Never ask what the repo or the request already answers. `sl` below is `<skill-dir>/../subagent-driven-development/scripts/sl`.
 
 **Coverage pass** (architectural work, before any question): Read `coverage.md` in this skill's folder and follow it. It gives each decision category one `## Coverage` row: settled, ruled, n/a, spike or open. All 14 rows, none merged or dropped: scope and success criteria; domain and data model; persistence and migration; interfaces and contracts; UI states; concurrency and state ownership; error handling and recovery; security and privacy (untrusted input); performance and limits (sizes, timeouts); observability; testing strategy; compatibility; rollout (release order, rollback); research unknowns. A ruled row's basis is the decision itself (a number, a step), not "none needed". Research unknowns become spike tasks, never questions; the open rows are the questions. `**Coverage:** off` in the spec, or from the user, skips the pass.
 
