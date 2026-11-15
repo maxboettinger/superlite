@@ -80,7 +80,7 @@ def test_review_brief_lines(world):
                  "Diffs: `git show <sha>` for each commit above, in Root.", f"Spec slice: `/sl/sl task T3 --plan {plan}`",
                  "Files in scope: src/core/engine.py, tests/test_engine.py", f"Probe adapter: {world.sd / 'probes' / 'adapter.py'}"]:
         assert want in lines, want
-    i = lines.index("Incident hotspots (`/sl/sl incident hotspots --files src/core/engine.py,tests/test_engine.py`):")
+    i = lines.index("Incident hotspots (`/sl/sl incident hotspots --files <the files in scope, comma-joined>`):")
     assert json.loads(lines[i + 1])["file"] == "src/core/engine.py"
     pk = io.review_brief(world.sd, world.plan, ["T3", "T4"], "/sl/sl", "/sl", package="Core lib").splitlines()
     assert "# Review: T3, T4 (package Core lib)" in pk and "Why: every committed task of package Core lib" in pk
