@@ -4,7 +4,8 @@ The fixture holds the sentences of the pre-split SKILL.md. It changes only for t
 sentences the split rewrites: "Follow all six rules" (now seven, naming split.md),
 the "Who decides sets the mode" link (now "Who orchestrates sets the mode"), and the
 probe part's MCP sentence, and the moved review step 4 ("in the order of `SKILL.md`
-Plan shape" instead of "in the order below").
+Plan shape" instead of "in the order below"), and review step 1 (now "no taskgraph and no
+code outside its `## Key code changes` snippets", #851).
 """
 import re
 from pathlib import Path

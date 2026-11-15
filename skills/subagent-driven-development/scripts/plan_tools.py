@@ -2642,6 +2642,63 @@ def also_touches_warnings(plan: Plan) -> list[str]:  # O(n*a*n) #596: Also-touch
     return out  # O(w)
 
 
+REVIEW_SNIPPETS_MAX = 4  # O(1)
+REVIEW_SNIPPET_LINES = 15  # O(1)
+REVIEW_SECTION = "key code changes"  # O(1)
+REVIEW_HEAD_RE = re.compile(r"^##\s+(.*?)\s*#*\s*$")  # O(1)
+REVIEW_END_RE = re.compile(r"^#{1,2}\s")  # O(1)
+
+
+def is_review_plan(path) -> bool:  # O(s)
+    return bool(path) and Path(path).name.lower().endswith(".review.md")  # O(s)
+
+
+def lint_review_plan(plan: Plan) -> tuple[list[str], list[str]]:  # O(L + b) total
+    issues: list[str] = []  # O(1)
+    secs: list[list[int]] = []  # [start, end) 0-based line indexes | O(1)
+    for i, ln in enumerate(plan.lines):  # O(L)
+        if plan.fenced[i]:  # O(1)
+            continue  # O(1)
+        if secs and secs[-1][1] < 0 and REVIEW_END_RE.match(ln):  # O(s)
+            secs[-1][1] = i  # O(1)
+        m = REVIEW_HEAD_RE.match(ln)  # O(s)
+        if m and heading_phrase(m.group(1)) == REVIEW_SECTION:  # O(s)
+            secs.append([i, -1])  # O(1)
+    for s in secs:  # O(sections)
+        if s[1] < 0:  # O(1)
+            s[1] = len(plan.lines)  # O(1)
+    if len(secs) > 1:  # O(1)
+        at = ", ".join(str(s[0] + 1) for s in secs)  # O(sections)
+        issues.append(f"REVIEW: ## Key code changes appears {len(secs)} times (lines {at}); keep one section")  # O(sections)
+    per_sec = [0] * len(secs)  # O(sections)
+    snippets: list = []  # O(1)
+    outside: list = []  # O(1)
+    for b in plan.blocks:  # O(b)
+        if len(b.content) == b.end - b.start:  # unterminated | O(1)
+            issues.append(f"REVIEW: code fence at line {b.start + 1} is never closed")  # O(1)
+            continue  # O(1)
+        if (b.info.split() or [""])[0].lower() == "mermaid":  # O(s)
+            continue  # O(1)
+        k = next((j for j, s in enumerate(secs) if s[0] < b.start < s[1]), -1)  # O(sections)
+        if k < 0:  # O(1)
+            outside.append(b)  # O(1)
+        else:  # O(1)
+            per_sec[k] += 1  # O(1)
+            snippets.append(b)  # O(1)
+    for s, n in zip(secs, per_sec):  # O(sections)
+        if n == 0:  # O(1)
+            issues.append(f"REVIEW: ## Key code changes (line {s[0] + 1}) holds no snippet; add 1 to 4 fenced snippets or drop the section")  # O(1)
+    if len(snippets) > REVIEW_SNIPPETS_MAX:  # O(1)
+        at = ", ".join(str(b.start + 1) for b in snippets)  # O(b)
+        issues.append(f"REVIEW: ## Key code changes holds {len(snippets)} snippets; the cap is {REVIEW_SNIPPETS_MAX} (snippets at lines {at})")  # O(b)
+    for b in snippets:  # O(b)
+        if len(b.content) > REVIEW_SNIPPET_LINES:  # O(1)
+            issues.append(f"REVIEW: snippet at line {b.start + 1} in ## Key code changes has {len(b.content)} lines; the cap is {REVIEW_SNIPPET_LINES}")  # O(1)
+    for b in outside:  # O(b)
+        issues.append(f"REVIEW: code block at line {b.start + 1} is outside ## Key code changes; a review plan holds code only there")  # O(1)
+    return issues, []  # O(1)
+
+
 def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e*n + C*P + n*p + merge/simulate) total
     issues: list[str] = []  # O(1)
     warnings: list[str] = []  # O(1)
@@ -3496,10 +3553,11 @@ def cmd_lint(args) -> int:  # O(lint) total
     if getattr(args, "stable", False):
         return cmd_lint_stable(args)
     plan = Plan.load(args.plan)  # O(C+L)
-    issues, warnings = lint_plan(plan, args)  # O(lint)
+    review = is_review_plan(plan.path)  # O(s)
+    issues, warnings = lint_review_plan(plan) if review else lint_plan(plan, args)  # O(lint)
     for w in warnings:  # O(w) iterations
         print(w)  # O(1)
-    line = refresh_adapter(args.plan, write=False)  # plain lint only says how to rebuild (#423) | O(file + entries)
+    line = None if review else refresh_adapter(args.plan, write=False)  # plain lint only says how to rebuild (#423) | O(file + entries)
     if line:  # O(1)
         print(line)  # O(1)
     for i in issues:  # O(issues) iterations

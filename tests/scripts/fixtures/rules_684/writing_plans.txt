@@ -195,7 +195,7 @@ Workbook-->>Server: changed refs
 Write for the split
 Write it so scripts can parse it.
 Write the machine plan `<plans>/<date>-<topic>.md` from the approved review plan, in the order of `SKILL.md` Plan shape (same tasks and scope, header `**Review plan:** <path>`, and the review plan's `## Coverage` table copied unchanged), then `schedule --insert`, `lint --stable`, and dispatch the stable set in the same turn.
-Write the review plan, small requests too (one-page form): `<plans>/<date>-<topic>.review.md`, plain words with diagrams, no code or taskgraph (`review-plan.md`).
+Write the review plan, small requests too (one-page form): `<plans>/<date>-<topic>.review.md`, plain words with diagrams, no taskgraph and no code outside its `## Key code changes` snippets (`review-plan.md`).
 Write them honestly. |
 Writing Plans
 `**Detail:** full` on one task overrides the header, for tricky cores. |
