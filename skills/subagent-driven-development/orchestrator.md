@@ -59,6 +59,10 @@ is what the hook verifies: show the review plan path, a five-line summary and "R
 the turn. Only after the reply run `approve --review`. `set human` writes `approved: false`. The hooks (coord-guard) deny code writes and
 superlite agent dispatch while the mode is human and unapproved, and deny the model writing `orchestrator.json` or `human-replies.jsonl`.
 
+## Scope rulings
+
+Once the plan is approved (human mode) or its first task dispatched (AI mode), a ruling that adds, drops or changes a deliverable the approved plan, its spec or its issue asked for is written `Ruling: [scope] <decision> - <why> - <cost if wrong>`. `sl finish` lists those under `scope rulings:` (the `rulings:` list keeps them too); a batch lead also writes each into notes.md, so the ship summary and main's wait line show it.
+
 ## Benchmarks
 Every prompt file under `bench/` (`prompt*.md`, `tasks/*/prompt*.md`) ends with `Orchestrator: AI, do not ask me to choose or to approve.`
 (a test checks this), so the decider is never asked. To test the human gate, run the session in human mode:
