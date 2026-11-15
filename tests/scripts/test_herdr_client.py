@@ -129,7 +129,7 @@ def test_start_agent_surfaces_invalid_agent_name_of_herdr_0_9_5(fake, name):
 
 
 def test_on_routes_with_machine_flag(fake):
-    with hc.on("mxn"):
+    with hc.on("box"):
         assert hc.agent_state("a") == "idle"
         with hc.on("b"):
             hc.agent_state("a")
@@ -137,25 +137,25 @@ def test_on_routes_with_machine_flag(fake):
         with hc.on(None):
             hc.agent_state("a")
     hc.agent_state("a")
-    assert fake() == [["--machine", "mxn", "agent", "get", "a"], ["--machine", "b", "agent", "get", "a"],
-                      ["--machine", "mxn", "agent", "get", "a"], ["agent", "get", "a"], ["agent", "get", "a"]]
+    assert fake() == [["--machine", "box", "agent", "get", "a"], ["--machine", "b", "agent", "get", "a"],
+                      ["--machine", "box", "agent", "get", "a"], ["agent", "get", "a"], ["agent", "get", "a"]]
 
 def test_machine_calls_never_prefixed(fake):
-    with hc.on("mxn"):
-        assert hc.machines()[0]["label"] == "mxn"
-        assert hc.machine_status("mxn") == "reachable"
+    with hc.on("box"):
+        assert hc.machines()[0]["label"] == "box"
+        assert hc.machine_status("box") == "reachable"
     assert all(c[0] == "machine" for c in fake())
 
 def test_on_restores_after_error(fake):
     with pytest.raises(RuntimeError):
-        with hc.on("mxn"):
+        with hc.on("box"):
             raise RuntimeError("x")
     hc.agent_state("a")
     assert fake() == [["agent", "get", "a"]]
 
 def test_machine_status_unreachable(fake, monkeypatch):
-    monkeypatch.setenv("FAKE_HERDR_MACHINE_DOWN", "mxn")
-    assert hc.machine_status("mxn") == "unreachable: ssh: connect to host mxn port 22: Connection refused"
+    monkeypatch.setenv("FAKE_HERDR_MACHINE_DOWN", "box")
+    assert hc.machine_status("box") == "unreachable: ssh: connect to host box port 22: Connection refused"
 
 def test_machine_status_unknown_machine(fake, monkeypatch):
     monkeypatch.setenv("FAKE_HERDR_REPLY", "[]")

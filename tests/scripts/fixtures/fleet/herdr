@@ -32,7 +32,7 @@ if reply is not None:
     sys.exit(0)
 key = " ".join(a[:2])
 if key == "machine list":
-    print(os.environ.get("FAKE_HERDR_MACHINES") or json.dumps([{"id": "094d", "label": "mxn", "target": "mxn", "session": "default", "enabled": True, "selected": False}]))
+    print(os.environ.get("FAKE_HERDR_MACHINES") or json.dumps([{"id": "094d", "label": "box", "target": "box", "session": "default", "enabled": True, "selected": False}]))
     sys.exit(0)
 if key == "machine status":
     down = os.environ.get("FAKE_HERDR_MACHINE_DOWN") == a[2]

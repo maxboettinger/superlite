@@ -42,37 +42,37 @@ def test_tree_argv(env):
 
 
 def test_target_and_check(monkeypatch):
-    rows = [{"label": "mxn", "enabled": True}, {"label": "off", "enabled": False}]
+    rows = [{"label": "box", "enabled": True}, {"label": "off", "enabled": False}]
     monkeypatch.setattr(hc, "machines", lambda: rows, raising=False)
-    assert fr.target("mxn") == "mxn"
+    assert fr.target("box") == "box"
     for bad in ("off", "nope"):
         with pytest.raises(fr.RemoteError, match=f"no enabled Herdr machine {bad} "):
             fr.target(bad)
     st = {"v": "reachable"}
     monkeypatch.setattr(hc, "machine_status", lambda label, timeout_ms=10000: st["v"], raising=False)
-    assert fr.check("mxn") == ""
-    st["v"] = "unreachable: ssh: connect to host mxn port 22: Connection refused"
-    assert fr.check("mxn") == st["v"]
+    assert fr.check("box") == ""
+    st["v"] = "unreachable: ssh: connect to host box port 22: Connection refused"
+    assert fr.check("box") == st["v"]
 
     def boom(label, timeout_ms=10000): raise hc.HerdrError("exit", "timeout")
     monkeypatch.setattr(hc, "machine_status", boom, raising=False)
-    assert fr.check("mxn") == "herdr machine status failed: timeout"
+    assert fr.check("box") == "herdr machine status failed: timeout"
 
 
 def test_push_read_drop(env):
     (env.proj / ".superlite" / "briefs").mkdir()
     (env.proj / ".superlite" / "briefs" / "r.md").write_text("hi")
-    out = fr.push("mxn", str(env.proj), "proj/W3", "abc123", [".superlite/briefs/r.md"])
+    out = fr.push("box", str(env.proj), "proj/W3", "abc123", [".superlite/briefs/r.md"])
     assert out == str(env.trees / "proj/W3")
     c = calls(env)[0]
-    assert c["argv"] == ["push", "--host", "mxn", "--name", "proj/W3", "--base", "abc123", "--file", ".superlite/briefs/r.md", "--timeout", "120"]
+    assert c["argv"] == ["push", "--host", "box", "--name", "proj/W3", "--base", "abc123", "--file", ".superlite/briefs/r.md", "--timeout", "120"]
     assert Path(c["cwd"]).resolve() == env.proj.resolve()
     assert (env.trees / "proj/W3/.superlite/briefs/r.md").read_text() == "hi"
     f = env.trees / "proj/W3/x.txt"; f.write_bytes(b"0123456789abc")
-    assert fr.read("mxn", str(f), 10) == b"abc"
-    assert fr.read("mxn", str(f) + "z") == b""
-    assert fr.drop("mxn", str(env.proj), "proj/W3") is True
-    assert fr.drop("mxn", str(env.proj), "proj/W3") is False
+    assert fr.read("box", str(f), 10) == b"abc"
+    assert fr.read("box", str(f) + "z") == b""
+    assert fr.drop("box", str(env.proj), "proj/W3") is True
+    assert fr.drop("box", str(env.proj), "proj/W3") is False
 
 
 def test_push_errors(env, monkeypatch):
@@ -80,17 +80,17 @@ def test_push_errors(env, monkeypatch):
         fr.push("down", str(env.proj), "n", None, [])
     with pytest.raises(fr.RemoteError, match="down unreachable"):
         fr.read("down", "/x")
-    with pytest.raises(fr.RemoteError, match=r"mxn: remote_tree push: usage"):
+    with pytest.raises(fr.RemoteError, match=r"box: remote_tree push: usage"):
         monkeypatch.setenv("SUPERLITE_HOME", str(env.home))
         (env.home / "machine.json").write_text(json.dumps({"remote_tree": [sys.executable, "-c", "import sys;sys.stderr.write('a\\nusage\\n');sys.exit(2)"]}))
-        fr.push("mxn", str(env.proj), "n", None, [])
+        fr.push("box", str(env.proj), "n", None, [])
     (env.home / "machine.json").write_text("{}")
     with pytest.raises(fr.RemoteError, match="no remote_tree command in .*machine.json"):
-        fr.push("mxn", str(env.proj), "n", None, [])
+        fr.push("box", str(env.proj), "n", None, [])
     (env.home / "machine.json").write_text(json.dumps({"remote_tree": [TREE]}))
     monkeypatch.setenv("FAKE_TREE_SLEEP", "30")
-    with pytest.raises(fr.RemoteError, match="mxn: remote_tree push timed out after 11 s"):
-        fr.push("mxn", str(env.proj), "n", None, [], timeout_s=1)
+    with pytest.raises(fr.RemoteError, match="box: remote_tree push timed out after 11 s"):
+        fr.push("box", str(env.proj), "n", None, [], timeout_s=1)
 
 
 def test_tree_name(tmp_path):
@@ -113,8 +113,8 @@ def test_plugin(env, monkeypatch):
         subprocess.run(["git", "-C", str(sl), *c], check=True, env=genv)
     sha = subprocess.run(["git", "-C", str(sl), "rev-parse", "HEAD"], capture_output=True, text=True, env=genv).stdout.strip()
     monkeypatch.delenv("GIT_DIR", raising=False)
-    assert fr.plugin("mxn", str(sl)) == str(env.trees / "plugin" / sha[:12])
-    assert calls(env)[0]["argv"][:6] == ["push", "--host", "mxn", "--name", "plugin/" + sha[:12], "--base"]
+    assert fr.plugin("box", str(sl)) == str(env.trees / "plugin" / sha[:12])
+    assert calls(env)[0]["argv"][:6] == ["push", "--host", "box", "--name", "plugin/" + sha[:12], "--base"]
     assert calls(env)[0]["argv"][6] == sha
 
 
@@ -134,7 +134,7 @@ def line(wid, tr, t=1):
 def synced(env):
     tree = env.trees / "proj" / "W3"; (tree / ".superlite").mkdir(parents=True)
     tr = env.trees / "s.jsonl"; tr.write_text("one\n")
-    (env.sd / "fleet.json").write_text(json.dumps({"on": True, "workers": {"W3": {"remote": {"label": "mxn", "tree": str(tree), "sd": str(tree / ".superlite"), "name": "proj/W3", "plugin": "", "offset": 0, "tr": {}}}}}))
+    (env.sd / "fleet.json").write_text(json.dumps({"on": True, "workers": {"W3": {"remote": {"label": "box", "tree": str(tree), "sd": str(tree / ".superlite"), "name": "proj/W3", "plugin": "", "offset": 0, "tr": {}}}}}))
     env.metrics = tree / ".superlite" / "metrics.jsonl"; env.tr = tr
     return env
 
@@ -231,4 +231,4 @@ def test_plugin_git_failure_is_remote_error(env, monkeypatch, exc):
         raise exc
     monkeypatch.setattr(fr.subprocess, "run", boom)
     with pytest.raises(fr.RemoteError, match="git rev-parse"):
-        fr.plugin("mxn", str(env.proj))
+        fr.plugin("box", str(env.proj))

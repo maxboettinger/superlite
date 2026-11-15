@@ -71,7 +71,7 @@ def world(tmp_path, monkeypatch):
 
 
 def started(world):
-    return rw.spawn(world.sd, "research", None, world.proj, "mxn")
+    return rw.spawn(world.sd, "research", None, world.proj, "box")
 
 
 def record(world, wid="W1"):
@@ -80,12 +80,12 @@ def record(world, wid="W1"):
 
 def test_spawn_calls_routed(world, capsys):
     r = started(world)
-    assert r == {"id": "W1", "account": "default@mxn", "pane_id": "w6:p1", "agent": "superlite:researcher", "model": "sonnet", "role": "research", "machine": "mxn"}
-    assert "W1 account=default@mxn pane=w6:p1 agent=superlite:researcher role=research machine=mxn" in capsys.readouterr().out
+    assert r == {"id": "W1", "account": "default@box", "pane_id": "w6:p1", "agent": "superlite:researcher", "model": "sonnet", "role": "research", "machine": "box"}
+    assert "W1 account=default@box pane=w6:p1 agent=superlite:researcher role=research machine=box" in capsys.readouterr().out
     inside, outside = world.fh.inside()
     assert outside == [] and any(c[0] == "start_agent" for c in inside)
-    assert world.panes[0]["machine"] == "mxn"
-    assert record(world)["state"] == "ready" and record(world)["machine"] == "mxn"
+    assert world.panes[0]["machine"] == "box"
+    assert record(world)["state"] == "ready" and record(world)["machine"] == "box"
 
 
 def test_spawn_argv_plugin_dir(world):
@@ -101,7 +101,7 @@ def test_spawn_argv_plugin_dir(world):
 
 def test_spawn_refusals(world, capsys):
     with pytest.raises(ValueError, match="role implementer cannot run on a remote machine yet; remote roles: research, final-reviewer"):
-        rw.spawn(world.sd, "implementer", None, world.proj, "mxn")
+        rw.spawn(world.sd, "implementer", None, world.proj, "box")
     with pytest.raises(SystemExit) as e:
         rw.spawn(world.sd, "research", None, world.proj, "down")
     assert e.value.code == 3 and "BLOCKED: fleet spawn: machine down: unreachable: ssh: refused" in capsys.readouterr().out
@@ -125,7 +125,7 @@ def test_send_brief(world, capsys):
 
 
 def test_final_reviewer_ships_packet_tests(world):
-    rw.spawn(world.sd, "final-reviewer", None, world.proj, "mxn")
+    rw.spawn(world.sd, "final-reviewer", None, world.proj, "box")
     b = world.sd / "briefs" / "review-packet.md"; b.write_text("p")
     (world.sd / "briefs" / "review-packet-tests.md").write_text("t")
     rw.send_brief(world.sd, "W1", str(b))
@@ -138,7 +138,7 @@ def test_final_reviewer_ships_packet_tests(world):
 
 
 def test_pushed_packet_is_mapped_to_the_remote_tree(world):
-    rw.spawn(world.sd, "final-reviewer", None, world.proj, "mxn")
+    rw.spawn(world.sd, "final-reviewer", None, world.proj, "box")
     shard = world.sd / "briefs" / "review-packet-tests.md"; shard.write_text(f"tests at {world.proj}/src/x.py")
     b = world.sd / "briefs" / "review-packet.md"; b.write_text(f"read {shard} in full; code in {world.proj}/src")
     rw.send_brief(world.sd, "W1", str(b))
@@ -187,10 +187,10 @@ def test_stop(world, capsys):
 
 def test_stop_failed_drop(world, capsys, monkeypatch):
     started(world)
-    def boom(*a, **k): raise fr.RemoteError("mxn unreachable: x")
+    def boom(*a, **k): raise fr.RemoteError("box unreachable: x")
     monkeypatch.setattr(fr, "drop", boom)
     rw.stop(world.sd, "W1")
-    assert "W1 tree kept on mxn: mxn unreachable: x" in capsys.readouterr().err and record(world)["state"] == "stopped"
+    assert "W1 tree kept on box: box unreachable: x" in capsys.readouterr().err and record(world)["state"] == "stopped"
 
 
 def test_spawn_accepts_trust_dialog_on_start(world):
@@ -216,7 +216,7 @@ def test_spawn_drops_the_tree_when_startup_fails(world, monkeypatch):
 
 
 def test_spawn_blocked_survives_a_failed_drop(world, monkeypatch):
-    def boom(*a, **k): raise fr.RemoteError("mxn unreachable: x")
+    def boom(*a, **k): raise fr.RemoteError("box unreachable: x")
     monkeypatch.setattr(fr, "drop", boom); world.fh.start_error = "agent_start_failed"
     with pytest.raises(SystemExit) as e:
         started(world)
@@ -248,4 +248,4 @@ def test_spawn_git_failure_is_blocked(world, capsys, monkeypatch):
     with pytest.raises(SystemExit) as e:
         started(world)
     out = capsys.readouterr().out
-    assert e.value.code == 3 and out.startswith("BLOCKED: fleet spawn: machine mxn: ") and "Traceback" not in out
+    assert e.value.code == 3 and out.startswith("BLOCKED: fleet spawn: machine box: ") and "Traceback" not in out
