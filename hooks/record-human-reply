@@ -3,9 +3,14 @@
 # has mode human and approved false), append one line per human prompt to
 # <project>/.superlite/human-replies.jsonl:
 #   {"t":<epoch ms>,"approves":true|false,"text":"<first 160 chars of the prompt>"}
-# approves is true when the prompt contains an approval phrase (approve, approved, yes, go ahead,
-# go for it, looks good, lgtm, proceed, ship it, do it) and none of: not, don't, dont, no, wait,
-# stop, but, change, instead (case-insensitive, whole words). Only this hook writes the file.
+# approves is true when no veto word appears (case-insensitive, whole words: not, don't, dont, no,
+# wait, stop, but, change, instead; nein, nicht, kein, keine, aber, warte, warten, moment, stopp,
+# ändere, ändern, änderung, aendere, aendern, statt, stattdessen) and either a strong phrase appears
+# anywhere (approve, approved, yes, go ahead, go for it, looks good, lgtm, proceed, ship it, do it,
+# genehmigt, freigegeben, leg los, sieht gut aus) or the reply is short (<= 80 chars, no ?) and made
+# only of yes-words (ok, sure, ja, passt, mach, ...) and fillers (so, bitte, thanks, ...), one at least
+# a yes-word. JSON \uXXXX umlaut escapes and curly apostrophes are decoded first so a veto cannot hide.
+# Only this hook writes the file.
 # Bash builtins only (each external process costs ~250 ms on Windows). Never blocks: exit 0 always.
 # stdin is bounded three ways: a terminal exits at once, the read gives up after 5 s, input is cut at 1 MiB.
 
@@ -35,13 +40,24 @@ re_unappr='"approved"[[:space:]]*:[[:space:]]*false'
 [[ $oj =~ $re_human && $oj =~ $re_unappr ]] || exit 0
 
 jstr prompt; text="$REPLY"
-# bash 3.2 (stock macOS) has no ${var,,}: use tr.
+# bash 3.2 (stock macOS) has no ${var,,}: use tr (C locale: umlauts and curly quotes are folded below).
 lc="$(printf '%s' "$text" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+lc="${lc//Ä/ä}"; lc="${lc//Ö/ö}"; lc="${lc//Ü/ü}"
+lc="${lc//\\u00e4/ä}"; lc="${lc//\\u00c4/ä}"; lc="${lc//\\u00f6/ö}"; lc="${lc//\\u00d6/ö}"
+lc="${lc//\\u00fc/ü}"; lc="${lc//\\u00dc/ü}"
+q="'"; lc="${lc//\\u2019/$q}"; lc="${lc//’/$q}"
 b='(^|[^[:alnum:]_])'; e='([^[:alnum:]_]|$)'
-re_yes="$b(approve|approved|yes|go[[:space:]]+ahead|go[[:space:]]+for[[:space:]]+it|looks[[:space:]]+good|lgtm|proceed|ship[[:space:]]+it|do[[:space:]]+it)$e"
-re_no="$b(not|don't|don’t|dont|no|wait|stop|but|change|instead)$e"
+re_yes="$b(approve|approved|yes|go[[:space:]]+ahead|go[[:space:]]+for[[:space:]]+it|looks[[:space:]]+good|lgtm|proceed|ship[[:space:]]+it|do[[:space:]]+it|genehmigt|freigegeben|leg[[:space:]]+los|sieht[[:space:]]+gut[[:space:]]+aus)$e"
+re_no="$b(not|don't|dont|no|wait|stop|but|change|instead|nein|nicht|kein|keine|aber|warte|warten|moment|stopp|ändere|ändern|änderung|aendere|aendern|statt|stattdessen)$e"
+yw='ok|okay|sure|yep|yeah|fine|good|great|perfect|alright|go|ja|jo|jep|passt|mach|machs|los|klar|gut|genau|gerne|gern|perfekt|super|prima|weiter|einverstanden'
+fw='so|das|es|s|it|that|let|lets|bitte|please|danke|thanks|dann|then|mal|doch|sounds|klingt|for|me|für|mich|mir|sehr|very|yes|approve'
+s='[[:space:][:punct:]]'
+re_short="^$s*(($yw|$fw)$s+)*($yw)($s+($yw|$fw))*$s*\$"
 approves=false
-[[ $lc =~ $re_yes ]] && ! [[ $lc =~ $re_no ]] && approves=true
+if ! [[ $lc =~ $re_no ]]; then
+  [[ $lc =~ $re_yes ]] && approves=true
+  [ "$approves" = true ] || { [ ${#lc} -le 80 ] && [[ $lc != *\?* ]] && [[ $lc =~ $re_short ]] && approves=true; }
+fi
 
 text="${text:0:160}"
 text="${text//\\/\\\\}"; text="${text//\"/\\\"}"
