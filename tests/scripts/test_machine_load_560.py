@@ -70,7 +70,7 @@ def test_floor_and_limit_sources(monkeypatch):
 def test_measure_mean_and_default():
     mem = {"total": 64 * G, "free": 52 * G, "pressure": "normal"}
     m = ml.measure(procs=[(10, 1, 600 * M, "claude"), (20, 1, 800 * M, "claude")], mem=mem)
-    assert m == {"agents": 2, "each": 700 * M, "total": 64 * G, "free": 52 * G, "pressure": "normal"}
+    assert m == {"agents": 2, "each": 700 * M, "total": 64 * G, "free": 52 * G, "pressure": "normal", "other": None}
     m0 = ml.measure(procs=[], mem=mem)
     assert m0["agents"] == 0 and m0["each"] == G
 
@@ -95,7 +95,8 @@ def test_room():
     assert ml.room(m, 15, 0) is True
     assert ml.room({**m, "free": 10 * G}, 15, 0) is False
     assert ml.room({**m, "free": 11 * G}, 15, 0) is True
-    assert ml.room({**m, "pressure": "warn"}, 15, 0) is False
+    assert ml.room({**m, "pressure": "warn"}, 15, 0) is True  # #916: warn alone refuses nothing
+    assert ml.room({**m, "pressure": "critical"}, 15, 0) is False
     assert ml.room(m, 15, 16) is True
     assert ml.room({**m, "agents": 16}, 15, 16) is False
     assert ml.room({**m, "free": 1 * G, "pressure": "critical"}, 0, 0) is True

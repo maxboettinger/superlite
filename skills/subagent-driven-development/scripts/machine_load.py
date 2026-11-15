@@ -4,9 +4,10 @@
 `measure` reads one `ps` call (process trees of the agent CLIs in AGENTS, with every descendant; their mean
 resident size) and one OS memory read (macOS `sysctl`, Linux `/proc`). `room` admits one more agent when free memory
 minus one mean agent stays at or above the floor (`SUPERLITE_MACHINE_FLOOR`, else `<home>/machine.json` `floor`,
-else 15 percent; 0 = off) and the memory pressure is normal. An optional count cap (`SUPERLITE_MACHINE_LIMIT`, else
+else 15 percent; 0 = off) and the memory pressure is not critical (`warn` alone refuses nothing, #916). An optional count cap (`SUPERLITE_MACHINE_LIMIT`, else
 `machine.json` `limit`; 0 = none) bounds the agents too. No CPU or load-average check: builds are admitted outside
-superlite. `gate` waits up to `wait_s` for room and returns None to go ahead, else the busy line.
+superlite. `gate` waits up to `wait_s` for room and returns None to go ahead, else the busy line, which names the largest
+process outside the agent trees.
 """
 import json  # O(1)
 import os  # O(1)
@@ -76,20 +77,39 @@ def _named(procs: list, args_by_pid: dict) -> list:  # O(p)
     return out  # O(p)
 
 
-def agent_trees(procs: list) -> list:  # O(p * depth)
+def _roots(procs: list) -> dict:  # pid -> the outermost agent above it (itself included), for each pid inside an agent tree | O(p * depth)
     info = {p[0]: p for p in procs}  # O(p)
-    isagent = lambda pid: os.path.basename(info[pid][3]) in AGENTS  # O(1)
-    sums = {}  # O(1)
-    for pid, _, rss, _ in procs:  # O(p)
+    out = {}  # O(1)
+    for pid, *_ in procs:  # O(p)
         seen, cur, top = set(), pid, None  # O(1)
         while cur in info and cur not in seen:  # walk to the outermost agent above | O(depth)
             seen.add(cur)  # O(1)
-            if isagent(cur):  # O(1)
+            if os.path.basename(info[cur][3]) in AGENTS:  # O(1)
                 top = cur  # O(1)
             cur = info[cur][1]  # O(1)
         if top is not None:  # O(1)
-            sums[top] = sums.get(top, 0) + rss  # O(1)
+            out[pid] = top  # O(1)
+    return out  # O(p)
+
+
+def _sums(procs: list, roots: dict) -> list:  # O(p)
+    sums = {}  # O(1)
+    for pid, _, rss, _ in procs:  # O(p)
+        if pid in roots:  # O(1)
+            sums[roots[pid]] = sums.get(roots[pid], 0) + rss  # O(1)
     return [sums[k] for k in sorted(sums)]  # O(roots)
+
+
+def agent_trees(procs: list) -> list:  # O(p * depth)
+    return _sums(procs, _roots(procs))  # O(p * depth)
+
+
+def _other(procs: list, roots: dict):  # (name, rss) of the largest process outside every agent tree, or None (#916) | O(p)
+    rest = [p for p in procs if p[0] not in roots]  # O(p)
+    if not rest:  # O(1)
+        return None  # O(1)
+    top = max(rest, key=lambda p: p[2])  # O(p)
+    return os.path.basename(top[3]) or top[3], top[2]  # O(1)
 
 
 def _darwin(text: str):  # O(1)
@@ -140,11 +160,14 @@ def memory():  # O(1)
 
 
 def measure(procs=None, mem=None) -> dict:  # O(p)
-    trees = agent_trees(_ps() if procs is None else procs)  # O(p)
+    procs = _ps() if procs is None else procs  # O(p)
+    roots = _roots(procs)  # O(p * depth)
+    trees = _sums(procs, roots)  # O(p)
     mem = memory() if mem is None else mem  # O(1)
     mem = mem or {"total": None, "free": None, "pressure": None}  # O(1)
     each = sum(trees) // len(trees) if trees else DEFAULT_EACH  # O(roots)
-    return {"agents": len(trees), "each": each, "total": mem["total"], "free": mem["free"], "pressure": mem["pressure"]}  # O(1)
+    return {"agents": len(trees), "each": each, "total": mem["total"], "free": mem["free"], "pressure": mem["pressure"],
+            "other": _other(procs, roots)}  # O(p)
 
 
 def limit() -> tuple:  # O(1)
@@ -194,7 +217,7 @@ def room(m: dict, floor_pct: float, lim: int) -> bool:  # O(1)
         return False  # O(1)
     if floor_pct <= 0 or m["total"] is None or m["free"] is None:  # O(1)
         return True  # O(1)
-    if m["pressure"] in ("warn", "critical"):  # O(1)
+    if m["pressure"] == "critical":  # `warn` alone refuses nothing: the floor below decides (#916) | O(1)
         return False  # O(1)
     return (m["free"] - m["each"]) * 100 >= floor_pct * m["total"]  # O(1)
 
@@ -202,6 +225,12 @@ def room(m: dict, floor_pct: float, lim: int) -> bool:  # O(1)
 def _line(m: dict, flo: float, lim: int, src: str) -> str:  # O(1)
     s = describe(m, flo)  # O(1)
     return s + (f"; {m['agents']} agents of limit {lim} from {src}" if lim else "")  # O(1)
+
+
+def _busy(m: dict, flo: float, lim: int, src: str) -> str:  # the busy line names what holds the memory besides the agents (#916) | O(1)
+    other = m.get("other")  # O(1)
+    held = f"; largest non-agent process {other[0]} {other[1] / 2**30:.1f} GB" if other else ""  # O(1)
+    return _line(m, flo, lim, src) + held  # O(1)
 
 
 def gate(what: str, wait_s: float, over: bool = False, poll_s: float = 10.0):  # O(wait_s / poll_s * p)
@@ -222,9 +251,9 @@ def gate(what: str, wait_s: float, over: bool = False, poll_s: float = 10.0):  #
             print(f"machine limit overridden (--over-limit): {_line(m, flo, lim, src)}", file=sys.stderr)  # O(1)
             return None  # O(1)
         if time.monotonic() - t0 >= wait_s:  # O(1)
-            return f"machine busy after {el} s: {_line(m, flo, lim, src)}"  # O(1)
+            return f"machine busy after {el} s: {_busy(m, flo, lim, src)}"  # O(1)
         if not waited:  # O(1)
-            print(f"machine busy: {_line(m, flo, lim, src)}; waiting up to {int(wait_s)} s for {what}", file=sys.stderr)  # O(1)
+            print(f"machine busy: {_busy(m, flo, lim, src)}; waiting up to {int(wait_s)} s for {what}", file=sys.stderr)  # O(1)
             waited = True  # O(1)
         time.sleep(poll_s)  # O(1)
 
