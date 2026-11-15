@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run pytest, parse the junit XML, print one summary line.
 
-    run_tests.py [--fast PATHS... | --full] [--log PATH] [--ledger PATH]
+    run_tests.py [--fast PATHS... | --full | --affected [--base REV] [--files F...]] [--log PATH] [--ledger PATH]
                  [--summary PATH] [--background] [-m EXPR]
     run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] [--scope WORD] --command CMD   (a result run outside run_tests; mode `recorded` with its scope, default external, never the full run; report only, closes no incidents)
     run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
@@ -126,6 +126,7 @@ WRITTEN = set()  # resolved summary paths this process wrote; main clears it | O
 XCODE_OUT = re.compile(r"^\W*✘ Test |: error: -\[|^Test case '.*' failed on |\*\* TEST (?:FAILED|SUCCEEDED) \*\*", re.M)  # xcodebuild test output | O(1)
 STAMP = None  # the stamp a full run was answered from; write_summary records it, main clears it | O(1)
 WARNING = ""  # the platform warning of this full run; write_summary records it, main clears it | O(1)
+AFFECTED = None  # the --affected selection of this run (base, changed, selected, reasons, untested); write_summary records it, main clears it | O(1)
 DROPPED = ""  # the dropped-paths note of this fast run; write_summary records it, main clears it | O(1)
 OUTPUT = ""  # the full-output log of this run; write_summary records it, main clears it | O(1)
 
@@ -434,6 +435,17 @@ def to_root(a, argv, cwd, root):  # O(len argv + p) rewrite --fast paths against
                 argv[k] = x if os.path.isabs(x) else os.path.relpath(os.path.join(cwd, x), root).replace(os.sep, "/") + ("/" if x.endswith("/") else "")  # O(len)
                 fixed.append(argv[k])  # O(1)
         a.also = fixed  # O(n)
+    if a.files and "--files" in argv:  # every --files chunk stays valid from the root | O(len argv)
+        in_files, fixed = False, []  # O(1)
+        for k, x in enumerate(argv):  # O(len argv) iterations
+            if x == "--files":  # O(1)
+                in_files = True  # O(1)
+            elif x.startswith("--"):  # O(1)
+                in_files = False  # O(1)
+            elif in_files:  # O(1)
+                argv[k] = fix(x)  # O(len)
+                fixed.append(argv[k])  # O(1)
+        a.files = fixed  # O(n)
     os.chdir(root)  # O(1)
     print(f"run_tests: running from {root}", file=sys.stderr)  # O(1)
 
@@ -507,7 +519,7 @@ WAIT_CUE = "next: tests still running; run the wait line below now, in the foreg
 
 
 def narrowed(a):  # a run limited by paths, a marker or pass-through args is fast, not full | O(1)
-    return bool(a.fast or a.marker or getattr(a, "passthrough", None))  # O(1)
+    return bool(a.fast or a.affected or a.marker or getattr(a, "passthrough", None))  # O(1)
 
 
 def start_background(a, argv):  # O(len argv) + one detached spawn
@@ -836,6 +848,8 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
         data["stamp"] = STAMP  # O(1)
     if started is not None:  # the packet closes only incidents logged before this run started (#101) | O(1)
         data["started"] = started  # O(1)
+    if AFFECTED:  # what --affected selected for this run (#847) | O(1)
+        data["affected"] = AFFECTED  # O(1)
     p = Path(path)  # O(1)
     p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     tmp = p.with_name(p.name + ".tmp")  # O(1)
@@ -1392,6 +1406,9 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     mode.add_argument("--fast", nargs="+", metavar="PATH",  # O(1)
                       help="run only these test paths (comma or space separated)")  # O(1)
     mode.add_argument("--full", action="store_true", help="run everything (default)")  # O(1)
+    mode.add_argument("--affected", action="store_true", help="run the tests the change touches (testcmd.select_affected; see --base, --files)")  # O(1)
+    ap.add_argument("--base", default=None, metavar="REV", help="--affected: diff against REV (default: the last checkpoint, else HEAD)")  # O(1)
+    ap.add_argument("--files", nargs="+", action="extend", default=[], metavar="F", help="--affected: the changed files, instead of git (comma or space separated)")  # O(1)
     ap.add_argument("--log", default=ct.DEFAULT_LOG)  # O(1)
     ap.add_argument("--ledger", default=ct.DEFAULT_LEDGER)  # O(1)
     ap.add_argument("--summary", default=DEFAULT_SUMMARY,  # O(1)
@@ -1424,6 +1441,9 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     argv = argv[:argv.index("--")] if "--" in argv else argv  # O(len argv)
     a = ap.parse_args(argv)  # O(1)
     a.passthrough = tail  # O(1)
+    for flag, given in (("--base", a.base), ("--files", a.files)):  # O(1)
+        if given and not a.affected:  # O(1)
+            return usage_error(a, "fast", f"{flag} needs --affected")  # O(summary size)
     a.cli_env = {}  # O(1)
     for item in a.env:  # O(e)
         key, eq, val = item.partition("=")  # O(len)
@@ -1435,8 +1455,9 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         print("run_tests: pass-through args (after --) need a test run", file=sys.stderr)  # O(1)
         return 2  # O(1)
     WRITTEN.clear()  # O(1)
-    global CURRENT_TASK, OUTPUT, WARNING, STAMP, DROPPED  # O(1)
+    global CURRENT_TASK, OUTPUT, WARNING, STAMP, DROPPED, AFFECTED  # O(1)
     OUTPUT = ""  # O(1)
+    AFFECTED = None  # O(1)
     DROPPED = ""  # O(1)
     STAMP = None  # O(1)
     WARNING = ""  # O(1)
@@ -2092,6 +2113,61 @@ def task_cmd_spec(a):  # O(L + m + f) the spec of the `cmd=` in --task's plan **
             "source": "plan", "origin": f"{plan}: {a.task} **Tests:** cmd=", "isolate": bool(base.get("isolate"))}  # O(1)
 
 
+def affected_files(a):  # O(f) + two spawns: (base or None, changed files) for --affected; raises ValueError with the usage-error text
+    if a.files:  # --files replaces git | O(f)
+        return None, [p for chunk in a.files for p in split_fast(chunk)]  # O(f)
+    base = a.base  # O(1)
+    if not base and a.task:  # the run's start, so a re-run after the task's checkpoint still sees its change | O(1)
+        import autocommit  # noqa: E402  # lazy: only --affected --task needs it | O(1)
+        st = autocommit.load_state()  # O(1)
+        base = autocommit.base_of(st) if isinstance(st, dict) else None  # O(1)
+    base = base or trees.base_commit(".")  # O(checkpoints) + spawn
+    try:  # O(1)
+        listed = trees.split_z(trees.git(".", "diff", "--name-only", "--no-renames", "-z", base)) + trees.split_z(trees.git(".", "ls-files", "-o", "--exclude-standard", "-z"))  # O(f)
+    except RuntimeError as e:  # O(1)
+        why = str(e).split("failed: ", 1)[-1].strip().splitlines()  # O(1)
+        raise ValueError(f"--affected: cannot diff against {base}: {why[0] if why else 'git failed'}")  # O(1)
+    keep = (".superlite/test-cmd.json", ".superlite/test-map.json")  # O(1)
+    changed = list(dict.fromkeys(p for p in listed if not p.startswith(".superlite/") or p in keep))  # O(f)
+    if a.task:  # only the task's own files, the owns the --task tree code uses (also-claims included) | O(f * o)
+        plan, tried = task_plan(a)  # O(S)
+        if not plan or not Path(plan).is_file():  # O(1)
+            raise ValueError(f"--task {a.task} needs its plan: pass --plan PLAN (tried {tried}, not found)")  # O(1)
+        info = nt.parse_plan(plan)  # O(L)
+        if a.task not in info:  # O(1)
+            raise ValueError(f"unknown task {a.task} in {plan}")  # O(1)
+        ct.add_also_owns(info, a.ledger)  # O(c + o)
+        changed = [p for p in changed if nt.owns_match(p, info[a.task]["owns"])]  # O(f * o)
+    if not changed:  # O(1)
+        raise ValueError(f"--affected: no changed files since {base[:12]}")  # O(1)
+    return base, changed  # O(1)
+
+
+def run_affected(a, tspec):  # O(f + selection) turns --affected into a.fast paths or a full run: (paths, label, error text or None)
+    global AFFECTED  # O(1)
+    if tspec:  # the task's own command runs as today | O(1)
+        print(f"run_tests: --affected: {a.task} runs its **Tests:** cmd=; no selection", file=sys.stderr)  # O(1)
+        return [], "fast", None  # O(1)
+    try:  # O(1)
+        base, changed = affected_files(a)  # O(f)
+    except ValueError as e:  # O(1)
+        return [], "fast", str(e)  # O(1)
+    sel = testcmd.select_affected(".", changed)  # O(tree)
+    AFFECTED = {"base": base, "changed": len(changed), "selected": sel["selected"], "reasons": sel["reasons"], "untested": sel["untested"]}  # O(1)
+    where = f"base {base[:12]}" if base else "--files"  # O(1)
+    more = sel["untested"][:10]  # O(1)
+    tail = f"; untested: {', '.join(more)}" + (f" (+{len(sel['untested']) - 10} more)" if len(sel["untested"]) > 10 else "") if more else ""  # O(1)
+    print(f"run_tests: --affected: {len(changed)} changed, {len(sel['selected'])} selected ({where}){tail}", file=sys.stderr)  # O(1)
+    if sel.get("full"):  # shared setup: the whole suite, as --full does | O(1)
+        AFFECTED["trigger"] = sel["trigger"]  # O(1)
+        print(f"run_tests: --affected: {sel['trigger']} changed: the whole suite runs", file=sys.stderr)  # O(1)
+        a.affected = False  # the run is a full run from here on | O(1)
+        return [], "full", None  # O(1)
+    if not sel["selected"]:  # O(1)
+        return [], "fast", f"--affected: no test covers the change; untested: {', '.join(sel['untested'])}; write a test or run --fast PATHS"  # O(1)
+    return list(sel["selected"]), "fast", None  # O(1)
+
+
 def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     global DROPPED  # O(1)
     paths = [p for chunk in (a.fast or []) for p in split_fast(chunk)]  # O(p)
@@ -2107,6 +2183,12 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         if paths:  # O(1)
             print(f"run_tests: --fast paths are not passed to {a.task}'s **Tests:** cmd=", file=sys.stderr)  # O(1)
         paths = []  # O(1)
+    if a.affected:  # the selected test files become the --fast paths; a setup change runs the whole suite | O(f + tree)
+        paths, label, bad = run_affected(a, tspec)  # O(f + tree)
+        if bad:  # O(1)
+            return usage_error(a, label, bad)  # O(summary size)
+        if tspec:  # O(1)
+            label = "fast"  # O(1)
     if paths and not tspec:  # a workflow, config or doc file is no test (#597) | O(p)
         paths, skipped = skip_non_test(paths)  # O(p)
         if skipped:  # O(1)
