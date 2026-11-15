@@ -199,3 +199,15 @@ def test_files_equals_spelling_from_a_subfolder_is_read_from_there(tmp_path):
     r = rt(root / "tests", "--affected", "--files=test_misc.py", root=root)
     assert r.returncode == 0, r.stderr
     assert got(root) == ["tests/test_misc.py"]
+
+
+def test_to_root_tolerates_a_namespace_without_files(tmp_path, monkeypatch):
+    import argparse
+    import run_tests
+    root, sub = tmp_path / "proj", tmp_path / "proj" / "sub"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    argv = ["--full"]
+    run_tests.to_root(argparse.Namespace(also=[], fast=None), argv, str(sub), str(root))
+    assert argv == ["--full"]
+    os.chdir(tmp_path)

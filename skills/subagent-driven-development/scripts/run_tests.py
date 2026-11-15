@@ -435,7 +435,7 @@ def to_root(a, argv, cwd, root):  # O(len argv + p) rewrite --fast paths against
                 argv[k] = x if os.path.isabs(x) else os.path.relpath(os.path.join(cwd, x), root).replace(os.sep, "/") + ("/" if x.endswith("/") else "")  # O(len)
                 fixed.append(argv[k])  # O(1)
         a.also = fixed  # O(n)
-    if a.files and ("--files" in argv or any(x.startswith("--files=") for x in argv)):  # every --files chunk stays valid from the root | O(len argv)
+    if getattr(a, "files", None) and ("--files" in argv or any(x.startswith("--files=") for x in argv)):  # every --files chunk stays valid from the root | O(len argv)
         in_files, fixed = False, []  # O(1)
         for k, x in enumerate(argv):  # O(len argv) iterations
             if x.startswith("--files="):  # the =VALUE spelling | O(1)
