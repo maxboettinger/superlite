@@ -3,6 +3,8 @@
 
 # Complexity notation:
 # n = argument count, e = env vars, k = until states, a = agents listed, p = panes of a tab
+import contextlib  # O(1)
+import contextvars  # O(1)
 import json  # O(1)
 import os  # O(1)
 import subprocess  # O(1)
@@ -15,7 +17,23 @@ class HerdrError(Exception):  # O(1)
         self.message = message  # O(1)
 
 
-def _run(args, timeout_ms, env):  # O(n + output)
+_MACHINE = contextvars.ContextVar("herdr_machine", default=None)  # the saved Herdr machine every routed call runs on | O(1)
+
+
+@contextlib.contextmanager  # O(1)
+def on(machine):  # O(1)
+    """Route every Herdr call inside the block to the saved machine `machine` (`--machine`); None routes locally."""
+    token = _MACHINE.set(machine or None)  # O(1)
+    try:  # O(1)
+        yield  # O(1)
+    finally:  # O(1)
+        _MACHINE.reset(token)  # O(1)
+
+
+def _run(args, timeout_ms, env, routed=True):  # O(n + output)
+    machine = _MACHINE.get() if routed else None  # O(1)
+    if machine:  # O(1)
+        args = ["--machine", machine] + list(args)  # O(n)
     exe = os.environ.get("SUPERLITE_HERDR_BIN") or "herdr"  # O(1)
     full = dict(os.environ)  # O(env)
     full.update(env or {})  # O(e)
@@ -54,8 +72,32 @@ def call(args, timeout_ms=30000, env=None):  # O(n + output)
     return payload.get("result", {})  # O(1)
 
 
-def read_text(args, timeout_ms=30000, env=None):  # O(n + output)
-    return _run(args, timeout_ms, env)  # O(n + output)
+def read_text(args, timeout_ms=30000, env=None, routed=True):  # O(n + output)
+    return _run(args, timeout_ms, env, routed)  # O(n + output)
+
+
+def _rows(args, timeout_ms):  # a bare JSON array, never routed to a machine | O(n + output)
+    try:  # O(1)
+        rows = json.loads(read_text(args, timeout_ms, routed=False))  # O(output)
+    except ValueError:  # O(1)
+        raise HerdrError("parse", " ".join(args))  # O(1)
+    if not isinstance(rows, list):  # O(1)
+        raise HerdrError("parse", " ".join(args))  # O(1)
+    return [x for x in rows if isinstance(x, dict)]  # O(rows)
+
+
+def machines():  # O(rows)
+    """The saved Herdr machines (id, label, target, session, enabled, selected)."""
+    return _rows(["machine", "list", "--json"], 10000)  # O(rows)
+
+
+def machine_status(label, timeout_ms=10000):  # O(rows)
+    """`reachable`, `unreachable: <error>` or `unknown machine <label>`."""
+    for row in _rows(["machine", "status", label, "--json"], timeout_ms):  # O(rows)
+        if row.get("label") == label:  # O(1)
+            st = str(row.get("status") or "unknown")  # O(1)
+            return f"{st}: {row['error']}" if row.get("error") else st  # O(1)
+    return f"unknown machine {label}"  # O(1)
 
 
 def _pick(r, *path):  # O(len path)

@@ -126,3 +126,37 @@ def test_success_reply_without_result_shape_is_parse_error(fake, monkeypatch, ca
 def test_start_agent_surfaces_invalid_agent_name_of_herdr_0_9_5(fake, name):
     with pytest.raises(hc.HerdrError) as e: hc.start_agent(name, "w6:p1", [])
     assert e.value.code == "invalid_agent_name"
+
+
+def test_on_routes_with_machine_flag(fake):
+    with hc.on("mxn"):
+        assert hc.agent_state("a") == "idle"
+        with hc.on("b"):
+            hc.agent_state("a")
+        hc.agent_state("a")
+        with hc.on(None):
+            hc.agent_state("a")
+    hc.agent_state("a")
+    assert fake() == [["--machine", "mxn", "agent", "get", "a"], ["--machine", "b", "agent", "get", "a"],
+                      ["--machine", "mxn", "agent", "get", "a"], ["agent", "get", "a"], ["agent", "get", "a"]]
+
+def test_machine_calls_never_prefixed(fake):
+    with hc.on("mxn"):
+        assert hc.machines()[0]["label"] == "mxn"
+        assert hc.machine_status("mxn") == "reachable"
+    assert all(c[0] == "machine" for c in fake())
+
+def test_on_restores_after_error(fake):
+    with pytest.raises(RuntimeError):
+        with hc.on("mxn"):
+            raise RuntimeError("x")
+    hc.agent_state("a")
+    assert fake() == [["agent", "get", "a"]]
+
+def test_machine_status_unreachable(fake, monkeypatch):
+    monkeypatch.setenv("FAKE_HERDR_MACHINE_DOWN", "mxn")
+    assert hc.machine_status("mxn") == "unreachable: ssh: connect to host mxn port 22: Connection refused"
+
+def test_machine_status_unknown_machine(fake, monkeypatch):
+    monkeypatch.setenv("FAKE_HERDR_REPLY", "[]")
+    assert hc.machine_status("zz") == "unknown machine zz"

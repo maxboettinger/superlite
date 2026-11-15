@@ -12,7 +12,9 @@ a = sys.argv[1:]
 log = os.environ.get("FAKE_HERDR_LOG")
 if log:
     with open(log, "a") as f:
-        f.write(json.dumps(a) + "\n")
+        f.write(json.dumps(sys.argv[1:]) + "\n")
+if a[:1] == ["--machine"]:
+    a = a[2:]  # logged with the flag, dispatched without it
 if a[:2] == ["agent", "prompt"] and "--timeout" in a and "--wait" not in a:
     sys.stderr.write("--timeout requires --wait\n")
     sys.exit(2)
@@ -29,6 +31,14 @@ if reply is not None:
     print(reply)
     sys.exit(0)
 key = " ".join(a[:2])
+if key == "machine list":
+    print(os.environ.get("FAKE_HERDR_MACHINES") or json.dumps([{"id": "094d", "label": "mxn", "target": "mxn", "session": "default", "enabled": True, "selected": False}]))
+    sys.exit(0)
+if key == "machine status":
+    down = os.environ.get("FAKE_HERDR_MACHINE_DOWN") == a[2]
+    err = "ssh: connect to host %s port 22: Connection refused" % a[2] if down else None
+    print(json.dumps([{"id": "094d", "label": a[2], "status": "unreachable" if down else "reachable", "error": err}]))
+    sys.exit(0)
 if key == "workspace create":
     out = {"id": "x", "result": {"type": "workspace_created", "workspace": {"workspace_id": "w6"}, "root_pane": {"pane_id": "w6:p1"}}}
 elif key == "tab create":
