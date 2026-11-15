@@ -2,7 +2,10 @@
 """End-of-build report: actual metrics next to the projected ones.
 
     report.py --plan PLAN.md [--dir .superlite] [--full | --json]
-    report.py --list [--plans docs/plans]  |  --show NAME [--full]
+    report.py --list [--plans docs/plans] [--root DIR]  |  --show NAME [--full] [--root DIR]
+
+--list and --show also read the runs archived in `<main checkout>/.superlite/runs/<id>/` (run_archive): --list names them after the
+stored reports, --show finds one by run id or plan name when the plans folder holds no such report. --root picks the project.
 
 Actual: metrics.task_records / coordinator_record (agent transcripts), the ledger's last full test run (finish.test_result, a newer run named beside it; test-summary.json when the ledger holds none), incidents.jsonl.
 Projected: `.superlite/projection.json`, saved by `plan_tools lint --stable` (a fixed forecast); without it the
@@ -29,6 +32,7 @@ if str(HERE) not in sys.path:  # O(1)
 import metrics  # noqa: E402  | O(1)
 import plan_tools as pt  # noqa: E402  | O(1)
 import predict  # noqa: E402  | O(1)
+import run_archive  # noqa: E402  | O(1)
 from budget import COORDINATOR_TARGET_USD  # noqa: E402  | O(1)
 
 PROJECTION = "projection.json"  # O(1)
@@ -280,7 +284,7 @@ def write_report(plan_path, sl_dir) -> tuple[dict, Path]:  # O(M + B + n*(n + e)
     return c, md  # O(1)
 
 
-def list_reports(plans_dir) -> str:  # O(R log R)
+def list_reports(plans_dir, archive=None) -> str:  # O(R log R)
     """Stored reports under plans_dir, newest first: plan name, date, wall-clock and cost deltas."""
     seen: dict[str, Path] = {}  # name -> json, the new name wins | O(1)
     for pat, suf in (("*.build-report.json", ".build-report.json"), ("*.report.json", ".report.json")):  # O(1) iterations
@@ -295,10 +299,26 @@ def list_reports(plans_dir) -> str:  # O(R log R)
         out.append(f"{name}  {datetime.fromtimestamp(f.stat().st_mtime):%Y-%m-%d}  "
                    f"time {_delta(delta(w.get('projected'), w.get('actual')), '', '+.1f')}  "
                    f"cost {_delta(delta(k.get('projected'), k.get('actual')), '', '+.2f')}")  # O(1)
-    return "\n".join(out) + "\n" if out else f"no stored reports in {plans_dir}\n"  # O(R)
+    out = out or [f"no stored reports in {plans_dir}"]  # O(1)
+    arch = run_archive.runs(archive) if archive else []  # O(R)
+    if arch:  # O(1)
+        out.append(f"archived runs in {archive}:")  # O(1)
+    for r in arch:  # O(R)
+        js = r["dir"] / "build-report.json"  # O(1)
+        c = _read_json(js) if js.is_file() else None  # O(file)
+        stem = Path(str(r["plan"])).stem if r.get("plan") else "-"  # O(1)
+        head = f"  {r['id']}  {stem}  {r.get('batch') or '-'}  "  # O(1)
+        if c is None:  # O(1)
+            out.append(head + "no build report")  # O(1)
+            continue  # O(1)
+        h = c.get("headline") or {}  # O(1)
+        w, k = (h.get(x) or {} for x in ("wall_min", "cost_usd_agents"))  # O(1)
+        out.append(head + f"time {_delta(delta(w.get('projected'), w.get('actual')), '', '+.1f')}  "
+                   f"cost {_delta(delta(k.get('projected'), k.get('actual')), '', '+.2f')}")  # O(1)
+    return "\n".join(out) + "\n"  # O(R)
 
 
-def show_report(name, plans_dir, full=False) -> str:  # O(file)
+def show_report(name, plans_dir, full=False, archive=None) -> str:  # O(file)
     """A stored build's summary (or its full file); NAME is a plan name or basename, with or without extension."""
     stem = Path(name).name
     for suf in (".md", ".json", ".build-report", ".report"):  # O(1)
@@ -307,6 +327,16 @@ def show_report(name, plans_dir, full=False) -> str:  # O(file)
         md, js = paths(Path(plans_dir) / (stem + ".md"))  # O(1)
         if md.is_file() and js.is_file():  # O(1)
             break  # O(1)
+    if (not md.is_file() or not js.is_file()) and archive:  # O(1)
+        rs = run_archive.runs(archive)  # O(R)
+        hit = next((r for r in rs if r["id"] == Path(name).name), None) or next(
+            (r for r in rs if r.get("plan") and Path(str(r["plan"])).stem == stem
+             and (r["dir"] / "build-report.json").is_file()), None)  # O(R)
+        if hit:  # O(1)
+            md, js = hit["dir"] / "build-report.md", hit["dir"] / "build-report.json"  # O(1)
+            if not md.is_file() or not js.is_file():  # O(1)
+                names = ", ".join(sorted(p.name for p in hit["dir"].iterdir()))  # O(F log F)
+                return f"report: archived run {hit['id']} has no build report; files in {hit['dir']}: {names}\n"  # O(F)
     if not md.is_file() or not js.is_file():  # O(1)
         return f"report: no stored report for {stem} in {plans_dir}" + chr(10)  # O(1)
     return md.read_bytes().decode("utf-8") if full else summary(_read_json(js), md.as_posix())  # O(file)
@@ -524,7 +554,7 @@ def main(argv=None):  # O(M + B + n*(n + e))
     ap.add_argument("--plans", default=next((d for d in ("docs/superpowers/plans", "docs/plans") if Path(d).is_dir()), "docs/plans"),
                     help="where the plans and their stored reports are (default: docs/superpowers/plans when it exists, else docs/plans)")  # O(1)
     ap.add_argument("--batches", action="store_true", help="print the batch cost and quality rows")  # O(1)
-    ap.add_argument("--root", help="the project root holding .superlite/batch-costs.jsonl (default: the main checkout)")  # O(1)
+    ap.add_argument("--root", help="the project root holding .superlite/batch-costs.jsonl and .superlite/runs (default: the main checkout)")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     sys.stdout.reconfigure(encoding="utf-8")  # O(1)
     if a.batches:  # O(1)
@@ -534,7 +564,8 @@ def main(argv=None):  # O(M + B + n*(n + e))
         sys.stdout.write(json.dumps(batches_json(rows), indent=1) + "\n" if a.json else batches_text(rows))  # O(n)
         return 0  # O(1)
     if a.list or a.show:  # O(1)
-        sys.stdout.write(list_reports(a.plans) if a.list else show_report(a.show, a.plans, a.full))  # O(file)
+        archive = run_archive.archive_dir(Path(a.root or Path.cwd()) / ".superlite")  # O(1)
+        sys.stdout.write(list_reports(a.plans, archive) if a.list else show_report(a.show, a.plans, a.full, archive))  # O(file)
         return 0  # O(1)
     if not a.plan:  # O(1)
         ap.error("--plan is required (or --list / --show NAME)")  # O(1)
