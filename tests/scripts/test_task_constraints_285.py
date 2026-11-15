@@ -65,6 +65,6 @@ def test_next_tasks_plain_plan_unchanged(tmp_path):
 
 def test_docs_name_the_block():
     sk = (ROOT / "skills" / "writing-plans" / "SKILL.md").read_text()
-    assert "`sl task` appends them" in sk and "Task briefs point here" not in sk
+    assert "`sl task Tn --constraints` prints them" in sk and "Task briefs point here" not in sk
     row = [ln for ln in (ROOT / "docs" / "tools.md").read_text().split("\n") if ln.startswith("| `task`")][0]
     assert "Global constraints" in row

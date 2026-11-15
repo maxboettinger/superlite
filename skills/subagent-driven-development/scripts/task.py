@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Print one task's block from the CURRENT plan plus the Produces lines of every task it Consumes.
 
-    task.py Tn [--plan P] [--pool .superlite/pool.json]      (as `sl task Tn --plan P`)
+    task.py Tn [--plan P] [--pool .superlite/pool.json] [--constraints]      (as `sl task Tn --plan P`)
 
 The lookup agents use to read their own task and their neighbours instead of asking the coordinator. It reads
 the plan file on every call, so it is never stale. Output: the task block verbatim, then `## Consumed
@@ -10,6 +10,9 @@ interfaces`: for each producer of an item Tn consumes, its title, Produces lines
 block mentions (a one-word heading in an explicit form such as `Design section`, or, with an uppercase letter,
 by its own case outside field labels and inline code), when there is any; last
 `## Global constraints`: the plan's constraint, Tech stack and Architecture lines (`wave0.constraint_lines`).
+`render` appends that section by default (fleet briefs carry it this way, #635). The CLI prints it only with
+`--constraints` and otherwise ends with `CONSTRAINTS_POINTER`: every agent already holds the constraints once
+(slim and mini primes, fleet brief), and repeating them on each call cost about 4.5k characters a call.
 `also_touches` reads a task's Also-touches files and `also_line` renders them as an `Also edit:` line in the task block.
 Exit 2 for an unknown task or a missing plan. Language-neutral. Stdlib only.
 """
@@ -128,7 +131,10 @@ def also_line(files) -> str:  # O(f)
     return "Also edit: " + ", ".join(files) + " (Also-touches: files another task owns that this task edits too; commit_task commits them with this task)"  # O(f)
 
 
-def render(plan, tid) -> str:  # O(n*q*s)
+CONSTRAINTS_POINTER = "Global constraints: in your prime or brief; `sl task {tid} --constraints` prints them."  # not a heading: fleet.with_constraints keys on `## Global constraints` | O(1)
+
+
+def render(plan, tid, constraints=True) -> str:  # O(n*q*s)
     task = plan.by_id.get(tid)  # O(1)
     if task is None:  # O(1)
         raise KeyError(tid)  # O(1)
@@ -153,8 +159,10 @@ def render(plan, tid) -> str:  # O(n*q*s)
         for sec in secs:  # O(k) iterations
             out += ["", sec]  # O(1)
     cons = wave0.constraint_lines(plan)  # O(L)
-    if cons:  # O(1)
+    if cons and constraints:  # O(1)
         out += ["", "## Global constraints", "", "\n".join(cons)]  # O(L)
+    elif cons:  # O(1)
+        out += ["", CONSTRAINTS_POINTER.format(tid=tid)]  # O(1)
     return "\n".join(out) + "\n"  # O(out)
 
 
@@ -163,6 +171,7 @@ def main(argv=None):  # O(L + n*q*s)
     ap.add_argument("task", help="task id, e.g. T5")  # O(1)
     ap.add_argument("--plan")  # O(1)
     ap.add_argument("--pool", default=state.pool_path())  # the session's run, else ./.superlite | O(d)
+    ap.add_argument("--constraints", action="store_true", help="append the plan's Global constraints (agents already hold them from their prime or brief)")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     plan_path = a.plan  # O(1)
     if not plan_path:  # O(1)
@@ -178,7 +187,7 @@ def main(argv=None):  # O(L + n*q*s)
         return 2  # O(1)
     tid = a.task if a.task in plan.by_id else a.task.upper()  # O(1)
     try:  # O(1)
-        text = render(plan, tid)  # O(n*q*s)
+        text = render(plan, tid, constraints=a.constraints)  # O(n*q*s)
     except KeyError:  # O(1)
         print(f"error: no task {a.task} in {plan_path} (tasks: {', '.join(t.id for t in plan.tasks)})", file=sys.stderr)  # O(n)
         return 2  # O(1)

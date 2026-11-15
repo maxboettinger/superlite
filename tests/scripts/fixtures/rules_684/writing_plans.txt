@@ -176,7 +176,7 @@ The coordinator runs them once, after every task is committed and before the fin
 The implementer writes them during TDD, so the failures never reach review (lever 1).
 The order is fixed: lint, dispatch the whole stable set (`lint --stable` ends with `DISPATCH NOW: ...`), and only then patch the FIX tasks (edits or a full rewrite, as many rounds as needed), re-lint and dispatch the newly stable ones.
 The plan is the first file of the change: run `<skill-dir>/../subagent-driven-development/scripts/sl worktree ensure <topic>` first and write it in the folder the command prints, never into the shared main checkout (a plan header `**Worktree:** none` opts out).
-The plan no longer rides in the sonnet prime (implementers read their task with `sl task Tn`: the block, the Produces lines it consumes, the plan sections it names and the Global constraints), but it is written on the critical path.
+The plan no longer rides in the sonnet prime (implementers read their task with `sl task Tn`: the block, the Produces lines it consumes and the plan sections it names; the Global constraints sit in the prime, and `--constraints` prints them), but it is written on the critical path.
 The predictor and the schedule depend on them. |
 The stub is the contract: implementers may not change a signature without a coordinator ruling.
 The title line shows `Complexity` and `Est. context`; drop the mini diagram if the task does not interact.
@@ -213,7 +213,7 @@ Writing Plans
 `predict --refit` moves the band from measured task times.
 `predict` counts a task as prose when its `Kind` holds `prose` or every file it owns is a prose file (by default `.md`, `.mdx`, `.markdown`, `.rst`, `.txt`, `.adoc`), never a `mechanical` one; a prose task's forecast time is doubled and its calls tripled by default (`prose` in the coefficients). |
 `prune` drops the edges that examples make removable (consumer not yet dispatched), except hard edges: mark an edge whose consumer needs the producer built (a compiled package, e.g.
-`sl task` appends them, with the Tech stack and Architecture lines, to every task's text, so do not repeat constraints per task.
+Every agent gets them once, with the Tech stack and Architecture lines (its prime or fleet brief; `sl task Tn --constraints` prints them), so do not repeat constraints per task.
 description: Use when you have an approved design or requirements for a multi-step task and need an implementation plan, before touching code.
 flowchart LR
 name: writing-plans
