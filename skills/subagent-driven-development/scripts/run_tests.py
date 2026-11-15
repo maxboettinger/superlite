@@ -2141,6 +2141,10 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                     more = f" (+{len(out) - 5} more)" if len(out) > 5 else ""  # O(1)
                     tail = f"if {a.task} needs one, rerun with --also F" if a.task else "kept at base while their task or worker is busy"  # O(1)
                     print(f"run_tests: {len(out)} changed file(s) not in {key}'s tree: {', '.join(out[:5])}{more}; {tail}", file=sys.stderr)  # O(1)
+                drift = tree_drift(".", tree, overlay_now)  # O(f * size)
+                if drift:  # O(1)
+                    more = f" (+{len(drift) - 5} more)" if len(drift) > 5 else ""  # O(1)
+                    print(f"run_tests: changed in the run root while the tests ran: {', '.join(drift[:5])}{more}; the tree tested the earlier copy, rerun to test the current files", file=sys.stderr)  # O(1)
             return rc  # O(1)
 
     with tempfile.TemporaryDirectory() as tmp:  # O(1) mkdtemp
@@ -2214,14 +2218,30 @@ def fast_overlay(root, task, info, ledger):  # O(f * T * o) + two spawns: (paths
     paths = sorted(set(copy) | set(delete))  # O(f log f)
     pulled = shared_siblings(paths, task, info, done)  # O(f * T * o)
     say_pulled(task, pulled)  # O(s)
+    busy = busy_held(Path(root) / ".superlite", os.environ.get("SUPERLITE_FLEET_WORKER", ""), paths)  # O(w + p * w)
     overlay, held = [], {}  # O(1)
     for p in paths:  # O(f)
         owners = [t for t in unfinished_owners(p, task, info, done) if t not in pulled]  # O(T * o)
+        if not nt.owns_match(p, info[task]["owns"]) and not any(nt.owns_match(p, info[t]["owns"]) for t in pulled):  # the task's and a pulled sibling's own files are never held | O(o + s * o)
+            owners += [f"busy {w}" for w in busy.get(p, [])]  # O(w)
         if owners:  # O(1)
             held[p] = owners  # O(1)
         else:  # O(1)
             overlay.append(p)  # O(1)
     return overlay, held  # O(1)
+
+
+def tree_drift(root, tree, paths):  # O(p * size) sorted overlaid paths whose bytes differ between tree and root now; a path on one side only counts
+    out = []  # O(1)
+    for p in paths:  # O(p)
+        a, b = Path(root) / p, Path(tree) / p  # O(1)
+        try:  # O(1)
+            same = a.read_bytes() == b.read_bytes()  # O(size)
+        except OSError:  # O(1)
+            same = not a.exists() and not b.exists()  # O(1)
+        if not same:  # O(1)
+            out.append(p)  # O(1)
+    return sorted(out)  # O(p log p)
 
 
 def full_overlay(root, task, info, ledger):  # O(f * T * o) + two spawns: task's owns plus the changed files of the siblings its tree takes whole
