@@ -150,3 +150,10 @@ def test_swift_source_outside_every_test_target_is_untested(tmp_path):
     root = make(tmp_path, {**SWIFT_PKG, "Sources/Tool/Runner.swift": "struct Runner {}\n"}, cfg=SWIFT_CFG)
     assert testcmd.select_affected(str(root), ["Sources/Tool/Runner.swift"]) == {
         "full": False, "selected": [], "reasons": {}, "untested": ["Sources/Tool/Runner.swift"]}
+
+
+def test_changed_test_file_selects_tests_that_mention_it(tmp_path):
+    files = {**PY, "tests/test_user.py": "from test_misc import helper\n\n\ndef test_u():\n    pass\n"}
+    root = make(tmp_path, files)
+    r = testcmd.select_affected(str(root), ["tests/test_misc.py"])
+    assert r["reasons"] == {"tests/test_misc.py": "changed", "tests/test_user.py": "mention"}
