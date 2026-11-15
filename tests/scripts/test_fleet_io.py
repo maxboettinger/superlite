@@ -21,6 +21,12 @@ class FakeHerdr:
     def read_screen(self, name, lines=40, source="visible"): self.calls.append(("read_screen", name)); return self.screen
     def send_keys(self, name, keys): self.calls.append(("send_keys", name, keys))
     def call(self, args, timeout_ms=30000, env=None): self.calls.append(("call", args)); return {}  # pane rename
+    def on(self, machine):
+        import contextlib
+        @contextlib.contextmanager
+        def cm():
+            self.calls.append(("on", machine)); yield
+        return cm()
     class HerdrError(Exception):
         def __init__(self, code="", message=""): super().__init__(message or code); self.code, self.message = code, message
 
@@ -319,3 +325,57 @@ def test_stop_hook_without_a_fleet_calls_no_herdr(tmp_path):
     sd = tmp_path / "proj" / ".superlite"; sd.mkdir(parents=True); (sd / "stable.json").write_text("{}"); log = tmp_path / "herdr.log"
     r = run_hook("capture-worker-stop", json.dumps({"session_id": "s1", "transcript_path": "/t", "last_assistant_message": "x"}), hook_env(sd, log), sd.parent)
     assert r.returncode == 0 and (sd / "metrics.jsonl").exists() and not log.exists()
+
+
+# --- remote workers (#919)
+@pytest.fixture
+def remote(world, monkeypatch):
+    d = json.loads((world.sd / "fleet.json").read_text()); d["workers"]["W2"].update({"machine": "mxn", "role": "research", "state_dir": str(world.sd / "remote" / "W2")})
+    (world.sd / "fleet.json").write_text(json.dumps(d))
+    frw = types.SimpleNamespace(sent=[], st={"sl-proj-w2": "working"})
+    frw.send_brief = lambda sd, wid, brief, label="": (frw.sent.append((wid, brief, label)), label or "Q1")[1]
+    frw.states = lambda sd: frw.st
+    monkeypatch.setitem(sys.modules, "fleet_remote_worker", frw)
+    return frw
+
+def busy_w2(world):
+    d = json.loads((world.sd / "fleet.json").read_text()); d["workers"]["W2"].update({"state": "busy", "task": "Q1", "sent": 2_000_000}); (world.sd / "fleet.json").write_text(json.dumps(d))
+
+def test_machine_of(world, remote):
+    assert io.machine_of(world.sd, "W2") == "mxn" and io.machine_of(world.sd, "W1") is None and io.machine_of(world.sd, "W9") is None
+
+def test_send_brief_remote_hands_off(world, remote, capsys):
+    assert io.send_brief(world.sd, "W2", "/nowhere/q.md", "Q1") == "Q1"
+    assert remote.sent == [("W2", "/nowhere/q.md", "Q1")] and capsys.readouterr().out == ""  # the remote module prints the one line
+
+def test_wait_remote_report(world, remote, tmp_path):
+    rd = world.sd / "remote" / "W2"; rd.mkdir(parents=True)
+    tr = tmp_path / "w2.jsonl"; transcript(tr, "Status: DONE - found it")
+    (rd / "metrics.jsonl").write_text(json.dumps({"ev": "stop", "t": 2_000_010, "agent_id": "W2", "type": "x", "transcript": str(tr), "last": ""}) + "\n")
+    busy_w2(world)
+    out = io.wait(world.sd, ["W2"], 60000)
+    assert [(r["id"], r["status"]) for r in out] == [("W2", "DONE")]
+
+def test_wait_remote_down_not_dead(world, remote, capsys):
+    busy_w2(world); remote.st = {"sl-proj-w2": None}; world.fh.gone.add("sl-proj-w2")
+    out = io.wait(world.sd, ["W2"], 20000)
+    assert out == [] and "TIMEOUT W2" in capsys.readouterr().out and not any(c[0] == "agent_state" for c in world.fh.calls)
+
+def test_pane_label_remote(world, remote):
+    assert io.pane_label(world.sd, "W2", "t") is True
+    assert world.fh.calls[-2:] == [("on", "mxn"), ("call", ["pane", "rename", "w6:p2", "t"])]
+
+def test_local_wait_unchanged(world, remote):
+    io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl")
+    world.fh.states = [{"sl-proj-w1": "working"}]
+    io.wait(world.sd, ["W1"], 5000)
+    assert not any(c[0] == "on" for c in world.fh.calls) and remote.sent == []
+
+
+def test_send_text_and_keys_remote_run_on_machine(world, remote):
+    io.send_text(world.sd, "W2", "recheck")
+    i = max(i for i, c in enumerate(world.fh.calls) if c[0] == "prompt")
+    assert world.fh.calls[i - 1] == ("on", "mxn")
+    world.fh.calls.clear()
+    assert io.main(["keys", "W2", "Enter", "--plan", str(world.plan)]) == 0
+    assert world.fh.calls == [("on", "mxn"), ("send_keys", "sl-proj-w2", ["Enter"])]
