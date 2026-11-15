@@ -155,7 +155,8 @@ def collect(plan_path, sl_dir) -> dict:  # O(M + B + n*(n + e))
         },
         "cost_split": {"agents_usd": round(agents_usd, 6), "rework_usd": round(rework_usd, 6), "coordinator_usd": coord_usd,
                        "coordinator_session_usd": co["session"]["cost_usd"] if co else None,
-                       "coordinator": {k: co[k] for k in ("turns", "context_median", "context_peak")} if co else None,
+                       "coordinator": {**{k: co[k] for k in ("turns", "context_median", "context_peak")},
+                                       **{k: co.get(k, 0) for k in ("compactions", "pre_tokens")}} if co else None,
                        "total_usd": round(agents_usd + rework_usd + (coord_usd or 0.0), 6)},
         "concurrency": {"peak": peak_concurrency(rows), "projected_peak": (proj or {}).get("peak_width")},
         "critical_path": {"actual": [r["task"] for r in rows if r.get("on_critical_path")],
@@ -201,7 +202,7 @@ def render(c) -> str:  # O(n)
         out.append(f"{label:24}{_num(v['projected'], fmt):>10}{_num(v['actual'], fmt):>10}  "
                    + _delta(delta(v["projected"], v["actual"]), unit, "+.2f" if key == "cost_usd_agents" else "+.1f" if fmt != "d" else "+d"))  # O(1)
     co, sess = cs.get("coordinator"), cs.get("coordinator_session_usd")  # absent in reports written before the run split (#112) | O(1)
-    co_txt = (f" ({co['turns']} turns, context median {co['context_median'] / 1000:.1f}k, peak {co['context_peak'] / 1000:.1f}k"
+    co_txt = (f" ({co['turns']} turns, context median {co['context_median'] / 1000:.1f}k, peak {co['context_peak'] / 1000:.1f}k{compactions_text(co)}"
               + (f"; session ${sess:.2f})" if sess is not None else ")")) if co else ""  # O(1)
     per_task = (f", coordinator per task ${cs['coordinator_usd'] / len(c['tasks']):.2f} (target ${COORDINATOR_TARGET_USD:.2f})"
                 if cs["coordinator_usd"] is not None and c["tasks"] else "")  # #112: omitted without tasks or a coordinator | O(1)
@@ -376,6 +377,13 @@ def _kinds(kinds, top=4) -> str:  # O(k log k)
     return ", ".join(f"{k} ${(v or {}).get('cost_usd', 0) or 0:.2f}" for k, v in ks)  # O(1)
 
 
+def compactions_text(d) -> str:  # ", N compaction(s), largest X.Xk tokens" (#844), empty without a compaction | O(1)
+    n = (d or {}).get("compactions")  # O(1)
+    if not n:  # O(1)
+        return ""  # O(1)
+    return f", {n} compaction{'' if n == 1 else 's'}, largest {(d.get('pre_tokens') or 0) / 1000:.1f}k tokens"  # O(1)
+
+
 def batches_text(rows) -> str:  # O(n log n)
     j = batches_json(rows)  # O(n)
     if not j["batches"] and not j["main"]:  # O(1)
@@ -386,7 +394,7 @@ def batches_text(rows) -> str:  # O(n log n)
         ws = ", ".join(f"{k} {(v or {}).get('n', 0)} ${(v or {}).get('cost_usd', 0) or 0:.2f}"
                        for k, v in (r.get("workers") or {}).items())  # O(w)
         line = (f"{r.get('batch')} {r.get('end') or '?'} grade {g.get('letter') or '?'} ({g.get('points', 0)}) | "
-                f"lead ${ld.get('cost_usd', 0) or 0:.2f} {ld.get('turns', 0) or 0} turns, "
+                f"lead ${ld.get('cost_usd', 0) or 0:.2f} {ld.get('turns', 0) or 0} turns{compactions_text(ld)}, "
                 f"wall {(ld.get('wall_s', 0) or 0) / 60:.1f} min, waits {(ld.get('blocked_wait_s', 0) or 0) / 60:.1f} min | "
                 f"workers ${wt.get('cost_usd', 0) or 0:.2f}" + (f" ({ws})" if ws else ""))  # O(1)
         k = _kinds(ld.get("kinds"))  # O(k log k)
@@ -403,7 +411,7 @@ def batches_text(rows) -> str:  # O(n log n)
     for r in j["main"]:  # O(n)
         k = _kinds(r.get("kinds"))  # O(k log k)
         out.append(f"main {','.join(map(str, r.get('round') or []))}: ${r.get('cost_usd', 0) or 0:.2f}, "
-                   f"{r.get('turns', 0) or 0} turns" + (f" ({k})" if k else ""))  # O(1)
+                   f"{r.get('turns', 0) or 0} turns{compactions_text(r)}" + (f" ({k})" if k else ""))  # O(1)
     return "\n".join(out) + "\n"  # O(n)
 
 

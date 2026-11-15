@@ -85,6 +85,7 @@ def main_row(root, data, now=None, env=None):  # the main row for the sessions i
     tokens = dict.fromkeys(TOKEN_KEYS, 0)  # O(1)
     kinds, windows, unmeasured = {}, {}, []  # O(1)
     turns, cost, wall = 0, 0.0, 0.0  # O(1)
+    comps, pre = 0, 0  # O(1)
     for sid in ids:  # O(sessions)
         path = main_transcript(root, sid, env)  # O(candidates)
         if path is None:  # O(1)
@@ -96,6 +97,8 @@ def main_row(root, data, now=None, env=None):  # the main row for the sessions i
         turns += u["turns"]  # O(1)
         cost += u["cost_usd"]  # O(1)
         wall += u["wall_s"] or 0.0  # O(1)
+        comps += u.get("compactions", 0)  # O(1)
+        pre = max(pre, u.get("pre_tokens", 0))  # O(1)
         for k in TOKEN_KEYS:  # O(1)
             tokens[k] += u["tokens"].get(k, 0)  # O(1)
         for k, v in (u.get("kinds") or {}).items():  # O(kinds)
@@ -104,7 +107,7 @@ def main_row(root, data, now=None, env=None):  # the main row for the sessions i
             cur["cost_usd"] = round(cur["cost_usd"] + v["cost_usd"], 6)  # O(1)
     stamp = datetime.fromtimestamp(time.time(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # O(1)
     return {"v": 1, "row": "main", "t": stamp, "round": data.get("round"), "sessions": ids, "unmeasured": unmeasured,
-            "windows": windows, "turns": turns, "tokens": tokens, "cost_usd": round(cost, 6), "wall_s": round(wall, 3),
+            "windows": windows, "turns": turns, "compactions": comps, "pre_tokens": pre, "tokens": tokens, "cost_usd": round(cost, 6), "wall_s": round(wall, 3),
             "kinds": kinds}  # O(1)
 
 
