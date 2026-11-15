@@ -185,3 +185,9 @@ def test_without_testpaths_and_tests_folder_bench_is_ignored(tmp_path):
     root = make(tmp_path, {"pyproject.toml": '[project]\nname = "calc"\n', "src/calc/adder.py": "def add(a, b):\n    return a + b\n",
                            "test_adder.py": body, "bench/test_speed.py": body})
     assert testcmd.select_affected(str(root), ["src/calc/adder.py"])["selected"] == ["test_adder.py"]
+
+
+def test_dot_slash_changed_paths_are_normalised(tmp_path):
+    root = make(tmp_path, PY)
+    assert testcmd.select_affected(str(root), ["./tests/test_misc.py"])["selected"] == ["tests/test_misc.py"]
+    assert testcmd.select_affected(str(root), ["./.superlite/test-cmd.json"])["trigger"] == ".superlite/test-cmd.json"

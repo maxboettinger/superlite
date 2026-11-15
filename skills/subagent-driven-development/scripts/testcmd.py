@@ -1367,7 +1367,7 @@ def _full_trigger(root: str, p: str, cmd_words: set, full_globs: list) -> bool: 
 
 
 def select_affected(root: str, changed: list[str]) -> dict:  # tests a change touches; never runs a test, never writes a file | O(files + c*t)
-    changed = list(dict.fromkeys(c.replace("\\", "/") for c in changed))  # O(c)
+    changed = list(dict.fromkeys(posixpath.normpath(c.replace("\\", "/")) for c in changed))  # O(c)
     tmap = _read_map(root)  # O(file)
     spec = resolve(root) or {}  # O(m + f)
     cmd_words: set[str] = set()  # O(1)

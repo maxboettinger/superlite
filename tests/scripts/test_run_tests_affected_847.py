@@ -287,3 +287,10 @@ def test_shared_setup_change_with_a_marker_runs_the_narrowed_command(tmp_path):
     assert "run_tests: --affected: tests/conftest.py changed: the whole command runs, narrowed by -m or pass-through args" in r.stderr
     assert "the whole suite runs" not in r.stderr
     assert summary(root)["mode"] == "fast"
+
+
+def test_dot_slash_files_path_is_normalised(tmp_path):
+    root = repo(tmp_path)
+    r = rt(root, "--affected", "--files", "./tests/test_misc.py")
+    assert r.returncode == 0, r.stderr
+    assert got(root) == ["tests/test_misc.py"]
