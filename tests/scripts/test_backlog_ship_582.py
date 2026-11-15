@@ -7,9 +7,9 @@ import backlog_state as bs  # noqa: E402
 
 
 def test_note_items_unverified_and_kind():
-    assert bsh.note_items("Unverified: app check (#12)\nKind: design (docs/plans/a.md)\n") == {"followups": [], "undone": [], "unverified": ["app check (#12)"], "kind": "design"}
-    assert bsh.note_items("") == {"followups": [], "undone": [], "unverified": [], "kind": None}
-    assert bsh.note_items("- unverified: suite green\nKind: code") == {"followups": [], "undone": [], "unverified": ["suite green"], "kind": None}
+    assert bsh.note_items("Unverified: app check (#12)\nKind: design (docs/plans/a.md)\n") == {"followups": [], "undone": [], "unverified": ["app check (#12)"], "scope": [], "kind": "design"}
+    assert bsh.note_items("") == {"followups": [], "undone": [], "unverified": [], "scope": [], "kind": None}
+    assert bsh.note_items("- unverified: suite green\nKind: code") == {"followups": [], "undone": [], "unverified": ["suite green"], "scope": [], "kind": None}
 
 
 def test_with_closes_keeps_refs_and_kept_issues_open():
