@@ -2,7 +2,7 @@
 
 ## Human orchestrator: the two phases
 
-1. Write the review plan, small requests too (one-page form): `<plans>/<date>-<topic>.review.md`, plain words with diagrams, no code or taskgraph (`review-plan.md`). Nothing is built, dispatched or written except this file before the human's approving reply.
+1. Write the review plan, small requests too (one-page form): `<plans>/<date>-<topic>.review.md`, plain words with diagrams, no taskgraph and no code outside its `## Key code changes` snippets (`review-plan.md`). Before you show it, run `sl plan_tools lint --plan <path>`: a `.review.md` path gets only the review-plan checks (the snippet caps), and it writes nothing. Nothing is built, dispatched or written except this file before the human's approving reply.
 2. Show it in plain text, not AskUserQuestion (the hook checks your typed reply; an AskUserQuestion answer does not count): the path, a five-line summary and "Reply approve to start, or tell me what to change". END THE TURN and do nothing else until the human replies; changes mean revise and ask again.
 3. Only after an approving reply: `sl orchestrator approve --review <path>` (refused without a fresh human reply; `lint --stable`, `dispatch`, `wave0` and `build_prime` refuse until then).
 4. Write the machine plan `<plans>/<date>-<topic>.md` from the approved review plan, in the order of `SKILL.md` Plan shape (same tasks and scope, header `**Review plan:** <path>`, and the review plan's `## Coverage` table copied unchanged), then `schedule --insert`, `lint --stable`, and dispatch the stable set in the same turn.
@@ -24,19 +24,20 @@ reply recorded by the hook; records the path and its sha256 in `.superlite/orche
 3. `## What will be built`: a table `| Part | What it does (one sentence) | Size (S/M/L) | Built by |`. "Built by" in plain words
    (a fast helper for routine parts, a careful helper for logic-heavy parts), never agent type names.
 4. `## How it fits together`: a mermaid diagram of the parts and how they connect (architecture or context), at most 12 nodes.
-5. `## How it gets built`: a mermaid diagram of the build flow: what runs in parallel and what must wait (waves or lanes),
+5. `## Key code changes` (optional): 1 to 4 fenced snippets of at most 15 lines each, in the target language, showing the signatures or the core logic the plan adds or changes (a before/after, a new signature, a data shape, the key branch). One plain sentence above each says why it matters. Illustrative only: the machine plan's stubs and tests stay the contract. Leave the section out when no snippet helps; plan lint rejects a fifth snippet, a longer one, and code anywhere else.
+6. `## How it gets built`: a mermaid diagram of the build flow: what runs in parallel and what must wait (waves or lanes),
    at most 12 nodes. Optionally a mermaid `gantt` of the rough schedule.
-6. `## Decisions you can change`: each open choice with its default, for example `Storage: files on disk (default) | a database`.
-7. `## Coverage`: the coverage table in plain words: settled with where, ruled with the default, not applicable, spike, or open with the question. No row is open when you ask for approval.
-8. `## Risks`: what could go wrong and what we do about it.
-9. `## Out of scope`: what this will not do.
-10. `## How we will know it works`: acceptance checks a human can verify.
-11. `## Rough time and cost`: a range from the sizes, labelled rough until the machine plan is linted.
+7. `## Decisions you can change`: each open choice with its default, for example `Storage: files on disk (default) | a database`.
+8. `## Coverage`: the coverage table in plain words: settled with where, ruled with the default, not applicable, spike, or open with the question. No row is open when you ask for approval.
+9. `## Risks`: what could go wrong and what we do about it.
+10. `## Out of scope`: what this will not do.
+11. `## How we will know it works`: acceptance checks a human can verify.
+12. `## Rough time and cost`: a range from the sizes, labelled rough until the machine plan is linted.
 
 ## One-page form (small requests)
 
 A small request also gets a review plan before any code: one page with `## Summary`, `## What will be built` (parts table), `## How it
-fits together` (one mermaid diagram of at most 12 nodes), `## Decisions you can change` (with defaults), `## How we will know it works`
+fits together` (one mermaid diagram of at most 12 nodes), optionally `## Key code changes` (same caps), `## Decisions you can change` (with defaults), `## How we will know it works`
 (acceptance checks) and `## Rough time and cost` (a rough estimate). Everything else in the required list may be left out when it has
 nothing to say.
 
@@ -67,6 +68,18 @@ flowchart LR
   C --> F[File reader]
   C --> N[Counting]
   N --> P[Printed result]
+```
+
+## Key code changes
+The counting rule is one small function: it returns lines, words and characters of the text.
+
+```python
+def count(text: str) -> tuple[int, int, int]:
+    return (
+        text.count("\n"),
+        len(text.split()),
+        len(text),
+    )
 ```
 
 ## How it gets built
@@ -109,6 +122,6 @@ About 3 to 6 minutes and $1 to $2 (rough, until linted).
   back to the human as one question.
 
 ## Do not
-- No code, no `%% taskgraph`, no `Produces`/`Consumes` lines, no `e.g.` examples, no file paths, no agent or model names.
+- No code outside `## Key code changes` (at most 4 snippets of at most 15 lines), no `%% taskgraph`, no `Produces`/`Consumes` lines, no `e.g.` examples, no file paths, no agent or model names.
 - No more than two pages; no placeholders ("TBD").
-- Do not lint, dispatch or build before the yes (`lint --stable`, `dispatch`, `wave0` and `build_prime` refuse).
+- Do not dispatch, build or run `lint --stable` before the yes (`lint --stable`, `dispatch`, `wave0` and `build_prime` refuse); plain `lint` of the review plan is fine.
