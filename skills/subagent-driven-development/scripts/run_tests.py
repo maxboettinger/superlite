@@ -2119,7 +2119,9 @@ def task_cmd_spec(a):  # O(L + m + f) the spec of the `cmd=` in --task's plan **
 
 def affected_files(a):  # O(f) + two spawns: (base or None, changed files) for --affected; raises ValueError with the usage-error text
     if a.files:  # --files replaces git | O(f)
-        return None, [p for chunk in a.files for p in split_fast(chunk)]  # O(f)
+        root = os.getcwd()  # O(1)
+        rel = lambda p: os.path.relpath(p, root).replace(os.sep, "/") if os.path.isabs(p) and os.path.commonpath([root, p]) == root and p != root else p  # an absolute path under the root becomes root-relative | O(len)
+        return None, [rel(p) for chunk in a.files for p in split_fast(chunk)]  # O(f)
     base = a.base  # O(1)
     if not base and a.task:  # the run's start, so a re-run after the task's checkpoint still sees its change | O(1)
         import autocommit  # noqa: E402  # lazy: only --affected --task needs it | O(1)
@@ -2168,6 +2170,9 @@ def run_affected(a, tspec):  # O(f + selection) turns --affected into a.fast pat
         a.affected = False  # the run is a full run from here on | O(1)
         return [], "full", None  # O(1)
     if not sel["selected"]:  # O(1)
+        if not sel["untested"]:  # O(1)
+            names = ", ".join(changed[:10]) + (f" (+{len(changed) - 10} more)" if len(changed) > 10 else "")  # O(1)
+            return [], "fast", f"--affected: no test covers the change; changed: {names}; run --fast PATHS or --full"  # O(1)
         return [], "fast", f"--affected: no test covers the change; untested: {', '.join(sel['untested'])}; write a test or run --fast PATHS"  # O(1)
     return list(sel["selected"]), "fast", None  # O(1)
 

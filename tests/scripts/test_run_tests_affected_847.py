@@ -239,3 +239,20 @@ def test_to_root_also_group_ends_at_a_short_option(tmp_path, monkeypatch):
     assert argv == ["--task", "T1", "--also", "sub/x.c", "-m", "slow"]
     assert a.also == ["sub/x.c"]
     os.chdir(tmp_path)
+
+
+def test_absolute_files_path_under_the_root_becomes_root_relative(tmp_path):
+    root = repo(tmp_path)
+    for cwd in (root, root / "tests"):
+        (root / ".superlite" / "got.txt").unlink(missing_ok=True)
+        r = rt(cwd, "--affected", "--files", str(root / "tests" / "test_misc.py"), root=root)
+        assert r.returncode == 0, r.stderr
+        assert got(root) == ["tests/test_misc.py"]
+
+
+def test_nothing_selected_without_untested_names_the_changed_files(tmp_path):
+    root = repo(tmp_path)
+    os.remove(root / "src/calc/orphan.py")
+    r = rt(root, "--affected")
+    assert r.returncode == 2, r.stderr
+    assert "--affected: no test covers the change; changed: src/calc/orphan.py; run --fast PATHS or --full" in r.stderr
