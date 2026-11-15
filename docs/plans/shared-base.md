@@ -15,7 +15,7 @@ Global constraints:
 - Names callers use today keep working through the steps: a moved name is re-exported from its old module (`plan_tools.Plan`, `next_tasks.parse_plan`, `backlog_state.main_root`) until its last caller moves.
 - Existing tests stay green; an existing test file changes only when the task Owns it. Run `sl` as an executable; verify with `sl run_tests --fast <own test files> --task Tn`. No version edits.
 
-Ruling: the ratchet comes first (step 1) for all four counts, with ceilings in one append-only file where a later line for the same file and count wins (because a shared baseline that batches rewrite would hold every batch that grows any large file behind every other, while appended lines merge through the backlog's `append_only` rule, `backlog_checks.py:436`) - cost if wrong: raises become routine; the owner can then require a plan `Ruling:` for each raise.
+Ruling: the ratchet comes first (step 1) for all four counts, with ceilings in one append-only file where a later line for the same file and count wins (because a shared baseline that batches rewrite would hold every batch that grows any large file behind every other, while appended lines need no hold under the backlog's `append_only` rule, `backlog_checks.py:436`, and merge without a conflict through git's built-in union driver, `.gitattributes`: `tests/scripts/ratchet_ceilings.txt merge=union`; the batch that ships later rebases onto the earlier one, so its line lands below and wins, and its ship-time full suite checks the merged file) - cost if wrong: raises become routine; the owner can then require a plan `Ruling:` for each raise.
 Ruling: initial line ceilings are each file's count plus 5%, rounded up to the next 10, so batches running when step 1 ships merge without a raise; the other three counts start at their exact value; step 13 lowers all of them (because B214, B220, B226 and B230 edit large files now) - cost if wrong: about 5% growth slips through until step 13.
 Ruling: `planfile.py` is a new module extracted from `plan_tools.py` (lines about 44-550: regexes, `Task`, `Plan`, fences, taskgraph), not a reader kept inside `plan_tools` (because plan_tools is 3,627 lines and imported by 24 scripts and hooks; a small module keeps their import small and moves about 500 lines out of the largest file) - cost if wrong: one more module.
 Ruling: the run folder's name stays in the existing `state.py` (`DIR_NAME`), not a new module (because `state.py` already resolves run state and the home folder; upstream's `state.py` name is taken here by a wider module) - cost if wrong: none.
@@ -80,7 +80,7 @@ Stop each script carrying its own plan parser, git wrapper and `.superlite` spel
 - `tests/scripts/ratchet_ceilings.txt`: lines `<script name> <count> <max>  # <reason>`; blank and `#` lines skipped; a later line for the same script and count wins; a line without a `# ` reason is an error. Defaults without a line: `lines` 600, the other three 0; `state.py` has no `superlite` limit, `planfile.py` no `parsers` limit, `base.py` no `git` limit.
 - The test fails on any count over its ceiling, naming script, count, actual, ceiling and the fix: lines: move code into a module of its own, or append a raise with a reason; superlite: use `state.DIR_NAME`; parsers: read plans with `planfile.read` (`plan_tools.Plan` before step 3); git: use `base.git` (a wrapper of the file's own before step 2).
 - `python3 tests/scripts/ratchet.py --baseline` prints the step-1 lines (section's Ruling on headroom); `--tighten` prints a lower line for every count below its ceiling, for step 13 or any step that shrank a file.
-- The file is append-only: AGENTS.md gains one line saying so; a batch that must raise a ceiling appends one line with `# B<n>: <why>` and names it in its notes; main lists the file as `append_only` for such a batch.
+- The file is append-only: AGENTS.md gains one line saying so; a batch that must raise a ceiling appends one line with `# B<n>: <why>` and names it in its notes; main lists the file as `append_only` for such a batch. `.gitattributes` gains `tests/scripts/ratchet_ceilings.txt merge=union`, so two batches' appends rebase without a conflict (the backlog's `append_only` rule only lifts the hold). Two lines for the same script and count: the last one wins; after the union rebase that is the line of the batch that ships later, whose ship-time full suite runs on the merged file and fails it if its line is too low.
 - Answer to #854's question: yes, first, because it costs one fast test (84 files read, under a second) and turns every later regression into a named failure with its fix.
 
 ### 5. Step order
@@ -133,9 +133,11 @@ Callers that move first: the small git users (step 4) and the lookups (step 5), 
 - `tests/scripts/ratchet.py`: counts, ceilings reader, `--baseline`, `--tighten` (T1).
 - `tests/scripts/test_ratchet_854.py`: the ratchet and its self-tests (T1).
 - `tests/scripts/ratchet_ceilings.txt`: the ceilings (T1, appended later).
+- `.gitattributes`: the union merge line for the ceilings (T1).
 - `skills/subagent-driven-development/scripts/state.py`: `DIR_NAME` (T1).
 - `AGENTS.md`: the append-only line (T1).
 - `skills/subagent-driven-development/scripts/base.py`, `tests/scripts/test_base_854.py` (T2).
+- `tests/scripts/plan_corpus.py`: the corpus, the readers and `compare` (S1).
 - `tests/scripts/test_plan_parsers_agree_854.py`: parser corpus test (S1).
 - `skills/subagent-driven-development/scripts/planfile.py`, `plan_tools.py`, `tests/scripts/test_planfile_854.py` (T3).
 
@@ -173,7 +175,7 @@ Specific risks: `clean_env` leaking `GIT_DIR` from the caller's environment; a t
 **Probe entry:** none (Ruling: library functions and a test helper; their cases are named tests).
 
 ### T1 ratchet · Complexity 3 · Est. context 30k
-**Owns:** tests/scripts/ratchet.py, tests/scripts/test_ratchet_854.py, tests/scripts/ratchet_ceilings.txt, skills/subagent-driven-development/scripts/state.py, AGENTS.md
+**Owns:** tests/scripts/ratchet.py, tests/scripts/test_ratchet_854.py, tests/scripts/ratchet_ceilings.txt, skills/subagent-driven-development/scripts/state.py, AGENTS.md, .gitattributes
 **Components:** 2
 **LOC owned:** 160
 **Tests:** fast
@@ -186,7 +188,7 @@ Specific risks: `clean_env` leaking `GIT_DIR` from the caller's environment; a t
 e.g. measure(p) for a 3-line file `import re`, `X = ".superlite"`, `r = re.compile(r"[A-Z]{1,3}\d+")` -> {"lines": 3, "superlite": 1, "parsers": 1, "git": 0}
 e.g. read_ceilings(p) for `a.py lines 900  # baseline` then `a.py lines 950  # B240: one more reader` -> {("a.py", "lines"): 950}
 e.g. violations(dir_with_new_601_line_b_py, {}) -> ["b.py: lines 601 > ceiling 600 (default). Fix: move code into a module of its own, or append `b.py lines <n>  # B<n>: <why>` to tests/scripts/ratchet_ceilings.txt"]
-**Review Focus:** state: `test_repo_within_ceilings` (the real scripts folder and ceilings file); `test_later_line_wins`; file: `test_line_without_reason_is_an_error`, `test_unknown_count_name_is_an_error`; `test_defaults_and_exemptions` (a new 601-line file fails; `.superlite` in state.py passes, in x.py fails; `%% taskgraph` in planfile.py passes); `test_messages_name_the_fix` (one per count); `test_tighten_prints_lower_lines_only`; `test_state_dir_name` (`state.DIR_NAME == ".superlite"`).
+**Review Focus:** state: `test_repo_within_ceilings` (the real scripts folder and ceilings file); `test_later_line_wins`; file: `test_line_without_reason_is_an_error`, `test_unknown_count_name_is_an_error`; `test_defaults_and_exemptions` (a new 601-line file fails; `.superlite` in state.py passes, in x.py fails; `%% taskgraph` in planfile.py passes); `test_messages_name_the_fix` (one per count); `test_tighten_prints_lower_lines_only`; `test_gitattributes_union_for_ceilings` (`.gitattributes` holds `tests/scripts/ratchet_ceilings.txt merge=union`); `test_union_rebase_keeps_both_appends` (temp repo with that attribute, two branches each append one line, rebasing the second onto the first succeeds and keeps both lines, the second's last); `test_state_dir_name` (`state.DIR_NAME == ".superlite"`).
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS, 5 write ratchet_ceilings.txt from `python3 tests/scripts/ratchet.py --baseline`
 **Notes:** `--baseline` writes line ceilings at count plus 5% rounded up to the next 10 and the other counts exact, each with `# baseline <date>`, only for counts above their default; AGENTS.md gains under Rules: "`tests/scripts/ratchet_ceilings.txt` is append-only: add a line with a `# B<n>: <why>` reason, never edit or delete one; the last line for a script and count wins (#854)."
 
@@ -210,7 +212,7 @@ e.g. main_checkout(worktree_of_repo) -> repo; main_checkout(Path(tmp_not_git)) -
 **Notes:** decode output as UTF-8 with `errors="replace"`; `GitResult` is a `typing.NamedTuple`; no caller moves in this task.
 
 ### S1 parser corpus test · Complexity 3 · Est. context 30k
-**Owns:** tests/scripts/test_plan_parsers_agree_854.py
+**Owns:** tests/scripts/plan_corpus.py, tests/scripts/test_plan_parsers_agree_854.py
 **Components:** 1
 **LOC owned:** 120
 **Tests:** fast
@@ -219,7 +221,9 @@ e.g. main_checkout(worktree_of_repo) -> repo; main_checkout(Path(tmp_not_git)) -
 **Est. time:** 2.5 min (1 component, about 120 LOC, fast tests)
 **Covers:** 3
 **Consumes:** none
-**Produces:** test_plan_parsers_agree_854.KNOWN: dict[tuple[str, str, str], str]
+**Produces:** plan_corpus.corpus() -> list[Path] · plan_corpus.compare(readers: dict[str, Callable[[Path], dict]], plans: list[Path]) -> list[tuple[str, str, str]] · plan_corpus.KNOWN: dict[tuple[str, str, str], str]
+e.g. compare({"plan_tools": r1, "next_tasks": r2}, [Path("docs/plans/a.md")]) where r1 gives {"ids": ["T1"]} and r2 gives {"ids": ["T1", "T1B"]} -> [("docs/plans/a.md", "next_tasks", "ids")] (the first reader is the reference; one tuple per plan, reader and differing key among ids, titles, owns, edges)
+e.g. len(corpus()) -> about 240 (230 plans in docs/plans plus fixtures)
 e.g. KNOWN[("docs/plans/2026-10-02-x.md", "next_tasks", "ids")] -> "T1B: next_tasks reads a capital suffix; plan_tools stops at T1 (planfile follows plan_tools)"
 **Review Focus:** state: `test_parsers_agree_on_corpus` (for every `docs/plans/*.md` whose name has no second dot (230 today; the `.progress`, `.review`, `.report`, `.spec` and `.build-report` files are not plans) and every `plan*.md` under `tests/scripts/fixtures/`: task ids, titles and owns from `next_tasks.parse_plan`, `pt_review.parse_plan` and `plan_tools.Plan.load`, and edges from `pt_review` against `plan_tools.parse_taskgraph`, agree or the difference is in KNOWN); `test_known_entries_still_occur` (a KNOWN entry that no longer happens fails, so the list only shrinks); `test_corpus_not_empty` (at least 200 plans and at least one task per plan for plan_tools).
 **Steps:** 1 write the comparison, 2 run it, 3 record every difference found in KNOWN with its ruling (plan_tools' form wins unless a real plan needs the other), 4 run: PASS
@@ -234,11 +238,11 @@ e.g. KNOWN[("docs/plans/2026-10-02-x.md", "next_tasks", "ids")] -> "T1B: next_ta
 **Kind:** design
 **Est. time:** 3.5 min (2 components, about 150 LOC, fast tests)
 **Covers:** 3
-**Consumes:** test_plan_parsers_agree_854.KNOWN: dict[tuple[str, str, str], str] (S1)
+**Consumes:** plan_corpus.corpus() -> list[Path] (S1) · plan_corpus.compare(readers: dict[str, Callable[[Path], dict]], plans: list[Path]) -> list[tuple[str, str, str]] (S1)
 **Produces:** planfile.read(path: str | Path) -> Plan · planfile.parse_taskgraph(plan: Plan) -> dict[str, list[str]]
 e.g. read("docs/plans/lessons-cache.md").by_id["T5"].owns -> ["skills/subagent-driven-development/scripts/lessons_sync.py", "tests/scripts/test_lessons_sync_853.py"]
 e.g. parse_taskgraph(read("docs/plans/shared-base.md")) -> {"T1": [], "T2": [], "S1": [], "T3": ["S1"]} (each task maps to the tasks it waits for)
-**Review Focus:** state: `test_plan_tools_reexports_every_moved_name` (each moved name `n`: `plan_tools.n is planfile.n`); `test_planfile_imports_no_plan_tools`; `test_read_matches_plan_load_on_corpus` (planfile added to S1's comparison as a fourth reader with no KNOWN entry of its own).
+**Review Focus:** state: `test_plan_tools_reexports_every_moved_name` (each moved name `n`: `plan_tools.n is planfile.n`); `test_planfile_imports_no_plan_tools`; `test_read_matches_plan_load_on_corpus` (`compare({"plan_tools": <Plan.load view>, "planfile": <read view>}, corpus()) == []`).
 **Steps:** 1 failing tests, 2 run: FAIL, 3 move, 4 run: PASS, 5 `sl run_tests --full`
 **Notes:** about 500 lines move verbatim from `plan_tools.py:44-550` (regexes, `PlanError`, `is_task`, `nkey`, `FenceBlock`, heading helpers, `scan_fences`, `expand_braces`, `split_top_level`, `strip_ticks`, `Task`, `Plan`, taskgraph readers, `hard_edges`); LOC owned counts the new and edited lines. A function those classes call from below line 550 moves too; planfile imports nothing from plan_tools. plan_tools is owned by running batch B230 today: the build batch waits for it to ship.
 
@@ -248,6 +252,6 @@ The cases are in each task. Cross-task: after T3, `sl plan_tools lint` on this f
 ## Self-review
 - Coverage: #854's questions map to sections 3 (modules, interfaces), 5 (order, first callers, how batches avoid blocking), 4 (ratchet first) and 6 (not done).
 - Placeholders: none; `...` in examples stands for an error text the examples do not fix.
-- Types: T3 consumes S1's `KNOWN`; T1 and T2 consume nothing.
+- Types: T3 consumes S1's `plan_corpus.corpus` and `compare`; T1 and T2 consume nothing.
 - Graph: one edge, S1 -> T3 (T3's test runs S1's comparison); T1, T2 and S1 share no file.
 - Limits: 4 tasks, each 2.5-3.5 min predicted; steps 4-13 are planned by the batch that takes each.

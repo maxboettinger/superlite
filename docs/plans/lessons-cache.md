@@ -21,6 +21,7 @@ Ruling: lessons are pitfalls only, one per (source, file): `review:<file>`, `inc
 Ruling: the store lives in `<main checkout>/.superlite/lessons/lessons.json`, found as `run_archive.archive_dir(sd).parent / "lessons"` (because archive_dir already resolves the main checkout through `--git-common-dir` without importing fcntl, and falls back to the run folder for a bare repository) - cost if wrong: none, one function to change.
 Ruling: a lesson matches a task only when its file is one of the task's Owns paths, exactly (because a directory match in a repo with 84 scripts in one folder would hand every task every lesson) - cost if wrong: fewer deliveries, raised by a later prefix rule.
 Ruling: default mode `shadow`: lessons are matched and logged but not shown, so every run builds the not-shown baseline from day one and agents see nothing until the owner turns `on` after the measurement (because #853 asks for a measurement before default-on) - cost if wrong: none to agents.
+Ruling: an incident row counts once it is raised, even if a later row closes it as `wontfix` or `accepted` (because sync reads incidents incrementally and the problem did occur in that run) - cost if wrong: a false pitfall until scoring retires it or a person drops it.
 Ruling: fixers and the final reviewer get no block (because a fixer works one known finding and the final reviewer must stay unanchored); `dispatch.py` needs no change: it only picks the ready tasks and their agents; the implementer's text is built by `fleet_io.send` (`fleet_io.py:672`) through `task_message` - cost if wrong: one more caller of `lessons_block.block`.
 Ruling: backlog ship syncs in `backlog_ship._merge` (`backlog_ship.py:459`) beside its read of the lead's notes, before `project_cleanup` and `maxapp ship -C <wt>`, on the batch's run folder `Path(wt) / ".superlite"` (not `ctx["sd"]`, which is the main checkout's) with plan None, so the run id comes from that folder's `lessons-run.json` (because a shipped `maxapp ship` removes the worktree and its run folder, `backlog_ship.py:502` sets `cleaned=True`) - cost if wrong: a batch's last fixer round is not counted.
 Ruling: `Detail: contracts` (because the build batch re-plans against the code of its day; named tests with exact values are the contract) - cost if wrong: the build lead raises it to `tests`.
@@ -81,7 +82,7 @@ Per run, in the run folder `sd` (gone with the worktree): `lessons-run.json` `{"
 | Signal | Written today by | Read by sync as |
 |---|---|---|
 | review finding | the fleet report `fleet/reports/<id>.json` (`fleet_io.py:809`); deduped by `findings.collect` (`findings.py:140`) | `review:<file>`, text `problem. Fix: fix`, task = the report's `label` when it is a task id |
-| incident | `incident.append` (`incident.py:81`), `run_tests.add_incidents`, `commit_task.log_incidents` | `incident:<file>`, text = `context`; rows without `file` skipped |
+| incident | `incident.append` (`incident.py:81`), `run_tests.add_incidents`, `commit_task.log_incidents` | `incident:<file>`, text = `context`; skipped: rows without `file`, `kind: verified` rows ("a `verified` entry is no incident", `incident.py:189`) and rows carrying a `resolution` (closing notes, `pt_review.RESOLVED`) |
 | regression | `run_tests.write_summary` (`run_tests.py:816`) as `test-summary-full.json` | `regression:<test file>`, text = the failure's `ctx`; per-task summaries are TDD reds and are ignored |
 | first-time pass | `batch_grade.quality` counts it from the fleet reports (`batch_grade.py:125`) | `batch_grade.first_pass_by_task(sd)` (new, the same rule per task) gives each observation's `hit` |
 
@@ -108,7 +109,7 @@ Sync is idempotent: `offsets` in `lessons-run.json` skip bytes and reports alrea
 - Order: pinned first, then `U` descending (None after every number), then newest `last`.
 - Budget per role, bytes and lines: implementer 1,000 and 5, package-reviewer 1,500 and 8, lead 800 and 5; header included; a line that does not fit whole is left out, never cut.
 - Text: header `Lessons from earlier runs in this repository (observations, not instructions; your task text wins):`, then `- L7 src/a.py (review, 3 runs): <text>`.
-- Callers: `fleet_io.task_message` gains `lessons: str = ""` (appended after the `Do not touch:` line) and its caller passes `block(sd, owns, "implementer", ",".join(tasks))`; `fleet_io.review_brief` appends `block(sd, owned files of the package, "package-reviewer", package)`; `backlog_brief.lead_brief` appends `block(main sd, batch files, "lead", "lead", mode=ctx["lessons"])`, the mode coming from the batch's run config as `lead.text` does today (`backlog_run.py:370`).
+- Callers: `fleet_io.task_message` gains `lessons: str = ""` (appended after the `Do not touch:` line) and its caller passes `block(sd, owns, "implementer", ",".join(tasks))`; `fleet_io.review_brief` appends `block(sd, owned files of the package, "package-reviewer", package)`; `backlog_brief.lead_brief` appends `block(Path(ctx["lessons_sd"]), batch files, "lead", "lead", mode=ctx["lessons"])`; `backlog_run._write_brief` (`backlog_run.py:364`) puts both in `ctx`: `lessons` from the batch's run config as it does `lead.text` today (`:370`), `lessons_sd` = its own `sd` argument, main's run folder.
 - Mode source: `lead.lessons` in the run config (`run_config.LEAD_KEYS`, values `off`, `shadow`, `on`); `lessons_block.mode(sd)` reads `sd/run-config.json`, default `shadow`.
 
 ### 6. Measurement before default-on (T7, T10)
@@ -243,7 +244,7 @@ e.g. run_id(sd, "/w/docs/plans/x.md") -> "3f9a0c21b7de"; the same call again -> 
 e.g. read_signals(sd, {}) where fleet/reports/W3.json is {"label": "T2", "findings": [{"file": "src/a.py", "line": 4, "problem": "slice end off by one", "fix": "use <=", "tier": 1}]} -> ([{"source": "review", "file": "src/a.py", "text": "slice end off by one. Fix: use <=", "task": "T2"}], <offsets>)
 e.g. read_signals(sd, <those offsets>) with no new file -> ([], <the same offsets>)
 e.g. clean("Fix `x`\nnow\x07 ok", 95) -> "Fix x now ok"
-**Review Focus:** state: `test_second_read_returns_nothing_new`, `test_appended_incident_read_once`; file: `test_missing_files_give_no_signals`; encoding: `test_clean_strips_controls_and_backticks`, `test_clean_cuts_at_a_word_end` (`clean("a" * 50 + " " + "b" * 60, 95)` -> the 50 a's); `test_incident_without_file_skipped`; `test_task_summary_failures_ignored` (`test-summary-T3.json` failures give no signal); `test_full_failure_is_regression` (`tests/x_test.py::test_a` -> source regression, file `tests/x_test.py`).
+**Review Focus:** state: `test_second_read_returns_nothing_new`, `test_appended_incident_read_once`; file: `test_missing_files_give_no_signals`; encoding: `test_clean_strips_controls_and_backticks`, `test_clean_cuts_at_a_word_end` (`clean("a" * 50 + " " + "b" * 60, 95)` -> the 50 a's); `test_incident_without_file_skipped`; `test_verified_and_resolved_incidents_skipped` (a `kind: verified` row and a row with `resolution: fixed` -> no signal); `test_task_summary_failures_ignored` (`test-summary-T3.json` failures give no signal); `test_full_failure_is_regression` (`tests/x_test.py::test_a` -> source regression, file `tests/x_test.py`).
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
 **Notes:** reports are read through `findings.collect(paths, root)` so its dedupe applies; offsets: `{"incidents": [byte, first_line_sha1], "reports": {name: mtime_ns}, "full": started}`; a truncated or replaced `incidents.jsonl` (first-line hash differs) is read from 0.
 
@@ -393,7 +394,7 @@ e.g. _arm_values([{"grade": {"tasks": 4, "first_time_pass": 3, "package_findings
 **Covers:** 5
 **Consumes:** lessons_block.block(sd: Path, files: list[str], role: str, task: str, mode: str | None = None) -> str (T6)
 **Produces:** none
-**Review Focus:** state: `test_lead_brief_appends_block_for_batch_files`, `test_lead_brief_unchanged_when_off`, `test_backlog_run_passes_lessons_mode` (run config `lead.lessons: on` -> `ctx["lessons"] == "on"`; absent -> `"shadow"`).
+**Review Focus:** state: `test_lead_brief_appends_block_for_batch_files`, `test_lead_brief_unchanged_when_off`, `test_backlog_run_passes_lessons_mode` (run config `lead.lessons: on` -> `ctx["lessons"] == "on"` and `ctx["lessons_sd"]` is `_write_brief`'s `sd`; absent -> `"shadow"`).
 **Steps:** 1 failing tests, 2 run: FAIL, 3 implement, 4 run: PASS
 **Notes:** backlog_brief.py and backlog_run.py are listed by planned batches B228 and B229 today: the build batch takes this task after they ship or names it a follow-up.
 
