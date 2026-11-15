@@ -139,7 +139,7 @@ def test_dispatch_keeps_in_process_agent_after_one_task(tmp_path):
 def test_dispatch_evicts_in_process_agent_past_80k_added(tmp_path):
     plan, pf, ledger = dworld(tmp_path, 129.0)
     lines, evict = dispatch.run(plan, pf, ledger, committed="T1", gate=False)
-    assert evict["a1"] == "context over 80k"
+    assert evict["a1"].startswith("context over 80k (held ")
 
 
 def test_ready_k_blank_text_before_ready_is_skipped(tmp_path):
