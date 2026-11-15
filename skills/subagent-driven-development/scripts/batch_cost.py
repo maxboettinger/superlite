@@ -108,11 +108,14 @@ def _one(sd, batch, wid, recorded=None) -> dict:  # O(m + T)
     own = dict(worker, worktree=wt) if wt else worker  # O(1)
     tokens, cost, turns, wall, blocked, kinds = dict.fromkeys(TOKENS, 0), 0.0, 0, 0.0, 0.0, {}  # O(1)
     wake, best_model, best_turns = {}, None, 0  # O(1)
+    comps, pre = 0, 0  # O(1)
     for tr in _lead_transcripts(sd, wid, own):  # O(stops) iterations
         u = metrics.session_usage(tr, kind=batch_waits.lead_kind)  # O(T)
         turns += u["turns"]  # O(1)
         cost += u["cost_usd"]  # O(1)
         wall += u.get("wall_s") or 0.0  # O(1)
+        comps += u.get("compactions", 0)  # O(1)
+        pre = max(pre, u.get("pre_tokens", 0))  # O(1)
         for k in TOKENS:  # O(1)
             tokens[k] += u["tokens"].get(k, 0)  # O(1)
         for kind, v in (u.get("kinds") or {}).items():  # O(kinds)
@@ -126,7 +129,8 @@ def _one(sd, batch, wid, recorded=None) -> dict:  # O(m + T)
         for k, n in (w.get("wakeups") or {}).items():  # O(1)
             wake[k] = wake.get(k, 0) + n  # O(1)
     return {"model": best_model or recorded or worker.get("tier"), "effort": _effort(worker), "turns": turns, "tokens": tokens,
-            "cost_usd": round(cost, 6), "wall_s": round(wall, 3), "blocked_wait_s": round(blocked, 3), "wakeups": wake, "kinds": kinds}  # O(1)
+            "cost_usd": round(cost, 6), "wall_s": round(wall, 3), "blocked_wait_s": round(blocked, 3), "wakeups": wake, "kinds": kinds,
+            "compactions": comps, "pre_tokens": pre}  # O(1)
 
 
 def _leads(batch) -> list:  # the batch's lead records, distinct ids in order | O(l)
@@ -144,6 +148,8 @@ def _lead(sd, batch) -> dict:  # sum over the distinct lead ids; model and effor
     out["turns"] = sum(p["turns"] for p in parts)  # O(l)
     out["wall_s"] = round(sum(p["wall_s"] for p in parts), 3)  # O(l)
     out["blocked_wait_s"] = round(sum(p["blocked_wait_s"] for p in parts), 3)  # O(l)
+    out["compactions"] = sum(p["compactions"] for p in parts)  # O(l)
+    out["pre_tokens"] = max(p["pre_tokens"] for p in parts)  # O(l)
     for p in parts:  # O(l)
         for k in TOKENS:  # O(1)
             out["tokens"][k] += p["tokens"][k]  # O(1)
@@ -163,7 +169,8 @@ def _lead_rows(sd, batch) -> list:  # one summary per lead | O(l * (m + T))
     for x in _leads(batch):  # O(l)
         u = _one(sd, batch, x["id"], x.get("model"))  # O(m + T)
         rows.append({"id": x["id"], "phase": x.get("phase") or "single", "model": u["model"], "effort": x.get("effort") or u["effort"],
-                     "turns": u["turns"], "tokens": u["tokens"], "cost_usd": u["cost_usd"], "wall_s": u["wall_s"]})  # O(1)
+                     "turns": u["turns"], "tokens": u["tokens"], "cost_usd": u["cost_usd"], "wall_s": u["wall_s"],
+                     "compactions": u["compactions"], "pre_tokens": u["pre_tokens"]})  # O(1)
     return rows  # O(l)
 
 

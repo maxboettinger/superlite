@@ -165,6 +165,18 @@ def _ts(e) -> float | None:  # O(1)
         return None  # O(1)
 
 
+def compaction(e) -> dict | None:  # O(1)
+    """One `compact_boundary` transcript entry (#844) as {t, pre_tokens, trigger}, else None. pre_tokens is
+    `compactMetadata.preTokens` when an int >= 0 (not a bool), else 0; trigger is `compactMetadata.trigger` when a str."""
+    if e.get("type") != "system" or e.get("subtype") != "compact_boundary":  # O(1)
+        return None  # O(1)
+    md = e.get("compactMetadata")  # O(1)
+    md = md if isinstance(md, dict) else {}  # O(1)
+    p, tr = md.get("preTokens"), md.get("trigger")  # O(1)
+    return {"t": _ts(e), "pre_tokens": p if isinstance(p, int) and not isinstance(p, bool) and p >= 0 else 0,  # O(1)
+            "trigger": tr if isinstance(tr, str) else None}
+
+
 def _empty() -> dict:  # O(1)
     return {"input": 0, "output": 0, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}  # O(1)
 
@@ -360,7 +372,8 @@ def coordinator_record(sl_dir, prices=None, agents=None) -> dict | None:  # O(ma
     """The coordinator as one line: usage per assistant message (deduplicated by message id), turns, context peak and
     median, cost by model and duration of the run alone, from the first dispatch (the last Agent/Task call at or before
     `run_start`) to the transcript's end (`finish` writes the report); `session` holds turns, cost and duration of the
-    whole transcript, design and planning included. scope: "run", or "session" before any agent ran (then both agree).
+    whole transcript, design and planning included (plus compactions and pre_tokens of `compact_boundary` entries, #844;
+    the run scope also has compaction_tokens). scope: "run", or "session" before any agent ran (then both agree).
     agents: agent_records(sl_dir), when the caller has them."""
     sl_dir = Path(sl_dir)  # O(1)
     path = session_transcript(sl_dir)  # O(M)
@@ -368,7 +381,15 @@ def coordinator_record(sl_dir, prices=None, agents=None) -> dict | None:  # O(ma
         return None  # O(1)
     prices = prices or load_prices()  # O(file)
     seen: dict[str, dict] = {}  # O(1)
+    comps: list[dict] = []  # O(1)
+    cuuids: set = set()  # O(1)
     for e in read_jsonl(path):  # O(entries)
+        c = None if e.get("isSidechain") else compaction(e)  # O(1)
+        if c is not None:  # O(1)
+            if e.get("uuid") is None or e["uuid"] not in cuuids:  # a repeated uuid counts once | O(1)
+                comps.append(c)  # O(1)
+                cuuids.add(e.get("uuid"))  # O(1)
+            continue  # O(1)
         if e.get("isSidechain") or e.get("type") != "assistant":  # subagent entries are counted per agent | O(1)
             continue  # O(1)
         msg = e.get("message") or {}  # O(1)
@@ -407,8 +428,12 @@ def coordinator_record(sl_dir, prices=None, agents=None) -> dict | None:  # O(ma
     run = [r for r in msgs if start is not None and r["last"] is not None and r["last"] >= start]  # O(turns)
     whole = _coordinator_line(msgs, prices)  # O(turns log turns)
     out = _coordinator_line(run, prices) if start is not None else dict(whole)  # O(turns log turns)
+    mine = [c["pre_tokens"] for c in comps if start is None or (c["t"] is not None and c["t"] >= start)]  # O(comps)
     out.update({"scope": "run" if start is not None else "session", "run_start": start,  # O(1)
-                "session": {k: whole[k] for k in ("turns", "cost_usd", "duration_s")}, "transcript": path})
+                "compactions": len(mine), "pre_tokens": max(mine, default=0), "compaction_tokens": mine,
+                "session": {**{k: whole[k] for k in ("turns", "cost_usd", "duration_s")}, "compactions": len(comps),
+                            "pre_tokens": max((c["pre_tokens"] for c in comps), default=0)},
+                "transcript": path})
     return out  # O(1)
 
 
@@ -422,11 +447,23 @@ def session_usage(path, since=None, until=None, kind=None, prices=None, sidechai
     counter over its streamed snapshots; output tops up from content length); thinking is
     `output_tokens_details.thinking_tokens` when the transcript has it, else thinking characters / 3.5 (part of output).
     since/until (epoch seconds, inclusive) keep a message whose first timestamp is inside. Entries with `isSidechain` are
-    skipped unless sidechain. kind(blocks) -> label groups turns into kinds {label: {turns, cost_usd}} from the
+    skipped unless sidechain. `compact_boundary` entries (#844, same window rule, a repeated uuid once) give
+    compactions (count), pre_tokens (largest, 0 without) and compaction_tokens (each one's, transcript order).
+    kind(blocks) -> label groups turns into kinds {label: {turns, cost_usd}} from the
     message's merged content blocks. A missing or unreadable file gives the empty result."""
     prices = prices or load_prices()  # O(file)
     seen: dict[str, dict] = {}  # O(1)
+    comps: list[int] = []  # O(1)
+    cuuids: set = set()  # O(1)
     for e in read_jsonl(path):  # O(entries)
+        c = None if e.get("isSidechain") and not sidechain else compaction(e)  # O(1)
+        if c is not None:  # O(1)
+            ct, windowed = c["t"], since is not None or until is not None  # O(1)
+            ok = (not windowed) if ct is None else not ((since is not None and ct < since) or (until is not None and ct > until))  # O(1)
+            if ok and (e.get("uuid") is None or e["uuid"] not in cuuids):  # a repeated uuid counts once | O(1)
+                comps.append(c["pre_tokens"])  # O(1)
+                cuuids.add(e.get("uuid"))  # O(1)
+            continue  # O(1)
         if e.get("type") != "assistant" or (e.get("isSidechain") and not sidechain):  # O(1)
             continue  # O(1)
         msg = e.get("message") or {}  # O(1)
@@ -491,6 +528,7 @@ def session_usage(path, since=None, until=None, kind=None, prices=None, sidechai
     return {"turns": turns, "tokens": tok, "cost_usd": round(cost, 6),  # O(kinds log kinds)
             "model": min(fams, key=lambda f: (-fams[f], f)) if fams else None, "first": first, "last": last,
             "wall_s": round(last - first, 1) if first is not None and last is not None else None,
+            "compactions": len(comps), "pre_tokens": max(comps, default=0), "compaction_tokens": comps,
             "kinds": {k: {"turns": v["turns"], "cost_usd": round(v["cost_usd"], 6)} for k, v in sorted(kinds.items())}}
 
 

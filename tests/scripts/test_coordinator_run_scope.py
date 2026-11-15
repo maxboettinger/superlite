@@ -85,7 +85,7 @@ def test_budget_and_report_split_the_run_from_the_session(tmp_path):
     c = report.collect(p, sl)
     cs = c["cost_split"]
     assert abs(cs["coordinator_usd"] - _cost(RUN)) < 1e-6 and abs(cs["coordinator_session_usd"] - _cost(DESIGN + RUN)) < 1e-6
-    assert cs["coordinator"] == {"turns": len(RUN), "context_median": 1_660, "context_peak": 2_060}
+    assert cs["coordinator"] == {"turns": len(RUN), "context_median": 1_660, "context_peak": 2_060, "compactions": 0, "pre_tokens": 0}
     assert f"coordinator ${_cost(RUN):.2f} ({len(RUN)} turns, context median 1.7k, peak 2.1k; session ${_cost(DESIGN + RUN):.2f})" in report.render(c)
 
 
