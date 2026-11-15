@@ -79,8 +79,7 @@ def test_slim_content_header_constraints_and_stable_interfaces_only(tmp_path):
     ifaces = text.split("## Stable tasks")[1]
     for n in (1, 2, 3):
         assert f"### T{n} " in ifaces
-    assert "Produces: alpha.Parse(text string) (Doc, error)" in ifaces
-    assert "Consumes: alpha.Lex(text string) []Tok (T2)" in ifaces and "After: T1, T2" in ifaces
+    assert "Produces:" not in ifaces and "Consumes:" not in ifaces and "After:" not in ifaces  # titles and Owns only (#914)
     assert "Owns: pkg/t1.go, pkg/t1_test.go" in ifaces
     assert "T4" not in ifaces and "beta.Main" not in text  # FIX task: no interface line
     assert "BODY-OF-T" not in text and "SPEC-" not in text and "mermaid" not in text and "## Spec sections" not in text
@@ -89,7 +88,7 @@ def test_slim_content_header_constraints_and_stable_interfaces_only(tmp_path):
 
 def test_slim_without_stable_json_treats_every_task_as_stable(tmp_path):
     _, text = slim(tmp_path, make(tmp_path, stable=None))
-    assert "### T4 cli" in text and "Produces: beta.Main(args []string) int" in text and "BODY-OF-T4" not in text
+    assert "### T4 cli" in text and "Owns: pkg/t4.go" in text and "beta.Main" not in text and "BODY-OF-T4" not in text
 
 
 def test_slim_ignores_a_later_patch_of_a_fix_task(tmp_path):
