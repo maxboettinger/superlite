@@ -136,7 +136,8 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
     else:  # O(1)
         out += ["Your task text: " + " and ".join(f"`{sl_path} task {t} --plan {plan}`" for t in tasks)]  # O(k)
     own_line = f"Owns (relative to the task's tree of {ext['root']}): {', '.join(mine[0].written_owns)}" if ext else f"Owns: {', '.join(owns)}"  # O(o)
-    out += [own_line] + ([taskmod.also_line(also)] if also else []) + [f"Do not touch: {', '.join(others) if others else '(nothing else is owned)'}"]  # O(n*o)
+    dont = "Do not touch: (nothing else is owned)" if not others else f"Do not touch: {', '.join(others)}" if tier == "haiku" else f"Do not touch: any other file ({len(others)} files belong to other tasks; the prime's task list names their owners)"  # O(n*o)
+    out += [own_line] + ([taskmod.also_line(also)] if also else []) + [dont]  # O(n*o)
     cmds = {t.id: testcmd.task_command(t.field_text("tests")) for t in mine} if not ext else {}  # O(k*s)
     tail = ", then run the printed `wait:` line in the foreground."  # O(1)
 
@@ -360,7 +361,7 @@ def review_brief(sd, plan, tasks, sl_path, superlite_root, package=None):  # the
     lines += ["Diffs: `git show <sha>` for each commit above, in Root."]  # O(1)
     lines += [f"Spec slice: `{sl_path} task {t} --plan {plan_p}`" for t in tasks]  # O(k)
     lines += [f"Files in scope: {', '.join(files)}", "",  # O(o)
-              f"Incident hotspots (`{sl_path} incident hotspots --files {','.join(files)}`):", _hotspots(sd, files), ""]  # O(B + i log i)
+              f"Incident hotspots (`{sl_path} incident hotspots --files <the files in scope, comma-joined>`):", _hotspots(sd, files), ""]  # O(B + i log i)
     for t in tasks:  # O(k) iterations
         names, rows, total = contract_mentions(pl, t, CONTRACT_LIMIT)  # O(L*k)
         if total:  # O(1)

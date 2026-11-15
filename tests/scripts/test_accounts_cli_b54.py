@@ -16,7 +16,7 @@ def test_lines_per_account(monkeypatch, capsys):
     monkeypatch.setattr(ac, "read_usage", lambda env=None: USAGE)
     assert ac.main([]) == 0
     assert capsys.readouterr().out.splitlines() == ["claude1 ok 5h=12% weekly=40%", "claude2 skip 5-hour 95%",
-                                                    "claude3 skip error token expired", "claude4 ok 5h=5% weekly=20%"]
+                                                    "claude3 skip usage unreadable: token expired", "claude4 ok 5h=5% weekly=20%"]
 
 
 def test_tier_adds_the_scoped_cap(monkeypatch, capsys):

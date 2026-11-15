@@ -41,7 +41,7 @@ def test_error_account_skipped():
     a = acc("claude1", 1, weekly_all=1); a["error"] = "login expired"
     u = {"accounts": [a, acc("claude2", 2, weekly_all=50)]}
     assert ac.pick_account(u, ["claude1", "claude2"]) == "claude2"
-    assert "claude1: error login expired" in ac.reasons(u, ["claude1", "claude2"])
+    assert "claude1: usage unreadable: login expired" in ac.reasons(u, ["claude1", "claude2"])
 
 def test_empty_usage_takes_first_allowed():
     assert ac.pick_account({}, ["claude2", "claude1"]) == "claude2"

@@ -44,21 +44,34 @@ def package(path):  # O(len path)
     return posixpath.dirname(path.replace("\\", "/"))  # O(len path)
 
 
-def eligibility(agent, est_context, limits=None, prime_k=0.0):  # O(1)
-    """None when eligible, else a short reason. `limits` (config/routing.json, per tier) overrides the defaults."""
+def _base_k(agent, prime_k):  # what the worker held at READY; a missing value falls back to the prime's size | O(1)
+    base = agent.get("baseline_k")  # O(1)
+    return prime_k if base is None else float(base)  # O(1)
+
+
+def eligibility(agent, est_context, limits=None, prime_k=0.0, reuse_prefix_k=0.0):  # O(1)
+    """None when eligible, else a short reason. `limits` (config/routing.json, per tier) overrides the defaults.
+    `reuse_prefix_k`: the predictor's fixed prefix a running worker already holds in its baseline (#901)."""
     lim = limits or {}  # O(1)
     max_ctx = float(lim.get("max_context_k", MAX_CONTEXT_K))  # O(1)
     max_tasks = int(lim.get("max_tasks", MAX_TASKS))  # O(1)
     max_idle = float(lim.get("max_idle_min", MAX_IDLE_MIN))  # O(1)
-    base = agent.get("baseline_k")  # what the worker held at READY; a missing value falls back to the prime's size | O(1)
-    base = prime_k if base is None else float(base)  # O(1)
-    if max(0.0, float(agent.get("context_k", 0)) - base) + est_context > max_ctx:  # only what the worker added since READY counts | O(1)
+    held = max(0.0, float(agent.get("context_k", 0)) - _base_k(agent, prime_k))  # only what the worker added since READY counts | O(1)
+    if held + max(0.0, est_context - reuse_prefix_k) > max_ctx:  # O(1)
         return f"context over {max_ctx:g}k"  # O(1)
     if len(agent.get("tasks", [])) >= max_tasks:  # O(1)
         return f"{max_tasks} tasks done"  # O(1)
     if float(agent.get("idle_min", 0)) > max_idle:  # O(1)
         return f"idle over {max_idle:g} min"  # O(1)
     return None  # O(1)
+
+
+def context_note(agent, est_context, prime_k=0.0, reuse_prefix_k=0.0):  # O(1)
+    """The numbers behind a `context over` reason: held, at READY, next (whole k)."""
+    held = f"{round(float(agent.get('context_k', 0))):g}k"  # O(1)
+    base = agent.get("baseline_k")  # O(1)
+    ready = f"{round(float(base)):g}k" if base is not None else f"unknown (prime {round(prime_k):g}k used)"  # O(1)
+    return f"held {held}, at READY {ready}, next {round(max(0.0, est_context - reuse_prefix_k)):g}k"  # O(1)
 
 
 def prime_k(sl_dir, tier):  # O(1)

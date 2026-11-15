@@ -15,7 +15,9 @@ Roles: implementer (default), fixer, package-reviewer, final-reviewer, research,
 MCP (#576): implementers, fixers and package reviewers get the servers their project names through a generated `--mcp-config`; a server that fails its check is left out with one stderr line.
 Exit 3 with a `BLOCKED: ...` line on stdout when a worker cannot start. `--for-dispatch` prints one
 `Wn Tn[,Tm] sent` line per worker, `BLOCKED: Tn[,Tm] not sent (<reason>)` for a line that got no worker
-(the other lines still go out; exit 3); the Wave 0 line starts a haiku worker and sends it `briefs/wave0.md`.
+(the other lines still go out; exit 3), `QUEUED: Tn[,Tm] not sent (machine busy ...); ...` for a fresh line the machine
+gate refused while a worker of the fleet is busy (no wait, no exit 3; the next round sends it, #916); the Wave 0 line
+starts a haiku worker and sends it `briefs/wave0.md`.
 Every subcommand but name first moves this session's fleet into its folder (#580).
 `--plan P` (or `--plan=P`) is checked first, for every subcommand: a path that is neither file nor folder, or whose state folder cannot be
 created, prints `error: --plan P: <reason>; ...` on stderr and exits 2, creating nothing (#372).
@@ -305,8 +307,10 @@ def choose_account(sd, model, env, avoid=None, lead=False):  # O(a * e + w) plus
         if account in over:  # O(1)
             print(f"{account}: weekly_all {over[account]:g}% >= lead_weekly_max {limit:g}%; no account under it", file=sys.stderr)  # O(1)
     if account is None:  # O(1)
-        print("BLOCKED: no account with headroom")  # O(1)
-        for r in ac.reasons(usage, allowed, model, alias):  # O(a)
+        why = ac.reasons(usage, allowed, model, alias)  # O(a)
+        unread = bool(why) and not out and all(r.split(": ", 1)[-1].startswith("usage unreadable") for r in why)  # O(a) #917
+        print("BLOCKED: usage unreadable for every account (claude-profile usage failed); rerun when sl accounts shows a reading" if unread else "BLOCKED: no account with headroom")  # O(1)
+        for r in why:  # O(a)
             print(r)  # O(1)
         for n in sorted(out):  # O(a)
             print(f"{n}: signed out (Claude Code sign-in screen)")  # O(1)
@@ -402,7 +406,7 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=
     Every worker starts lean (#377): no MCP server (`--strict-mcp-config`; the exception is the line above), Chrome, skills or slash commands; Artifact, ListAgents, ReadNotifications and ReportFindings denied (LEAN_FLAGS, LEAN_DENY)."""
     busy = ml.gate(f"fleet spawn ({role})", machine_wait, over)  # the first attempt only; the retry below is the same spawn | O(wait)
     if busy:  # O(1)
-        print(f"BLOCKED: fleet spawn: {busy}; rerun later, or pass --over-limit")  # O(1)
+        print(f"BLOCKED: {BUSY_HEAD}{busy}{BUSY_TAIL}")  # O(1)
         raise SystemExit(3)  # O(1) before any pane
     kw = {**({"output": output} if output is not None else {}), **({"brief": True} if brief else {}), **({"plain": False} if not plain else {})}  # only the non-default flags, so an older _spawn signature still fits | O(1)
     try:  # O(1)
@@ -435,6 +439,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=Fa
     cfg = cfg or routing.load_cfg()  # O(file)
     launch = fleet_roles.launch(role, tier, cfg, output=output)  # a ValueError (unknown role or tier) reaches `main` | O(file)
     agent, model = launch["agent"], launch["model"]  # O(1)
+    pool_tier = model  # the routing tier the pool files the worker under, whatever the run config pins | O(1)
     prime = "prime-haiku.md" if model == "haiku" else "prime.md"  # O(1)
     if launch["prime"] and not (sd / prime).is_file() and brief:  # a brief-only task outside a plan run: no prime, one turn, no pool | O(1)
         launch = fleet_roles.launch(role, tier, cfg, output=output, brief=True)  # O(file)
@@ -580,7 +585,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=Fa
             fail(f"no READY: the folder trust dialog is still open in {cwd}; accept it once per account (start claude there on account {account}), then rerun", screen, named=False)  # O(s)
         fail("no READY" + size + gone, screen, named=False)  # O(s)
     if launch["pool"]:  # the pool entry first: a concurrent round must not see a ready worker outside the pool | O(1)
-        _register_pool(sd, wid, model, account)  # O(w)
+        _register_pool(sd, wid, pool_tier, account)  # O(w)
     _store_session(sd, wid, name)  # O(w)
     fs.set_state(sd, wid, "ready")  # O(w)
     _launch_line(sd, wid, agent, model, account, pane)  # O(1)
@@ -595,6 +600,14 @@ def _machine_line():  # O(p): the machine measurement as the status line; nothin
             print(ml.snapshot_text())  # O(p)
     except Exception:  # noqa: BLE001 | a status line must not fail the status | O(1)
         pass  # O(1)
+
+
+BUSY_HEAD, BUSY_TAIL = "fleet spawn: ", "; rerun later, or pass --over-limit"  # O(1) the machine gate's BLOCKED reason
+QUEUE_TAIL = "the next round sends it once a worker finishes, or pass --over-limit"  # O(1) #916
+
+
+def _in_flight(sd):  # O(w) a worker of this fleet is busy, so a later round gets room or a worker back
+    return any(v.get("state") == "busy" for v in fs.workers(sd).values())  # O(w)
 
 
 def _spawn_quiet(sd, plan, tier, project, over=False, machine_wait=100.0):  # O(spawn) -> (worker dict, None) or (None, reason of the BLOCKED lines)
@@ -652,20 +665,31 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0):  # O(R * (s
     sl, root = str(fio.HERE / "sl"), str(fio.HERE.parents[2])  # O(1)
     blocked = False  # O(1)
     deadline = time.monotonic() + machine_wait  # one wait budget for the whole round | O(1)
+    full = None  # the machine-busy reason once the gate refused this round while a worker is busy (#916) | O(1)
+
+    def fresh(tier):  # O(spawn) -> (worker id or None, reason or None, queued)
+        nonlocal full  # O(1)
+        if full is not None:  # no room this round: the later fresh lines wait for the next one, untried | O(1)
+            return None, full, True  # O(1)
+        wait = 0.0 if _in_flight(sd) else max(0.0, deadline - time.monotonic())  # a busy worker frees room for the next round: no wait | O(w)
+        w, why = _spawn_quiet(sd, plan, tier, project, over, wait)  # O(spawn)
+        if why and why.startswith(BUSY_HEAD + "machine busy") and _in_flight(sd):  # O(w)
+            full = why[len(BUSY_HEAD):].removesuffix(BUSY_TAIL)  # O(len)
+            return None, full, True  # O(1)
+        return (w["id"] if w else None), why, False  # O(1)
+
     for tasks, decision in lines:  # O(R) iterations
-        why, wid, brief = None, None, None  # O(1)
+        why, wid, brief, queued = None, None, None, False  # O(1)
         if decision.startswith("wave0"):  # one haiku worker, sent the Wave 0 brief that `wave0 --plan` wrote | O(1)
             brief = sd / "briefs" / "wave0.md"  # O(1)
             if brief.is_file():  # no worker for a brief that is not there | O(1)
                 tier = (re.search(r"\btier=(\S+)", decision) or [None, "haiku"])[1]  # O(len)
-                w, why = _spawn_quiet(sd, plan, tier, project, over, max(0.0, deadline - time.monotonic()))  # O(spawn)
-                wid = w["id"] if w else None  # O(1)
+                wid, why, queued = fresh(tier)  # O(spawn)
             else:  # O(1)
                 why = "no .superlite/briefs/wave0.md; run wave0 --plan PLAN"  # O(1)
         elif decision.startswith("fresh"):  # O(1)
             tier = (re.search(r"\btier=(\S+)", decision) or [None, "sonnet"])[1]  # O(len)
-            w, why = _spawn_quiet(sd, plan, tier, project, over, max(0.0, deadline - time.monotonic()))  # O(spawn)
-            wid = w["id"] if w else None  # O(1)
+            wid, why, queued = fresh(tier)  # O(spawn)
         elif decision.startswith("agent="):  # an idle worker of an earlier round | O(1)
             wid = decision.split()[0].split("=", 1)[1]  # O(len)
             why = None if wid in fs.load(sd)["workers"] else f"unknown worker {wid}"  # O(w)
@@ -683,7 +707,9 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0):  # O(R * (s
                 why = "no .superlite/briefs/wave0.md; run wave0 --plan PLAN"  # O(1)
             except fio.hc.HerdrError as e:  # O(1)
                 why = e.message or e.code  # O(1)
-        if why is not None:  # O(1)
+        if queued:  # not a block: the tasks stay ready for the next round (#916) | O(1)
+            print(f"QUEUED: {tasks} not sent ({why}); {QUEUE_TAIL}")  # O(1)
+        elif why is not None:  # O(1)
             if SHELL_MSG in why:  # O(len)
                 why += "; rerun sl fleet spawn --for-dispatch"  # O(1)
             print(f"BLOCKED: {tasks} not sent ({why})")  # O(1)

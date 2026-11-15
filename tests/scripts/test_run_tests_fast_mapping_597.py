@@ -125,12 +125,12 @@ def test_fast_from_package_dir_resolves_once(tmp_path):
 
 def test_summary_line_names_failing_tests():
     data = {"mode": "fast", "passed": 3, "failed": 2, "failures": ["tests/a.py::test_x: assert 1 == 2", "-::ParserTests/parses(): failed"]}
-    assert run_tests.summary_line(data) == "tests (fast): 3 passed, 2 failed; failing: tests/a.py::test_x, ParserTests/parses()"
+    assert run_tests.summary_line(data) == "tests (fast): 3 passed, 2 failed; failing: tests/a.py::test_x: assert 1 == 2, ParserTests/parses(): failed"
 
 
 def test_summary_line_caps_at_three_names():
     data = {"mode": "fast", "passed": 0, "failed": 5, "failures": [f"{c}: boom" for c in "abcde"]}
-    assert run_tests.summary_line(data) == "tests (fast): 0 passed, 5 failed; failing: a, b, c (+2 more)"
+    assert run_tests.summary_line(data) == "tests (fast): 0 passed, 5 failed; failing: a: boom, b: boom, c: boom (+2 more)"
 
 
 def test_summary_line_unchanged_without_failures():
@@ -140,7 +140,7 @@ def test_summary_line_unchanged_without_failures():
 
 def test_summary_line_cuts_long_names():
     line = run_tests.summary_line({"mode": "fast", "passed": 0, "failed": 1, "failures": ["n" * 100 + ": boom"]})
-    assert line == "tests (fast): 0 passed, 1 failed; failing: " + "n" * 60
+    assert line == "tests (fast): 0 passed, 1 failed; failing: " + "n" * 60 + ": boom"
 
 
 BASH_CFG = {"language": "bash", "test": "echo '1 passed'",

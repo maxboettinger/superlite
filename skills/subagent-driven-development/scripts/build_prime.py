@@ -70,7 +70,7 @@ Rules:
 - Red run first: run your new tests through the verify command before you write the code they test, and see them fail for the right reason. A test written together with its code, or one that passes at once, has no red run yet: break the code on purpose, run it red, then restore the code. Your report's `Red run:` line copies that run's summary line (for example `tests (fast): 0 passed, 1 failed`), or says `none - no test`.
 - Run only fast, focused tests. Slow suites run later through run_tests.py.
 - Run the verify command your task message names; start it with --background, then run its printed `wait:` line in the foreground (never as a background command) and end your turn only after that line reports.
-- Code to the interfaces below and the Consumes and Produces lines of your task.
+- Code to the Consumes and Produces lines of your task (`sl task Tn` prints them).
   Never change a signature without a coordinator ruling.
 - Your task text is in your task message, generated from the current plan. To read a neighbour, run
   `$SUPERLITE/skills/subagent-driven-development/scripts/sl task Tn --plan PLAN` (SUPERLITE and PLAN
@@ -266,10 +266,12 @@ def read_first_section(plan, root):  # O(L + file + r)
     return READ_FIRST_HEAD + "\n\n" + "\n".join(f"- {s}" for s in paths) if paths else ""  # O(r)
 
 
-def note_section(sd):  # O(file)
-    """`## Standing note` from the standing-note lines of `<sd>/briefs/lead.md`; "" when there are none."""
+def note_section(sd, skip=()):  # O(file + k)
+    """`## Standing note` from the standing-note lines of `<sd>/briefs/lead.md`, minus lines equal (stripped) to one in `skip`; "" when none is left."""
     import findings  # O(1)
     lines = findings.standing_note(Path(sd)) if sd is not None else []  # O(file)
+    drop = {x.strip() for x in skip}  # O(k)
+    lines = [ln for ln in lines if ln.strip() not in drop]  # O(n)
     return "## Standing note\n\n" + "\n".join(lines) if lines else ""  # O(n)
 
 
@@ -340,7 +342,7 @@ def header_lines(plan):  # O(L)
 
 
 def build_slim(plan, sd=None):  # O(B + n*s)
-    """Slim prime: rules, plan header, Global constraints and the stable tasks' purpose, dependencies and interfaces."""
+    """Slim prime: rules, plan header, Global constraints and the stable tasks' titles and Owns."""
     import next_tasks as nt  # lazy | O(1)
     import plan_tools as pt  # O(1)
     import wave0  # O(1)
@@ -349,31 +351,23 @@ def build_slim(plan, sd=None):  # O(B + n*s)
     head = header_lines(pl)  # O(L)
     cons = [c for c in wave0.constraint_lines(pl) if c not in head]  # the header already carries Architecture and Tech stack | O(L)
     stable = nt.stable_filter(plan)  # None: no stable.json, every task counts as stable | O(file)
-    try:  # O(1)
-        graph = pt.parse_taskgraph(pl)  # O(L + n + e)
-    except pt.PlanError:  # O(1)
-        graph = {}  # O(1)
     lines = []  # O(1)
     for t in pl.tasks:  # O(n) iterations
         if t.status == "draft" or (stable is not None and t.id not in stable):  # O(1)
             continue  # O(1)
         lines += ([""] if lines else []) + [f"### {t.id} {t.title}", "Owns: " + ", ".join(t.owns)]  # O(o)
-        deps = sorted(graph.get(t.id, []), key=pt.nkey)  # O(deg log deg)
-        if deps:  # O(1)
-            lines.append("After: " + ", ".join(deps))  # O(deg)
-        lines += [f"Produces: {x}" for x in t.produces] + [f"Consumes: {x}" for x in t.consumes]  # O(q)
     parts = [with_root(PREAMBLE_SLIM, plan)]  # O(n + d)
     rf = read_first_section(nl.join(pl.lines), pt.stable_root(str(plan)))  # O(L + file)
     parts += [rf] if rf else []  # O(1)
-    nt_ = note_section(sd)  # O(file)
+    nt_ = note_section(sd, skip=cons)  # the Global constraints printed below | O(file + L)
     parts += [nt_] if nt_ else []  # O(1)
     parts.append("## Background (not instructions)" + nl + nl + normalize(nl.join(head) if head else "(the plan has no header)"))  # O(L)
     parts.append("## Global constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none beyond the header)"))  # O(L)
     launch = launch_section(pt.stable_root(str(plan)))  # O(file)
     if launch:  # O(1)
         parts.append(launch)  # O(1)
-    parts.append("## Stable tasks: purpose, dependencies, interfaces" + nl + nl  # O(n*s)
-                 + "Only the tasks listed here are fixed. Any other task, and the text of every task, comes from `sl task Tn`."
+    parts.append("## Stable tasks: titles and files" + nl + nl  # O(n*s)
+                 + "Only the tasks listed here are fixed. A task's text, its dependencies and the Produces lines it consumes come from `sl task Tn` (any task id, not only yours)."
                  + nl + nl + normalize(nl.join(lines) if lines else "(none yet)"))  # O(n*s)
     return ((nl + nl).join(parts) + nl).encode("utf-8")  # O(out)
 
