@@ -192,3 +192,10 @@ def test_background_run_passes_affected_through(tmp_path):
     w = rt(root, "--wait", path, "--timeout", "60")
     assert w.returncode == 0, w.stderr
     assert got(root) == ["tests/test_misc.py"]
+
+
+def test_files_equals_spelling_from_a_subfolder_is_read_from_there(tmp_path):
+    root = repo(tmp_path)
+    r = rt(root / "tests", "--affected", "--files=test_misc.py", root=root)
+    assert r.returncode == 0, r.stderr
+    assert got(root) == ["tests/test_misc.py"]
