@@ -397,6 +397,8 @@ SDD_PINNED = (
     "refuse below 20 GB free (warn below 50)",
     # test_upstream_text_841.py
     "Never pass `model` to a superlite agent.",
+    # test_docs_affected_847.py
+    "(or `--affected` for `--fast PATHS`)",
 )
 
 
