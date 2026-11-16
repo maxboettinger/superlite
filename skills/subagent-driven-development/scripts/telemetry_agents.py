@@ -81,7 +81,12 @@ def _review(transcript, role, sd, fields, cwd) -> None:  # one `review` line for
     if not facts:  # O(1)
         return  # O(1)
     rep = fleet_report.parse(facts["text"])  # O(len)
-    rnd = 1 + telemetry.count("review", telemetry.run_id(Path(sd) if sd else None), review_kind=kind)  # O(n)
+    run = telemetry.run_id(Path(sd) if sd else None)  # O(1)
+    if run is None:  # no run: the FR<n> label digits, else None; never a count over unrelated null-run lines | O(1)
+        m = re.search(r"FR(\d+)", fields.get("task") or "")  # O(1)
+        rnd = int(m.group(1)) if m else None  # O(1)
+    else:  # O(1)
+        rnd = 1 + telemetry.count("review", run, review_kind=kind)  # O(n)
     telemetry.emit("review", sd=sd, cwd=cwd, review_kind=kind, verdict=fields["status"], findings=len(rep["findings"]), round=rnd)  # O(s)
 
 

@@ -147,3 +147,12 @@ def test_agent_hooks_outside_run_silent(tmp_path):
         r = run(hook, tmp_path, payload)
         assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
     assert telemetry.read_events() == []
+
+
+def test_kind_review_null_run_round(tmp_path):
+    tr = transcript(tmp_path, last="Verdict: APPROVED\n")
+    for task in (None, None, "FR2"):
+        telemetry_agents._review(tr, "final-reviewer", None, {"status": "APPROVED", "task": task}, str(tmp_path))
+    rounds = [e["round"] for e in events("review")]
+    assert rounds == [None, None, 2]
+    assert all(telemetry.validate(e) == [] for e in events("review"))
