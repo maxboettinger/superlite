@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -39,6 +40,28 @@ def test_kind_tests_line_shape(tmp_path):
     assert line["repo_root"] == str(tmp_path.resolve()) or line["repo_root"] == str(tmp_path)
     assert (line["mode"], line["passed"], line["seconds"], line["task"]) == ("fast", 3, 2.5, "T2")
     assert line["session"] is None and line["run"] is None and line["worker"] is None
+
+
+def test_repo_root_logical_path_matches_bash_writer(tmp_path, monkeypatch):
+    real = tmp_path / "real"
+    (real / "sub").mkdir(parents=True)
+    (real / ".git").mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    logical = str(link / "sub")
+    assert telemetry.emit("gate", cwd=logical, hook="h", decision="block", rule="r", tool="Bash", target="t")
+    monkeypatch.chdir(real / "sub")
+    monkeypatch.setenv("PWD", logical)
+    assert telemetry.emit("gate", hook="h", decision="block", rule="r", tool="Bash", target="t")
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE")}
+    env["SL_TEL_CWD"] = logical
+    hooks_lib = Path(__file__).resolve().parents[2] / "hooks" / "telemetry.sh"
+    r = subprocess.run([shutil.which("bash"), "-c", f". '{hooks_lib}'; sl_tel_gate h block r Bash t"],
+                       capture_output=True, text=True, env=env)
+    assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
+    lines = telemetry.read_events()
+    assert len(lines) == 3
+    assert {x["repo_root"] for x in lines} == {str(link)}
 
 
 def test_kind_gate_cut_to_4096():

@@ -88,7 +88,7 @@ def test_bash_line_matches_python_keys(tmp_path):
     a, b = telemetry.read_events()
     assert list(a) == list(b)
     assert telemetry.validate(a) == [] and telemetry.validate(b) == []
-    assert a["repo_root"] == b["repo_root"] or Path(a["repo_root"]).resolve() == Path(b["repo_root"]).resolve()
+    assert a["repo_root"] == b["repo_root"]
 
 
 def test_bash_read_only_home_silent(tmp_path):
