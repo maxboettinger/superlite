@@ -193,6 +193,15 @@ def test_hook_silent_during_active_run(repo):
     assert (r.returncode, r.stdout) == (0, "")
 
 
+def test_hook_silent_for_fleet_worker(repo):
+    """#919: a fleet worker (local or in a remote tree without run markers) is tested by its coordinator, never by this hook."""
+    stamp_all(repo)
+    (repo / "agents" / "a.md").write_text("changed\n")
+    r = cli(repo, "check", "--hook", stdin=json.dumps({"stop_hook_active": False, "cwd": str(repo)}),
+            env={"SUPERLITE_FLEET_WORKER": "W3"})
+    assert (r.returncode, r.stdout) == (0, "")
+
+
 def test_run_stamps_only_green_layers(repo):
     r = cli(repo, "run", "unit", "headless", "--command-override", "unit=true", "headless=false")
     assert r.returncode == 1
