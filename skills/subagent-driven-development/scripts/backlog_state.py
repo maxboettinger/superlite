@@ -54,11 +54,35 @@ def update(p: Path, fn):
     with open(p.with_name(p.name + ".lock"), "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)  # O(wait)
         d = load(p)
+        before = {b.get("id"): b.get("state") for b in d.get("batches", []) if isinstance(b, dict)}  # O(batches)
         res = fn(d)
         tmp = p.with_name(p.name + ".tmp")
         tmp.write_text(json.dumps(d, indent=2))  # O(size)
         os.replace(tmp, p)
+        _telemetry(p, d, before)  # O(batches)
         return res
+
+
+def _telemetry(p: Path, d: dict, before: dict) -> None:  # one batch line per changed state; never raises | O(batches)
+    try:
+        import telemetry
+        root = p.parent.parent
+        for b in d.get("batches", []):  # O(batches)
+            if not isinstance(b, dict):
+                continue
+            bid, state = b.get("id"), b.get("state")
+            if state == before.get(bid) or not state:
+                continue
+            leads = [x for x in b.get("leads") or [] if isinstance(x, dict)]  # O(leads)
+            model = leads[-1].get("model") if leads else None
+            reason = None  # park and no-change reasons are agent prose: they stay in backlog.json | O(1)
+            telemetry.emit("batch", cwd=str(root), batch=bid, state=state, lead_model=model,
+                           pr=b.get("pr"), reason=reason)
+            end = ("done" if b.get("no_change") else "shipped") if state == "shipped" else "parked" if state == "parked" else None
+            if end:
+                telemetry.finish_deferred(telemetry.batch_key(root, bid), end, reason)
+    except BaseException:
+        pass
 
 
 def batch(data: dict, bid: str) -> dict:

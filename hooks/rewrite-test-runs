@@ -23,6 +23,17 @@
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
 shopt -u patsub_replacement 2>/dev/null   # bash 5.2+: `&` in a ${x//a/&} replacement must stay literal
 
+# tel_gate DECISION RULE TOOL TARGET: one telemetry line (hooks/telemetry.sh), sourced only here; fails open, prints nothing.
+tel_gate() {
+  . "${BASH_SOURCE[0]%/*}/telemetry.sh" 2>/dev/null || return 0
+  local re_s='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"' re_c='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
+  SL_TEL_SESSION=""; SL_TEL_CWD=""
+  [[ ${input-} =~ $re_s ]] && SL_TEL_SESSION="${BASH_REMATCH[1]}"
+  [[ ${input-} =~ $re_c ]] && SL_TEL_CWD="${BASH_REMATCH[1]}"
+  sl_tel_gate "rewrite-test-runs" "$@" 2>/dev/null
+  return 0
+}
+
 fleet_worker=""
 [ "${SUPERLITE_FLEET_ROLE:-}" = lead ] || fleet_worker="${SUPERLITE_FLEET_WORKER:-}"  # a lead is a coordinator
 re_agent='"agent_id"[[:space:]]*:[[:space:]]*"'
@@ -345,6 +356,7 @@ hidden_rest() {
 deny() {
   local t="${cmd:0:400}"; t="${t//[\"\\$'\n\r\t']/ }"
   t="${t//$ph1/>&}"; t="${t//$ph2/&>}"
+  tel_gate deny hidden-test-wait "$tool" "$t"
   printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"hidden test wait: %s","rule":"hidden-test-wait","cwd":"%s"}\n' "$tool" "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
@@ -355,6 +367,7 @@ deny() {
 deny_monitor() {
   local t="$orig -> $short"
   t="${t//[\"\\]/ }"
+  tel_gate deny monitor-test-run Monitor "$t"
   printf '{"kind":"rule-block","agent":"coordinator","tool":"Monitor","target":"monitor test run: %s","rule":"monitor-test-run","cwd":"%s"}\n' "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
@@ -365,6 +378,7 @@ deny_monitor() {
 }
 deny_subagent_full() {
   local t="${cmd:0:400}"; t="${t//[\"\\$'\n\r\t']/ }"
+  tel_gate deny subagent-full-suite "$tool" "$t"
   printf '{"kind":"rule-block","agent":"subagent","tool":"%s","target":"full suite: %s","rule":"subagent-full-suite","cwd":"%s"}\n' "$tool" "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
@@ -376,6 +390,7 @@ deny_subagent_full() {
 deny_isolate() {
   local t="${cmd:0:400}" task="$1"; t="${t//[\"\\$'\n\r\t']/ }"
   t="${t//$ph1/>&}"; t="${t//$ph2/&>}"
+  tel_gate deny isolated-test-run "$tool" "$t"
   printf '{"kind":"rule-block","agent":"subagent","tool":"%s","target":"isolated test run: %s","rule":"isolated-test-run","cwd":"%s"}\n' "$tool" "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
@@ -487,6 +502,7 @@ orig="${cmd//$ph1/>&}"; orig="${orig//$ph2/&>}"; orig="${orig//[[:cntrl:]]/ }"; 
 short="${out//"bash \"$root/skills/subagent-driven-development/scripts/sl\""/sl}"
 short="${short//[[:cntrl:]]/ }"; short="${short#"${short%%[![:space:]]*}"}"; short="${short%"${short##*[![:space:]]}"}"; shortfull="$short"; short="${short:0:200}"
 if [ "$tool" = Monitor ]; then deny_monitor; fi
+tel_gate rewrite raw-test-run "$tool" "$orig -> $short"
 esc orig; esc short
 printf '{"kind":"rule-rewrite","agent":"coordinator","tool":"%s","target":"%s -> %s","rule":"raw-test-run","cwd":"%s","command":"%s","rewritten":"%s"}\n' \
   "$tool" "$orig" "$short" "$cwdv" "$orig" "$short" >> "$sd/incidents.jsonl" 2>/dev/null

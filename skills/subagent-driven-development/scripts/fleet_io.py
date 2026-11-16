@@ -680,6 +680,25 @@ def _prompt(name, msg):  # prompt NAME; one resend after a stall or a slow reply
     hc.prompt(name, msg, ["working"], 15000)  # resent once; a second failure propagates | O(len msg)
 
 
+def _tel(kind, sd, **fields):  # one telemetry line; a failure, SystemExit too, never reaches the caller | O(s)
+    try:  # O(1)
+        import telemetry  # noqa: E402 | O(1) lazy
+        telemetry.emit(kind, sd=sd, **fields)  # O(s)
+    except BaseException:  # O(1)
+        pass  # O(1)
+
+
+def _tel_dispatch(sd, wid, label, tasks=None):  # a `dispatch` line per task of a send (one for a brief) | O(k + w)
+    try:  # O(1)
+        w = fs.load(Path(sd))["workers"].get(wid) or {}  # O(w)
+        tids = tasks if tasks else [(re.match(r"T\d+", label or "") or [None])[0]]  # O(k)
+        for tid in tids:  # O(k)
+            _tel("dispatch", sd, task=tid, role=w.get("role") or "implementer", agent_type=w.get("agent"), model=w.get("model") or w.get("tier"),  # O(s)
+                 tier=w.get("tier"), account=w.get("account"), machine=w.get("machine") or None, label=label)
+    except BaseException:  # O(1)
+        pass  # O(1)
+
+
 def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
     sd = Path(sd)  # O(1)
     data = fs.load(sd)  # O(w)
@@ -687,6 +706,7 @@ def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
         raise KeyError(wid)  # O(1)
     if _write_remote(data["workers"][wid]):  # a remote write worker: its own module maps paths, prompts and prints the `sent` line | O(1)
         _remote().send_task(sd, wid, plan, tasks, sl_path)  # O(w + n + k*s)
+        _tel_dispatch(sd, wid, ",".join(tasks), tasks)  # O(k + w)
         return ",".join(tasks)  # O(k)
     tier = data["workers"][wid].get("tier", "sonnet")  # O(1)
     msg = task_message(plan, tasks, sl_path, superlite_root, tier)  # O(n + k*s)
@@ -697,6 +717,7 @@ def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
     _busy(sd, wid, label, sent)  # O(w + pool bytes)
     pane_label(sd, wid, pane_title(sd, wid, label))  # O(w)
     print(f"{wid} {label} sent")  # O(1)
+    _tel_dispatch(sd, wid, label, tasks)  # O(k + w)
     return label  # O(1)
 
 
@@ -726,7 +747,9 @@ def send_brief(sd, wid, brief, label="", full=False, preface=""):  # O(w + len b
     (LABEL, else the brief's stem). FileNotFoundError for a missing brief, KeyError for an unknown worker."""
     sd = Path(sd)  # O(1)
     if machine_of(sd, wid):  # a remote worker: its own module copies the brief and prompts inside on(machine) | O(w)
-        return _remote().send_brief(sd, wid, brief, label)  # it prints the one `sent` line | O(w + l)
+        out = _remote().send_brief(sd, wid, brief, label)  # it prints the one `sent` line | O(w + l)
+        _tel_dispatch(sd, wid, out if isinstance(out, str) and out else label or Path(brief).stem)  # O(w)
+        return out  # O(1)
     path = Path(brief).resolve()  # O(1)
     if not path.is_file():  # O(1)
         raise FileNotFoundError(str(brief))  # O(1)
@@ -741,6 +764,7 @@ def send_brief(sd, wid, brief, label="", full=False, preface=""):  # O(w + len b
     _busy(sd, wid, label, sent, str(path))  # O(w + pool bytes)
     pane_label(sd, wid, pane_title(sd, wid, label))  # O(w)
     print(f"{wid} {label} sent")  # O(1)
+    _tel_dispatch(sd, wid, label)  # O(w)
     return label  # O(1)
 
 
@@ -822,6 +846,50 @@ def _lags(text, last, label):  # the transcript text is behind its stop record: 
     return not text.strip() or fleet_report.parse(last, label)["status"] != "UNKNOWN"  # O(len)
 
 
+def _usage_since(transcript, since_s):  # tokens, cost and tool calls of the transcript from SINCE_S on, else all None | O(T)
+    none = {"tokens": None, "cost_usd": None, "tool_calls": None}  # O(1)
+    if not transcript:  # O(1)
+        return none  # O(1)
+    u = mx.session_usage(transcript, since=since_s)  # O(T)
+    if not u.get("turns"):  # O(1)
+        return none  # O(1)
+    t = u["tokens"]  # O(1)
+    calls = 0  # O(1)
+    for e in _records(transcript):  # O(T)
+        ts = mx._ts(e)  # O(1)
+        if e.get("type") == "assistant" and (ts is None or ts >= since_s):  # O(1)
+            calls += sum(1 for b in (e.get("message") or {}).get("content") or [] if isinstance(b, dict) and b.get("type") == "tool_use")  # O(len)
+    return {"tokens": {"in": t["input"], "out": t["output"], "cache_read": t["cache_read"], "cache_write": t["cache_write"]}, "cost_usd": u["cost_usd"], "tool_calls": calls}  # O(1)
+
+
+def _tel_finish(sd, wid, w, rep, label):  # the `agent_stop` line of a worker's turn end, and a `review` line for a reviewer; once per send | O(T + w)
+    try:  # O(1)
+        sent = int(w.get("sent") or 0)  # O(1)
+        key = f"{sent}:{label}"  # O(1)
+        with fs.locked(sd):  # O(1) plus wait
+            data = fs.load(Path(sd))  # O(w)
+            cur = data["workers"].get(wid)  # O(1)
+            if cur is None or cur.get("tel_stop") == key:  # O(1)
+                return  # O(1)
+            cur["tel_stop"] = key  # O(1)
+            fs.save(Path(sd), data)  # O(w)
+        role = w.get("role") or "implementer"  # O(1)
+        stop = latest_stop(sd, wid, sent) if sent else None  # O(m + w)
+        use = _usage_since((stop or {}).get("transcript"), sent / 1000)  # O(T)
+        tid = (re.match(r"T\d+", label or "") or [None])[0]  # O(1)
+        _tel("agent_stop", sd, task=tid, role=role, model=w.get("model") or w.get("tier"), effort=None, account=w.get("account"), machine=w.get("machine") or None,  # O(s)
+             duration_s=round((now_ms() - sent) / 1000, 1) if sent else None, status=rep["status"], **use)
+        kind = {"package-reviewer": "package", "final-reviewer": "final"}.get(role)  # O(1)
+        if kind:  # O(1)
+            import telemetry  # noqa: E402 | O(1) lazy
+            m = re.search(r"FR(\d+)", label or "")  # O(1)
+            run = telemetry.run_id(sd)  # O(size)
+            rnd = int(m.group(1)) if m else (1 + telemetry.count("review", run, review_kind=kind) if run else None)  # O(n)
+            _tel("review", sd, review_kind=kind, verdict=rep["status"], findings=len(rep["findings"]), round=rnd)  # O(s)
+    except BaseException:  # O(1)
+        pass  # O(1)
+
+
 def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follows an APPROVED that left packet lines unread; TAIL: the last pane lines of a turn that ended without a report; CUT: the stop record line of a transcript that stayed behind | O(len + w)
     label = w.get("task") or wid  # O(1)
     rid = label.split(",")[0]  # O(1)
@@ -840,6 +908,7 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follow
     n = len(rep["findings"])  # O(1)
     nc = len(rep.get("concerns") or [])  # O(1)
     print(f"{wid} {label} {rep['status']} findings={n}" + (f" concerns={nc}" if nc else "") + (" partial" if part else "") + f" {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
+    _tel_finish(sd, wid, w, rep, label)  # O(T + w)
     _ready(sd, wid, label)  # O(w)
     pane_label(sd, wid, pane_title(sd, wid, label, "reported, waiting for coordinator"))  # before the worker may be stopped | O(w)
     if w.get("one_turn") and rep["status"] in FINAL and (not _write_remote(w) or rep.get("collected")):  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker; a remote write worker only once its snapshot is collected | O(1)

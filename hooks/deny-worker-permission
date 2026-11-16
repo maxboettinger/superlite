@@ -4,5 +4,17 @@
 
 [ -n "${SUPERLITE_FLEET_WORKER:-}" ] || exit 0
 IFS= read -r -d '' input   # builtin; drain stdin
+# tel_gate DECISION RULE TOOL TARGET: one telemetry line (hooks/telemetry.sh), sourced only here; fails open, prints nothing.
+tel_gate() {
+  . "${BASH_SOURCE[0]%/*}/telemetry.sh" 2>/dev/null || return 0
+  local re_s='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"' re_c='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
+  SL_TEL_SESSION=""; SL_TEL_CWD=""
+  [[ ${input-} =~ $re_s ]] && SL_TEL_SESSION="${BASH_REMATCH[1]}"
+  [[ ${input-} =~ $re_c ]] && SL_TEL_CWD="${BASH_REMATCH[1]}"
+  sl_tel_gate "deny-worker-permission" "$@" 2>/dev/null
+  return 0
+}
+re_t='"tool_name"[[:space:]]*:[[:space:]]*"([A-Za-z]+)"'; tn=""; [[ $input =~ $re_t ]] && tn="${BASH_REMATCH[1]}"
+tel_gate deny worker-permission "$tn" ""
 printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"No human watches this pane: permission dialogs are answered no. Do not retry: a lead writes .superlite/question.json and ends with Status: NEEDS_DECISION; any other worker ends with Status: BLOCKED and the command it needed."}}}'
 exit 0

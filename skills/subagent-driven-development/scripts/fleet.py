@@ -502,7 +502,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=Fa
         sd.resolve().relative_to(Path(project).resolve())  # O(len)
     except ValueError:  # O(1)
         argv += ["--add-dir", str(sd.resolve())]  # O(1)
-    record = {"name": name, "account": account, "agent": agent, "tier": tier or model, "state": "starting", "task": None, "role": role, "one_turn": launch["one_turn"],  # O(1)
+    record = {"name": name, "account": account, "agent": agent, "tier": tier or model, "model": model, "state": "starting", "task": None, "role": role, "one_turn": launch["one_turn"],  # O(1)
               "run_config": rcfg["id"], "launch": {"argv": argv, "env": wenv, "cwd": cwd}}
     if solo:  # O(1)
         record["brief_only"] = True  # O(1)
@@ -956,6 +956,14 @@ def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr cal
     return targets  # O(1)
 
 
+def _tel_fleet(sd, on, accounts):  # the `fleet` event of on and off; never raises | O(1)
+    try:  # O(1)
+        import telemetry  # noqa: E402 | O(1) lazy
+        telemetry.emit("fleet", sd=sd, on=on, accounts=list(accounts))  # O(s)
+    except BaseException:  # a telemetry failure never changes the command | O(1)
+        pass  # O(1)
+
+
 def _sd(a):  # O(d)
     return Path(state.resolve(getattr(a, "plan", None))).resolve()  # O(d)
 
@@ -1333,10 +1341,13 @@ def main(argv=None):  # O(w) plus command cost
         if any(not ac.is_path(x) and x != "current" for x in accts) and not ac.read_listing().get("accounts"):  # O(a) plus subprocess time
             print("fleet: warning: claude-profile list unavailable; account names cannot be resolved, pass config dir paths instead", file=sys.stderr)  # O(1)
         print(f"fleet: on accounts={','.join(accts) or 'auto'}", file=sys.stderr)  # O(a) stdout stays clean for worker lines
+        _tel_fleet(sd, True, accts)  # O(1)
     elif a.cmd == "off":  # O(1)
         ws = fs.load(sd).get("workspace_id")  # read before stop clears it | O(w)
+        was = list(fs.load(sd).get("accounts") or [])  # O(w)
         stop(sd, all_=True, keep_workspace=True)  # O(w)
         fs.set_off(sd)  # O(1)
+        _tel_fleet(sd, False, was)  # O(1)
         print("fleet: off", flush=True)  # said before the workspace closes: a caller inside it dies with its pane | O(1)
         if ws:  # O(1)
             try:  # O(1)

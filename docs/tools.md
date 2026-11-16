@@ -66,6 +66,7 @@ Mechanical steps are scripts, not agents. Every tool runs as `<skill-dir>/script
 | `golden` | Runs golden cases in sealed copies, no push and no pull request: `run [--level minor|major] [--ids a,b] [--no-rerun] [--timeout S] [--root R]` appends result rows to `.superlite/golden-results.jsonl`; `history [ID]` prints the stored runs and the run-to-run noise once a case has 5 runs |
 | `release` | `sl release minor|major [--dry-run] [--no-golden] [--accept-flags] [--root R]`: preflight, scoreboard, golden batches, bump, tag, push, GitHub release, `stable`. Exit 0 released or dry run, 1 golden red, 2 refused, 3 a step failed after the bump, 4 scoreboard flags need `--accept-flags`. Refused for a patch level and inside a lead or worker |
 | `release_tag` | Version level (`patch`, `minor`, `major`) and the annotated tag `v<version>` on the merged commit (library, used at ship and by `release`) |
+| `telemetry` | `sl telemetry export --since YYYY-MM-DD [--root DIR]... [--out FILE]` rebuilds event-log lines (marked `backfill`) from the existing ledgers; the log itself is `<superlite home>/events.jsonl` (see [telemetry](telemetry.md)) |
 
 `_pyrun.py` is a shared helper, not a tool. Probes live in `probes/` with the probe pack in `probes/pack/`.
 

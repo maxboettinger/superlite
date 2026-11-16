@@ -8,6 +8,17 @@
 
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
 
+# tel_gate DECISION RULE TOOL TARGET: one telemetry line (hooks/telemetry.sh), sourced only here; fails open, prints nothing.
+tel_gate() {
+  . "${BASH_SOURCE[0]%/*}/telemetry.sh" 2>/dev/null || return 0
+  local re_s='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"' re_c='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
+  SL_TEL_SESSION=""; SL_TEL_CWD=""
+  [[ ${input-} =~ $re_s ]] && SL_TEL_SESSION="${BASH_REMATCH[1]}"
+  [[ ${input-} =~ $re_c ]] && SL_TEL_CWD="${BASH_REMATCH[1]}"
+  sl_tel_gate "final-review-check" "$@" 2>/dev/null
+  return 0
+}
+
 [ "${SUPERLITE_FINAL_REVIEW:-}" = off ] && exit 0
 [[ $input =~ \"stop_hook_active\"[[:space:]]*:[[:space:]]*true ]] && exit 0
 
@@ -81,6 +92,7 @@ if [ ! -d "$sd" ]; then
   [ "$sd" = "$proj/.superlite" ] && _sl_exclude "$proj"
 fi
 printf '%s\n' "$branch" >> "$warned" 2>/dev/null || exit 0
+tel_gate warn final-review-missing "" "$branch"
 b="${branch//\\/\\\\}"; b="${b//\"/\\\"}"
 printf '{"decision":"block","reason":"Branch %s changes %s files, %s lines with no final review. Run superlite:final-reviewer on a packet, or state why not, then stop again. Shown once per branch."}\n' "$b" "$files" "$lines"
 exit 0

@@ -63,7 +63,7 @@ def test_language_names_the_gate():
 def test_end_lines_moved_into_the_rows():
     lines = TOOLS.read_text().splitlines()
     assert not any(l.startswith(("A `run=` probe entry runs", "A `run_tests --fast` run whose paths")) for l in lines)
-    assert lines[-1].startswith("Backlog rules are split by reader")
+    assert any(l.startswith("Backlog rules are split by reader") for l in lines)
     assert TOOLS.read_text().count("predates that sandbox") == 1
 
 

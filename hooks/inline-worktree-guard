@@ -108,9 +108,20 @@ while [ "${#d}" -gt "${#projn}" ]; do
   d="${d%/*}"
 done
 
+# tel_gate DECISION RULE TOOL TARGET: one telemetry line (hooks/telemetry.sh), sourced only here; fails open, prints nothing.
+tel_gate() {
+  . "${BASH_SOURCE[0]%/*}/telemetry.sh" 2>/dev/null || return 0
+  local re_s='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"' re_c='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
+  SL_TEL_SESSION=""; SL_TEL_CWD=""
+  [[ ${input-} =~ $re_s ]] && SL_TEL_SESSION="${BASH_REMATCH[1]}"
+  [[ ${input-} =~ $re_c ]] && SL_TEL_CWD="${BASH_REMATCH[1]}"
+  sl_tel_gate "inline-worktree-guard" "$@" 2>/dev/null
+  return 0
+}
 hit="${rel:0:120}"; hit="${hit//[\"\\$'\n\r\t']/}"
 printf '{"kind":"rule-block","agent":"coordinator","tool":"%s","target":"%s"}\n' "$tool" "$hit" \
   >> "$sd/incidents.jsonl" 2>/dev/null
+tel_gate block inline-main-checkout "$tool" "$rel"
 printf '%s\n' \
   'Blocked: an inline superlite flow is running and this path is in the main checkout, not in a worktree. Create the flow'"'"'s worktree and edit there: run `sl worktree ensure <topic>` (it prints the folder; make every edit below it). For a trivial change that should stay in this checkout, run `sl worktree inplace --reason "<why>"` once, then repeat the edit.' >&2
 printf 'Blocked target: %s (%s)\n' "$rel" "$p" >&2

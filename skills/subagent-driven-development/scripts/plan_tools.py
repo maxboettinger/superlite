@@ -3355,6 +3355,50 @@ def refresh_adapter(plan_path: str, write: bool = True) -> str:  # O(file + entr
         pt_review.IMPORT_ROOTS[:] = saved  # O(r)
 
 
+def _telemetry_run(old: dict, sl_dir: Path):  # (run_id/run_session keys for stable.json, whether a run starts) | O(S)
+    """Keep the run id of `old`; mint one when it has none or another session wrote it (that run is then written as abandoned).
+    A /clear or compact handoff (the folder owner is this session and the old session's binding is gone) keeps the run and moves run_session."""
+    try:  # telemetry never changes a lint | O(1)
+        import state  # O(1)
+        import telemetry  # O(1)
+        sid = state.session_id()  # O(1)
+        rid, owner = old.get("run_id"), old.get("run_session")  # O(1)
+        if isinstance(rid, str) and rid:  # O(1)
+            handed = bool(owner and sid and owner != sid and state.owner(sl_dir) == sid and not state._binding(owner).exists())  # /clear: the hook moved the folder and the binding to the new id | O(1)
+            if handed or not (owner and sid and owner != sid):  # a handoff, same session, or one of them unknown | O(1)
+                return {"run_id": rid, "run_session": sid if handed else owner or sid}, False  # O(1)
+            telemetry.emit("run_end", sd=sl_dir, run=rid, outcome="abandoned", reason="resumed by another session")  # O(s)
+        return {"run_id": telemetry.new_run_id(), "run_session": sid}, True  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return {k: old[k] for k in ("run_id", "run_session") if k in old}, False  # O(1)
+
+
+def _head_branch(root: Path):  # the checked-out branch name (also before the first commit), None when detached | O(1) git
+    r = subprocess.run(["git", "-C", str(root), "symbolic-ref", "--short", "-q", "HEAD"], capture_output=True, text=True)  # O(1) git
+    return r.stdout.strip() or None if r.returncode == 0 else None  # O(1)
+
+
+def _telemetry_run_start(run_keys: dict, sl_dir: Path, plan_path: str, plan) -> None:  # O(file)
+    try:  # never raises | O(1)
+        import fleet_state  # O(1)
+        import orchestrator  # O(1)
+        import telemetry  # O(1)
+        root = stable_root(plan_path)  # O(d)
+        try:  # O(1)
+            rel = Path(plan_path).resolve().relative_to(root.resolve()).as_posix()  # O(d)
+        except ValueError:  # a plan outside the repository | O(1)
+            rel = Path(plan_path).name  # O(1)
+        m = re.search(r"^\*\*Detail:\*\*[ \t]*(\S[^\n]*?)[ \t]*$", Path(plan_path).read_text(encoding="utf-8"), re.M)  # O(file)
+        sid = run_keys.get("run_session")  # O(1)
+        mode = telemetry.session_mode(sid) or ("backlog" if os.environ.get("SUPERLITE_FLEET_ROLE") == "lead" else None)  # O(1)
+        orch = orchestrator.read_state(sl_dir)  # O(file)
+        telemetry.emit("run_start", sd=sl_dir, cwd=str(root), session=sid, plan=rel, tasks=len(plan.tasks),  # O(s)
+                       detail=m.group(1) if m else None, branch=_head_branch(root), mode=mode,
+                       orchestrator=orch["mode"] if orch else None, fleet=fleet_state.is_on(sl_dir))
+    except Exception:  # noqa: BLE001 | O(1)
+        pass  # O(1)
+
+
 def cmd_lint_stable(args) -> int:  # O(lint + n*k*s)
     import orchestrator  # human mode: no lint --stable (and so no dispatch) before approval | O(1)
     import state  # O(1)
@@ -3527,7 +3571,10 @@ def cmd_lint_stable(args) -> int:  # O(lint + n*k*s)
     (sl_dir / "chain-rulings.json").write_text(json.dumps(accepted, indent=1), encoding="utf-8")  # O(w)
     out.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     gate_keys = {k: old[k] for k in ("worktree", "baseline_dirty") if k in old} if gate.mode == "resumed" else {"worktree": gate.mode, "baseline_dirty": gate.baseline}  # kept after the first run | O(1)
-    out.write_text(json.dumps({"stable": stable, "fix": fix, "plan_issues": plan_issues, "interfaces": interfaces, "blocks": blocks, "tiers": tiers, "plan": str(Path(args.plan).resolve()), **gate_keys}, indent=1), encoding="utf-8")  # O(S)
+    run_keys, tel_start = _telemetry_run(old, sl_dir)  # O(S)
+    out.write_text(json.dumps({"stable": stable, "fix": fix, "plan_issues": plan_issues, "interfaces": interfaces, "blocks": blocks, "tiers": tiers, "plan": str(Path(args.plan).resolve()), **gate_keys, **run_keys}, indent=1), encoding="utf-8")  # O(S)
+    if tel_start:  # O(1)
+        _telemetry_run_start(run_keys, sl_dir, args.plan, plan)  # O(file)
     entry = {"time": datetime.now().isoformat(timespec="seconds"), "stable": len(stable), "fix": len(fix),  # O(n)
              "stable_ids": stable, "newly_stable": [t for t in stable if t not in set(old.get("stable") or [])],
              "dispatched": sorted(sent & set(stable), key=nkey), "pending": pending, "frozen": len(frozen)}
