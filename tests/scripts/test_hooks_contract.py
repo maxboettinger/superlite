@@ -309,3 +309,70 @@ def test_fail_closed_cases_are_real():
     for script, state, name in FAIL_CLOSED:
         assert script in scripts and state in STATES and name in MALFORMED, (script, state, name)
     assert set(TALKS) <= scripts
+
+
+# --- telemetry (#933): a hook's telemetry write never changes its exit code, stdout or stderr ---
+import sys  # noqa: E402
+
+sys.path.insert(0, str(ROOT / "skills" / "subagent-driven-development" / "scripts"))
+import telemetry  # noqa: E402
+
+VALID = {
+    "bash": _tool("Bash", {"command": "ls"}, session_id="s1", cwd="/tmp"),
+    "edit": _tool("Edit", {"file_path": "docs/a.md"}, session_id="s1", cwd="/tmp"),
+    "skill": _tool("Skill", {"skill": "x"}, session_id="s1"),
+    "agent": json.dumps({"tool_name": "Agent", "tool_input": {"subagent_type": "worker", "description": "d"},
+                         "session_id": "s1", "cwd": "/tmp"}),
+    "stop": json.dumps({"session_id": "s1", "agent_id": "a1", "agent_type": "worker", "cwd": "/tmp"}),
+    "prompt": json.dumps({"session_id": "s1", "prompt": "hi", "cwd": "/tmp"}),
+    "permission": json.dumps({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "session_id": "s1",
+                              "tool_input": {"command": "ls"}}),
+    "session": json.dumps({"session_id": "s1", "source": "startup", "reason": "other", "cwd": "/tmp"}),
+}
+RO_INPUTS = {**MALFORMED, **{f"valid-{k}": v for k, v in VALID.items()}}
+HOOK_SCRIPTS = sorted({h.script for h in CLAUDE if h.script})
+
+
+def run_with_home(script: str, raw: str, proj: Path, sl_home: Path) -> subprocess.CompletedProcess:
+    drop = ("SUPERLITE_FLEET_", "CLAUDE_", "CURSOR_", "SUPERLITE_STATE_DIR", "SUPERLITE_FINAL_REVIEW")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(drop)}
+    env.update({"HOME": str(proj.parent / "home"), "CLAUDE_PROJECT_DIR": str(proj), "SUPERLITE_HOME": str(sl_home),
+                "CLAUDE_PLUGIN_ROOT": str(ROOT)})
+    return subprocess.run([BASH, str(HOOKS / script), ], input=raw, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", cwd=proj, env=env, timeout=60)
+
+
+@needs_bash
+@pytest.mark.parametrize("script", HOOK_SCRIPTS)
+def test_hooks_fail_open_read_only_home(script, tmp_path):
+    proj = project(tmp_path, "run")
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, so no folder can be made under it", encoding="utf-8")
+    writable, read_only = tmp_path / "wh", blocker / "home"  # read-only also for a root user
+    for name, raw in RO_INPUTS.items():
+        if script == "session-start" and name not in (*SESSION_START_INPUTS, "valid-session"):
+            continue
+        a = run_with_home(script, raw, proj, writable)
+        b = run_with_home(script, raw, proj, read_only)
+        assert (b.returncode, b.stdout, b.stderr) == (a.returncode, a.stdout, a.stderr), (script, name)
+    assert not read_only.exists()
+
+
+@needs_bash
+def test_hook_events_valid(tmp_path):
+    sl_home = tmp_path / "events_home"
+    for state in STATES:
+        (tmp_path / state).mkdir()
+        proj = project(tmp_path / state, state)
+        for script in HOOK_SCRIPTS:
+            for name, raw in RO_INPUTS.items():
+                if script == "session-start" and name not in (*SESSION_START_INPUTS, "valid-session"):
+                    continue
+                run_with_home(script, raw, proj, sl_home)
+    events = telemetry.read_events(sl_home / "events.jsonl")
+    assert {e.get("kind") for e in events} >= {"gate", "session_start"}, "the hooks wrote no lines"
+    bad = [(e.get("kind"), p) for e in events if (p := telemetry.validate(e))]
+    assert bad == []
+    raw_lines = (sl_home / "events.jsonl").read_text(encoding="utf-8").splitlines() if events else []
+    assert len(raw_lines) == len(events)
+    assert all(len(line.encode("utf-8")) <= 4096 for line in raw_lines)
