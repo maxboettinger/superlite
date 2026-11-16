@@ -24,7 +24,7 @@ One object per line, keys in a fixed order. Common fields, in order: `v`, `t`, `
 | `review` | `review_kind`, `verdict`, `findings`, `round` | Python |
 | `batch` | `batch`, `state`, `lead_model`, `pr`, `reason` | Python (`backlog_state.py`) |
 | `feedback` | `fkind`, `reason` | Python (`feedback.py`) |
-| `run_end` | `outcome`, `wall_s`, `cost_usd`, `tasks`, `first_time_pass`, `fix_rounds`, `final_verdict`, `agents`, `tests_passed`, `tests_failed`, `ci_red`, `questions`, `projected_min`, `critical_path_min`, `reason` | Python (`orchestrator.py`), deferred while a batch is unshipped |
+| `run_end` | `outcome`, `wall_s`, `cost_usd`, `tasks`, `first_time_pass`, `fix_rounds`, `final_verdict`, `agents`, `tests_passed`, `tests_failed`, `ci_red`, `questions`, `projected_min`, `critical_path_min`, `reason`, `mode`, `orchestrator`, `fleet` | Python (`orchestrator.py`), deferred while a batch is unshipped |
 
 Example:
 
@@ -32,7 +32,7 @@ Example:
 {"v":1,"t":"2026-11-16T12:34:56.789Z","kind":"tests","session":null,"run":null,"repo_root":"/tmp/p","harness":null,"version":"1.5.252","worker":null,"role":null,"config_dir":null,"mode":"fast","passed":3,"failed":0,"skipped":1,"seconds":2.5,"task":"T2"}
 ```
 
-Added fields beyond the base contract: `review_kind` (kind `review`), `writer_role` (kinds `dispatch` and `agent_stop`: the role of the fleet worker that wrote the line) and `backfill` (`true` on a line rebuilt by the export).
+Added fields beyond the base contract: `review_kind` (kind `review`), `writer_role` (kinds `dispatch` and `agent_stop`: the role of the fleet worker that wrote the line), `backfill` (`true` on a line rebuilt by the export), and `mode`, `orchestrator` and `fleet` (kind `run_end`) (as of the run's end, from the source `run_start` uses).
 
 ## Writers
 
@@ -40,7 +40,7 @@ Python code calls `telemetry.emit(kind, ...)`; hooks source `hooks/telemetry.sh`
 
 ## Run end
 
-`run_end` is written when the run ends. While a backlog batch is not yet shipped the line is deferred: the fields are kept and the line is written when the batch ships or is abandoned.
+`run_end` is written when the run ends. While a backlog batch is not yet shipped the line is deferred: the fields are kept and the line is written when the batch ships or is abandoned. A run whose folder holds a lead brief has mode `backlog`.
 
 ## Rotation
 
@@ -59,4 +59,4 @@ No line holds a prompt, a response, a last message, an agent description, feedba
 
 ## Export
 
-`sl telemetry export --since YYYY-MM-DD` rebuilds the same lines from the existing ledgers (run folders, backlog, feedback) for a backfill; each rebuilt line carries `backfill: true`.
+`sl telemetry export --since YYYY-MM-DD` rebuilds the same lines from the existing ledgers (run folders, backlog, feedback) for a backfill; each rebuilt line carries `backfill: true`. Exported `run_start` and `run_end` lines take `mode`, `orchestrator` and `fleet` from the archive's `run.json`; an older archive gives `backlog` when it names a batch, else null.

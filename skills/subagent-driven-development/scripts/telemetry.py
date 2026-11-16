@@ -47,7 +47,7 @@ KINDS = {  # O(1)
     "batch": ("batch", "state", "lead_model", "pr", "reason"),
     "feedback": ("fkind", "reason"),
     "run_end": ("outcome", "wall_s", "cost_usd", "tasks", "first_time_pass", "fix_rounds", "final_verdict", "agents",
-                "tests_passed", "tests_failed", "ci_red", "questions", "projected_min", "critical_path_min", "reason"),
+                "tests_passed", "tests_failed", "ci_red", "questions", "projected_min", "critical_path_min", "reason", "mode", "orchestrator", "fleet"),
 }
 WRITER_ROLE_KINDS = ("dispatch", "agent_stop")  # O(1)
 
