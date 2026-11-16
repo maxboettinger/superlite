@@ -62,12 +62,13 @@ def test_kind_dispatch_fleet_send(world, tmp_path):
 def test_kind_agent_stop_fleet_worker(world, tmp_path):
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl")
     sent = finish(world, tmp_path, "Status: DONE")
+    world.clock.t[0] += 4200
     out = io.wait(world.sd, ["W1"], 5000)
     assert out[0]["status"] == "DONE"
     (e,) = lines("agent_stop")
     assert telemetry.validate(e) == []
     assert e["status"] == "DONE" and e["task"] == "T3" and e["role"] == "implementer" and e["account"] == "claude1" and e["machine"] is None
-    assert e["duration_s"] == (world.clock.t[0] - sent) / 1000 or e["duration_s"] >= 0
+    assert e["duration_s"] == round((world.clock.t[0] - sent) / 1000, 1) and e["duration_s"] >= 4.2
     assert e["tokens"] == {"in": 100, "out": 20, "cache_read": 50, "cache_write": 10} and e["tool_calls"] == 2 and e["cost_usd"] > 0
     assert lines("review") == []
 
