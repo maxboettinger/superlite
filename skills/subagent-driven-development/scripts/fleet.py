@@ -1034,16 +1034,31 @@ def agent_gone(name, client=None):  # True only when herdr says the agent does n
     return False  # O(1)
 
 
-def mark_dead(sd, wid):  # stopped, dead, off the pool; no pane is closed | O(w)
+def _tel_dead(sd, w):  # one agent_stop line status DEAD for a worker found dead; never raises | O(1)
+    try:  # O(1)
+        import fleet_io  # noqa: PLC0415 | O(1)
+        import telemetry  # noqa: PLC0415 | O(1)
+        m = re.match(r"T\d+", str(w.get("task") or ""))  # O(1)
+        busy = w.get("state") == "busy" and w.get("sent")  # O(1)
+        dur = round((fleet_io.now_ms() - w["sent"]) / 1000, 1) if busy else None  # O(1)
+        telemetry.emit("agent_stop", sd=sd, task=m.group(0) if m else None, role=w.get("role") or "implementer", model=w.get("model") or w.get("tier"), effort=None, account=w.get("account"), machine=w.get("machine") or None, duration_s=dur, tokens=None, cost_usd=None, tool_calls=None, status="DEAD")  # O(1)
+    except BaseException:  # noqa: BLE001 | a telemetry failure never changes the state change | O(1)
+        pass  # O(1)
+
+
+def mark_dead(sd, wid):  # stopped, dead, off the pool; no pane is closed; one agent_stop DEAD line on the first transition | O(w)
     sd = Path(sd)  # O(1)
     with fs.locked(sd):  # O(1) plus wait
         data = fs.load(sd)  # O(w)
         w = data["workers"].get(wid)  # O(1)
         if w is None:  # O(1)
             return  # O(1)
+        before = dict(w)  # O(1)
         w.update({"state": "stopped", "dead": True, "was": w.get("was") if w.get("dead") else w.get("state"), "last_task": w.get("task") or w.get("last_task"), "task": None})  # O(1)
         fs.save(sd, data)  # O(w)
         _pool_drop(sd, wid)  # O(w)
+    if not before.get("dead"):  # O(1)
+        _tel_dead(sd, before)  # O(1)
 
 
 def respawn_hint(sd, wid, plan=None):  # the `sl fleet spawn` line that starts a fresh worker like WID; KeyError for an unknown worker | O(w)

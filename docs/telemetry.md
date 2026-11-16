@@ -18,13 +18,15 @@ One object per line, keys in a fixed order. Common fields, in order: `v`, `t`, `
 | `session_end` | `reason`, `duration_s` | hook `session-end` |
 | `run_start` | `plan`, `tasks`, `detail`, `branch`, `mode`, `orchestrator`, `fleet` | Python (`plan_tools.py`) |
 | `dispatch` | `task`, `role`, `agent_type`, `model`, `effort`, `tier`, `account`, `machine`, `label`, `writer_role` | hook `capture-agent-launch` |
-| `agent_stop` | `task`, `role`, `model`, `effort`, `account`, `machine`, `duration_s`, `tokens`, `cost_usd`, `tool_calls`, `status`, `writer_role` | hook `capture-agent-stop` (one Python call) |
+| `agent_stop` | `task`, `role`, `model`, `effort`, `account`, `machine`, `duration_s`, `tokens`, `cost_usd`, `tool_calls`, `status`, `writer_role` | hook `capture-agent-stop` (one Python call); `fleet_io.py` at a fleet worker's report; `fleet.py` when a fleet worker is marked dead |
 | `tests` | `mode`, `passed`, `failed`, `skipped`, `seconds`, `task` | Python (`run_tests.py`) |
 | `gate` | `hook`, `decision`, `rule`, `tool`, `target` | the gate hooks (bash) |
 | `review` | `review_kind`, `verdict`, `findings`, `round` | Python |
 | `batch` | `batch`, `state`, `lead_model`, `pr`, `reason` | Python (`backlog_state.py`) |
 | `feedback` | `fkind`, `reason` | Python (`feedback.py`) |
 | `run_end` | `outcome`, `wall_s`, `cost_usd`, `tasks`, `first_time_pass`, `fix_rounds`, `final_verdict`, `agents`, `tests_passed`, `tests_failed`, `ci_red`, `questions`, `projected_min`, `critical_path_min`, `reason`, `mode`, `orchestrator`, `fleet` | Python (`orchestrator.py`), deferred while a batch is unshipped |
+
+`agent_stop` `status` is the status word of the agent's report (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`, `UNKNOWN`, a reviewer's verdict), or `DEAD` when superlite marks a fleet worker dead (its agent is gone: `fleet wait`, a refused send or keys, `fleet status`); a `DEAD` line has `effort`, `tokens`, `cost_usd` and `tool_calls` null and `duration_s` only for a worker that was busy.
 
 Example:
 
