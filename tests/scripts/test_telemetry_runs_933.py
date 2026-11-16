@@ -95,3 +95,18 @@ def test_no_detail_is_null(tmp_path):
     lint(tmp_path, detail="")
     (line,) = kinds("run_start")
     assert line["detail"] is None
+
+
+def test_kind_run_end_abandoned_after_takeover(tmp_path):
+    first = lint(tmp_path, session="s1")
+    os.environ["CLAUDE_CODE_SESSION_ID"] = "s2"
+    try:
+        cp = subprocess.run([sys.executable, str(SCRIPTS / "orchestrator.py"), "takeover", "--plan", str(tmp_path / "plan.md")],
+                            cwd=tmp_path, capture_output=True, text=True)
+    finally:
+        del os.environ["CLAUDE_CODE_SESSION_ID"]
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    second = lint(tmp_path, session="s2")
+    assert second["run_id"] != first["run_id"] and second["run_session"] == "s2"
+    (end,) = kinds("run_end")
+    assert (end["run"], end["outcome"]) == (first["run_id"], "abandoned")
