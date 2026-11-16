@@ -233,11 +233,11 @@ def _read(path):  # O(file)
     return out  # O(lines)
 
 
-def read_events(path=None) -> list:  # parsed lines of the log, bad lines skipped | O(n)
+def read_events(path=None) -> list[dict]:  # parsed lines of the log, bad lines skipped | O(n)
     return _read(path or _home() / "events.jsonl")  # O(n)
 
 
-def validate(line) -> list:  # problems of one line, [] when it is well formed | O(k)
+def validate(line) -> list[str]:  # problems of one line, [] when it is well formed | O(k)
     if not isinstance(line, dict):  # O(1)
         return ["not an object"]  # O(1)
     kind = line.get("kind")  # O(1)

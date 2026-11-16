@@ -236,3 +236,8 @@ def test_session_and_key_ids_reject_trailing_newline():
     assert telemetry.session_mode("s1\n") is None
     assert telemetry.defer_run_end("k\n", dict(FIELDS)) is False
     assert telemetry.finish_deferred("k\n", "done") is False
+
+
+def test_read_events_validate_annotations():
+    assert telemetry.read_events.__annotations__["return"] in (list[dict], "list[dict]")
+    assert telemetry.validate.__annotations__["return"] in (list[str], "list[str]")
