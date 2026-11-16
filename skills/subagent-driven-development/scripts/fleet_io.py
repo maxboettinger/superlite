@@ -878,7 +878,7 @@ def _tel_finish(sd, wid, w, rep, label):  # the `agent_stop` line of a worker's 
         use = _usage_since((stop or {}).get("transcript"), sent / 1000)  # O(T)
         tid = (re.match(r"T\d+", label or "") or [None])[0]  # O(1)
         _tel("agent_stop", sd, task=tid, role=role, model=w.get("model") or w.get("tier"), effort=None, account=w.get("account"), machine=w.get("machine") or None,  # O(s)
-             duration_s=round((now_ms() - sent) / 1000, 1) if sent else None, status=rep["status"], **use)
+             duration_s=round((now_ms() - sent) / 1000, 1) if sent else None, status=rep["status"], agent_session=cur.get("session"), **use)
         kind = {"package-reviewer": "package", "final-reviewer": "final"}.get(role)  # O(1)
         if kind:  # O(1)
             import telemetry  # noqa: E402 | O(1) lazy

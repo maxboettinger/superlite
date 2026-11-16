@@ -934,6 +934,7 @@ def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr cal
         except hc.HerdrError:  # O(1)
             pass  # O(1)
         fs.set_state(sd, wid, "stopped")  # O(w)
+        _tel_worker_stop(sd, live[wid], "STOPPED")  # O(1)
         if sd.name == ".superlite":  # the worker's tree is no longer needed (#614) | O(tree size)
             try:  # O(1)
                 import trees  # noqa: E402 | O(1) lazy
@@ -1034,14 +1035,14 @@ def agent_gone(name, client=None):  # True only when herdr says the agent does n
     return False  # O(1)
 
 
-def _tel_dead(sd, w):  # one agent_stop line status DEAD for a worker found dead; never raises | O(1)
+def _tel_worker_stop(sd, w, status):  # one agent_stop line (DEAD or STOPPED) for a fleet worker; never raises | O(1)
     try:  # O(1)
         import fleet_io  # noqa: PLC0415 | O(1)
         import telemetry  # noqa: PLC0415 | O(1)
         m = re.match(r"T\d+", str(w.get("task") or ""))  # O(1)
         busy = w.get("state") == "busy" and w.get("sent")  # O(1)
         dur = round((fleet_io.now_ms() - w["sent"]) / 1000, 1) if busy else None  # O(1)
-        telemetry.emit("agent_stop", sd=sd, task=m.group(0) if m else None, role=w.get("role") or "implementer", model=w.get("model") or w.get("tier"), effort=None, account=w.get("account"), machine=w.get("machine") or None, duration_s=dur, tokens=None, cost_usd=None, tool_calls=None, status="DEAD")  # O(1)
+        telemetry.emit("agent_stop", sd=sd, task=m.group(0) if m else None, role=w.get("role") or "implementer", model=w.get("model") or w.get("tier"), effort=None, account=w.get("account"), machine=w.get("machine") or None, duration_s=dur, tokens=None, cost_usd=None, tool_calls=None, status=status, agent_session=w.get("session"))  # O(1)
     except BaseException:  # noqa: BLE001 | a telemetry failure never changes the state change | O(1)
         pass  # O(1)
 
@@ -1058,7 +1059,7 @@ def mark_dead(sd, wid):  # stopped, dead, off the pool; no pane is closed; one a
         fs.save(sd, data)  # O(w)
         _pool_drop(sd, wid)  # O(w)
     if not before.get("dead"):  # O(1)
-        _tel_dead(sd, before)  # O(1)
+        _tel_worker_stop(sd, before, "DEAD")  # O(1)
 
 
 def respawn_hint(sd, wid, plan=None):  # the `sl fleet spawn` line that starts a fresh worker like WID; KeyError for an unknown worker | O(w)

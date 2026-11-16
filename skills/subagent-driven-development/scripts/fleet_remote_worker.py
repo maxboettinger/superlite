@@ -340,7 +340,7 @@ def states(sd):  # O(w + a) plus herdr calls
 def stop(sd, wid):  # O(1) plus remote and herdr calls
     sd = Path(sd)  # O(1)
     w = fs.load(sd)["workers"][wid]  # KeyError for an unknown worker | O(w)
-    rec = w["remote"]  # O(1)
+    rec, was = w["remote"], w.get("state")  # O(1)
     fr.sync(sd, wid)  # the last stop record and transcript stay on this machine | O(m + B)
     with hc.on(rec["label"]):  # O(1)
         with _quiet():  # O(1)
@@ -348,6 +348,9 @@ def stop(sd, wid):  # O(1) plus remote and herdr calls
         with _quiet():  # O(1)
             hc.close_pane(w["pane_id"])  # O(1)
     fs.set_state(sd, wid, "stopped")  # O(w)
+    if was != "stopped":  # O(1)
+        import fleet  # noqa: PLC0415 | O(1) lazy
+        fleet._tel_worker_stop(sd, w, "STOPPED")  # O(1)
     try:  # O(1)
         fr.drop(rec["label"], rec.get("project") or str(sd.resolve().parent), rec["name"])  # O(1)
     except fr.RemoteError as e:  # O(1)
