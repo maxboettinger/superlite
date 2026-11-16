@@ -4,7 +4,7 @@
     telemetry_export.py is reached through `sl telemetry export --since YYYY-MM-DD [--root DIR]... [--out FILE]`
 
 `rebuild(since, roots, home) -> list[dict]`: `agent_stop` per `<home>/history.jsonl` row, `run_start` and `run_end` per run
-archive `<root>/.superlite/runs/*/`, `dispatch` per archived `metrics.jsonl` launch row, `tests` per archived
+archive `<root>/.superlite/runs/*/` (both carry mode, orchestrator and fleet from run.json), `dispatch` per archived `metrics.jsonl` launch row, `tests` per archived
 `test-summary-*.json`, `batch` per `<root>/.superlite/batch-costs.jsonl` row, `feedback` per `<home>/feedback.jsonl` entry; every
 line carries `backfill: true`, sorted by `t`. Free text of the sources (`desc`, `last`, `text`, failure names) is never copied.
 `main(a)` prints the lines, or writes `--out` whole; a bad date exits 2. Never writes `events.jsonl`. Stdlib only.
@@ -132,9 +132,12 @@ def _archive(d):  # the lines of one run archive | O(F + R)
     stable = max((r["stable"] for r in log if isinstance(r.get("stable"), int)), default=None)  # O(R)
     tasks = len(rep["tasks"]) if isinstance(rep.get("tasks"), list) else stable  # O(1)
     plan = man.get("plan")  # O(1)
+    mode = _str(man.get("mode")) or ("backlog" if man.get("batch") else None)  # O(1)
+    orch = man.get("orchestrator") if man.get("orchestrator") in ("ai", "human") else None  # O(1)
+    fleet = man.get("fleet") if isinstance(man.get("fleet"), bool) else None  # O(1)
     if start is not None:  # O(1)
         yield _line("run_start", start, run=run, repo_root=root, plan=Path(plan).name if isinstance(plan, str) and plan else None,
-                    tasks=tasks, branch=_str(man.get("branch")))  # O(1)
+                    tasks=tasks, branch=_str(man.get("branch")), mode=mode, orchestrator=orch, fleet=fleet)  # O(1)
     end = ended or (_when(log[-1]["time"]) if log else None) or start  # O(1)
     head = rep.get("headline") if isinstance(rep.get("headline"), dict) else {}  # O(1)
     qual = rep.get("quality") if isinstance(rep.get("quality"), dict) else {}  # O(1)
@@ -150,7 +153,7 @@ def _archive(d):  # the lines of one run archive | O(F + R)
                     cost_usd=pick("cost_usd_agents", "actual"), tasks=tasks, first_time_pass=_num(qual.get("first_time_pass")),
                     fix_rounds=_num(qual.get("rework_dispatches")), agents=pick("agents", "actual"),
                     tests_passed=_num(tests.get("passed")), tests_failed=_num(tests.get("failed")),
-                    projected_min=pick("wall_min", "projected"), critical_path_min=_num(cp.get("projected_min")))  # O(1)
+                    projected_min=pick("wall_min", "projected"), critical_path_min=_num(cp.get("projected_min")), mode=mode, orchestrator=orch, fleet=fleet)  # O(1)
     for row in _rows(d / "metrics.jsonl"):  # O(R)
         when = _when(row.get("t"))  # O(1)
         if row.get("ev") != "launch" or when is None:  # O(1)
