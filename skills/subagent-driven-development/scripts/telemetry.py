@@ -186,6 +186,9 @@ def _rotate(path):  # O(KEEP)
             lock.close()  # releases the flock | O(1)
 
 
+OPTIONAL = {"agent_stop": ("agent_session",)}  # keys a line may carry beyond KINDS; left out when unknown | O(1)
+
+
 def _build(kind, sd, cwd, session, fields):  # the line dict | O(k)
     fields = dict(fields)  # O(k)
     if kind in WRITER_ROLE_KINDS and fields.get("writer_role") is None:  # O(1)
@@ -202,6 +205,9 @@ def _build(kind, sd, cwd, session, fields):  # the line dict | O(k)
     line = dict(common)  # O(1)
     for k in KINDS[kind]:  # O(k)
         line[k] = fields.get(k)  # O(1)
+    for k in OPTIONAL.get(kind, ()):  # an optional key is left out when it has no value | O(1)
+        if fields.get(k):  # O(1)
+            line[k] = fields[k]  # O(1)
     if fields.get("backfill"):  # O(1)
         line["backfill"] = True  # O(1)
     return line  # O(1)
@@ -264,7 +270,7 @@ def validate(line) -> list[str]:  # problems of one line, [] when it is well for
         if k not in line:  # O(1)
             errs.append(f"{kind}: missing {k}")  # O(1)
     for k in line:  # O(k)
-        if k not in COMMON and k not in KINDS[kind] and k != "backfill":  # O(1)
+        if k not in COMMON and k not in KINDS[kind] and k != "backfill" and k not in OPTIONAL.get(kind, ()):  # O(1)
             errs.append(f"{kind}: unexpected {k}")  # O(1)
     if line.get("v") != 1:  # O(1)
         errs.append(f"{kind}: v must be 1")  # O(1)
