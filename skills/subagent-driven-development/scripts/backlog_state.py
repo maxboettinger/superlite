@@ -75,12 +75,12 @@ def _telemetry(p: Path, d: dict, before: dict) -> None:  # one batch line per ch
                 continue
             leads = [x for x in b.get("leads") or [] if isinstance(x, dict)]  # O(leads)
             model = leads[-1].get("model") if leads else None
-            reason = b.get("reason") or None
+            reason = None  # park and no-change reasons are agent prose: they stay in backlog.json | O(1)
             telemetry.emit("batch", cwd=str(root), batch=bid, state=state, lead_model=model,
                            pr=b.get("pr"), reason=reason)
             end = ("done" if b.get("no_change") else "shipped") if state == "shipped" else "parked" if state == "parked" else None
             if end:
-                telemetry.finish_deferred(telemetry.batch_key(root, bid), end, reason if end == "parked" else None)
+                telemetry.finish_deferred(telemetry.batch_key(root, bid), end, reason)
     except BaseException:
         pass
 

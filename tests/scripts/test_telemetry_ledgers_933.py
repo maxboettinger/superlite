@@ -101,9 +101,22 @@ def test_kind_batch_real_keys(tmp_path, monkeypatch):
     backlog_state.update(p, lambda d: backlog_state.batch(d, "B1").update(
         {"state": "parked", "reason": "ci red", "leads": [{"id": "x", "phase": "build", "model": "sonnet"}]}))
     (line,) = kind("batch")
-    assert (line["lead_model"], line["reason"]) == ("sonnet", "ci red")
+    assert telemetry.validate(line) == []
+    assert (line["lead_model"], line["reason"]) == ("sonnet", None)
     (end,) = kind("run_end")
-    assert (end["outcome"], end["reason"]) == ("parked", "ci red")
+    assert (end["outcome"], end["reason"]) == ("parked", None)
+
+
+def test_kind_batch_prose_reason_not_logged(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("SUPERLITE_HOME", str(home))
+    p = _backlog(tmp_path)
+    key = telemetry.batch_key(tmp_path / "proj", "B1")
+    assert telemetry.defer_run_end(key, {"wall_s": 5})
+    backlog_state.update(p, lambda d: backlog_state.batch(d, "B1").update(
+        {"state": "parked", "reason": "prose-park-words-xyz"}))
+    assert kind("batch") and kind("run_end")
+    assert "prose-park-words-xyz" not in (home / "events.jsonl").read_text()
 
 
 def test_kind_feedback_add(tmp_path, monkeypatch):
