@@ -155,6 +155,28 @@ def lead_batch(sd: Path) -> str | None:  # O(1)
     return m.group(1) if m else None  # O(1)
 
 
+def run_tags(sd: Path, session: str | None = None) -> dict:  # mode, orchestrator and fleet of a run folder; a failing source gives None | O(file)
+    """The three tags run_start and run_end carry: mode (backlog for a lead folder, else the session's mode word, else
+    backlog under a fleet lead), orchestrator (ai | human) and fleet (bool)."""
+    out = {"mode": None, "orchestrator": None, "fleet": None}  # O(1)
+    try:  # O(1)
+        import telemetry  # O(1)
+        out["mode"] = "backlog" if lead_batch(sd) else (telemetry.session_mode(session) or ("backlog" if os.environ.get("SUPERLITE_FLEET_ROLE") == "lead" else None))  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        pass  # O(1)
+    try:  # O(1)
+        st = read_state(sd)  # O(file)
+        out["orchestrator"] = st["mode"] if st else None  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        pass  # O(1)
+    try:  # O(1)
+        import fleet_state  # O(1)
+        out["fleet"] = fleet_state.is_on(sd)  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        pass  # O(1)
+    return out  # O(1)
+
+
 def _branch(checkout: Path) -> str | None:  # O(1) git
     try:  # O(1)
         r = subprocess.run(["git", "-C", str(checkout), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True)  # O(1) git
@@ -207,6 +229,11 @@ def _run_end_fields(sd: Path, plan_path, batch, outcome) -> dict:  # the run_end
         f["final_verdict"] = g["final_verdicts"][-1] if g["final_verdicts"] else None  # O(1)
     except Exception:  # noqa: BLE001 O(1)
         pass  # O(1)
+    try:  # O(1)
+        run_session = json.loads((sd / "stable.json").read_text(encoding="utf-8")).get("run_session")  # O(file)
+    except (OSError, ValueError, AttributeError):  # O(1)
+        run_session = None  # O(1)
+    f.update(run_tags(sd, run_session if isinstance(run_session, str) else None))  # O(file)
     return f  # O(1)
 
 
@@ -248,7 +275,8 @@ def end(sd: Path, plan: str | None = None, outcome: str | None = None) -> str:  
             if src.is_file():  # O(1)
                 shutil.copy2(src, dest / name)  # O(size)
     info = {"id": dest.name, "run_id": tel["run"], "batch": batch, "branch": _branch(checkout), "worktree": str(checkout),
-            "plan": str(plan_path.resolve()) if plan_path else None, "ended": now()}  # O(1)
+            "plan": str(plan_path.resolve()) if plan_path else None, "ended": now(),
+            "mode": tel.get("mode"), "orchestrator": tel.get("orchestrator"), "fleet": tel.get("fleet")}  # O(1)
     run_archive.write_manifest(dest, info)  # O(1)
     run_archive.write_manifest(dest, {**info, "files": sorted(p.name for p in dest.iterdir())})  # run.json lists itself | O(files)
     trimmed = run_archive.prune(dest.parent)  # O(runs)

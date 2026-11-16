@@ -71,7 +71,7 @@ def test_kind_run_start_export_archive(root):
     (d / "build-report.json").write_text(json.dumps({"tasks": [{}] * 5}), encoding="utf-8")
     (line,) = of(rebuild(root), "run_start")
     assert line["run"] == "20261102-101500-b1" and line["plan"] == "p.md" and line["branch"] == "feat/x"
-    assert line["tasks"] == 5 and line["mode"] is None
+    assert line["tasks"] == 5 and line["mode"] == "backlog"
     assert line["t"] == datetime.fromisoformat("2026-11-02T10:15:00").astimezone().astimezone(
         __import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
