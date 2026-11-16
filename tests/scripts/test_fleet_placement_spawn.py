@@ -144,3 +144,69 @@ def test_placed_value_error_is_not_a_remote_failure(pl, capsys, monkeypatch):
     assert fleet.main(["spawn", "--role", "research", "--brief", str(pl.brief)]) == 2
     cap = capsys.readouterr()
     assert "unknown role" in cap.err and "unavailable" not in cap.out and pl.skips == [] and pl.local == []
+
+
+def _fail_send(pl, monkeypatch, fail_ids):
+    """send_brief raises a Herdr timeout for the worker ids in `fail_ids` ("*" = every worker); stop is recorded and prints a line."""
+    stopped = []
+    monkeypatch.setattr(fleet, "stop", lambda sd, ids=None, **k: stopped.extend(ids or []) or print("stopped " + ",".join(ids or [])))
+
+    def send(sd, wid, b, label="", **k):
+        if "*" in fail_ids or wid in fail_ids:
+            raise fleet.hc.HerdrError("timeout", "timed out waiting for agent status")
+        pl.sent_briefs.append(wid)
+    monkeypatch.setattr(fio, "send_brief", send)
+    return stopped
+
+
+def test_placed_send_failure_spawns_local(pl, capsys, monkeypatch):
+    stopped = _fail_send(pl, monkeypatch, {"W1"})
+    assert fleet.main(["spawn", "--role", "research", "--brief", str(pl.brief)]) == 0
+    out = capsys.readouterr().out
+    assert "placement: box unavailable (W1 not sent: timed out waiting for agent status); local" in out
+    assert "BLOCKED" not in out and "stopped" not in out and "W2 local" in out
+    assert stopped == ["W1"] and pl.sent_briefs == ["W2"] and len(pl.local) == 1
+    assert [s[0] for s in pl.skips] == ["box"] and "not sent" in pl.skips[0][1]
+
+
+def test_placed_then_local_send_failure_blocks_once(pl, capsys, monkeypatch):
+    stopped = _fail_send(pl, monkeypatch, {"*"})
+    assert fleet.main(["spawn", "--role", "research", "--brief", str(pl.brief)]) == 3
+    out = capsys.readouterr().out
+    assert "placement: box unavailable" in out and out.count("BLOCKED") == 1 and "BLOCKED: W2 b not sent (timed out waiting for agent status)" in out
+    assert stopped == ["W1", "W2"] and len(pl.local) == 1 and len(pl.skips) == 1
+
+
+def test_forced_machine_send_failure_still_blocks(pl, capsys, monkeypatch):
+    stopped = _fail_send(pl, monkeypatch, {"*"})
+    assert fleet.main(["spawn", "--machine", "box", "--role", "research", "--brief", str(pl.brief)]) == 3
+    out = capsys.readouterr().out
+    assert "BLOCKED: W1 b not sent (timed out waiting for agent status)" in out and "placement:" not in out
+    assert stopped == ["W1"] and pl.local == [] and pl.skips == []
+
+
+def test_for_dispatch_send_failure_goes_local(disp, capsys, monkeypatch):
+    stops = []
+    monkeypatch.setattr(fleet, "stop", lambda sd, ids=None, **k: (stops.append(list(ids or [])), print(f"stopped {list(ids or [])}"), list(ids or []))[-1])
+
+    def bad(sd, wid, plan, tasks, sl):
+        raise fio.hc.HerdrError("account_signed_out", "the account is signed out on this machine; run /login for it there")
+    monkeypatch.setattr(frw, "send_task", bad)
+    disp.lines = [("T3", "fresh tier=sonnet agent=superlite:implementer")]
+    assert fleet.main(["spawn", "--for-dispatch", "--plan", str(disp.plan2)]) == 0
+    out = capsys.readouterr().out
+    assert "placement: box unavailable (W3 not sent: the account is signed out on this machine; run /login for it there); local" in out
+    assert "BLOCKED" not in out and "stopped ['W3']" not in out
+    assert disp.local == [("sonnet", "implementer")] and disp.fsends == [("W4", ["T3"])]
+    assert ["W3"] in stops and [x[0] for x in disp.skips] == ["box"]
+
+
+def test_placed_send_failure_survives_failing_stop(pl, capsys, monkeypatch):
+    _fail_send(pl, monkeypatch, {"W1"})
+
+    def boom(sd, ids=None, **k):
+        raise OSError("host unreachable")
+    monkeypatch.setattr(fleet, "stop", boom)
+    assert fleet.main(["spawn", "--role", "research", "--brief", str(pl.brief)]) == 0
+    out = capsys.readouterr().out
+    assert "placement: box unavailable" in out and "W2 local" in out and pl.sent_briefs == ["W2"]

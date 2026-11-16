@@ -123,3 +123,32 @@ def test_prune_failed_agent_list_drops_nothing(world, monkeypatch, capsys):
     world.fh.list_error = True
     assert started(world)["id"] == "W1"
     assert dropped == [] and "plugin trees kept on box:" in capsys.readouterr().err
+
+
+def _stalled_prompt(world, monkeypatch):
+    sent = []
+
+    def prompt(name, text, until, timeout_ms):
+        sent.append(text)
+        raise world.fh.HerdrError("agent_prompt_stalled", "agent prompt produced no observed working or blocked state within 5000 ms; current status is idle")
+    monkeypatch.setattr(world.fh, "prompt", prompt, raising=False)
+    b = world.sd / "briefs" / "q.md"; b.write_text("question")
+    return sent, b
+
+
+def test_remote_prompt_login_line_fails_without_resend(world, monkeypatch):
+    started(world)
+    sent, b = _stalled_prompt(world, monkeypatch)
+    world.fh.screen = "❯ Read the brief\n⏺ Login reached its time limit · Please run /login\n✻ Cooked for 0s\n"
+    with pytest.raises(world.fh.HerdrError) as ei:
+        rw.send_brief(world.sd, "W1", str(b), "Q1")
+    assert ei.value.code == rw.SIGNED_OUT and "signed out" in ei.value.message and len(sent) == 1
+
+
+def test_remote_prompt_stall_without_login_line_resends(world, monkeypatch):
+    started(world)
+    sent, b = _stalled_prompt(world, monkeypatch)
+    world.fh.screen = "❯ Read the brief\n"
+    with pytest.raises(world.fh.HerdrError) as ei:
+        rw.send_brief(world.sd, "W1", str(b), "Q1")
+    assert ei.value.code == "agent_prompt_stalled" and len(sent) == 2
