@@ -123,3 +123,15 @@ def test_end_output_unchanged(tmp_path, fake_report, capsys):
     out = capsys.readouterr()
     assert out.out.startswith("orchestrator: run ended; ") and " files moved to " in out.out
     assert out.out.count("\n") == 1
+
+
+def test_run_end_grade_fields(tmp_path, fake_report):
+    root, sd, plan = make_run(tmp_path)
+    reports = sd / "fleet" / "reports"
+    reports.mkdir(parents=True)
+    for name, label, role, status in (("a", "T1", "implementer", "DONE"), ("b", "F-T1-1", "fixer", "DONE"),
+                                      ("c", "FR1", "final-reviewer", "NEEDS_FIXES"), ("d", "FR2", "final-reviewer", "APPROVED")):
+        (reports / f"{name}.json").write_text(json.dumps({"label": label, "role": role, "status": status}))
+    orchestrator.end(sd)
+    e = last("run_end")
+    assert (e["fix_rounds"], e["final_verdict"], e["ci_red"], e["questions"]) == (1, "APPROVED", 0, 0)
