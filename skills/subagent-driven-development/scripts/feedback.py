@@ -337,6 +337,14 @@ def new_entry(kind: str, text: str, plan: str = "", ver: str = "", **extra) -> d
             "plan": Path(plan).name if plan else "", **extra}
 
 
+def _emit(fkind: str, reason) -> None:  # one telemetry line, no text; never raises | O(s)
+    try:  # O(1)
+        import telemetry  # O(1)
+        telemetry.emit("feedback", fkind=fkind, reason=reason or None)  # O(s)
+    except BaseException:  # O(1)
+        pass  # O(1)
+
+
 def add_auto(tool: str, reason: str, target: str, version: str) -> bool:  # O(w) + locked append
     """Log one machine-found stop as an entry of kind `auto`, scrubbed like `add` (home paths, e-mail addresses, tokens).
     Called again with the same tool and reason it writes a second entry: triage groups them. False when the tool is empty
@@ -350,6 +358,7 @@ def add_auto(tool: str, reason: str, target: str, version: str) -> bool:  # O(w)
         append(home() / "feedback.jsonl", [entry])  # O(w) + fsync
     except OSError:  # O(1)
         return False  # O(1)
+    _emit("auto", reason)  # O(s)
     return True  # O(1)
 
 
@@ -372,6 +381,7 @@ def cmd_add(a) -> int:  # O(i*w) + locked append
     entry = new_entry(a.kind, text, a.plan or "")  # O(w)
     eid = entry["id"]  # O(1)
     append(home() / "feedback.jsonl", [entry])  # O(w) + fsync
+    _emit(a.kind, None)  # O(s)
     done = triaged()  # O(x)
     left = sum(1 for e in local_entries() if e["id"] not in done)  # O(i*w)
     print(f"feedback logged: {eid} ({left} untriaged on this machine)")  # O(1)

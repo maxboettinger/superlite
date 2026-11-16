@@ -54,11 +54,30 @@ def update(p: Path, fn):
     with open(p.with_name(p.name + ".lock"), "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)  # O(wait)
         d = load(p)
+        before = {b.get("id"): b.get("state") for b in d.get("batches", []) if isinstance(b, dict)}  # O(batches)
         res = fn(d)
         tmp = p.with_name(p.name + ".tmp")
         tmp.write_text(json.dumps(d, indent=2))  # O(size)
         os.replace(tmp, p)
+        _telemetry(p, d, before)  # O(batches)
         return res
+
+
+def _telemetry(p: Path, d: dict, before: dict) -> None:  # one batch line per changed state; never raises | O(batches)
+    try:
+        import telemetry
+        root = p.parent.parent
+        for b in d.get("batches", []):  # O(batches)
+            bid, state = b.get("id"), b.get("state")
+            if not isinstance(b, dict) or state == before.get(bid) or not state:
+                continue
+            telemetry.emit("batch", cwd=str(root), batch=bid, state=state, lead_model=b.get("lead_model"),
+                           pr=b.get("pr"), reason=b.get("reason"))
+            end = {"shipped": "shipped", "parked": "parked"}.get(state, "done") if state in ("shipped", "parked", "done") else None
+            if end:
+                telemetry.finish_deferred(telemetry.batch_key(root, bid), end, b.get("reason") if end == "parked" else None)
+    except BaseException:
+        pass
 
 
 def batch(data: dict, bid: str) -> dict:
