@@ -68,14 +68,19 @@ def _telemetry(p: Path, d: dict, before: dict) -> None:  # one batch line per ch
         import telemetry
         root = p.parent.parent
         for b in d.get("batches", []):  # O(batches)
-            bid, state = b.get("id"), b.get("state")
-            if not isinstance(b, dict) or state == before.get(bid) or not state:
+            if not isinstance(b, dict):
                 continue
-            telemetry.emit("batch", cwd=str(root), batch=bid, state=state, lead_model=b.get("lead_model"),
-                           pr=b.get("pr"), reason=b.get("reason"))
-            end = {"shipped": "shipped", "parked": "parked"}.get(state, "done") if state in ("shipped", "parked", "done") else None
+            bid, state = b.get("id"), b.get("state")
+            if state == before.get(bid) or not state:
+                continue
+            leads = [x for x in b.get("leads") or [] if isinstance(x, dict)]  # O(leads)
+            model = leads[-1].get("model") if leads else None
+            reason = b.get("reason") or None
+            telemetry.emit("batch", cwd=str(root), batch=bid, state=state, lead_model=model,
+                           pr=b.get("pr"), reason=reason)
+            end = ("done" if b.get("no_change") else "shipped") if state == "shipped" else "parked" if state == "parked" else None
             if end:
-                telemetry.finish_deferred(telemetry.batch_key(root, bid), end, b.get("reason") if end == "parked" else None)
+                telemetry.finish_deferred(telemetry.batch_key(root, bid), end, reason if end == "parked" else None)
     except BaseException:
         pass
 

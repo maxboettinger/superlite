@@ -82,6 +82,30 @@ def test_kind_run_end_shipped_from_batch(tmp_path, monkeypatch):
     assert line["outcome"] == "shipped"
 
 
+def test_kind_run_end_done_from_no_change_batch(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
+    p = _backlog(tmp_path)
+    key = telemetry.batch_key(tmp_path / "proj", "B1")
+    assert telemetry.defer_run_end(key, {"wall_s": 5})
+    backlog_state.update(p, lambda d: backlog_state.batch(d, "B1").update({"state": "shipped", "no_change": "nothing to do"}))
+    (line,) = kind("run_end")
+    assert telemetry.validate(line) == []
+    assert line["outcome"] == "done"
+
+
+def test_kind_batch_real_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
+    p = _backlog(tmp_path)
+    key = telemetry.batch_key(tmp_path / "proj", "B1")
+    assert telemetry.defer_run_end(key, {"wall_s": 5})
+    backlog_state.update(p, lambda d: backlog_state.batch(d, "B1").update(
+        {"state": "parked", "reason": "ci red", "leads": [{"id": "x", "phase": "build", "model": "sonnet"}]}))
+    (line,) = kind("batch")
+    assert (line["lead_model"], line["reason"]) == ("sonnet", "ci red")
+    (end,) = kind("run_end")
+    assert (end["outcome"], end["reason"]) == ("parked", "ci red")
+
+
 def test_kind_feedback_add(tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("SUPERLITE_HOME", str(home))
