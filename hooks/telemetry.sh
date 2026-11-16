@@ -6,7 +6,7 @@
 #   sl_tel_gate HOOK DECISION RULE TOOL TARGET   # one `gate` line
 #   sl_tel_json VAR VALUE [MAX]                  # VAR = JSON string of VALUE cut to MAX chars (200), or null
 #   sl_tel_emit KIND FRAGMENT                    # FRAGMENT: the kind's own fields as JSON members
-#   sl_tel_session_file SID EXT                  # prints <home>/telemetry/sessions/SID.EXT; 1 for a bad id
+#   sl_tel_session_file SID EXT                  # sets SL_TEL_FILE=<home>/telemetry/sessions/SID.EXT (prints nothing); empty and 1 for a bad id
 #
 # Fail open: every function returns 0 and prints nothing (errors go to /dev/null). A line holds no free text.
 # Note: the run id lookup uses [[ =~ ]], so BASH_REMATCH changes; read your own match first.
@@ -54,9 +54,10 @@ _sl_tel_on() {
 # sl_tel_session_file SID EXT
 sl_tel_session_file() {
   local re='^[A-Za-z0-9_-]{1,128}$'
+  SL_TEL_FILE=""
   [[ $1 =~ $re ]] || return 1
   _sl_tel_home
-  printf '%s\n' "$_SL_TEL_HOME/telemetry/sessions/$1.$2"
+  SL_TEL_FILE="$_SL_TEL_HOME/telemetry/sessions/$1.$2"
   return 0
 }
 

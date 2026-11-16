@@ -40,7 +40,7 @@ _tel() {
   case "$n" in mvp|feature|debug|small|backlog) mode="$n" ;; esac
   sl_tel_json j "$name"; sl_tel_json v "$via"
   sl_tel_emit invoke "\"name\":$j,\"via\":$v"
-  [ -n "$sid" ] && mf=$(sl_tel_session_file "$sid" mode)
+  [ -n "$sid" ] && sl_tel_session_file "$sid" mode && mf="$SL_TEL_FILE"
   if [ -z "$mode" ] && [ "$n" = brainstorming ]; then
     [ -n "$mf" ] && [ -e "$mf" ] && return 0
     mode=regular

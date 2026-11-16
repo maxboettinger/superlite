@@ -16,8 +16,8 @@ sid=""; reason=""; dur=null
 
 sf=""; mf=""
 if [ -n "$sid" ]; then
-  sf=$(sl_tel_session_file "$sid" start) || sf=""
-  mf=$(sl_tel_session_file "$sid" mode) || mf=""
+  sl_tel_session_file "$sid" start && sf="$SL_TEL_FILE"
+  sl_tel_session_file "$sid" mode && mf="$SL_TEL_FILE"
 fi
 if [ -n "$sf" ] && [ -f "$sf" ]; then
   t0=""; { IFS= read -r t0 < "$sf"; } 2>/dev/null

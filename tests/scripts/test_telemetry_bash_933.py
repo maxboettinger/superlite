@@ -139,11 +139,20 @@ def test_bash_session_and_fleet_context(tmp_path):
 
 
 def test_bash_session_file():
-    r = sh("sl_tel_session_file s-1_A start; echo \"rc=$?\"; sl_tel_session_file '../x' start; echo \"rc=$?\"; "
-           "sl_tel_session_file '' mode; echo \"rc=$?\"")
+    r = sh("sl_tel_session_file s-1_A start; echo \"rc=$? f=$SL_TEL_FILE\"; sl_tel_session_file '../x' start; "
+           "echo \"rc=$? f=[$SL_TEL_FILE]\"; sl_tel_session_file '' mode; echo \"rc=$? f=[$SL_TEL_FILE]\"")
     out = r.stdout.splitlines()
-    assert out[0].endswith("/telemetry/sessions/s-1_A.start") and out[0].startswith(str(home()))
-    assert out[1:] == ["rc=0", "rc=1", "rc=1"]
+    assert len(out) == 3
+    assert out[0].startswith("rc=0 f=" + str(home())) and out[0].endswith("/telemetry/sessions/s-1_A.start")
+    assert out[1:] == ["rc=1 f=[]", "rc=1 f=[]"]
+
+
+def test_bash_session_file_prints_nothing_and_spawns_no_subshell():
+    r = sh("sl_tel_session_file s1 mode; echo done")
+    assert r.stdout == "done\n"
+    for hook in ("session-start", "session-end", "mark-inline-flow"):
+        text = (LIB.parent / hook).read_text(encoding="utf-8")
+        assert "$(sl_tel_session_file" not in text
 
 
 def test_bash_timestamp_fallback_without_epochrealtime():
