@@ -44,4 +44,10 @@ now="${EPOCHREALTIME//[.,]/}"; now="${now%???}"   # epoch ms
 [[ $now =~ ^[0-9]{13,}$ ]] || now="$(date +%s)000"
 printf '{"ev":"stop","t":%s,"agent_id":"%s","type":"%s","transcript":"%s","last":"%s"}\n' \
   "$now" "$id" "$type" "$tr" "$last" >> "$sd/metrics.jsonl" 2>/dev/null
+
+# Telemetry (#933): `agent_stop` (and `review`) lines from the transcript's counts, in one Python call; fails open.
+jstr session_id
+[ -n "$tr" ] && [ -f "$tr" ] && SUPERLITE_STATE_DIR="$sd" SUPERLITE_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-$REPLY}" \
+  "${BASH_SOURCE[0]%/*}/../skills/subagent-driven-development/scripts/sl" telemetry agent-stop \
+  --transcript "$tr" --agent-type "$type" --agent-id "$id" --sd "$sd" </dev/null >/dev/null 2>&1
 exit 0
