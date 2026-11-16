@@ -228,3 +228,11 @@ def test_cli_agent_stop_fails_open_silently(tmp_path):
                         str(tmp_path / "none.jsonl"), "--agent-type", "superlite:implementer"],
                        capture_output=True, text=True, env=dict(os.environ))
     assert r.returncode == 0 and r.stderr == ""
+
+
+def test_session_and_key_ids_reject_trailing_newline():
+    (home() / "telemetry" / "sessions").mkdir(parents=True)
+    (home() / "telemetry" / "sessions" / "s1\n.mode").write_text("feature")
+    assert telemetry.session_mode("s1\n") is None
+    assert telemetry.defer_run_end("k\n", dict(FIELDS)) is False
+    assert telemetry.finish_deferred("k\n", "done") is False
