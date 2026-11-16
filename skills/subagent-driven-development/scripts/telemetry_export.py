@@ -22,7 +22,7 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import telemetry  # noqa: E402 | O(1)
 
-TASK_RE = re.compile(r"\b([A-Z]{1,2}\d+[a-z]?)\b")  # a task id inside a launch description; the rest is never read | O(1)
+TASK_RE = re.compile(r"^\s*([A-Z]{1,3}\d+[A-Za-z]?)\b")  # a task id at the start of a launch description, as the live writer reads it; the rest is never read | O(1)
 
 
 def _rows(path):  # the JSON objects of a JSONL file; bad lines skipped | O(R)
@@ -155,7 +155,7 @@ def _archive(d):  # the lines of one run archive | O(F + R)
         when = _when(row.get("t"))  # O(1)
         if row.get("ev") != "launch" or when is None:  # O(1)
             continue  # O(1)
-        found = TASK_RE.search(row["desc"]) if isinstance(row.get("desc"), str) else None  # only the id leaves the text | O(len)
+        found = TASK_RE.match(row["desc"]) if isinstance(row.get("desc"), str) else None  # only the id leaves the text | O(len)
         yield _line("dispatch", when, run=run, repo_root=root, task=found[1] if found else None, agent_type=_str(row.get("type")),
                     model=_str(row.get("model")))  # O(1)
     for p in sorted(d.glob("test-summary-*.json")):  # O(F)
@@ -170,7 +170,7 @@ def _archive(d):  # the lines of one run archive | O(F + R)
                     skipped=_num(s.get("skipped")), seconds=_num(s.get("seconds")), task=_str(s.get("task")))  # O(1)
 
 
-def rebuild(since, roots, home) -> list:  # every line of the ledgers from `since` on, sorted by t | O(R log R)
+def rebuild(since, roots, home) -> list[dict]:  # every line of the ledgers from `since` on, sorted by t | O(R log R)
     floor = _stamp(datetime(since.year, since.month, since.day, tzinfo=timezone.utc))  # O(1)
     lines = list(_history(home)) + list(_feedback(home))  # O(R)
     for root in roots:  # O(roots)

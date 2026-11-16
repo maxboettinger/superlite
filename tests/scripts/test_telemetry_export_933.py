@@ -196,3 +196,19 @@ def test_export_repo_root_from_root(root):
     lines = rebuild(root)
     assert {x["kind"] for x in lines} >= {"run_start", "run_end", "dispatch", "tests", "batch"}
     assert {x["repo_root"] for x in lines} == {str(root)}
+
+
+def test_dispatch_task_anchored_like_live_writer(root):
+    d = archive(root)
+    ms = int(datetime(2026, 11, 2, 10, 30).timestamp() * 1000)
+    jl(d / "metrics.jsonl", [
+        {"ev": "launch", "t": ms, "type": "x", "model": "m", "desc": "fix T4 later"},
+        {"ev": "launch", "t": ms + 1, "type": "x", "model": "m", "desc": "ABCD12 thing"},
+        {"ev": "launch", "t": ms + 2, "type": "x", "model": "m", "desc": "  FOO7a work"},
+    ])
+    tasks = [x["task"] for x in of(rebuild(root), "dispatch")]
+    assert tasks == [None, None, "FOO7a"]
+
+
+def test_rebuild_annotation_list_of_dict():
+    assert telemetry_export.rebuild.__annotations__["return"] in (list[dict], "list[dict]")
