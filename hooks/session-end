@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# SessionEnd hook: writes one `session_end` telemetry line (reason, seconds since the session's start file) and removes
+# the session's <sid>.start and <sid>.mode files (#933). Silent, bash builtins only, exit 0 always (fail open).
+
+IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
+. "${BASH_SOURCE[0]%/*}/telemetry.sh" 2>/dev/null || exit 0
+
+re_sid='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'
+re_reason='"reason"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
+re_cwd='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]+)"'
+sid=""; reason=""; dur=null
+[[ $input =~ $re_sid ]] && sid="${BASH_REMATCH[1]}"
+[[ $input =~ $re_reason ]] && reason="${BASH_REMATCH[1]}"
+[[ $input =~ $re_cwd ]] && SL_TEL_CWD="${BASH_REMATCH[1]}"
+[ -n "$sid" ] && SL_TEL_SESSION="$sid"
+
+sf=""; mf=""
+if [ -n "$sid" ]; then
+  sf=$(sl_tel_session_file "$sid" start) || sf=""
+  mf=$(sl_tel_session_file "$sid" mode) || mf=""
+fi
+if [ -n "$sf" ] && [ -f "$sf" ]; then
+  t0=""; { IFS= read -r t0 < "$sf"; } 2>/dev/null
+  if [[ $t0 =~ ^[0-9]+$ ]]; then
+    now="${EPOCHREALTIME-}"
+    if [ -n "$now" ]; then now="${now%%[.,]*}"; else now=$(date +%s); fi
+    dur=$((now - t0))
+    [ "$dur" -ge 0 ] || dur=null
+  fi
+fi
+sl_tel_json r "$reason"
+sl_tel_emit session_end "\"reason\":$r,\"duration_s\":$dur"
+[ -n "$sf" ] && rm -f "$sf" 2>/dev/null
+[ -n "$mf" ] && rm -f "$mf" 2>/dev/null
+exit 0

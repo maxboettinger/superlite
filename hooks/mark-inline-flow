@@ -10,6 +10,50 @@
 
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
 
+# Telemetry (#933), before the subagent and fleet-worker exits: an `invoke` line for a superlite skill or a /superlite:<name>
+# prompt (only the name is read), and a `mode` line (+ <sid>.mode) where the invocation chooses the mode. Fails open.
+_tel() {
+  local re_sid='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'
+  local re_cwd='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]+)"'
+  local re_t='"tool_name"[[:space:]]*:[[:space:]]*"([A-Za-z]+)"'
+  local re_s='"skill"[[:space:]]*:[[:space:]]*"superlite:([A-Za-z0-9_-]+)"'
+  local re_p='"prompt"[[:space:]]*:[[:space:]]*"(\\[nrt]|[[:space:]])*/superlite:([A-Za-z0-9_-]+)(\\[nrt]|[[:space:]]|")'
+  local re_st='"prompt"[[:space:]]*:[[:space:]]*"(\\[nrt]|[[:space:]])*/superlite:start(\\[nrt]|[[:space:]])+(regular|mvp|feature|debug)(\\[nrt]|[[:space:]]|")'
+  local sid="" name="" via="" mode="" mf="" n j v
+  . "${BASH_SOURCE[0]%/*}/telemetry.sh" || return 0
+  _sl_tel_on || return 0
+  [[ $input =~ $re_sid ]] && sid="${BASH_REMATCH[1]}"
+  [[ $input =~ $re_cwd ]] && SL_TEL_CWD="${BASH_REMATCH[1]}"
+  [ -n "$sid" ] && SL_TEL_SESSION="$sid"
+  if [[ $input =~ $re_t ]]; then
+    [ "${BASH_REMATCH[1]}" = Skill ] || return 0
+    [[ $input =~ $re_s ]] || return 0
+    n="${BASH_REMATCH[1]}"; via=skill
+  elif [[ $input =~ $re_st ]]; then
+    n=start; via=command; mode="${BASH_REMATCH[3]}"
+  elif [[ $input =~ $re_p ]]; then
+    n="${BASH_REMATCH[2]}"; via=command
+  else
+    return 0
+  fi
+  name="superlite:$n"
+  case "$n" in mvp|feature|debug|small|backlog) mode="$n" ;; esac
+  sl_tel_json j "$name"; sl_tel_json v "$via"
+  sl_tel_emit invoke "\"name\":$j,\"via\":$v"
+  [ -n "$sid" ] && mf=$(sl_tel_session_file "$sid" mode)
+  if [ -z "$mode" ] && [ "$n" = brainstorming ]; then
+    [ -n "$mf" ] && [ -e "$mf" ] && return 0
+    mode=regular
+  fi
+  [ -n "$mode" ] || return 0
+  if [ -n "$mf" ]; then
+    [ -d "${mf%/*}" ] || mkdir -p "${mf%/*}"
+    printf '%s\n' "$mode" > "$mf"
+  fi
+  sl_tel_emit mode "\"mode\":\"$mode\""
+}
+_tel >/dev/null 2>&1
+
 re_agent='"agent_id"[[:space:]]*:[[:space:]]*"'
 [[ $input =~ $re_agent ]] && exit 0   # subagent call
 [ -n "${SUPERLITE_FLEET_WORKER:-}" ] && exit 0   # fleet worker session
