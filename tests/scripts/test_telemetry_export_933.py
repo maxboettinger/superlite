@@ -185,3 +185,14 @@ def test_export_bad_date_exit_2(root, capsys):
     assert e.value.code == 2
     ns = telemetry_export.argparse.Namespace(since="nope", root=[str(root)], out=None)
     assert telemetry_export.main(ns) == 2
+
+
+def test_export_repo_root_from_root(root):
+    d = archive(root)
+    ms = int(datetime(2026, 11, 2, 10, 30).timestamp() * 1000)
+    jl(d / "metrics.jsonl", [{"ev": "launch", "t": ms, "type": "x", "model": "m", "desc": "T4"}])
+    (d / "test-summary-T2.json").write_text(json.dumps({"passed": 1, "started": 1793613600}), encoding="utf-8")
+    jl(root / ".superlite" / "batch-costs.jsonl", [{"t": "2026-11-03T08:00:00Z", "batch": "B", "end": "done"}])
+    lines = rebuild(root)
+    assert {x["kind"] for x in lines} >= {"run_start", "run_end", "dispatch", "tests", "batch"}
+    assert {x["repo_root"] for x in lines} == {str(root)}

@@ -115,13 +115,14 @@ def _batches(root):  # O(R)
         if when is None:  # O(1)
             continue  # O(1)
         lead = row.get("lead") if isinstance(row.get("lead"), dict) else {}  # O(1)
-        yield _line("batch", when, batch=_str(row.get("batch")), state=_str(row.get("end")),
+        yield _line("batch", when, repo_root=str(root), batch=_str(row.get("batch")), state=_str(row.get("end")),
                     lead_model=_str(lead.get("model")), pr=row.get("pr") if isinstance(row.get("pr"), (int, str)) else None)  # O(1)
 
 
 def _archive(d):  # the lines of one run archive | O(F + R)
     man, rep = _json(d / "run.json"), _json(d / "build-report.json")  # O(size)
     run = _str(man.get("run_id")) or d.name  # O(1)
+    root = str(d.parent.parent.parent)  # <root>/.superlite/runs/<archive> | O(1)
     log = [r for r in _rows(d / "lint-log.jsonl") if _when(r.get("time"))]  # O(R)
     first = _when(log[0]["time"]) if log else None  # O(1)
     ended = _when(man.get("ended"))  # O(1)
@@ -132,7 +133,7 @@ def _archive(d):  # the lines of one run archive | O(F + R)
     tasks = len(rep["tasks"]) if isinstance(rep.get("tasks"), list) else stable  # O(1)
     plan = man.get("plan")  # O(1)
     if start is not None:  # O(1)
-        yield _line("run_start", start, run=run, plan=Path(plan).name if isinstance(plan, str) and plan else None,
+        yield _line("run_start", start, run=run, repo_root=root, plan=Path(plan).name if isinstance(plan, str) and plan else None,
                     tasks=tasks, branch=_str(man.get("branch")))  # O(1)
     end = ended or (_when(log[-1]["time"]) if log else None) or start  # O(1)
     head = rep.get("headline") if isinstance(rep.get("headline"), dict) else {}  # O(1)
@@ -145,7 +146,7 @@ def _archive(d):  # the lines of one run archive | O(F + R)
     cp = rep.get("critical_path") if isinstance(rep.get("critical_path"), dict) else {}  # O(1)
     wall = pick("wall_min", "actual")  # O(1)
     if end is not None:  # O(1)
-        yield _line("run_end", end, run=run, outcome="done", wall_s=round(wall * 60, 3) if wall is not None else None,
+        yield _line("run_end", end, run=run, repo_root=root, outcome="done", wall_s=round(wall * 60, 3) if wall is not None else None,
                     cost_usd=pick("cost_usd_agents", "actual"), tasks=tasks, first_time_pass=_num(qual.get("first_time_pass")),
                     fix_rounds=_num(qual.get("rework_dispatches")), agents=pick("agents", "actual"),
                     tests_passed=_num(tests.get("passed")), tests_failed=_num(tests.get("failed")),
@@ -155,7 +156,7 @@ def _archive(d):  # the lines of one run archive | O(F + R)
         if row.get("ev") != "launch" or when is None:  # O(1)
             continue  # O(1)
         found = TASK_RE.search(row["desc"]) if isinstance(row.get("desc"), str) else None  # only the id leaves the text | O(len)
-        yield _line("dispatch", when, run=run, task=found[1] if found else None, agent_type=_str(row.get("type")),
+        yield _line("dispatch", when, run=run, repo_root=root, task=found[1] if found else None, agent_type=_str(row.get("type")),
                     model=_str(row.get("model")))  # O(1)
     for p in sorted(d.glob("test-summary-*.json")):  # O(F)
         s = _json(p)  # O(size)
@@ -165,7 +166,7 @@ def _archive(d):  # the lines of one run archive | O(F + R)
             when = _when(s.get("started")) or datetime.fromtimestamp(p.stat().st_mtime, timezone.utc)  # O(1)
         except OSError:  # O(1)
             continue  # O(1)
-        yield _line("tests", when, run=run, mode=_str(s.get("mode")), passed=_num(s.get("passed")), failed=_num(s.get("failed")),
+        yield _line("tests", when, run=run, repo_root=root, mode=_str(s.get("mode")), passed=_num(s.get("passed")), failed=_num(s.get("failed")),
                     skipped=_num(s.get("skipped")), seconds=_num(s.get("seconds")), task=_str(s.get("task")))  # O(1)
 
 
