@@ -109,3 +109,13 @@ def test_fleet_telemetry_failure_keeps_output(world, capsys, monkeypatch):
     io.send(world.sd, world.plan, "W1", ["T3"], "/sl/sl", "/sl")
     assert capsys.readouterr().out == want
     assert base == "W2 T4 sent\n"
+
+
+def test_kind_review_fleet_null_run_no_label_round_none(world, tmp_path):
+    assert telemetry.run_id(world.sd) is None
+    w = json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]
+    for n in range(2):
+        io._finish(world.sd, "W1", {**w, "role": "package-reviewer", "sent": 1000 + n, "task": f"brief{n}"}, "Verdict: APPROVED", "transcript")
+    ev = lines("review")
+    assert len(ev) == 2 and [e["round"] for e in ev] == [None, None]
+    assert all(telemetry.validate(e) == [] for e in ev)

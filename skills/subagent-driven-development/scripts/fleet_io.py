@@ -883,7 +883,8 @@ def _tel_finish(sd, wid, w, rep, label):  # the `agent_stop` line of a worker's 
         if kind:  # O(1)
             import telemetry  # noqa: E402 | O(1) lazy
             m = re.search(r"FR(\d+)", label or "")  # O(1)
-            rnd = int(m.group(1)) if m else 1 + telemetry.count("review", telemetry.run_id(sd), review_kind=kind)  # O(n)
+            run = telemetry.run_id(sd)  # O(size)
+            rnd = int(m.group(1)) if m else (1 + telemetry.count("review", run, review_kind=kind) if run else None)  # O(n)
             _tel("review", sd, review_kind=kind, verdict=rep["status"], findings=len(rep["findings"]), round=rnd)  # O(s)
     except BaseException:  # O(1)
         pass  # O(1)
