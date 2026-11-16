@@ -130,3 +130,14 @@ def test_run_tests_summary_unchanged(tmp_path, monkeypatch):
     (tmp_path / "test_a.py").write_text("def test_a():\n    assert True\n")
     cp = rt(tmp_path, home, "--fast", "test_a.py")
     assert cp.stdout.split()[:3] == ["1", "0", "0"] and len(cp.stdout.split()) == 4
+
+
+def test_tests_emit_failure_keeps_exit(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(run_tests, "STAMP", None)
+    for name in ("write_summary", "publish_summary", "add_incidents", "resolve_passed"):
+        monkeypatch.setattr(run_tests, name, lambda *a, **k: None)
+    monkeypatch.setattr(run_tests.ct, "append_ledger", lambda *a, **k: None)
+    a = argparse.Namespace(summary=None, log=None, ledger=None, task=None, publish=None, run_id=None)
+    counts = {"passed": 1, "failed": 0, "skipped": 0, "skipped_tests": []}
+    assert run_tests.finish_run(a, "fast", counts, [], {}, 1.0, 0) == 0
