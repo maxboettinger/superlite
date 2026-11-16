@@ -116,6 +116,7 @@ sl_tel_emit() {
   line="{\"v\":1,\"t\":\"$_SL_TEL_T\",\"kind\":\"$kind\",\"session\":$sess,\"run\":$run,\"repo_root\":$root,\"harness\":$harn,\"version\":$ver,\"worker\":$w,\"role\":$r,\"config_dir\":$cfg"
   [[ -n $frag ]] && line="$line,$frag"
   line="$line}"
+  local LC_ALL=C
   ((${#line} > 4095)) && return 0
   _sl_tel_home
   [[ -d $_SL_TEL_HOME ]] || mkdir -p "$_SL_TEL_HOME" 2>/dev/null
@@ -127,7 +128,10 @@ sl_tel_emit() {
 sl_tel_gate() {
   _sl_tel_on || return 0
   local h d r t g
-  sl_tel_json h "$1"; sl_tel_json d "$2"; sl_tel_json r "$3"; sl_tel_json t "$4"; sl_tel_json g "$5"
+  local _tg=${5-}
+  _tg=${_tg%%$'\n'*}
+  _tg=${_tg%%<<*}
+  sl_tel_json h "$1"; sl_tel_json d "$2"; sl_tel_json r "$3"; sl_tel_json t "$4"; sl_tel_json g "$_tg"
   sl_tel_emit gate "\"hook\":$h,\"decision\":$d,\"rule\":$r,\"tool\":$t,\"target\":$g"
   return 0
 }

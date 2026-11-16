@@ -65,7 +65,7 @@ def test_kind_mode_bash_fragment():
 
 
 def test_bash_escapes_quotes_backslash_newline():
-    target = 'a"b\\c\nd\te'
+    target = 'a"b\\c\td\te'
     r = sh('sl_tel_gate h block r Bash "$T"', T=target)
     assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
     raw = (home() / "events.jsonl").read_text().splitlines()
@@ -159,3 +159,27 @@ def test_bash32_lint_passes():
     assert offences(text) == []
     assert b"\r" not in LIB.read_bytes()
     assert subprocess.run([BASH, "-n", str(LIB)]).returncode == 0
+
+
+def test_bash_line_cap_counts_bytes_not_characters():
+    big = "€" * 200
+    sh(
+        "SL_TEL_SESSION=\"$BIG\"; sl_tel_gate h block r Bash \"$BIG\"",
+        BIG=big,
+        LC_ALL="C.UTF-8",
+        CLAUDE_CONFIG_DIR="€" * 500,
+        SUPERLITE_FLEET_WORKER=big,
+        SUPERLITE_FLEET_ROLE=big,
+    )
+    p = home() / "events.jsonl"
+    assert not p.exists() or len(p.read_bytes()) <= 4096
+    assert not p.exists() or p.read_bytes() == b""
+
+
+def test_bash_gate_target_cut_at_newline_and_heredoc():
+    sh('sl_tel_gate h block r Bash "$T"', T="cat > f.txt <<EOF\nsecret body\nEOF")
+    sh('sl_tel_gate h block r Bash "$T"', T="echo hi\nsecret body")
+    sh('sl_tel_gate h block r Bash "$T"', T="cat <<'EOF' > f")
+    lines = telemetry.read_events()
+    assert [ln["target"] for ln in lines] == ["cat > f.txt ", "echo hi", "cat "]
+    assert "secret" not in (home() / "events.jsonl").read_text()
