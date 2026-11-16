@@ -34,6 +34,7 @@ GIT_TIMEOUT_S = 30  # bound of each git call of the working-state listing | O(1)
 PLUGIN_MAX_AGE_S = 86400  # an unused plugin tree is dropped only when its commit is older than this | O(1)
 REMOTE_START_MS = 90000  # wait for a new remote agent to be idle before the first prompt | O(1)
 REMOTE_PROMPT_MS = 60000  # wait for a remote agent to start working after a prompt | O(1)
+SIGNED_OUT = "account_signed_out"  # the error code of a prompt the host's account answered with a sign-in or /login line | O(1)
 SUPERLITE_ROOT = str(Path(__file__).resolve().parents[3])  # the checkout whose commit the host loads | O(1)
 
 
@@ -181,6 +182,7 @@ def _prompt(name, msg):  # fio._prompt with the remote wait: a new remote agent 
         hc.prompt(name, msg, ["working"], REMOTE_PROMPT_MS)  # O(len msg)
         return  # O(1)
     except hc.HerdrError as e:  # O(1)
+        _login_after_prompt(name)  # O(s)
         text = str(getattr(e, "message", "") or e)  # O(len)
         if getattr(e, "code", "") == fio.STALLED:  # O(1)
             pass  # O(1)
@@ -194,6 +196,15 @@ def _prompt(name, msg):  # fio._prompt with the remote wait: a new remote agent 
         else:  # O(1)
             raise  # O(1)
     hc.prompt(name, msg, ["working"], REMOTE_PROMPT_MS)  # resent once; a second failure propagates | O(len msg)
+
+
+def _login_after_prompt(name):  # an account signed out on the host starts fine and answers the first prompt with a /login line: a resend cannot help | O(s)
+    try:  # O(1)
+        screen = hc.read_screen(name, fleet.SCREEN_ROWS)  # O(s)
+    except hc.HerdrError:  # an unreadable screen leaves the caller's own handling | O(1)
+        return  # O(1)
+    if fra.login_screen(screen):  # O(s)
+        raise hc.HerdrError(SIGNED_OUT, "the account is signed out on this machine; run /login for it there")  # O(1)
 
 
 def _signed_out(sd, wid, label, account, pane, project):  # the pane closes, the tree goes, the spawn is BLOCKED | O(1)
