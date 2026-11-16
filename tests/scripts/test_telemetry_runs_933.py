@@ -110,3 +110,17 @@ def test_kind_run_end_abandoned_after_takeover(tmp_path):
     assert second["run_id"] != first["run_id"] and second["run_session"] == "s2"
     (end,) = kinds("run_end")
     assert (end["run"], end["outcome"]) == (first["run_id"], "abandoned")
+
+
+def test_clear_handoff_keeps_run(tmp_path):
+    first = lint(tmp_path, session="s1")
+    sessions = Path(os.environ["SUPERLITE_HOME"]) / "sessions"
+    # what the SessionStart hook does after /clear: the folder and its binding move to the new session id
+    (tmp_path / ".superlite" / "session").write_text("s2\n", encoding="utf-8")
+    (sessions / "s2").write_text((sessions / "s1").read_text(encoding="utf-8"), encoding="utf-8")
+    (sessions / "s1").unlink()
+    second = lint(tmp_path, session="s2")
+    assert second["run_id"] == first["run_id"] and second["run_session"] == "s2"
+    assert kinds("run_end") == [] and len(kinds("run_start")) == 1
+    third = lint(tmp_path, session="s2")
+    assert third["run_id"] == first["run_id"] and kinds("run_end") == []

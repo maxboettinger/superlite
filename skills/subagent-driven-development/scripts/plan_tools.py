@@ -3356,15 +3356,17 @@ def refresh_adapter(plan_path: str, write: bool = True) -> str:  # O(file + entr
 
 
 def _telemetry_run(old: dict, sl_dir: Path):  # (run_id/run_session keys for stable.json, whether a run starts) | O(S)
-    """Keep the run id of `old`; mint one when it has none or another session wrote it (that run is then written as abandoned)."""
+    """Keep the run id of `old`; mint one when it has none or another session wrote it (that run is then written as abandoned).
+    A /clear or compact handoff (the folder owner is this session and the old session's binding is gone) keeps the run and moves run_session."""
     try:  # telemetry never changes a lint | O(1)
         import state  # O(1)
         import telemetry  # O(1)
         sid = state.session_id()  # O(1)
         rid, owner = old.get("run_id"), old.get("run_session")  # O(1)
         if isinstance(rid, str) and rid:  # O(1)
-            if not (owner and sid and owner != sid):  # same session, or one of them unknown | O(1)
-                return {"run_id": rid, "run_session": owner or sid}, False  # O(1)
+            handed = bool(owner and sid and owner != sid and state.owner(sl_dir) == sid and not state._binding(owner).exists())  # /clear: the hook moved the folder and the binding to the new id | O(1)
+            if handed or not (owner and sid and owner != sid):  # a handoff, same session, or one of them unknown | O(1)
+                return {"run_id": rid, "run_session": sid if handed else owner or sid}, False  # O(1)
             telemetry.emit("run_end", sd=sl_dir, run=rid, outcome="abandoned", reason="resumed by another session")  # O(s)
         return {"run_id": telemetry.new_run_id(), "run_session": sid}, True  # O(1)
     except Exception:  # noqa: BLE001 | O(1)
