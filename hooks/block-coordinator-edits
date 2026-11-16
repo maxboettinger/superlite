@@ -39,6 +39,17 @@
 
 IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
 
+# tel_gate DECISION RULE TOOL TARGET: one telemetry line (hooks/telemetry.sh), sourced only here; fails open, prints nothing.
+tel_gate() {
+  . "${BASH_SOURCE[0]%/*}/telemetry.sh" 2>/dev/null || return 0
+  local re_s='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"' re_c='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
+  SL_TEL_SESSION=""; SL_TEL_CWD=""
+  [[ ${input-} =~ $re_s ]] && SL_TEL_SESSION="${BASH_REMATCH[1]}"
+  [[ ${input-} =~ $re_c ]] && SL_TEL_CWD="${BASH_REMATCH[1]}"
+  sl_tel_gate "block-coordinator-edits" "$@" 2>/dev/null
+  return 0
+}
+
 # bl_scan CMD: the shell words of the Bash command CMD, quotes and backslashes removed, into BLW (a $'\001'
 # between simple commands); the quoted text and heredoc bodies into BLT (text only) or BLS (text that may run:
 # an assignment's quoted value, an unquoted-delimiter heredoc body holding $( or a backtick). A $( or backtick
@@ -329,6 +340,7 @@ if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then
         bl_judge "$blc" || bl_block=0
       fi
       if [ "$bl_block" = 1 ]; then
+        tel_gate block backlog-main-only "$bl_tool" "sl backlog ${BLHIT}"
         printf '%s\n' "Blocked: sl backlog ${BLHIT} runs only in the main session (Max's session), never in a fleet worker or lead. Use sl backlog status or wait, and report NEEDS_DECISION instead.${BLWHY}" >&2
         exit 2
       fi
@@ -486,6 +498,7 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         else
           printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents.$fread" >&2
         fi
+        tel_gate block fleet "$tool_name" "$REPLY"
         exit 2
       fi
     fi
@@ -829,7 +842,8 @@ run_judge() {
     out="$(printf '%s' "$jin" | SUPERLITE_GUARD_NONCE="$nonce" "${PY[@]}" -I -X utf8 -W ignore "$judge" --mode "$1" --project "$proj" --sd "$sd" 2>&1)"   # -W ignore: one SyntaxWarning per invalid escape of an inlined script would fill the message
     rc=$?
     case "$rc" in
-      2) if [ "$jin" != "$input" ] && [[ $out == *"${nlh}Blocked command: "* ]]; then   # the judge read the inlined heredocs: name the typed command
+      2) tel_gate block guard-judge "$tool_name" "${cmd:0:200}"
+         if [ "$jin" != "$input" ] && [[ $out == *"${nlh}Blocked command: "* ]]; then   # the judge read the inlined heredocs: name the typed command
            fc="${cmd:0:4096}"; fc="${fc//$'\r'/ }"; fc="${fc//$'\n'/ }"; fc="${fc//$'\t'/ }"; fc="${fc//[[:cntrl:]]/}"; fc="${fc:0:120}"
            fc="${fc#"${fc%%[! ]*}"}"; fc="${fc%"${fc##*[! ]}"}"
            bc="${out##*"${nlh}Blocked command: "}"; tail=""
@@ -939,4 +953,5 @@ if [ "$prot" != 1 ]; then   # (prot 2, the cache, names its target too)   name w
   else printf 'Blocked command: %s\n' "$hit" >&2
   fi
 fi
+tel_gate block "$rule" "$tool_name" "${tgt:-$hit}"
 exit 2

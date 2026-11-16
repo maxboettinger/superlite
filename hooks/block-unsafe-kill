@@ -23,6 +23,7 @@ LC_ALL=C
 t=${input#*\"tool_name\"}
 re_tool='^[[:space:]]*:[[:space:]]*"(Bash|PowerShell|Monitor)"'   # Monitor runs its command in the Bash shell
 [[ $t =~ $re_tool ]] || exit 0
+TOOLN="${BASH_REMATCH[1]}"
 MODE=bash
 [[ ${BASH_REMATCH[1]} == PowerShell ]] && MODE=ps
 shopt -s nocasematch
@@ -94,7 +95,18 @@ cmd=$SUBST
 
 BLOCK_MSG="Blocked: this command kills processes by name or pattern, which can stop other sessions' processes. End only processes you started, in the same call that started them: helper & pid=\$!; ...; kill \$pid. If you have it, your harness's stop tool ends a background command (Claude Code: TaskStop). To find the PID of one you started earlier: pgrep -f <pattern>, check the list holds only yours, then kill <PID>. An auto-mode classifier may refuse kill <PID> of a process from an earlier call: leave that process to end on its own and start the next helper so it ends by itself (caffeinate -w <PID>, a loop with a deadline). Windows: taskkill /PID <PID>."
 [[ $MODE == ps ]] && BLOCK_MSG="Blocked: this command kills processes by name or pattern, which can stop other sessions' processes. End only processes you started, in the same call that started them: \$p = Start-Process <cmd> -PassThru; ...; Stop-Process -Id \$p.Id. If you have it, your harness's stop tool ends a background command (Claude Code: TaskStop). An auto-mode classifier may refuse Stop-Process -Id <PID> of a process from an earlier call: leave that process to end on its own and start the next helper so it ends by itself (a loop with a deadline)."
+# tel_gate DECISION RULE TOOL TARGET: one telemetry line (hooks/telemetry.sh), sourced only here; fails open, prints nothing.
+tel_gate() {
+  . "${BASH_SOURCE[0]%/*}/telemetry.sh" 2>/dev/null || return 0
+  local re_s='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"' re_c='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
+  SL_TEL_SESSION=""; SL_TEL_CWD=""
+  [[ ${input-} =~ $re_s ]] && SL_TEL_SESSION="${BASH_REMATCH[1]}"
+  [[ ${input-} =~ $re_c ]] && SL_TEL_CWD="${BASH_REMATCH[1]}"
+  sl_tel_gate "block-unsafe-kill" "$@" 2>/dev/null
+  return 0
+}
 block() {
+  tel_gate block kill-pattern "$TOOLN" "$cmd"
   echo "$BLOCK_MSG" >&2
   exit 2
 }
@@ -869,6 +881,7 @@ if [ -n "$PIDS" ] && command -v ps >/dev/null 2>&1; then
     base="${line##*/}"
     case $base in
       Xcode|Simulator|mcpbridge|SourceKitService|com.apple.dt.*|com.apple.CoreSimulator*|herdr|claude|launchd|WindowServer|Finder|Dock|loginwindow)
+        tel_gate block shared-service "$TOOLN" "kill ${PIDS#,} ($base)"
         echo "Blocked: kill ${PIDS#,} would stop $base, a service shared with the user and other sessions. Ask the user to stop it; do not kill it yourself." >&2
         exit 2 ;;
     esac
