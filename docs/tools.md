@@ -91,3 +91,4 @@ A Swift project's worker prime holds a `- Verdict: sl run_tests runs the project
 The backlog status prints `machine: <free> GB free disk`, with `, below the N GB floor` or `, below the N GB warn level` when low, and `machine: disk unknown` when it cannot read the disk.
 `sl orchestrator end` removes `<state folder>/scratch/` (a link is removed, never followed) and appends `; scratch folder removed` to its line.
 Backlog rules are split by reader: main reads `backlog-main.md` (Main and Limits), a lead reads `backlog.md` (Lead and Permissions) (see [backlog-main](../skills/subagent-driven-development/backlog-main.md)).
+| `telemetry` | `sl telemetry export --since YYYY-MM-DD [--root DIR]... [--out FILE]` rebuilds event-log lines (marked `backfill`) from the existing ledgers; the log itself is `<superlite home>/events.jsonl` (see [telemetry](telemetry.md)) |
