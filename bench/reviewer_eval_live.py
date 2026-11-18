@@ -67,6 +67,8 @@ def _git(cmd, cwd):
 
 
 def checkout(case: dict, work: Path) -> Path:
+    if Path(str(case["id"])).name != str(case["id"]) or str(case["id"]) in ("", ".", ".."):
+        raise LiveError(f"case id {case['id']!r} is not a plain folder name")
     dest = Path(work) / case["id"]
     if dest.exists():
         shutil.rmtree(dest)
@@ -123,18 +125,26 @@ def review(case: dict, variant: dict, work: Path) -> dict:
 
 
 def grade(case: dict, pooled: list, model: str = "opus") -> dict:
-    diff = _run(["git", "diff", case["base"], case["merge"]], case["repo"]).stdout or ""
+    out = _run(["git", "diff", case["base"], case["merge"]], case["repo"])
+    if out.returncode != 0:
+        raise LiveError(f"git diff failed for {case['id']}: {(out.stderr or '').strip()}")
+    diff = out.stdout or ""
     if len(diff) > DIFF_LIMIT:
         diff = diff[:DIFF_LIMIT] + "\n(diff cut)"
     lines = "\n".join(f"{e['fp']} | {e['file']}:{e['line']} | {e['problem']} | {e['quote']}" for e in pooled)
     prompt = (f"Pull request: {case['title']}\n\n{case['body']}\n\n<diff>\n{diff}\n</diff>\n\n"
               f"Findings (fp | file:line | problem | quote):\n{lines}\n\n{GRADE_INSTRUCTION}")
-    run = _ask(prompt, tempfile.mkdtemp(), model)
-    m = re.search(r"\[.*\]", run.text, re.S)
-    try:
-        items = json.loads(m.group(0)) if m else []
-    except ValueError:
-        return {}
+    with tempfile.TemporaryDirectory() as tmp:
+        run = _ask(prompt, tmp, model)
+    items = []
+    for m in re.finditer(r"\[", run.text):
+        try:
+            got, _ = json.JSONDecoder().raw_decode(run.text, m.start())
+        except ValueError:
+            continue
+        if isinstance(got, list) and any(isinstance(i, dict) for i in got):
+            items = got
+            break
     out = {}
     for item in items if isinstance(items, list) else []:
         if isinstance(item, dict) and isinstance(item.get("fp"), str):

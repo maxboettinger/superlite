@@ -158,3 +158,26 @@ def test_grade_prompt_hides_variant_names(repo, monkeypatch):
 def test_parse_stream_reads_the_last_result():
     run = common.parse_stream(stream("hi"), 2.0)
     assert run.text == "hi" and run.cost == 0.42 and run.seconds == 2.0
+
+
+def test_grade_diff_failure_raises_live_error(repo, monkeypatch):
+    fake_ask(monkeypatch, "[]")
+    monkeypatch.setattr(live, "_run", lambda cmd, cwd, env=None, timeout=600: SimpleNamespace(returncode=128, stdout="", stderr="bad object"))
+    with pytest.raises(live.LiveError, match="bad object"):
+        live.grade(repo, [])
+
+
+def test_grade_skips_a_bracket_in_prose_before_the_array(repo, monkeypatch):
+    pooled = [{"fp": "f1", "file": "a.py", "line": 2, "problem": "p", "quote": "q"}]
+    fake_ask(monkeypatch, 'See [1] first: [{"fp": "f1", "grade": "wrong", "serious": false}] done [2]')
+    assert live.grade(repo, pooled) == {"f1": {"grade": "wrong", "serious": False}}
+
+
+def test_checkout_refuses_an_id_that_leaves_the_work_folder(repo, tmp_path):
+    keep = tmp_path / "keep"
+    keep.mkdir()
+    (keep / "f.txt").write_text("x")
+    (tmp_path / "work").mkdir()
+    with pytest.raises(live.LiveError):
+        live.checkout({**repo, "id": "../keep"}, tmp_path / "work")
+    assert (keep / "f.txt").exists()
