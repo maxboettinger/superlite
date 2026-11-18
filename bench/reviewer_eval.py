@@ -64,12 +64,21 @@ def _ratio(num: int, den: int):
     return num / den if den else None
 
 
+def _entry(grades: dict, fp) -> dict:
+    g = grades.get(fp)
+    return g if isinstance(g, dict) else {}
+
+
+def _grade(grades: dict, fp) -> str:
+    word = _entry(grades, fp).get("grade")
+    return word if word in GRADES else "ungraded"
+
+
 def score(found: dict, grades: dict, stats: dict) -> dict:
     pooled = {e["fp"] for e in pool(found)}
 
     def grade_of(fp):
-        g = grades.get(fp) or {}
-        return g.get("grade") if g.get("grade") in GRADES else "ungraded"
+        return _grade(grades, fp)
 
     pool_real = sum(1 for fp in pooled if grade_of(fp) == "real")
     out = {}
@@ -78,7 +87,7 @@ def score(found: dict, grades: dict, stats: dict) -> dict:
         for fp in {f["fp"] for f in findings}:
             g = grade_of(fp)
             counts[g] += 1
-            if g == "real" and (grades.get(fp) or {}).get("serious") is True:
+            if g == "real" and _entry(grades, fp).get("serious") is True:
                 counts["serious"] += 1
         st = stats.get(name) or {}
         out[name] = {**counts, "unverified": st.get("unverified", 0),
@@ -97,7 +106,7 @@ def run_case(case: dict, variants: list, review_fn, grade_fn, work: Path) -> dic
     pooled = pool(found)
     grades = grade_fn(case, pooled)
     scored = score(found, grades, stats)
-    pool_real = sum(1 for e in pooled if (grades.get(e["fp"]) or {}).get("grade") == "real")
+    pool_real = sum(1 for e in pooled if _grade(grades, e["fp"]) == "real")
     return {"case": case["id"], "pool": len(pooled), "pool_real": pool_real, "variants": scored}
 
 

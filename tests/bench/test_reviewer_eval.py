@@ -114,3 +114,11 @@ def test_summarize_and_table():
     assert s["a"]["recall"] == 0.5 and s["a"]["cost_usd"] == 3.0
     lines = re_.table(s).splitlines()
     assert len(lines) == 3 and lines[1].split()[0] == "a" and lines[2].split()[0] == "b"
+
+
+def test_malformed_grade_entries_count_as_ungraded():
+    found = {"a": [F("f1"), F("f2")]}
+    out = re_.score(found, {"f1": "real", "f2": None}, {})["a"]
+    assert out["ungraded"] == 2 and out["real"] == 0
+    row = re_.run_case(_case(), [re_.parse_variant("a=m:e")], lambda c, v, w: {"findings": found["a"]}, lambda c, p: {"f1": "real"}, Path("."))
+    assert row["pool_real"] == 0
