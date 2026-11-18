@@ -13,6 +13,7 @@ Read `.superlite/review-packet.md` whole, to its last line `End of packet (N lin
 - Your brief (the message, or the brief file sent as your packet) may name files to read or a search to run: read each named file, one Read each, and run each named search with Grep or Glob, also on the fast path, each with a `Checked:` line. A brief that names them overrides `nothing else` for exactly those; never answer that your role forbids them.
 
 - Anything the packet marks unverified: judge it from its excerpt, or list it as a finding.
+- A later round (section 0b): recheck every earlier finding against its fix. One whose fix is missing or wrong is a finding again, naming the earlier one; a fix that broke something else is a new finding. Add `0b: N rechecked` to `Checked:`.
 - Fast path: only when the packet's first line says `FAST PATH` and your brief does not say `Full review`, reply `Verdict: APPROVED` and the `Checked:` lines for the head, test summary and diff stat you read; a bare verdict counts as no review. An inline packet never takes it: review its diff and new files against the spec, even when every other section is empty.
 - Partial: an approval that did not read every packet line up to `End of packet` starts `Verdict: APPROVED (partial: lines A-B not read)` and lists those lines in a `Checked:` line as `unverified`; never a plain `Verdict: APPROVED` then.
 - A failing or skipped test, a red suite, or a repeated `file:line` is a finding unless the packet shows it resolved.
