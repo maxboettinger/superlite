@@ -176,3 +176,31 @@ def test_append_cap_uses_incident_lock_and_fsync(tmp_path, monkeypatch):
     budget.append_cap(tmp_path, 3.75, "extend", "why")
     assert calls == ["lock", "fsync", "unlock"]
     assert (tmp_path / "progress.md").read_text(encoding="utf-8") == "- Budget cap: 3.75 (extend) - why\n"
+
+
+def test_raise_records_the_cap_the_check_used_rounded_up_to_the_cent(tmp_path, monkeypatch, capsys):
+    p, sl = make(tmp_path, mode="ai")
+    patch(monkeypatch, cost=3.2031)
+    assert budget.main(["raise", "--to", "3.204", "--ruling", "user", "--plan", str(p), "--dir", str(sl)]) == 0
+    assert "cap $3.00 -> $3.21 (raised)" in capsys.readouterr().out
+    import plan_tools as pt
+    assert budget.effective_cap(pt.Plan.load(str(p)), sl) == 3.21
+    p, sl = make(tmp_path / "b", mode="ai") if (tmp_path / "b").mkdir() is None else (None, None)
+    patch(monkeypatch, cost=0.0)
+    assert budget.main(["raise", "--to", "0.001", "--ruling", "user", "--plan", str(p), "--dir", str(sl)]) == 0
+    assert budget.effective_cap(pt.Plan.load(str(p)), sl) == 0.01
+
+
+def test_raise_refuses_when_the_rounded_cap_is_not_above_spend(tmp_path, monkeypatch, capsys):
+    p, sl = make(tmp_path, mode="ai")
+    patch(monkeypatch, cost=3.2031)
+    assert budget.main(["raise", "--to", "3.2", "--ruling", "user", "--plan", str(p), "--dir", str(sl)]) == 2
+    assert not (sl / "progress.md").exists()
+
+
+def test_extend_refuses_when_the_rounded_cap_is_not_above_spend(tmp_path, monkeypatch, capsys):
+    p, sl = make(tmp_path, mode="ai")
+    patch(monkeypatch, cost=3.76)
+    assert budget.main(["extend", "--plan", str(p), "--dir", str(sl), "--ruling", "why"]) == 2
+    assert "not above" in capsys.readouterr().err
+    assert not (sl / "progress.md").exists()
