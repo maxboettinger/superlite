@@ -151,3 +151,15 @@ def test_raise_refuses_non_finite_cap(tmp_path, monkeypatch):
     for bad in ("nan", "inf"):
         assert budget.main(["raise", "--to", bad, "--ruling", "user", "--plan", str(p), "--dir", str(sl)]) == 2
     assert not (sl / "progress.md").exists()
+
+
+def test_extend_defaults_to_the_plan_run_folder_from_another_cwd(tmp_path, monkeypatch, capsys):
+    p, sl = make(tmp_path, mode="ai")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    patch(monkeypatch)
+    assert budget.main(["extend", "--plan", str(p), "--ruling", "why"]) == 0
+    capsys.readouterr()
+    assert (sl / "progress.md").read_text(encoding="utf-8") == "- Budget cap: 3.75 (extend) - why\n"
+    assert not (other / ".superlite").exists()
