@@ -2,20 +2,23 @@
 """One line of run-time control: elapsed, cost so far, projected finish and cost against target and cap.
 
     budget.py --plan P [--dir .superlite] [--changed] [--json]
+    budget.py extend --plan P --ruling TEXT [--dir D]       the AI orchestrator's one +25% extension
+    budget.py raise --to USD --ruling TEXT --plan P [--dir D]   the user's raise
 
 Reads `.superlite/metrics.jsonl` (via metrics.py), the ledger's commits and the plan header
 (`**Target-min:** 11`, optional `**Budget-usd:** 3.00`). Projection: elapsed + the longest remaining path
 through unfinished tasks (predicted minutes from `schedule`, history-backed when stats exist, minus time
 already spent on in-flight tasks); cost: spent + mean cost of finished tasks (else the history band mean)
-per unfinished task. Soft controls only: at 70% of the cap it warns; over the cap it says to stop optional
-work (extra review rounds, fix rounds beyond the first) and names the next step; when the projected time
+per unfinished task. At 70% of the cap it warns; over the cap the run is paused (`gate` is the line dispatch and
+fleet spawn refuse with); the cap is the newest `- Budget cap:` ledger line, else the header. When the projected time
 overruns the target it names the late critical-path task. `--changed` prints only when the line differs
-from the last printed one (`.superlite/budget.state`), for dispatch and lint. Always exit 0. Stdlib only.
+from the last printed one (`.superlite/budget.state`), for dispatch and lint. Exit 0; extend/raise refusals exit 2. Stdlib only.
 """
 # Complexity notation:
 #   n = tasks, e = edges, M = metrics lines
 import argparse  # O(1)
 import json  # O(1)
+import math  # O(1)
 import os  # O(1)
 import re  # O(1)
 import sys  # O(1)
@@ -50,6 +53,32 @@ def summaries_note(env=None) -> str | None:  # O(1)
 def header_budget(plan) -> float | None:  # O(C)
     m = re.search(r"^\*\*Budget-usd:\*\*\s*\$?\s*(\d+(?:\.\d+)?)", plan.text, re.M)  # O(C)
     return float(m.group(1)) if m else None  # O(1)
+
+
+CAP_LINE = re.compile(r"^- Budget cap: (\d+(?:\.\d+)?) \((extend|raise)\) - ", re.M)  # O(1)
+EXTEND_FACTOR = 1.25  # the AI orchestrator's one extension (+25%) | O(1)
+
+
+def need_usd(spent: float, projected) -> float:  # O(1)
+    """The least cap that lets the run finish: the larger of spend and projected cost, up to a cent."""
+    return math.ceil(round(max(spent, projected or 0.0) * 100, 6)) / 100  # O(1)
+
+
+def ledger_caps(sl_dir) -> list:  # O(ledger)
+    """The (usd, kind) of every `- Budget cap:` line of the run ledger, oldest first."""
+    f = Path(sl_dir) / "progress.md"  # O(1)
+    if not f.is_file():  # O(1)
+        return []  # O(1)
+    return [(float(m.group(1)), m.group(2)) for m in CAP_LINE.finditer(f.read_text(encoding="utf-8", errors="replace"))]  # O(ledger)
+
+
+def effective_cap(plan, sl_dir) -> float | None:  # O(ledger + C)
+    """The newest ledger cap line, else the plan header cap, else None."""
+    if not hasattr(plan, "text"):  # a path | O(1)
+        import plan_tools as pt  # O(1)
+        plan = pt.Plan.load(str(plan))  # O(L)
+    caps = ledger_caps(sl_dir)  # O(ledger)
+    return caps[-1][0] if caps else header_budget(plan)  # O(1)
 
 
 def committed(sl: Path) -> set:  # O(ledger)
@@ -112,10 +141,14 @@ def compute(plan_path, sl_dir=".superlite", now=None) -> dict:  # O(M + B + n*(n
         (stats.get("tiers") or {}).get("sonnet", {}).get("mean_cost"))
     left = [t for t in rem if t not in inflight]  # O(n)
     proj_cost = spent + (per_task or 0.0) * len(left) if per_task is not None or not left else None  # O(1)
-    target, cap = plan.header_target(), header_budget(plan)  # O(C)
+    target, hcap = plan.header_target(), header_budget(plan)  # O(C)
+    cap = effective_cap(plan, sl)  # O(ledger)
+    need = need_usd(spent, proj_cost)  # O(1)
     out = {"coordinator_usd": round(co_usd, 3), "agents_usd": round(agents_usd, 3), "coordinator": co,  # O(1)
            "elapsed_min": round(elapsed / 60.0, 1), "cost_usd": round(spent, 3), "projected_min": round(projected, 1),
            "projected_usd": None if proj_cost is None else round(proj_cost, 3), "target_min": target, "cap_usd": cap,
+           "header_cap_usd": hcap, "extended": any(k == "extend" for _, k in ledger_caps(sl)), "need_usd": need,
+           "plan": str(plan_path), "dir": str(sl),
            "late_path": crit[1], "done": len(done), "remaining": len(rem), "stats": f"n={stats.get('rows', 0)}"}  # O(1)
     out["pct_cap"] = round(max(spent, proj_cost or 0.0) / cap, 3) if cap else None  # O(1)
     out["state"] = ("over" if cap and spent > cap else "warn" if cap and (proj_cost or spent) >= WARN_AT * cap else "ok")  # O(1)
@@ -132,6 +165,29 @@ def compute(plan_path, sl_dir=".superlite", now=None) -> dict:  # O(M + B + n*(n
     return out  # O(1)
 
 
+def pause_text(b: dict, plan_path=None, sl_dir=None) -> str:  # O(file)
+    """The gate line after `budget: paused: `."""
+    import orchestrator  # O(1)
+    plan_path = plan_path or b.get("plan") or "<plan>"  # O(1)
+    st = orchestrator.read_state(sl_dir or b.get("dir") or ".superlite")  # O(file)
+    ai = bool(st and st.get("mode") == "ai")  # O(1)
+    head = f"spent ${b['cost_usd']:.2f} of ${b['cap_usd']:.2f} cap; least cap to finish ${b['need_usd']:.2f}; "  # O(1)
+    if ai and not b.get("extended"):  # O(1)
+        return head + f'once: sl budget extend --plan {plan_path} --ruling "<why>" (+25%)'  # O(1)
+    return head + f'stop the run; the user raises it: sl budget raise --to {b["need_usd"]:.2f} --ruling "<their words>" --plan {plan_path}'  # O(1)
+
+
+def gate(plan_path, sl_dir=".superlite") -> str | None:  # O(compute)
+    """None while the run may spend; else the one `budget: paused: ...` line. Never raises."""
+    try:  # fail open | O(1)
+        b = compute(plan_path, sl_dir)  # O(compute)
+        if b.get("state") != "over" or not b.get("cap_usd"):  # O(1)
+            return None  # O(1)
+        return "budget: paused: " + pause_text(b, plan_path, sl_dir)  # O(file)
+    except Exception:  # noqa: BLE001 | O(1)
+        return None  # O(1)
+
+
 def line(b: dict) -> str:  # O(1)
     cap_txt = " of $%g cap" % b["cap_usd"] if b["cap_usd"] else ""  # O(1)
     s = (f"budget: coordinator ${b['coordinator_usd']:.2f} | agents ${b['agents_usd']:.2f} | total ${b['cost_usd']:.2f}{cap_txt}, "  # O(1)
@@ -146,10 +202,13 @@ def line(b: dict) -> str:  # O(1)
     if b.get("hint"):  # O(1)
         s += " " + b["hint"]  # O(1)
     if b["state"] == "warn":  # O(1)
-        s += " WARN: 70% of the cap reached"  # O(1)
+        proj = b["projected_usd"] if b["projected_usd"] is not None else b["cost_usd"]  # O(1)
+        s += f" WARN: 70% of the cap reached; projected ${proj:.2f} against the ${b['cap_usd']:.2f} cap"  # O(1)
     if b["state"] == "over":  # O(1)
-        s += (" OVER CAP: start no optional work (extra review rounds, fix rounds beyond the first); "  # O(1)
-              "finish the tasks in flight, commit, run finish")
+        try:  # O(file)
+            s += " OVER CAP: paused: " + pause_text(b)  # O(file)
+        except Exception:  # noqa: BLE001 | O(1)
+            s += " OVER CAP: paused"  # O(1)
     if b["late"] and b["late_path"]:  # O(1)
         s += f" LATE: critical path {' -> '.join(b['late_path'])}"  # O(1)
     if b.get("summaries"):  # O(1)
@@ -177,14 +236,63 @@ def maybe_print(plan_path, sl_dir=".superlite") -> None:  # O(compute)
     print(text)  # O(1)
 
 
+def append_cap(sl_dir, usd: float, kind: str, ruling: str) -> None:  # O(1)
+    f = Path(sl_dir) / "progress.md"  # O(1)
+    f.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+    num = f"{usd:.2f}".rstrip("0").rstrip(".")  # O(1)
+    with f.open("a", encoding="utf-8") as fh:  # O(1)
+        fh.write(f"- Budget cap: {num} ({kind}) - {' '.join(ruling.split())}\n")  # O(1)
+
+
+def change_cap(a) -> int:  # O(compute)
+    """`extend` and `raise`: refusals exit 2 with one stderr line."""
+    import orchestrator  # O(1)
+    import plan_tools as pt  # O(1)
+
+    def refuse(msg):  # O(1)
+        print(f"budget: {a.cmd}: {msg}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+
+    cap = effective_cap(pt.Plan.load(a.plan), a.dir)  # O(ledger + L)
+    if cap is None:  # O(1)
+        return refuse("no cap (set **Budget-usd:** in the plan header)")  # O(1)
+    if not (a.ruling or "").strip():  # O(1)
+        return refuse("--ruling TEXT is required")  # O(1)
+    if a.cmd == "extend":  # O(1)
+        st = orchestrator.read_state(a.dir)  # O(file)
+        if not (st and st.get("mode") == "ai"):  # O(1)
+            return refuse("only the AI orchestrator may extend; the user raises the cap with `sl budget raise`")  # O(1)
+        if any(k == "extend" for _, k in ledger_caps(a.dir)):  # O(ledger)
+            return refuse("already extended once; the user raises it: sl budget raise --to USD --ruling TEXT")  # O(1)
+        new = round(cap * EXTEND_FACTOR, 2)  # O(1)
+        append_cap(a.dir, new, "extend", a.ruling)  # O(1)
+        print(f"budget: cap ${cap:.2f} -> ${new:.2f} (extended once, +25%)")  # O(1)
+        return 0  # O(1)
+    if a.to is None:  # O(1)
+        return refuse("--to USD is required")  # O(1)
+    spent = compute(a.plan, a.dir)["cost_usd"]  # O(compute)
+    if a.to <= spent:  # O(1)
+        return refuse(f"--to {a.to:g} is not above the ${spent:.2f} spent so far")  # O(1)
+    append_cap(a.dir, a.to, "raise", a.ruling)  # O(1)
+    print(f"budget: cap ${cap:.2f} -> ${a.to:.2f} (raised)")  # O(1)
+    return 0  # O(1)
+
+
 def main(argv=None):  # O(compute)
+    argv = list(sys.argv[1:] if argv is None else argv)  # O(1)
+    cmd = argv.pop(0) if argv and argv[0] in ("extend", "raise") else None  # O(1)
     ap = argparse.ArgumentParser(description=__doc__.split(chr(10))[0])  # O(1)
     ap.add_argument("--plan", required=True)  # O(1)
     ap.add_argument("--dir", default=".superlite")  # O(1)
     ap.add_argument("--changed", action="store_true")  # O(1)
     ap.add_argument("--json", action="store_true")  # O(1)
+    ap.add_argument("--ruling", default="")  # O(1)
+    ap.add_argument("--to", type=float, default=None)  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    a.cmd = cmd  # O(1)
     sys.stdout.reconfigure(encoding="utf-8")  # O(1)
+    if cmd:  # O(1)
+        return change_cap(a)  # O(compute)
     if a.changed:  # O(1)
         maybe_print(a.plan, a.dir)  # O(compute)
         return 0  # O(1)
