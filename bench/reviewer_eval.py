@@ -98,16 +98,18 @@ def score(found: dict, grades: dict, stats: dict) -> dict:
 
 
 def run_case(case: dict, variants: list, review_fn, grade_fn, work: Path) -> dict:
-    found, stats = {}, {}
+    found, stats, kept = {}, {}, {}
     for variant in variants:
         res = review_fn(case, variant, work)
         found[variant["name"]] = res["findings"]
+        kept[variant["name"]] = res.get("unverified_items", [])
         stats[variant["name"]] = {"unverified": res.get("unverified", 0), "cost_usd": res.get("cost_usd", 0.0)}
     pooled = pool(found)
     grades = grade_fn(case, pooled)
     scored = score(found, grades, stats)
     pool_real = sum(1 for e in pooled if _grade(grades, e["fp"]) == "real")
-    return {"case": case["id"], "pool": len(pooled), "pool_real": pool_real, "variants": scored}
+    return {"case": case["id"], "pool": len(pooled), "pool_real": pool_real, "variants": scored,
+            "unverified_items": kept}
 
 
 def summarize(rows: list) -> dict:

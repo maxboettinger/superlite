@@ -3,7 +3,7 @@
 
     checkout(case, work) -> work/<id>, a clone detached at the merge commit, without a remote
     packet(clone, case) -> the inline review packet path, built against the case's base
-    review(case, variant, work) -> {"findings", "unverified", "cost_usd", "seconds"}
+    review(case, variant, work) -> {"findings", "unverified", "unverified_items", "cost_usd", "seconds"}
     grade(case, pooled, model="opus") -> {fp: {"grade", "serious"}}; {} when the reply holds no array
 
 Every subprocess and model call goes through `_run` or `_ask`; tests patch those two.
@@ -119,15 +119,16 @@ def review(case: dict, variant: dict, work: Path) -> dict:
     run = common.parse_stream(out.stdout or "", time.time() - t0)
     if not run.result:
         raise LiveError(f"reviewer gave no result ({where}): {(out.stderr or '').strip()[:200]}")
-    findings, unverified = [], 0
+    findings, unverified = [], []
     for f in fleet_report.parse(run.text)["findings"]:
         v = finding_check.verify(clone, f)
         if v["state"] == "unverified":
-            unverified += 1
+            unverified.append({k: f.get(k) for k in ("file", "line", "quote", "problem")})
             continue
         line = v["line"] if v["state"] == "moved" else f["line"]
         findings.append({**f, "line": line, "fp": finding_check.fingerprint(f["file"], f["quote"], f["problem"])})
-    return {"findings": findings, "unverified": unverified, "cost_usd": run.cost, "seconds": run.seconds}
+    return {"findings": findings, "unverified": len(unverified), "unverified_items": unverified,
+            "cost_usd": run.cost, "seconds": run.seconds}
 
 
 def grade(case: dict, pooled: list, model: str = "opus") -> dict:

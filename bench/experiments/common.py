@@ -1,8 +1,8 @@
 """Shared helpers for superlite micro-experiments.
 
 Run scripts with: uv run --no-project python bench/experiments/<script>.py
-Every call runs `claude -p` with a clean environment (host-session CLAUDE*/ANTHROPIC* vars stripped,
-so hooks and plugins behave like a fresh terminal) and stream-json output, then parses usage.
+Every call runs `claude -p` with a clean environment (host-session CLAUDE*/ANTHROPIC*/SUPERLITE_* vars stripped,
+so hooks and plugins behave like a fresh terminal and never report into a host run) and stream-json output, then parses usage.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ SUPERPOWERS_OFF = {"superpowers@claude-plugins-official": False}
 
 
 def clean_env(fork: bool = False, extra: dict[str, str] | None = None) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not (k.startswith("CLAUDE") or k.startswith("ANTHROPIC"))}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "ANTHROPIC", "SUPERLITE_"))}
     if fork:
         env["CLAUDE_CODE_FORK_SUBAGENT"] = "1"
     env.update(extra or {})

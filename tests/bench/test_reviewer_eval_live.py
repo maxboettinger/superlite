@@ -199,3 +199,28 @@ def test_a_timeout_in_grade_git_or_packet_raises_live_error(repo, tmp_path, monk
         live.checkout(repo, tmp_path / "work")
     with pytest.raises(live.LiveError, match="timed out"):
         live.packet(tmp_path, repo)
+
+
+RUN_VARS = ("SUPERLITE_FLEET_WORKER", "SUPERLITE_FLEET_AGENT", "SUPERLITE_STATE_DIR", "SUPERLITE_FINAL_REVIEW")
+
+
+def test_reviewer_and_grader_children_get_no_superlite_run_vars(repo, tmp_path, faked, monkeypatch):
+    for k in RUN_VARS:
+        monkeypatch.setenv(k, "host-run")
+    live.review(repo, {"name": "current", "model": "opus", "effort": "high"}, tmp_path / "w")
+    assert not [k for k in faked["env"] if k.startswith("SUPERLITE_")]
+    seen = {}
+
+    def fake_sub(args, **kw):
+        seen["env"] = kw["env"]
+        return SimpleNamespace(returncode=0, stdout=stream("[]"), stderr="")
+
+    monkeypatch.setattr(common, "subprocess", SimpleNamespace(run=fake_sub))
+    live.grade(repo, [])
+    assert not [k for k in seen["env"] if k.startswith("SUPERLITE_")]
+
+
+def test_review_keeps_the_unverified_findings(repo, tmp_path, faked):
+    out = live.review(repo, {"name": "current", "model": "opus", "effort": "high"}, tmp_path / "w")
+    assert out["unverified"] == 1
+    assert out["unverified_items"] == [{"file": "a.py", "line": 1, "quote": "not in the file at all", "problem": "ghost"}]
