@@ -635,7 +635,7 @@ def corrections_line(ledger, plan=None):  # O(file) + spawn; size of the project
         except OSError:  # O(1)
             size = 0  # O(1)
         n = len(corrections.lines(root))  # O(file)
-        return (f"corrections: {n} lines, {size}/{corrections.MAX_BYTES} bytes ({corrections.FILE}); a user correction from this run "
+        return (f"corrections: {n} {'line' if n == 1 else 'lines'}, {size}/{corrections.MAX_BYTES} bytes ({corrections.FILE}); a user correction from this run "
                 'that later runs need: sl corrections add "<rule>"')  # O(1)
     except Exception:  # O(1)
         return "corrections: unreadable"  # O(1)

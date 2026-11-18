@@ -78,3 +78,9 @@ def test_finish_summary_names_corrections(tmp_path):
     n = (tmp_path / corrections.FILE).stat().st_size
     assert (f"corrections: 2 lines, {n}/2048 bytes (docs/superlite/corrections.md); a user correction from this run "
             'that later runs need: sl corrections add "<rule>"') in summary(tmp_path)
+
+
+def test_finish_summary_singular_for_one_correction(tmp_path):
+    put(tmp_path, "Use uv, never pip")
+    out = summary(tmp_path)
+    assert "corrections: 1 line, " in out and "1 lines" not in out
