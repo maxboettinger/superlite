@@ -147,3 +147,14 @@ def test_route_without_ledger_or_corrections_file_still_works(run):
     assert not (sd / "findings.jsonl").exists()
     lines = findings.route(sd, plan, [report("FR1", [f("src/a.py", 1, 1)])], "/sl/sl")
     assert len(lines) == 1 and "Corrections" not in brief(sd, "fix-F-T1-1.md")
+
+
+def test_merged_findings_keep_both_problems_and_fixes(run):
+    root, sd, plan, report = run
+    put(root, "src/a.py", 12, QUOTE)
+    two = [{**f("src/a.py", 12, 1, "first defect"), "quote": QUOTE, "label": "FR1", "fix": "fix one"},
+           {**f("src/a.py", 12, 3, "second defect"), "quote": QUOTE, "label": "FR1", "fix": "fix two"}]
+    out, notes = findings.screen(two, root, sd)
+    assert len(out) == 1 and out[0]["tier"] == 3
+    assert "first defect" in out[0]["problem"] and "second defect" in out[0]["problem"]
+    assert "fix one" in out[0]["fix"] and "fix two" in out[0]["fix"]
