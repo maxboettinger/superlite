@@ -4,11 +4,12 @@ import pytest
 from test_plan_tools import SCRIPTS, make_plan
 sys.path.insert(0, str(SCRIPTS))
 import findings  # noqa: E402
+from test_findings_route import put  # noqa: E402
 import plan_tools as pt  # noqa: E402
 
 
 def f(file, line, tier, problem="p", fix="x"):
-    return {"file": file, "line": line, "problem": problem, "fix": fix, "tier": tier}
+    return {"file": file, "line": line, "problem": problem, "fix": fix, "tier": tier, "quote": f"code at {line}"}
 
 
 @pytest.fixture
@@ -16,6 +17,8 @@ def run(tmp_path):
     root = tmp_path / "repo"; sd = root / ".superlite"; (sd / "fleet" / "reports").mkdir(parents=True)
 
     def report(label, items):
+        for it in items:
+            put(root, it["file"], it["line"], it["quote"])
         p = sd / "fleet" / "reports" / f"{label}.json"
         p.write_text(json.dumps({"id": "W4", "label": label, "status": "CHANGES_REQUESTED", "findings": items, "valid": True}))
         return str(p)
