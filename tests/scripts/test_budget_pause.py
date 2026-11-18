@@ -143,3 +143,11 @@ def test_over_line_says_paused(tmp_path):
     out = budget.line(b)
     assert "OVER CAP: paused" in out
     assert out.split("OVER CAP: paused: ")[1].startswith("spent $3.20 of $3.00 cap")
+
+
+def test_raise_refuses_non_finite_cap(tmp_path, monkeypatch):
+    p, sl = make(tmp_path, mode="ai")
+    patch(monkeypatch)
+    for bad in ("nan", "inf"):
+        assert budget.main(["raise", "--to", bad, "--ruling", "user", "--plan", str(p), "--dir", str(sl)]) == 2
+    assert not (sl / "progress.md").exists()
