@@ -122,3 +122,23 @@ def test_malformed_grade_entries_count_as_ungraded():
     assert out["ungraded"] == 2 and out["real"] == 0
     row = re_.run_case(_case(), [re_.parse_variant("a=m:e")], lambda c, v, w: {"findings": found["a"]}, lambda c, p: {"f1": "real"}, Path("."))
     assert row["pool_real"] == 0
+
+
+def test_signatures_match_plan_contract():
+    want = {
+        "load_cases": ({"set_dir": Path}, "list[dict]"),
+        "pool": ({"found": "dict[str, list[dict]]"}, "list[dict]"),
+        "score": ({"found": "dict[str, list[dict]]", "grades": "dict[str, dict]", "stats": "dict[str, dict]"}, "dict[str, dict]"),
+        "run_case": ({"variants": "list[dict]"}, "dict"),
+        "summarize": ({"rows": "list[dict]"}, "dict[str, dict]"),
+        "table": ({"summary": "dict[str, dict]"}, "str"),
+    }
+    import inspect
+
+    for name, (params, ret) in want.items():
+        sig = inspect.signature(getattr(re_, name))
+        for p, ann in params.items():
+            got = sig.parameters[p].annotation
+            assert got == ann or got is ann or str(got) == str(ann) or getattr(got, "__name__", "") == getattr(ann, "__name__", "x"), (name, p, got)
+        got = sig.return_annotation
+        assert (got.__name__ if got in (dict, str) else str(got)) == ret, (name, got)
