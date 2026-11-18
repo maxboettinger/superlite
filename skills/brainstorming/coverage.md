@@ -29,6 +29,6 @@ Before the question batch, check the request against every decision category bel
 | Performance and limits | sizes, latency, quotas, timeouts |
 | Observability | logs, metrics, how a failure gets noticed |
 | Testing strategy | test levels, test data and fixtures |
-| Compatibility | platforms, versions, backward compatibility |
+| Compatibility | platforms and stack (a new project's platform is never assumed: settle or rule it by name), versions, backward compatibility |
 | Rollout | release order, feature flags, rollback |
 | Research unknowns | what nobody knows yet: a spike task, never a question |

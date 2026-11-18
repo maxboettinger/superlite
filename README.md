@@ -144,7 +144,7 @@ Install superlite as a plugin from this repository:
 agy plugin install https://github.com/iha2/superlite
 ```
 
-Antigravity runs the plugin's session-start hook, so superlite is active from the first message. Reinstall with the same command to update.
+Antigravity has no session-start hook event, so superlite is not injected at session start there (#942). Reinstall with the same command to update.
 
 ### Codex App
 
@@ -309,7 +309,7 @@ For local development, run Pi with a checkout loaded as a temporary package:
 pi -e /path/to/superlite
 ```
 
-The Pi package loads the superlite skills and a small extension that injects the `using-superlite` bootstrap at session startup and again after compaction. Subagent and task-list tools remain optional Pi companion packages.
+The Pi package loads the superlite skills and a small extension that injects the `using-superlite` bootstrap into every request; the first message stays the same, so the prompt cache holds. Subagent and task-list tools remain optional Pi companion packages.
 
 ### Qwen Code
 

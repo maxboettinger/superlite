@@ -4,7 +4,7 @@ Read this before you write the first task block.
 
 ## Task template
 
-Size, not depth: a task is the smallest unit with its own test cycle that a reviewer could reject alone. Fold setup, config and docs into the task that needs them. Docs that describe other tasks' output depend on them.
+Size, not depth: a task is the smallest unit with its own test cycle that a reviewer could reject alone. Fold setup, config and docs into the task that needs them. Docs that describe other tasks' output depend on them. A step is finished when an implementer could write only one reasonable thing from it.
 
 ````markdown
 ### T7 minisheet server · Complexity 5 (O-1) · Est. context 38k

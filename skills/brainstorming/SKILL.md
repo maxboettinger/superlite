@@ -20,7 +20,7 @@ Hidden complexity found mid-task upgrades the size: say so and step up. A reques
 
 ## 2. Explore and ask, once
 
-Read the relevant code and recent commits first (broad sweeps: an Explore agent, effort low). Never ask what the repo or the request already answers. `sl` below is `<skill-dir>/../subagent-driven-development/scripts/sl`.
+Read the relevant code and recent commits first (broad sweeps: an Explore agent, effort low). Never ask what the repo or the request already answers. Ask only when the answer changes what gets built; rule the rest. Purpose unknown: it is the first question of the batch. `sl` below is `<skill-dir>/../subagent-driven-development/scripts/sl`.
 
 **Coverage pass** (architectural work, before any question): Read `coverage.md` in this skill's folder and follow it. It gives each decision category one `## Coverage` row: settled, ruled, n/a, spike or open. All 14 rows, none merged or dropped: scope and success criteria; domain and data model; persistence and migration; interfaces and contracts; UI states; concurrency and state ownership; error handling and recovery; security and privacy (untrusted input); performance and limits (sizes, timeouts); observability; testing strategy; compatibility; rollout (release order, rollback); research unknowns. A ruled row's basis is the decision itself (a number, a step), not "none needed". Research unknowns become spike tasks, never questions; the open rows are the questions. `**Coverage:** off` in the spec, or from the user, skips the pass.
 
@@ -35,6 +35,7 @@ Write what you understood (the user's words apart from your assumptions), then t
 - **YAGNI.** Cut every feature the user did not ask for or the stated success criteria do not need.
 - **Clear units.** One purpose each, a defined interface, testable alone; you can say what it does, how it is used and what it depends on. If using it means reading its internals, fix the boundary.
 - **Fit the codebase.** Follow existing patterns. Fix existing code only where it blocks the work; no unrelated refactors.
+- **UI.** More than one sensible shape: show mockups of the options before the plan (the harness's canvas or artifact tool, else a sketch in chat). Unattended: pick, sketch it, record the `Ruling:`.
 - Name the approach you chose and, when a real alternative exists, why you rejected it, in one sentence. Do not present three approaches by default.
 
 ## 4. Approve once, then build
@@ -44,7 +45,7 @@ Write what you understood (the user's words apart from your assumptions), then t
 **Architectural:**
 
 1. With an AI orchestrator write ONE doc, `<plans>/YYYY-MM-DD-<topic>.md` (`<plans>` is `docs/superpowers/plans/` when that folder exists, else `docs/plans/`; a location the user named wins): the design above (with the `## Coverage` table), then the plan half from `superlite:writing-plans`, appended. With a human orchestrator write the review plan instead (`<date>-<topic>.review.md`, template `../writing-plans/review-plan.md`); the machine plan comes after the yes. The doc is the first file of the change: run `sl worktree ensure <topic>` (with `--branch <name>` for a project with a branch rule) first and write it in the folder it prints, never into the shared main checkout (a plan header `**Worktree:** none` opts out).
-2. Self-review inline for placeholders, contradictions, scope (one plan, or decompose?) and requirements that could be read two ways; fix them in place. No review loop, no subagent.
+2. Self-review inline for placeholders, contradictions, scope (one plan, or decompose?), requirements that could be read two ways, and what a builder would still have to guess; fix them in place. No review loop, no subagent.
 3. With a human orchestrator ask in plain text, not AskUserQuestion (the hook verifies the human's typed reply): the review plan's path, a five-line summary and "Reply approve to start, or tell me what to change"; END THE TURN and do nothing until the human replies. Only then run `sl orchestrator approve --review <path>` and write the machine plan from it with `superlite:writing-plans`: task-graph format for the orchestrator, never shown for approval, adding or changing nothing the human approved. With an AI orchestrator skip the approval. Run `sl graphify_gate`; on `needs_install: true` add the Graphify install opt-in (`uv tool install graphifyy`) to that same question. Never install without a yes.
 4. On approval, invoke `superlite:subagent-driven-development` once, in this session (the one coordinator). It runs `lint --stable`, dispatches the stable tasks at once and patches only the FIX tasks.
 

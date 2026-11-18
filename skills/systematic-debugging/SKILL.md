@@ -17,10 +17,10 @@ A typo, a missing import, a clear stack trace pointing at the faulty line, a fai
 
 1. **Reproduce.** Get a reliable, minimal trigger: a command, a test, an input. Read the full error and stack trace, not just the first line. If it cannot be reproduced, gather more data (logs, inputs, environment); do not guess.
 2. **Check what changed.** Recent diffs, new dependencies, config and environment differences often point straight at the cause.
-3. **Trace the evidence.** In multi-component systems, log or inspect what enters and leaves each boundary to find which component breaks. For bad values, trace backward through the call chain to where the bad value originates and fix it there, not at the symptom. Compare with similar working code and list every difference.
+3. **Trace the evidence.** In multi-component systems, log or inspect what enters and leaves each boundary to find which component breaks. For bad values, trace backward through the call chain to where the bad value originates and fix it there, not at the symptom. Compare with similar working code and list every difference. A test that passes alone and fails in the suite: bisect the test files for the one that leaves state behind.
 4. **Hypothesize.** State the single most likely root cause in one sentence: "X is wrong because Y". Base it on evidence, not hunch.
 5. **Probe.** Test the hypothesis with the smallest possible change or observation: one print, one assertion, one input. Change one thing at a time. Confirmed: go on. Refuted: form a new hypothesis from what you learned. Do not pile fixes on top.
-6. **Fix.** Write a failing regression test that captures the bug (see `superlite:test-driven-development`), apply one fix at the root cause, and run the focused tests. Do not bundle refactors or "while I'm here" changes.
+6. **Fix.** Write a failing regression test that captures the bug (see `superlite:test-driven-development`), apply one fix at the root cause, and run the focused tests. Do not bundle refactors or "while I'm here" changes. A flaky test waits for its condition (poll the state or event, with a timeout), never a sleep or a longer timeout.
 7. **Verify.** Confirm the original reproduction now passes and nothing nearby broke (focused run; the full suite goes through `<skill-dir>/../subagent-driven-development/scripts/sl run_tests --full` at the wave or branch end; focused: `--fast PATHS`; read its one-line summary).
 
 ## When fixes fail

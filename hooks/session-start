@@ -94,6 +94,9 @@ if [ -n "$sid" ] && [[ $input =~ $re_new ]] && . "${0%/*}/superlite-state.sh" 2>
   fi  # O(1)
 fi  # O(1)
 
+# A closed stdout (EPIPE) must not fail the hook: ignore SIGPIPE, hide the write error, exit 0.
+emit_json() { trap '' PIPE; printf "$@" 2>/dev/null || true; }  # O(s)
+
 # Fleet worker: a short worker note instead of the start menu. printf only (no heredoc).
 if [ -n "${SUPERLITE_FLEET_WORKER:-}" ] && [ "${SUPERLITE_FLEET_ROLE:-}" != lead ]; then  # O(1)
   case "${SUPERLITE_FLEET_ROLE:-implementer}" in  # a known brief role gets the brief note; any other value keeps the implementer note | O(1)
@@ -104,23 +107,30 @@ if [ -n "${SUPERLITE_FLEET_WORKER:-}" ] && [ "${SUPERLITE_FLEET_ROLE:-}" != lead
       wnote="You are superlite fleet worker ${SUPERLITE_FLEET_WORKER} (${SUPERLITE_FLEET_AGENT:-superlite:implementer}). The coordinator sends your task as a message; build it, then finish with your report. Do not start a superlite run."  # O(1)
       ;;  # O(1)
   esac  # O(1)
-  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$wnote"  # O(1)
+  emit_json '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$wnote"  # O(1)
   exit 0  # O(1)
 fi  # O(1)
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"  # O(1) + subshell
-PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"  # O(1) + subshell
+case "$0" in */*|*\\*) SCRIPT_DIR="${0%[/\\]*}";; *) SCRIPT_DIR=".";; esac  # O(1)
+PLUGIN_ROOT="${SCRIPT_DIR}/.."  # O(1)
 
-content=$(cat "${PLUGIN_ROOT}/skills/using-superlite/SKILL.md" 2>&1 || echo "Error reading using-superlite skill")  # O(s) read
+# Builtins only: no cat, dirname or subshell on a normal start.
+skill_md="${PLUGIN_ROOT}/skills/using-superlite/SKILL.md"  # O(1)
+content=""  # O(1)
+if [ -r "$skill_md" ] && IFS= read -r -d '' content 2>/dev/null < "$skill_md" || [ -n "$content" ]; then  # read -d '' returns 1 at EOF | O(s)
+  while [[ $content == *$'\n' ]]; do content="${content%$'\n'}"; done  # O(s) strip trailing newlines like $(...)
+else  # O(1)
+  content="Error reading using-superlite skill"  # O(1)
+fi  # O(1)
 
-escape_for_json() {  # O(s)
+escape_for_json() {  # sets escaped, prints nothing | O(s)
     local s="$1"  # O(s)
     s="${s//\\/\\\\}"  # O(s)
     s="${s//\"/\\\"}"  # O(s)
     s="${s//$'\r'/}"  # O(s) drop CR: a CRLF checkout must not change the text
     s="${s//$'\n'/\\n}"  # O(s)
     s="${s//$'\t'/\\t}"  # O(s)
-    printf '%s' "$s"  # O(s)
+    escaped="$s"  # O(s)
 }  # O(1)
 
 # Project state hint for the start menu: bash builtins only (no spawned process).
@@ -139,7 +149,12 @@ content="${content}"$'
 '"Project state: ${state}."  # O(s)
 
 # Name the running copy: the physical plugin root (pwd -P) and its version, so no one searches for another copy.
-root="$(cd "${PLUGIN_ROOT}" && pwd -P)"  # O(1) + subshell
+if cd -P -- "$PLUGIN_ROOT" 2>/dev/null; then  # O(1)
+  root="$PWD"  # O(1)
+  cd -- "$OLDPWD"  # O(1)
+else  # O(1)
+  root="$PLUGIN_ROOT"  # O(1)
+fi  # O(1)
 version="unknown"  # O(1)
 re_ver='"version"[[:space:]]*:[[:space:]]*"([^"]+)"'  # O(1)
 if [ -f "$root/package.json" ]; then  # O(1)
@@ -163,7 +178,7 @@ if [[ $input =~ $re_compact ]] && [ "${SUPERLITE_NO_AUTOCOMPACT:-}" != 1 ] && . 
   fi  # O(1)
 fi  # O(1)
 
-escaped=$(escape_for_json "$content")  # O(s) + subshell
+escaped=""; escape_for_json "$content"  # O(s)
 lead_note=""  # O(1)
 if [ "${SUPERLITE_FLEET_ROLE:-}" = lead ]; then  # a batch lead runs as an AI orchestrator with the full context | O(1)
   lid="${SUPERLITE_FLEET_WORKER:-}"  # O(1)
@@ -180,13 +195,13 @@ session_context="${lead_note}You have superlite. Its 'superlite:using-superlite'
 # - Copilot CLI (sets COPILOT_CLI=1) and unknown hosts expect top-level additionalContext (SDK standard).
 # printf only (no heredoc) to avoid the bash 5.3+ heredoc hang.
 if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then  # O(1)
-  printf '{"additional_context":"%s"}\n' "$session_context"  # O(s)
+  emit_json '{"additional_context":"%s"}\n' "$session_context"  # O(s)
 elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -z "${COPILOT_CLI:-}" ] && [ -z "${MUSE_PLUGIN_ROOT:-}" ]; then  # O(1)
-  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$session_context"  # O(s)
+  emit_json '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$session_context"  # O(s)
 elif [ -n "${MUSE_PLUGIN_ROOT:-}" ]; then  # O(1)
-  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$session_context"  # O(s)
+  emit_json '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$session_context"  # O(s)
 else  # O(1)
-  printf '{"additionalContext":"%s"}\n' "$session_context"  # O(s)
+  emit_json '{"additionalContext":"%s"}\n' "$session_context"  # O(s)
 fi  # O(1)
 
 exit 0  # O(1)
