@@ -91,6 +91,9 @@ def run(a):
             return _err("--limit must be at least 1")
         cases = cases[:a.limit]
     variants = [ev.parse_variant(v) for v in a.variant] or [default_variant()]
+    names = [v["name"] for v in variants]
+    if len(set(names)) != len(names):
+        return _err("variant names must be unique")
     work = Path(a.work) if a.work else Path(tempfile.mkdtemp(prefix="reviewer-eval-"))
     rows, failed = [], []
     try:
