@@ -24,7 +24,7 @@ class CaseError(ValueError):
     """A case file that is missing or malformed."""
 
 
-def load_cases(set_dir: Path) -> list:
+def load_cases(set_dir: Path) -> list[dict]:
     path = Path(set_dir) / "cases.json"
     try:
         cases = json.loads(path.read_text(encoding="utf-8"))
@@ -52,7 +52,7 @@ def parse_variant(text: str) -> dict:
     return {"name": name.strip(), "model": model.strip(), "effort": effort.strip()}
 
 
-def pool(found: dict) -> list:
+def pool(found: dict[str, list[dict]]) -> list[dict]:
     merged = {}
     for name in sorted(found):
         for f in found[name]:
@@ -74,7 +74,7 @@ def _grade(grades: dict, fp) -> str:
     return word if word in GRADES else "ungraded"
 
 
-def score(found: dict, grades: dict, stats: dict) -> dict:
+def score(found: dict[str, list[dict]], grades: dict[str, dict], stats: dict[str, dict]) -> dict[str, dict]:
     pooled = {e["fp"] for e in pool(found)}
 
     def grade_of(fp):
@@ -97,7 +97,7 @@ def score(found: dict, grades: dict, stats: dict) -> dict:
     return out
 
 
-def run_case(case: dict, variants: list, review_fn, grade_fn, work: Path) -> dict:
+def run_case(case: dict, variants: list[dict], review_fn, grade_fn, work: Path) -> dict:
     found, stats, kept = {}, {}, {}
     for variant in variants:
         res = review_fn(case, variant, work)
@@ -112,7 +112,7 @@ def run_case(case: dict, variants: list, review_fn, grade_fn, work: Path) -> dic
             "unverified_items": kept}
 
 
-def summarize(rows: list) -> dict:
+def summarize(rows: list[dict]) -> dict[str, dict]:
     total_real = sum(r.get("pool_real", 0) for r in rows)
     sums = {}
     for row in rows:
@@ -130,7 +130,7 @@ def summarize(rows: list) -> dict:
     return out
 
 
-def table(summary: dict) -> str:
+def table(summary: dict[str, dict]) -> str:
     def fmt(x):
         return "-" if x is None else f"{x:.2f}"
 

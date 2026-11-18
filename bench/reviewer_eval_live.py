@@ -131,7 +131,7 @@ def review(case: dict, variant: dict, work: Path) -> dict:
             "cost_usd": run.cost, "seconds": run.seconds}
 
 
-def grade(case: dict, pooled: list, model: str = "opus") -> dict:
+def grade(case: dict, pooled: list[dict], model: str = "opus") -> dict:
     try:
         out = _run(["git", "diff", case["base"], case["merge"]], case["repo"])
     except subprocess.TimeoutExpired as exc:

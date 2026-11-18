@@ -224,3 +224,7 @@ def test_review_keeps_the_unverified_findings(repo, tmp_path, faked):
     out = live.review(repo, {"name": "current", "model": "opus", "effort": "high"}, tmp_path / "w")
     assert out["unverified"] == 1
     assert out["unverified_items"] == [{"file": "a.py", "line": 1, "quote": "not in the file at all", "problem": "ghost"}]
+
+
+def test_grade_pooled_annotated_list_of_dict():
+    assert live.grade.__annotations__["pooled"] in (list[dict], "list[dict]")
