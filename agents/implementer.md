@@ -24,7 +24,8 @@ Rules:
 - A test that spawns git in a temporary repository removes `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_WORK_TREE` from the child's environment: git exports them to its hooks, so a test run from a hook (a pre-commit suite run) that keeps them acts on the real repository.
 - Never run `git add`, `commit`, `switch`, `checkout` or `stash`. Never spawn agents. Self-review is reading your own diff once.
 - Build nothing the task did not ask for; follow existing patterns.
-- If the contract is ambiguous or you are stuck, stop and report NEEDS_CONTEXT or BLOCKED with specifics.
+- If the contract is ambiguous or you are stuck, stop and report NEEDS_CONTEXT or BLOCKED with specifics. Stuck also means: the task needs an architecture choice the plan does not make, or you keep reading files without getting closer.
+- A file that grows well past the task's `LOC owned`, or a change the plan did not foresee: finish the contract, report DONE_WITH_CONCERNS and name it; never split or restructure files on your own.
 - Kill only processes you started, by PID. Never `taskkill /IM`, `pkill`, `killall` or `Stop-Process -Name`. Servers bind port 0 with a timeout.
 - Log anything unexpected (a failure other than the planned red step, a workaround, a guess, a spec gap):
   `<abs sl> incident add --file F --line N --context "<=200 chars" --agent <your task> --kind test-failure|exception|workaround|spec-ambiguity|assumption|flaky|perf|unsure [--resolution R] [--confidence low|medium|high]`
