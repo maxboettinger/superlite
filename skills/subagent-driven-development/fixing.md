@@ -16,7 +16,8 @@ A brief you write by hand goes to `.superlite/briefs/fix-<id>.md`, never `.super
 
 A file no task owns goes to the closest committed task that is not in progress; a `task=coordinator` line (every owner, or every committed task, in progress) is a brief whose fixer does not commit (`commit: held for the coordinator`): once those tasks are done, commit an owned file with its owner's `commit_task Tn` and an unowned one with `commit_task Tn --also F --ruling "final-review fix outside every Owns"` for a committed task.
 
-- **Escalation:** after 2 failed rounds at a tier, move up one. Log each failed round with `incident`.
+- **Escalation:** after 2 failed rounds at a tier, move up one. Log each failed round with `incident`. Never send the same brief to the same tier twice: change the context, the tier or the task size.
+- **Not verifiable:** an item a report marks as not verifiable: check it yourself (run it or read it); a confirmed gap is a finding for a fixer.
 - **Outside Owns:** a fixer touching a file outside its task's Owns runs `commit_task Tn --claim F --ruling "..."` first. A claim only records the ruling and prints `next: commit_task Tn`; that later `commit_task Tn` commits F with the task. To commit F with Tn now: `commit_task Tn --also F --ruling "..."`.
 - **Owner reuse** (fleet off only): if the task's own implementer is idle, within reuse limits (`max_tasks` of `config/routing.json`, <=40k context for fix work, <=50 min idle) and its model matches the tier, send it a fix-only brief instead of a fresh fixer. Over 40k context, start a fresh fixer instead.
 
@@ -40,7 +41,7 @@ Next: <best next hypothesis, and which spans to read first>
 
 - **A later round never resumes the old session.** Start a fresh agent (round 2 at the same tier, or the next tier on escalation) whose brief is only `$SL`, `Tn`, the finding id and "read `.superlite/fixes/<id>.md` first". Paste no transcript or report into it.
 - This keeps each round's context to the note plus the spans it names, roughly 10-20k instead of a reused 60-100k session. Escalation needs it anyway, since a different model shares no cache.
-- `.superlite/` is never committed. Notes still marked NOT_FIXED after the last tier become a `Ruling:` and go in the closing message.
+- `.superlite/` is never committed. Notes still marked NOT_FIXED after the last tier become a `Ruling:` and go in the closing message. When a later task depends on the unfixed behaviour, the ruling names the smallest change that unblocks it and goes into that task's message.
 - **Package reviewers** still fix what they find, but must close every finding, including ones sent later, and report a closed list.
 - **Final reviewer** only reports findings. They go to fixers, routed by tier and split by file.
 - **Probe failures:** a failure ruled no defect: `"$SL" probe_run --dismiss ID --plan PLAN` (ID: generated test name, group id or probe id); it deletes the generated test and closes its incident, and later runs list it under `results["dismissed"]`. `lint` prints `ADAPTER:` when it rebuilt the probe adapter and `RUN:` when you must (`plan_tools adapter`). `commit_task` prints `Tn: probe files committed: ...` when a checkpoint took generated probe files.
