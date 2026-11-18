@@ -6,6 +6,7 @@ import pytest
 from test_plan_tools import SCRIPTS, make_plan
 sys.path.insert(0, str(SCRIPTS))
 import findings  # noqa: E402
+from test_findings_route import put  # noqa: E402
 
 RULE = ("Edit only files under Root, by absolute paths; a copy elsewhere (the main checkout, the folder that holds sl) is not yours. "
         "`git status` showing files changed against HEAD is the run's normal state: never revert, restore or stash a file you did not change "
@@ -18,7 +19,8 @@ def run(tmp_path):
     plan = make_plan(sd, [{"id": "T1", "owns": "src/a.py", "tests": "fast"}], name="plan.md")
     def report():
         p = sd / "fleet" / "reports" / "FR1.json"
-        item = {"file": "src/a.py", "line": 3, "problem": "p", "fix": "x", "tier": 1}
+        item = {"file": "src/a.py", "line": 3, "problem": "p", "fix": "x", "tier": 1, "quote": "code at 3"}
+        put(root, item["file"], item["line"], item["quote"])
         p.write_text(json.dumps({"id": "W4", "label": "FR1", "status": "CHANGES_REQUESTED", "findings": [item], "valid": True}))
         return str(p)
     return root, sd, plan, report

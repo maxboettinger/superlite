@@ -1,0 +1,245 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-18T13:00:48 (plan edited since)",
+ "headline": {
+  "wall_min": {
+   "projected": 16.264,
+   "actual": 100.723
+  },
+  "cost_usd_agents": {
+   "projected": 1.554864,
+   "actual": 6.338254
+  },
+  "task_min": {
+   "projected": 72.038,
+   "actual": 31.335
+  },
+  "agents": {
+   "projected": 14,
+   "actual": 41
+  }
+ },
+ "cost_split": {
+  "agents_usd": 3.271352,
+  "rework_usd": 3.066902,
+  "coordinator_usd": 22.722776,
+  "coordinator_session_usd": 25.825515,
+  "coordinator": {
+   "turns": 136,
+   "context_median": 182894,
+   "context_peak": 367148,
+   "compactions": 1,
+   "pre_tokens": 369549
+  },
+  "total_usd": 29.06103
+ },
+ "concurrency": {
+  "peak": 9,
+  "projected_peak": 6
+ },
+ "critical_path": {
+  "actual": [
+   "BG1"
+  ],
+  "projected": [
+   "FD2",
+   "RE2",
+   "RE3"
+  ],
+  "projected_min": 16.264
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 14,
+   "cost_usd": 6.338254000000001
+  }
+ },
+ "coordinator_cost_by_model": {
+  "fable": 22.722776
+ },
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 12028,
+   "failed": 0,
+   "skipped": 12,
+   "seconds": 275.7,
+   "recorded": false
+  },
+  "tests_newer": null,
+  "tests_from": "progress.md",
+  "first_time_pass": 6,
+  "first_time_n": 14,
+  "rework_dispatches": 16,
+  "open_incidents": 16
+ },
+ "tasks": [
+  {
+   "task": "CR2",
+   "model": "sonnet",
+   "pred_min": 5.105,
+   "actual_min": 12.78,
+   "delta": {
+    "abs": 7.675,
+    "pct": 150.3
+   },
+   "cost_usd": 0.269753,
+   "first_time_pass": true
+  },
+  {
+   "task": "FD2",
+   "model": "sonnet",
+   "pred_min": 5.259,
+   "actual_min": 0.675,
+   "delta": {
+    "abs": -4.584,
+    "pct": -87.2
+   },
+   "cost_usd": 0.153905,
+   "first_time_pass": true
+  },
+  {
+   "task": "RE2",
+   "model": "sonnet",
+   "pred_min": 5.729,
+   "actual_min": 1.193,
+   "delta": {
+    "abs": -4.5357,
+    "pct": -79.2
+   },
+   "cost_usd": 1.579704,
+   "first_time_pass": false
+  },
+  {
+   "task": "CR3",
+   "model": "sonnet",
+   "pred_min": 5.088,
+   "actual_min": 0.633,
+   "delta": {
+    "abs": -4.4547,
+    "pct": -87.6
+   },
+   "cost_usd": 0.16152,
+   "first_time_pass": true
+  },
+  {
+   "task": "RE3",
+   "model": "sonnet",
+   "pred_min": 5.276,
+   "actual_min": 0.838,
+   "delta": {
+    "abs": -4.4377,
+    "pct": -84.1
+   },
+   "cost_usd": 0.288113,
+   "first_time_pass": false
+  },
+  {
+   "task": "BG2",
+   "model": "sonnet",
+   "pred_min": 5.122,
+   "actual_min": 0.718,
+   "delta": {
+    "abs": -4.4037,
+    "pct": -86.0
+   },
+   "cost_usd": 0.205053,
+   "first_time_pass": true
+  },
+  {
+   "task": "FD4",
+   "model": "sonnet",
+   "pred_min": 4.738,
+   "actual_min": 0.447,
+   "delta": {
+    "abs": -4.2913,
+    "pct": -90.6
+   },
+   "cost_usd": 0.241168,
+   "first_time_pass": false
+  },
+  {
+   "task": "CR1",
+   "model": "sonnet",
+   "pred_min": 5.311,
+   "actual_min": 1.32,
+   "delta": {
+    "abs": -3.991,
+    "pct": -75.1
+   },
+   "cost_usd": 0.264223,
+   "first_time_pass": false
+  },
+  {
+   "task": "DOC1",
+   "model": "sonnet",
+   "pred_min": 4.738,
+   "actual_min": 0.915,
+   "delta": {
+    "abs": -3.823,
+    "pct": -80.7
+   },
+   "cost_usd": 0.837596,
+   "first_time_pass": false
+  },
+  {
+   "task": "BG1",
+   "model": "sonnet",
+   "pred_min": 5.276,
+   "actual_min": 1.48,
+   "delta": {
+    "abs": -3.796,
+    "pct": -71.9
+   },
+   "cost_usd": 0.726592,
+   "first_time_pass": false
+  },
+  {
+   "task": "RE1",
+   "model": "sonnet",
+   "pred_min": 5.293,
+   "actual_min": 1.608,
+   "delta": {
+    "abs": -3.6847,
+    "pct": -69.6
+   },
+   "cost_usd": 0.307993,
+   "first_time_pass": false
+  },
+  {
+   "task": "CR4",
+   "model": "sonnet",
+   "pred_min": 4.687,
+   "actual_min": 1.32,
+   "delta": {
+    "abs": -3.367,
+    "pct": -71.8
+   },
+   "cost_usd": 0.159675,
+   "first_time_pass": true
+  },
+  {
+   "task": "FD1",
+   "model": "sonnet",
+   "pred_min": 4.687,
+   "actual_min": 1.608,
+   "delta": {
+    "abs": -3.0787,
+    "pct": -65.7
+   },
+   "cost_usd": 0.17191,
+   "first_time_pass": true
+  },
+  {
+   "task": "FD3",
+   "model": "sonnet",
+   "pred_min": 5.729,
+   "actual_min": 5.798,
+   "delta": {
+    "abs": 0.0693,
+    "pct": 1.2
+   },
+   "cost_usd": 0.971049,
+   "first_time_pass": false
+  }
+ ]
+}

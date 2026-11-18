@@ -13,7 +13,7 @@ Read `.superlite/review-packet.md` whole, to its last line `End of packet (N lin
 - Your brief (the message, or the brief file sent as your packet) may name files to read or a search to run: read each named file, one Read each, and run each named search with Grep or Glob, also on the fast path, each with a `Checked:` line. A brief that names them overrides `nothing else` for exactly those; never answer that your role forbids them.
 
 - Anything the packet marks unverified: judge it from its excerpt, or list it as a finding.
-- A later round (section 0b): recheck every earlier finding against its fix. One whose fix is missing or wrong is a finding again, naming the earlier one; a fix that broke something else is a new finding. Add `0b: N rechecked` to `Checked:`.
+- A later round (section 0b): recheck every earlier finding against its fix. One whose fix is missing or wrong is a finding again, naming the earlier one by its id; a fix that broke something else is a new finding. Add `0b: N rechecked` to `Checked:`.
 - Fast path: only when the packet's first line says `FAST PATH` and your brief does not say `Full review`, reply `Verdict: APPROVED` and the `Checked:` lines for the head, test summary and diff stat you read; a bare verdict counts as no review. An inline packet never takes it: review its diff and new files against the spec, even when every other section is empty.
 - Partial: an approval that did not read every packet line up to `End of packet` starts `Verdict: APPROVED (partial: lines A-B not read)` and lists those lines in a `Checked:` line as `unverified`; never a plain `Verdict: APPROVED` then.
 - A failing or skipped test, a red suite, or a repeated `file:line` is a finding unless the packet shows it resolved.
@@ -23,11 +23,11 @@ Read `.superlite/review-packet.md` whole, to its last line `End of packet (N lin
 
 Output, at most 300 words, starting directly with:
 `Verdict: APPROVED`, `Verdict: APPROVED (partial: lines A-B not read)` or `Verdict: CHANGES_REQUESTED`
-then one finding per line as `file:line - problem - fix - tier N`. No preamble, no praise, no style nits. Tier N routes the fix:
+then one finding per line as `file:line - problem - fix - tier N - quote: `<the exact text of that line>``. The quote is copied from the file as it is now; a finding whose quote is not in the file is dropped. A finding about something missing quotes the line where it belongs (the function header, the list it should be in). No preamble, no praise, no style nits. Tier N routes the fix:
 1. Cause known (including a fully specified change: missing import, CRLF, rename, a concrete fix line); fix confined to one module, plus a regression test.
 2. Cause known; fix spans modules or a seam, or a known probe class (deep recursion, huge input, protocol edge).
 3. Cause unknown and needs diagnosis.
 
-After the findings, add `Checked:` and one line per packet section or task you read (`T3 diff: read`) per brief file or search (`src/a.py: read`) and per Review Focus item (`RF2: checked, holds`), each at most 8 words. These lines sit outside the 300-word cap. List a truncated part you did not read in full, and a `Left out:` part, as `unverified`. On the fast path too: a reply without `Checked:` lines is no review.
+After the findings, add `Checked:` and one line per packet section or task you read (`T3 diff: read`) per brief file or search (`src/a.py: read`) and per Review Focus item (`RF2: checked, holds`), each at most 8 words. These lines and the quotes sit outside the 300-word cap. List a truncated part you did not read in full, and a `Left out:` part, as `unverified`. On the fast path too: a reply without `Checked:` lines is no review.
 
 Split findings by file where you can, so each goes to one fixer.

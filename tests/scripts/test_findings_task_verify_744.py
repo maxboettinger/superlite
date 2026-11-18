@@ -7,13 +7,14 @@ import pytest
 from test_plan_tools import SCRIPTS, make_plan
 sys.path.insert(0, str(SCRIPTS))
 import findings  # noqa: E402
+from test_findings_route import put  # noqa: E402
 import run_tests  # noqa: E402
 
 PLAIN = "Verify: `/sl/sl run_tests --fast <the test files you touched> --background`, then run the printed `wait:` line in the foreground (never as a background command) and end your turn only after it reports."
 
 
 def f(file, line, tier=1):
-    return {"file": file, "line": line, "problem": "p", "fix": "x", "tier": tier}
+    return {"file": file, "line": line, "problem": "p", "fix": "x", "tier": tier, "quote": f"code at {line}"}
 
 
 @pytest.fixture
@@ -22,6 +23,8 @@ def run(tmp_path):
     plan = make_plan(sd, [{"id": "T1", "owns": "src/a.py, tests/test_a.py", "tests": "fast cmd=bash tests/run.sh"},
                           {"id": "T2", "owns": "src/b.py", "tests": "fast"}], name="plan.md")
     def report(items):
+        for it in items:
+            put(root, it["file"], it["line"], it["quote"])
         p = sd / "fleet" / "reports" / "FR1.json"
         p.write_text(json.dumps({"id": "W4", "label": "FR1", "status": "CHANGES_REQUESTED", "findings": items, "valid": True}))
         return str(p)

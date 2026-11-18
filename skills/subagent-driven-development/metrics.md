@@ -35,11 +35,14 @@ refreshes stats. Rows hold no code, prompts or file contents.
 
 ## `sl budget [--plan P] [--changed] [--json]`
 One line: elapsed, cost so far, projected finish and cost against `**Target-min:**` and `**Budget-usd:**`, `[stats n=..]`.
-`WARN` at 70% of the cap; `OVER CAP`: no optional work (extra review rounds, fix rounds beyond the first), finish what
+`WARN` at 70% of the cap, naming the projected cost; `OVER CAP`: the run is paused (`dispatch` and `fleet spawn` exit 3 with `dispatch: BLOCKED: budget: paused ...` and `BLOCKED: fleet spawn: budget: paused ...`), finish what
 is in flight; `LATE: critical path T1 -> T5` when the projection overruns the target. `lint` and `dispatch` print it
 only when it changed (`.superlite/budget.state`) and only when `metrics.jsonl` exists.
-Soft controls only. Harder controls proposed, not built: a PreToolUse hook that refuses new `Agent` calls over the cap;
-auto-downgrading optional reviewers to the haiku tier; stopping the run at 100%.
+The cap is the newest ledger line `- Budget cap: <usd> (extend|raise) - <ruling>`, else the header.
+`sl budget extend --plan P --ruling TEXT`: the AI orchestrator's one +25% extension per run (exit 2 without a cap or ruling, after an extension, or for a human orchestrator).
+`sl budget raise --to USD --ruling TEXT --plan P`: the user's raise, run on their word (exit 2 unless USD is above the spend).
+Paused again after the extension or refused: commit, write `.superlite/stopped.md`, `fleet stop --all`, end the turn with the least cap. After the user's raise run `/superlite:resume`.
+Not built: a PreToolUse hook that refuses new `Agent` calls over the cap; auto-downgrading optional reviewers to the haiku tier.
 
 ## Coordinator, accuracy and reconcile
 - The coordinator is its own line: `metrics.py --json --all` returns `{coordinator, tasks}` (turns, tokens, cost by model, median and

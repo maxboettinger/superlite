@@ -68,7 +68,9 @@ def test_route_brief_file_names_checkpoint(tmp_path, monkeypatch):
     (root / ".git").mkdir()
     rep = sd / "fleet" / "reports" / "FR1.json"
     rep.write_text(json.dumps({"id": "W4", "label": "FR1", "status": "CHANGES_REQUESTED", "valid": True,
-                               "findings": [{"file": "src/a.py", "line": 1, "problem": "p", "fix": "x", "tier": 1}]}))
+                               "findings": [{"file": "src/a.py", "line": 1, "problem": "p", "fix": "x", "tier": 1, "quote": "code at 1"}]}))
+    (root / "src").mkdir()
+    (root / "src" / "a.py").write_text("code at 1\n")
     plan = make_plan(root, [{"id": "T1", "owns": "src/a.py"}])
     (sd / "progress.md").write_text("- commit T1 abcdef1234 done\n")
     (sd / "checkpoints.json").write_text(json.dumps({"run": "r-1", "entries": [{"task": "T1", "sha": "deadbee"}]}))

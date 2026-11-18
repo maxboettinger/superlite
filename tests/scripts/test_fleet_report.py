@@ -38,7 +38,7 @@ def test_unknown_json_status_and_broken_json_fall_back():
 def test_verdict_lines_become_findings_without_a_block():
     text = "Verdict: CHANGES_REQUESTED\nsrc/a.py:12 - off by one - use <= - tier 1\n- src/b.py:3 - crash on empty - guard it - tier 3\nChecked:\nT1 diff: read"
     assert fr.parse(text) == {"status": "CHANGES_REQUESTED", "files": [], "tests": "", "red": "", "reds": {}, "summary": "", "concerns": [], "valid": False,
-                              "findings": [FINDING, {"file": "src/b.py", "line": 3, "problem": "crash on empty", "fix": "guard it", "tier": 3}]}
+                              "findings": [{**FINDING, "quote": ""}, {"file": "src/b.py", "line": 3, "problem": "crash on empty", "fix": "guard it", "tier": 3, "quote": ""}]}
     assert fr.parse("Verdict: APPROVED") == {"status": "APPROVED", **EMPTY}
 
 def test_status_regexes_then_unknown():

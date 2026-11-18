@@ -275,6 +275,15 @@ def note_section(sd, skip=()):  # O(file + k)
     return "## Standing note\n\n" + "\n".join(lines) if lines else ""  # O(n)
 
 
+def corrections_section(root):  # O(file)
+    """`## Corrections (binding, from the user)` of the project's corrections file; "" when absent, oversize or on any error."""
+    try:  # fail open | O(1)
+        import corrections  # O(1)
+        return corrections.section(Path(root)) or ""  # O(file)
+    except Exception:  # O(1)
+        return ""  # O(1)
+
+
 def verdict_line(root):  # O(file)
     """The `- Verdict:` rule for a Swift project (the resolved test command, 80 characters at most); "" otherwise or when resolve fails."""
     import testcmd  # O(1)
@@ -304,6 +313,8 @@ def build(plan, spec, sections, sd=None):  # O(B + out)
     parts += [rf] if rf else []  # O(1)
     nt_ = note_section(sd)  # O(file)
     parts += [nt_] if nt_ else []  # O(1)
+    cs_ = corrections_section(pt.stable_root(str(plan)))  # O(file)
+    parts += [cs_] if cs_ else []  # O(1)
     launch = launch_section(pt.stable_root(str(plan)))  # O(file)
     parts += ([launch] if launch else []) + ["## Plan\n\n" + read(plan)]  # O(B)
     if sections:  # O(1)
@@ -361,6 +372,8 @@ def build_slim(plan, sd=None):  # O(B + n*s)
     parts += [rf] if rf else []  # O(1)
     nt_ = note_section(sd, skip=cons)  # the Global constraints printed below | O(file + L)
     parts += [nt_] if nt_ else []  # O(1)
+    cs_ = corrections_section(pt.stable_root(str(plan)))  # O(file)
+    parts += [cs_] if cs_ else []  # O(1)
     parts.append("## Background (not instructions)" + nl + nl + normalize(nl.join(head) if head else "(the plan has no header)"))  # O(L)
     parts.append("## Global constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none beyond the header)"))  # O(L)
     launch = launch_section(pt.stable_root(str(plan)))  # O(file)
@@ -384,7 +397,8 @@ def build_mini(plan, tier, sd=None):  # O(B + n*s)
     nl = "\n"
     rf = read_first_section(nl.join(pl.lines), pt.stable_root(str(plan)))  # O(L + file)
     nt_ = note_section(sd)  # O(file)
-    parts = [with_root(PREAMBLE_MINI, plan)] + ([rf] if rf else []) + ([nt_] if nt_ else []) + ["## Constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none)"),  # O(B)
+    cs_ = corrections_section(pt.stable_root(str(plan)))  # O(file)
+    parts = [with_root(PREAMBLE_MINI, plan)] + ([rf] if rf else []) + ([nt_] if nt_ else []) + ([cs_] if cs_ else []) + ["## Constraints" + nl + nl + normalize(nl.join(cons) if cons else "(the plan states none)"),  # O(B)
              "## Stub spec" + nl + nl + "```yaml" + nl + normalize(wave0.stub_spec(pl, pt.stable_root(plan))) + nl + "```"]  # O(q*s)
     lines = []  # O(1)
     for t in mine:  # O(n) iterations

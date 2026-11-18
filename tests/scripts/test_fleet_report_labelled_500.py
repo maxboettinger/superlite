@@ -59,7 +59,7 @@ def test_none_words_dropped():
 
 def test_finding_lines_in_a_status_report():
     r = fr.parse("Status: DONE_WITH_CONCERNS\n- src/a.py:12 - off by one - use <= - tier 1\n")
-    assert r["findings"] == [{"file": "src/a.py", "line": 12, "problem": "off by one", "fix": "use <=", "tier": 1}]
+    assert r["findings"] == [{"file": "src/a.py", "line": 12, "problem": "off by one", "fix": "use <=", "tier": 1, "quote": ""}]
 
 
 def test_json_block_wins_and_carries_concerns():

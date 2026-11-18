@@ -621,6 +621,26 @@ def moved_lines(sd, plan=None):  # O(files) + git spawns
         return []  # O(1)
 
 
+def corrections_line(ledger, plan=None):  # O(file) + spawn; size of the project's corrections file and the capture reminder
+    try:  # fail open | O(1)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+        import corrections  # O(1)
+        if plan:  # O(1)
+            import plan_tools as pt  # O(1)
+            root = pt.stable_root(str(plan))  # O(d)
+        else:  # O(1)
+            root = _git_top(Path(ledger)) or Path(ledger).resolve().parent  # O(1) + spawn
+        try:  # O(1)
+            size = (Path(root) / corrections.FILE).stat().st_size  # O(1)
+        except OSError:  # O(1)
+            size = 0  # O(1)
+        n = len(corrections.lines(root))  # O(file)
+        return (f"corrections: {n} {'line' if n == 1 else 'lines'}, {size}/{corrections.MAX_BYTES} bytes ({corrections.FILE}); a user correction from this run "
+                'that later runs need: sl corrections add "<rule>"')  # O(1)
+    except Exception:  # O(1)
+        return "corrections: unreadable"  # O(1)
+
+
 def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None, end_plan=None):  # O(R*w + I*w + C + G)
     rulings, commits, _ = read_ledger(ledger)  # O(R*w)
     incidents = open_incidents(log, load_run_summaries(sl_dir or Path(ledger).parent), ledger)  # O(I*w + I*S*F)
@@ -651,6 +671,8 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None, end_
         out.append(f"scope rulings: {len(scope)}")  # O(1)
         out += [f"- {r}" for r in scope]  # O(G)
         out.append("")  # O(1)
+    out.append(corrections_line(ledger, plan))  # O(file) + spawn
+    out.append("")  # O(1)
     import next_tasks  # lazy | O(1)
     held = {t: r for t, r in next_tasks.held_tasks(ledger).items() if t not in {c[0] for c in commits}}  # O(R + C)
     if held:  # O(1)

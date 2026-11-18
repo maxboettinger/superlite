@@ -1,8 +1,8 @@
 """Shared helpers for superlite micro-experiments.
 
 Run scripts with: uv run --no-project python bench/experiments/<script>.py
-Every call runs `claude -p` with a clean environment (host-session CLAUDE*/ANTHROPIC* vars stripped,
-so hooks and plugins behave like a fresh terminal) and stream-json output, then parses usage.
+Every call runs `claude -p` with a clean environment (host-session CLAUDE*/ANTHROPIC*/SUPERLITE_* vars stripped,
+so hooks and plugins behave like a fresh terminal and never report into a host run) and stream-json output, then parses usage.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ SUPERPOWERS_OFF = {"superpowers@claude-plugins-official": False}
 
 
 def clean_env(fork: bool = False, extra: dict[str, str] | None = None) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not (k.startswith("CLAUDE") or k.startswith("ANTHROPIC"))}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "ANTHROPIC", "SUPERLITE_"))}
     if fork:
         env["CLAUDE_CODE_FORK_SUBAGENT"] = "1"
     env.update(extra or {})
@@ -79,6 +79,19 @@ class Run:
         return []
 
 
+def parse_stream(stdout: str, seconds: float) -> Run:
+    """The stream-json events of a `claude -p` run and its last result event."""
+    events = []
+    for line in stdout.splitlines():
+        if line.startswith("{"):
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    results = [e for e in events if e.get("type") == "result"]
+    return Run(events, seconds, results[-1] if results else {})
+
+
 def run_claude(prompt: str, *, model: str = "opus", cwd: Path, budget: float = 2.0, plugin_superlite: bool = False,
                fork: bool = False, effort: str | None = None, extra_args: list[str] | None = None,
                env_extra: dict[str, str] | None = None, log: Path | None = None, timeout: int = 1800) -> Run:
@@ -95,17 +108,9 @@ def run_claude(prompt: str, *, model: str = "opus", cwd: Path, budget: float = 2
     proc = subprocess.run(args, cwd=cwd, input=prompt, capture_output=True, text=True, encoding="utf-8",
                           env=clean_env(fork, env_extra), timeout=timeout)
     secs = time.time() - t0
-    events = []
-    for line in proc.stdout.splitlines():
-        if line.startswith("{"):
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
     if log:
         log.write_text(proc.stdout, encoding="utf-8")
-    results = [e for e in events if e.get("type") == "result"]
-    return Run(events, secs, results[-1] if results else {})
+    return parse_stream(proc.stdout, secs)
 
 
 def pytest_counts(cwd: Path, target: str = "", pythonpath: Path | None = None) -> tuple[int, int]:

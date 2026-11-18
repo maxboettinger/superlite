@@ -33,7 +33,8 @@ def test_findings_root_is_the_git_root_with_state_dir_outside(tmp_path):
     sd = root / "sub" / ".superlite"; (sd / "fleet" / "reports").mkdir(parents=True)
     plan = make_plan(root, [{"id": "T1", "owns": "src/a.py"}, {"id": "T2", "owns": "src/b.py"}])
     rp = sd / "fleet" / "reports" / "FR1.json"
-    rp.write_text(json.dumps({"id": "W4", "label": "FR1", "findings": [{"file": str(root / "src" / "a.py"), "line": 1, "problem": "p", "fix": "x", "tier": 1}]}))
+    rp.write_text(json.dumps({"id": "W4", "label": "FR1", "findings": [{"file": str(root / "src" / "a.py"), "line": 1, "problem": "p", "fix": "x", "tier": 1, "quote": "code at 1"}]}))
+    (root / "src").mkdir(); (root / "src" / "a.py").write_text("code at 1\n")
     lines = findings.route(sd, plan, [str(rp)], "/sl/sl")
     assert lines and lines[0].endswith("files=src/a.py task=T1")
 

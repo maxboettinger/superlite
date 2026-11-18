@@ -142,7 +142,7 @@ def test_budget_line_warn_and_over_cap(tmp_path):
     cp = run(BUDGET, "--plan", p, "--dir", tmp_path / ".superlite", cwd=tmp_path)
     assert cp.returncode == 0, cp.both
     assert cp.out.startswith("budget: coordinator") and "of $0.001 cap" in cp.out and "OVER CAP" in cp.out
-    assert "no optional work" in cp.out or "start no optional work" in cp.out
+    assert "OVER CAP: paused: spent $" in cp.out and "least cap to finish $" in cp.out
     j = json.loads(run(BUDGET, "--plan", p, "--dir", tmp_path / ".superlite", "--json", cwd=tmp_path).out)
     assert j["state"] == "over" and j["cap_usd"] == 0.001 and j["target_min"] == 1.0
     text = text.replace("**Budget-usd:** 0.001", "**Budget-usd:** 100")

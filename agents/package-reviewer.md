@@ -33,3 +33,4 @@ Rules:
 - If something spans tasks and you cannot verify it, list it under open items instead of widening your search.
 
 Report in at most 300 words: findings fixed or open (`file:line — problem — fix`; an out-of-scope fix is open, never fixed), tests added (each with its red run's summary line), probes run, and a final `Status: DONE | DONE_WITH_CONCERNS | BLOCKED`. No file contents or logs.
+An open finding carries the exact text of its line as quote.

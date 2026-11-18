@@ -20,13 +20,22 @@ task's brief): the brief lists it and carries its `commit_task --claim` line. Ev
 `<sd>/briefs/lead.md`, carries the format rule, and in another superlite checkout names that worktree's `sl` for the tools it
 touches; a task brief says a hidden checkpoint leaves files modified in `git status`.
 
-No findings: `findings: none`. An unreadable report or plan prints `error: ...` to stderr and exits 2.
-Library: route, standing_note, main. Stdlib only.
+A finding of an `FR...` report needs a `quote` (the line it rests on): `screen` checks it against the file (a moved quote
+corrects the line), drops one that is not there (`UNVERIFIED ...` on stderr), merges findings with one fingerprint at the
+highest tier, drops a dismissed fingerprint (`DISMISSED ...`) and raises a repeat of an earlier routed finding by one tier.
+Every screened finding is a row of `<sd>/findings.jsonl`. The briefs hold the project corrections after the standing note.
+
+    findings.py dismiss FP --ruling TEXT --plan P     record that finding FP is not a defect (ledger row + progress ruling)
+    findings.py rounds --plan P [--out FILE]          the ledger as markdown, one section per round
+
+No findings: `findings: none`; all dropped by the screen: `findings: none routed (u unverified, d dismissed)`. An unreadable report or plan prints `error: ...` to stderr and exits 2.
+Library: route, screen, standing_note, main. Stdlib only.
 """
 # Complexity notation:
 #   r = reports, k = findings overall, n = plan tasks, o = owned paths overall, f = files in <sd>/fixes and <sd>/briefs
 import argparse  # O(1)
 import json  # O(1)
+import os  # O(1)
 import re  # O(1)
 import sys  # O(1)
 from pathlib import Path  # O(1)
@@ -37,6 +46,9 @@ import plan_tools as pt  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
 import testcmd  # noqa: E402 | O(1)
 import commit_task  # noqa: E402 | O(1)
+import corrections  # noqa: E402 | O(1)
+import finding_check as fc  # noqa: E402 | O(1)
+import incident  # noqa: E402 | O(1)
 from pool import currents  # noqa: E402 | O(1)
 
 TIERS = {1: "sonnet", 2: "sonnet-high", 3: "opus"}  # finding tier -> fixer tier name | O(1)
@@ -156,7 +168,8 @@ def collect(reports: list[str], root: Path) -> list[dict]:  # O(r + k log k)
             except (TypeError, ValueError):  # O(1)
                 tier = 1  # O(1)
             f = {"file": rel(it["file"], root), "line": line, "problem": one_line(it.get("problem", "")),  # O(s)
-                 "fix": one_line(it.get("fix", "")), "tier": tier, "label": label}  # O(s)
+                 "fix": one_line(it.get("fix", "")), "tier": tier, "label": label,  # O(s)
+                 "quote": one_line(it.get("quote") or "")}  # O(s)
             key = (f["file"], f["line"], f["problem"])  # O(1)
             if key not in seen:  # O(1)
                 seen.add(key)  # O(1)
@@ -270,7 +283,18 @@ def run_checkpoints(plan: Path):  # the checkpoint state commit_task writes for 
         return None  # O(1)
 
 
-def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, note=(), wt=None, extras=(), checkpoints=CURRENT, plan_file: Path | None = None, root: Path | None = None) -> str:  # O(k + o)
+def finding_line(i: dict) -> str:  # one finding of a brief, ending in its quote and fingerprint | O(s)
+    rep = f", repeat of {i['repeat']}" if i.get("repeat") else ""  # O(1)
+    quote = f" quote: `{i['quote']}`" if i.get("quote") else ""  # O(s)
+    fp = f" fp: {i['fp']}" if i.get("fp") else ""  # O(1)
+    return f"- {i['id']} {i['file']}:{i['line']} - {i['problem']} - {i['fix']} (tier {i['tier']}, from {i['label']}{rep}){quote}{fp}"  # O(s)
+
+
+def corr_lines(corr) -> list[str]:  # the corrections block after the standing note | O(s)
+    return [corr, ""] if corr else []  # O(1)
+
+
+def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, note=(), wt=None, extras=(), checkpoints=CURRENT, plan_file: Path | None = None, root: Path | None = None, corr=None) -> str:  # O(k + o)
     ids = ", ".join(i["id"] for i in items)  # O(k)
     owns = task.owns  # O(o)
     outside = sorted({i["file"] for i in items if not nt.owns_match(i["file"], owns)})  # files no Owns of this task lists | O(k)
@@ -283,9 +307,10 @@ def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, not
              TREE_RULE]  # O(1)
     if extras:  # O(1)
         lines.append(f"Extra files (findings route --also; the fix may edit them too): {', '.join(extras)}")  # O(e)
-    lines += ["", *note, "", "Findings:"] if note else ["", "Findings:"]  # O(note)
-    lines += [f"- {i['id']} {i['file']}:{i['line']} - {i['problem']} - {i['fix']} (tier {i['tier']}, from {i['label']})"  # O(k)
-              for i in items]  # O(k)
+    lines += ["", *note] if note else []  # O(note)
+    lines += ["", *corr_lines(corr)] if corr else [""]  # O(1)
+    lines.append("Findings:")  # O(1)
+    lines += [finding_line(i) for i in items]  # O(k)
     lines += shared_lines(sl_path, task.id, plan_file or plan, task_cmd(task))  # O(1)
     lines.append(f"Commit: `{sl_path} commit_task {task.id} --plan {plan}`")  # O(1)
     if not commit_task.autocommit.is_on():  # autocommit makes real commits: a dirty status then means files left uncommitted | O(1)
@@ -299,7 +324,7 @@ def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, not
     return "\n".join(lines) + "\n"  # O(k)
 
 
-def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, running: list[str], note=(), wt=None, checkpoints=CURRENT, root: Path | None = None) -> str:  # O(k)
+def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, running: list[str], note=(), wt=None, checkpoints=CURRENT, root: Path | None = None, corr=None) -> str:  # O(k)
     ids = ", ".join(i["id"] for i in items)  # O(k)
     held = ", ".join(running) or "-"  # O(n)
     lines = [f"# Fix {ids} · tier {tier} · coordinator commit",  # O(1)
@@ -307,9 +332,10 @@ def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, run
              f"Task: none · running: {held}",  # O(1)
              checkpoint_line(commit_task.autocommit.load_state() if checkpoints is CURRENT else checkpoints, None),  # O(e)
              TREE_RULE]  # O(1)
-    lines += ["", *note, "", "Findings:"] if note else ["", "Findings:"]  # O(note)
-    lines += [f"- {i['id']} {i['file']}:{i['line']} - {i['problem']} - {i['fix']} (tier {i['tier']}, from {i['label']})"  # O(k)
-              for i in items]  # O(k)
+    lines += ["", *note] if note else []  # O(note)
+    lines += ["", *corr_lines(corr)] if corr else [""]  # O(1)
+    lines.append("Findings:")  # O(1)
+    lines += [finding_line(i) for i in items]  # O(k)
     lines += shared_lines(sl_path, coordinator=True)  # O(1)
     lines.append(f"Commit: none by you: no committed task is free ({held} in progress). Do not run commit_task; "  # O(1)
                  "end your report with `commit: held for the coordinator` instead of the commit id. "  # O(1)
@@ -317,8 +343,60 @@ def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, run
     return "\n".join(lines) + "\n"  # O(k)
 
 
+def _screen(found: list[dict], root: Path, rows: list[dict]) -> tuple[list[dict], list[str], list[dict]]:  # O(k*(L+s) + k*r)
+    """Survivors, stderr notes and the dropped unverified findings (each with a `reason`)."""
+    notes, bad, merged = [], [], {}  # O(1)
+    for f in found:  # O(k) iterations
+        f = dict(f)  # O(1)
+        need = str(f.get("label", "")).upper().startswith("FR")  # a final-review finding must quote | O(1)
+        if need or f.get("quote"):  # O(1)
+            v = fc.verify(root, f)  # O(L*q + s)
+            if v["state"] == "unverified":  # O(1)
+                f["reason"] = v["reason"]  # O(1)
+                bad.append(f)  # O(1)
+                notes.append(f"UNVERIFIED {f['file']}:{f['line']} - {f['problem']} ({v['reason']}) from {f['label']}")  # O(1)
+                continue  # O(1)
+            f["line"] = v["line"]  # a moved quote corrects the line | O(1)
+        f["fp"] = fc.fingerprint(f["file"], f.get("quote", ""), f["problem"])  # O(q)
+        if f["fp"] in merged:  # O(1)
+            kept = merged[f["fp"]]  # O(1)
+            kept["tier"] = max(kept["tier"], f["tier"])  # O(1)
+            for key in ("problem", "fix"):  # a different second defect or fix is kept, not lost | O(1)
+                extra = str(f.get(key) or "")  # O(s)
+                if extra and extra not in str(kept.get(key) or ""):  # O(s)
+                    kept[key] = f"{kept[key]}; {extra}" if kept.get(key) else extra  # O(s)
+        else:  # O(1)
+            merged[f["fp"]] = f  # O(1)
+    out = []  # O(1)
+    for f in merged.values():  # O(k) iterations
+        old = fc.prior(rows, f["fp"])  # O(r)
+        if old and old.get("state") == "dismissed":  # O(1)
+            notes.append(f"DISMISSED {f['fp']} {f['file']}:{f['line']} - {f['problem']} (ruled: {old.get('ruling', '')})")  # O(1)
+            continue  # O(1)
+        if old:  # a repeat: one tier up, at most 3 | O(1)
+            try:  # O(1)
+                f["tier"] = min(3, max(f["tier"], int(old.get("tier") or 1) + 1))  # O(1)
+            except (TypeError, ValueError):  # O(1)
+                pass  # O(1)
+            f["repeat"] = old.get("id") or ""  # O(1)
+        out.append(f)  # O(1)
+    return out, notes, bad  # O(1)
+
+
+def screen(found: list[dict], root: Path, sd: Path) -> tuple[list[dict], list[str]]:  # O(k*(L+s) + r)
+    """Verify, fingerprint, merge and ledger-check findings; return the survivors and the stderr notes."""
+    out, notes, _ = _screen(found, Path(root), fc.load(sd))  # O(k*(L+s) + r)
+    return out, notes  # O(1)
+
+
+def _row(f: dict, rnd: int, state: str) -> dict:  # one ledger row | O(1)
+    return {"round": rnd, "id": f.get("id", ""), "fp": f.get("fp") or fc.fingerprint(f["file"], f.get("quote", ""), f["problem"]),  # O(q)
+            "file": f["file"], "line": f["line"], "problem": f["problem"], "tier": f["tier"], "label": f["label"],  # O(1)
+            "state": state, "reason": f.get("reason", "")}  # O(1)
+
+
 def route(sd: Path, plan: Path, reports: list[str], sl_path: str, also: list[str] | None = None,  # O(r + k log k + n*o + f)
-          superlite_root: str | None = None) -> list[str]:
+          superlite_root: str | None = None, notes: list[str] | None = None) -> list[str]:
     """Write one fixer brief per owning task; return the `fixer ...` lines in plan task order."""
     sd = Path(sd).resolve()  # O(d)
     root = Path(state.git_root(sd) or sd.parent)  # the project root, as fleet.py does | O(d)
@@ -346,7 +424,10 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str, also: list[str
         return "C"  # O(1)
     groups = {t.id: [] for t in tasks}  # O(n)
     groups["C"] = []  # O(1)
-    for f in collect(reports, root):  # O(k) iterations
+    rows = fc.load(sd)  # O(r)
+    rnd = fc.next_round(rows)  # O(r)
+    found, said, bad = _screen(collect(reports, root), root, rows)  # O(k*(L+s) + r)
+    for f in found:  # O(k) iterations
         groups[target(f["file"])].append(f)  # O(n*o)
     import fleet_io  # lazy: it imports herdr_client | O(1)
     sroot = superlite_root or Path(__file__).resolve().parents[3]  # O(1)
@@ -366,7 +447,11 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str, also: list[str
         if ef not in extras.setdefault(tid, []):  # O(e)
             extras[tid].append(ef)  # O(1)
     note = standing_note(sd)  # O(file)
-    lines = []  # O(1)
+    try:  # a corrections error leaves the briefs without the section | O(1)
+        corr = corrections.section(root)  # O(b)
+    except Exception:  # O(1)
+        corr = None  # O(1)
+    lines, ledger = [], []  # O(1)
     for t in [*tasks, None]:  # O(n) iterations
         tid = t.id if t else "C"  # O(1)
         items = sorted(groups[tid], key=lambda f: (f["file"], f["line"]))  # O(k_t log k_t)
@@ -381,12 +466,58 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str, also: list[str
         ex = extras.get(tid, [])  # O(1)
         found = [f["file"] for f in items]  # O(k_t)
         wt = fleet_io.worktree_sl(root, sroot, [*(t.owns if t else []), *found, *ex])  # O(k_t)
-        text = (brief_text(sl_path, plan, t, items, tier, note, wt, ex, cps, plan_file, root.resolve()) if t  # O(k_t)
-                else coordinator_text(sl_path, plan, items, tier, held, note, wt, cps, root.resolve()))  # O(k_t)
+        text = (brief_text(sl_path, plan, t, items, tier, note, wt, ex, cps, plan_file, root.resolve(), corr) if t  # O(k_t)
+                else coordinator_text(sl_path, plan, items, tier, held, note, wt, cps, root.resolve(), corr))  # O(k_t)
         brief.write_text(text, encoding="utf-8")  # O(k_t) I/O
         files = ",".join(sorted({*found, *ex}))  # O(k_t log k_t)
+        for f in items:  # O(k_t) iterations
+            ledger.append(_row(f, rnd, "routed") | {"repeat": f.get("repeat", ""), "quote": f.get("quote", "")})  # O(1)
         lines.append(f"fixer tier={TIERS[tier]} brief={brief} files={files} task={t.id if t else 'coordinator'}")  # O(1)
+    ledger += [_row(f, rnd, "unverified") for f in bad]  # O(k)
+    for row in ledger:  # O(k) iterations
+        try:  # the ledger is a record, not a gate | O(1)
+            fc.append(sd, row)  # O(1) I/O
+        except OSError:  # O(1)
+            break  # O(1)
+    for n in said:  # O(k) iterations
+        print(n, file=sys.stderr)  # O(1)
+    if notes is not None:  # O(1)
+        notes.extend(said)  # O(k)
     return lines  # O(n)
+
+
+def dismiss(sd: Path, fp: str, ruling: str) -> tuple[int, str]:  # O(r)
+    """Record finding `fp` as dismissed: a ledger row and a ruling line in progress.md."""
+    ruling = one_line(ruling)  # O(s)
+    old = next((r for r in reversed(fc.load(sd)) if r.get("fp") == fp), None)  # O(r)
+    if not ruling:  # O(1)
+        return 2, "error: --ruling must not be empty"  # O(1)
+    if not old:  # O(1)
+        return 2, f"error: unknown finding fingerprint {fp}"  # O(1)
+    fc.append(sd, {**old, "state": "dismissed", "ruling": ruling})  # O(1) I/O
+    line = f"- Ruling: finding {fp} {old.get('file')}:{old.get('line')} dismissed - {ruling}\n"  # O(s)
+    with open(Path(sd) / "progress.md", "ab+") as fh:  # incident's lock, text line (its append writes JSON) | O(1)
+        incident._lock(fh)  # O(1)
+        try:  # O(1)
+            fh.seek(0, 2)  # O(1)
+            fh.write(line.encode("utf-8"))  # O(s) I/O
+            fh.flush()  # O(1)
+            os.fsync(fh.fileno())  # O(s) I/O
+        finally:  # O(1)
+            incident._unlock(fh)  # O(1)
+    return 0, f"dismissed {fp}"  # O(1)
+
+
+def rounds_text(rows: list[dict]) -> str:  # the ledger as markdown, one section per round | O(r log r)
+    if not rows:  # O(1)
+        return "rounds: none"  # O(1)
+    out = []  # O(1)
+    for rn in sorted({int(r.get("round") or 0) for r in rows}):  # O(r log r)
+        out += [f"## Round {rn}", ""]  # O(1)
+        out += [f"- {r.get('id') or '-'} {r.get('file')}:{r.get('line')} - {r.get('problem')} (tier {r.get('tier')}) fp {r.get('fp')}: {r.get('state')}"  # O(1)
+                for r in rows if int(r.get("round") or 0) == rn]  # O(r)
+        out.append("")  # O(1)
+    return "\n".join(out).rstrip() + "\n"  # O(r)
 
 
 def main(argv=None) -> int:  # O(d + route)
@@ -396,10 +527,31 @@ def main(argv=None) -> int:  # O(d + route)
     r.add_argument("--plan", required=True)  # O(1)
     r.add_argument("--also", action="append", default=[], metavar="[Tn=]FILE", help="an extra file the fix may edit (repeatable)")  # O(1)
     r.add_argument("reports", nargs="+", metavar="REPORT.json")  # O(1)
+    d = sub.add_parser("dismiss", help="record a finding fingerprint as not a defect")  # O(1)
+    d.add_argument("fp")  # O(1)
+    d.add_argument("--ruling", required=True)  # O(1)
+    d.add_argument("--plan", required=True)  # O(1)
+    q = sub.add_parser("rounds", help="print the findings ledger as markdown")  # O(1)
+    q.add_argument("--plan", required=True)  # O(1)
+    q.add_argument("--out")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    if a.cmd == "dismiss":  # O(1)
+        try:  # O(1)
+            code, msg = dismiss(state.resolve(a.plan), a.fp, a.ruling)  # O(r)
+        except (OSError, pt.PlanError) as exc:  # O(1)
+            code, msg = 2, f"error: {exc}"  # O(1)
+        print(msg, file=sys.stderr if code else sys.stdout)  # O(1)
+        return code  # O(1)
+    if a.cmd == "rounds":  # O(1)
+        text = rounds_text(fc.load(state.resolve(a.plan)))  # O(r log r)
+        if a.out:  # O(1)
+            Path(a.out).write_text(text, encoding="utf-8")  # O(r) I/O
+        print(text, end="" if text.endswith("\n") else "\n")  # O(r)
+        return 0  # O(1)
     sl_path = str(Path(__file__).resolve().parent / "sl")  # O(1)
     try:  # O(1)
-        lines = route(state.resolve(a.plan), Path(a.plan), a.reports, sl_path, also=a.also)  # O(route)
+        said = []  # O(1)
+        lines = route(state.resolve(a.plan), Path(a.plan), a.reports, sl_path, also=a.also, notes=said)  # O(route)
     except ReportError as exc:  # O(1)
         print(f"error: cannot read report {exc}", file=sys.stderr)  # O(1)
         return 2  # O(1)
@@ -409,7 +561,9 @@ def main(argv=None) -> int:  # O(d + route)
     except pt.PlanError as exc:  # O(1)
         print(f"error: {exc}", file=sys.stderr)  # O(1)
         return 2  # O(1)
-    print("\n".join(lines) if lines else "findings: none")  # O(n)
+    u, dm = sum(n.startswith("UNVERIFIED") for n in said), sum(n.startswith("DISMISSED") for n in said)  # O(k)
+    none = f"findings: none routed ({u} unverified, {dm} dismissed)" if said else "findings: none"  # O(1)
+    print("\n".join(lines) if lines else none)  # O(n)
     return 0  # O(1)
 
 

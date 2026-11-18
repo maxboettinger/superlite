@@ -34,6 +34,7 @@ A primed worker whose pane shows the folder trust dialog gets Down, Enter and th
 `spawn --for-dispatch|--for-review|--package` accept the run folder as `--plan`: it becomes the plan file stable.json, pool.json or plan.md names, else exit 2 (#508).
 While the run's fleet.json says off, `spawn` (both forms) starts nothing: `BLOCKED: fleet is off in <state dir>; run sl fleet on [--plan P] first ...`, exit 3 (#355).
 `stop` drops the worker's tree `worker-<id>` unless a live process marks it busy (#614).
+While the budget is paused (spend above the cap), every `spawn` that names a `--plan` refuses: `BLOCKED: fleet spawn: budget: paused: ...`, exit 3, before any pane.
 `spawn` (not `--for-dispatch`, which dispatch gates itself) refuses on a nearly full disk: `BLOCKED: fleet spawn: disk: ...`, exit 3; below the warn level it warns on stderr (#614).
 `sl fleet restore` re-launches every worker and lead of the run after a Herdr restart, each resuming its own Claude session; `status` names it after a worker found dead (#577).
 `spawn --for-review|--package ... --note FILE` appends FILE to the generated review brief under `## Coordinator notes` (#604).
@@ -1188,6 +1189,15 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
         except pt.PlanError as e:  # O(1)
             print(f"error: {e}", file=sys.stderr)  # O(1)
             return 2  # O(1) before dispatch: no pane, no worker id
+    if a.plan:  # a spawn that knows its plan stops while the budget is paused; the gate fails open | O(compute)
+        try:  # O(compute)
+            import budget  # noqa: E402 | O(1) lazy
+            paused = budget.gate(a.plan, str(sd))  # O(compute)
+        except Exception:  # noqa: BLE001 | O(1)
+            paused = None  # O(1)
+        if paused:  # O(1)
+            print(f"BLOCKED: fleet spawn: {paused}")  # O(1)
+            return 3  # O(1) before any pane or worker id
     if not a.for_dispatch:  # dispatch gates the disk itself (#614) | O(1)
         import trees  # noqa: E402 | O(1) lazy
         level, line = trees.disk_gate(state.git_root(sd) or sd.parent)  # O(1)
