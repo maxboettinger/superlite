@@ -31,7 +31,7 @@ TID = r"[A-Z]{1,3}\d+[A-Za-z]?"  # a plan task id | O(1)
 RED_TASK = re.compile(r"^[ \t]*(?:[-*][ \t]+)?([*`]*)Red run[ \t]+\(?(" + TID + r")\)?[*`]*:[*`]*[ \t]*(\S.*?)[ \t]*\r?$", re.M)  # `Red run Tn: text` | O(1)
 RED_HEAD = re.compile(r"^[ \t]*(?:[-*][ \t]+)?[*`]*Red runs?[*`]*:[*`]*[ \t]*(.*?)[ \t]*\r?$")  # a `Red run:` header, with or without a value | O(1)
 RED_ITEM = re.compile(r"^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?[*`]*(" + TID + r")[*`]*:[*`]*[ \t]*(\S.*?)[ \t]*\r?$")  # a per-task item under a header | O(1)
-FINDING_LINE = re.compile(r"^\s*(?:[-*]\s+)?(\S+?):(\d+)\s+-\s+(.+?)\s+-\s+(.+)\s+-\s+tier\s+([123])\s*$", re.M)  # O(1)
+FINDING_LINE = re.compile(r"^\s*(?:[-*]\s+)?(\S+?):(\d+)\s+-\s+(.+?)\s+-\s+(.+?)\s+-\s+tier\s+([123])(?:\s+-\s+quote:[ \t]*(.*?))?\s*$", re.M)  # the first `- tier N` followed by the quote tail or the line end ends the fix | O(1)
 LABEL = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?[*_`]*(files changed|changed files|files touched|files|tests?(?: command| results?)?|results?|summary|concerns|open questions|questions)"
                    r"[*_`]*[ \t]*:[*_`]*[ \t]*(.*)$", re.I)  # a label line, its text stripped of trailing blanks | O(1)
 ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(.*)$")  # a list item under a label | O(1)
@@ -40,7 +40,7 @@ FULL = "Full review: the packet's FAST PATH line does not apply; review every se
 WORK = ("End your reply with the line `Status: <DONE|DONE_WITH_CONCERNS|NEEDS_CONTEXT|BLOCKED>`, then one fenced json block: "
         '{"status": "<that word>", "files": ["<path changed>"], "tests": "<test command and result line>", '
         '"red": "<the summary line of the run that saw your new tests fail, or none - no test>", '
-        '"findings": [{"file": "<path>", "line": <int>, "problem": "<text>", "fix": "<text>", "tier": <1|2|3>}], '
+        '"findings": [{"file": "<path>", "line": <int>, "problem": "<text>", "fix": "<text>", "tier": <1|2|3>, "quote": "<the exact text of that source line>"}], '
         '"summary": "<one line>"}. `findings` lists only the findings still open; `tier` is the integer 1, 2 or 3 (fixing.md).')  # O(1)
 RED_ONE = '"red": "<the summary line of the run that saw your new tests fail, or none - no test>"'  # O(1)
 RED_MANY = '"red": {"<task id>": "<the summary line of the run that saw that task\'s new tests fail, or none - no test>"}'  # O(1)
@@ -49,7 +49,7 @@ PLANNED = WORK.replace("`Status: <DONE|", "`Status: <DONE planned: <plan path>|D
 PLANNED_END = "End: Status: DONE planned:"  # O(1)
 REVIEW = ("After the `Checked:` lines (outside the 300-word cap), end with one fenced json block: "
           '{"status": "<APPROVED|CHANGES_REQUESTED>", "files": [], "tests": "", '
-          '"findings": [{"file": "<path>", "line": <int>, "problem": "<text>", "fix": "<text>", "tier": <1|2|3>}], '
+          '"findings": [{"file": "<path>", "line": <int>, "problem": "<text>", "fix": "<text>", "tier": <1|2|3>, "quote": "<the exact text of that source line>"}], '
           '"summary": "<one line>"}, one finding entry per finding line; `tier` is the integer 1, 2 or 3.')  # O(1)
 
 
@@ -61,7 +61,14 @@ def _int(v, lo: int, hi: int | None = None) -> bool:  # O(1)
 def _finding_ok(f) -> bool:  # O(1)
     return (isinstance(f, dict) and isinstance(f.get("file"), str) and bool(f["file"])  # O(1)
             and _int(f.get("line"), 0) and isinstance(f.get("problem"), str) and isinstance(f.get("fix"), str)
-            and _int(f.get("tier"), 1, 3))
+            and _int(f.get("tier"), 1, 3) and isinstance(f.get("quote", ""), str))
+
+
+def _finding(g) -> dict:  # a finding from FINDING_LINE's groups; one pair of wrapping backticks leaves the quote | O(len)
+    quote = (g[5] or "").strip()  # O(len)
+    if len(quote) >= 2 and quote[0] == quote[-1] == "`":  # O(1)
+        quote = quote[1:-1]  # O(1)
+    return {"file": g[0], "line": int(g[1]), "problem": g[2], "fix": g[3], "tier": int(g[4]), "quote": quote}  # O(1)
 
 
 def _red_line(text: str) -> str:  # O(s)
@@ -140,7 +147,7 @@ def _labelled(text: str) -> dict:  # O(s)
             continue  # O(1)
         f = FINDING_LINE.match(line)  # O(len)
         if f:  # O(1)
-            findings.append({"file": f.group(1), "line": int(f.group(2)), "problem": f.group(3), "fix": f.group(4), "tier": int(f.group(5))})  # O(1)
+            findings.append(_finding(f.groups()))  # O(1)
         m = ITEM.match(line)  # O(len)
         if m and cur is not None:  # O(1)
             cur[2].append(m.group(1).strip())  # O(1)
@@ -210,8 +217,7 @@ def parse(text: str, label: str = "", allow_json: bool = True) -> dict:  # O(s)
     base = {"files": lab["files"], "tests": lab["tests"], "red": _red_line(text), "reds": _red_tasks(text), "findings": [], "summary": lab["summary"], "concerns": lab["concerns"], "valid": False}  # O(1)
     m = VERDICT.search(text)  # O(s)
     if m:  # O(1)
-        found = [{"file": g[0], "line": int(g[1]), "problem": g[2], "fix": g[3], "tier": int(g[4])}  # O(f)
-                 for g in FINDING_LINE.findall(text)]
+        found = [_finding(g) for g in FINDING_LINE.findall(text)]  # O(f)
         return {**base, "status": m.group(1), "findings": found}  # O(1)
     status = mx.status_of(text)  # `Status: X`, else a status token on the first line | O(s)
     if not status and label:  # O(1)
