@@ -1,18 +1,33 @@
 # tests/scripts/test_findings_route.py
 import json, sys
+from pathlib import Path
 import pytest
 from test_plan_tools import SCRIPTS, make_plan
 sys.path.insert(0, str(SCRIPTS))
 import findings  # noqa: E402
 
-def f(file, line, tier, problem="p", fix="x"):
-    return {"file": file, "line": line, "problem": problem, "fix": fix, "tier": tier}
+def f(file, line, tier, problem="p", fix="x", quote=None):
+    return {"file": file, "line": line, "problem": problem, "fix": fix, "tier": tier, "quote": f"code at {line}" if quote is None else quote}
+
+
+def put(root, file, line, text):
+    """Make `file` (relative to root, or absolute) hold `text` on `line`; other lines are kept or blank."""
+    p = Path(str(file).removeprefix("./"))
+    p = p if p.is_absolute() else root / p
+    rows = p.read_text().split("\n") if p.exists() else []
+    rows += [""] * (line - len(rows))
+    rows[line - 1] = text
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join(rows))
 
 @pytest.fixture
 def run(tmp_path):
     root = tmp_path / "repo"; sd = root / ".superlite"; (sd / "fleet" / "reports").mkdir(parents=True)
     plan = make_plan(root, [{"id": "T1", "owns": "src/a.py, tests/test_a.py"}, {"id": "T2", "owns": "src/b.py, src/c.py"}, {"id": "T3", "owns": "src/d.py"}])
     def report(label, items):
+        for it in items:
+            if it.get("quote"):
+                put(root, it["file"], it["line"], it["quote"])
         p = sd / "fleet" / "reports" / f"{label}.json"
         p.write_text(json.dumps({"id": "W4", "label": label, "status": "CHANGES_REQUESTED", "findings": items, "valid": True}))
         return str(p)
