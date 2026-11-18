@@ -29,6 +29,9 @@ Reproduce the bug as a failing test first, see it fail, then fix. The test is th
 
 - One behavior per test; "and" in the name means split it.
 - Assert observable behavior, not implementation details.
+- Name the production change that would make the test fail. None: the test proves nothing.
+- Expected values come from the spec or are worked out by hand, never from the code under test. No change detectors (a constant's value, wording nobody depends on) and no assertions on source code text: run the code.
+- A mock mirrors the real thing's full structure; never assert what the mock itself does, and add no test-only methods to production code.
 - Cover the contract's edge cases: empty input, errors, boundaries.
 - A test that spawns git in a temporary repository removes `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_WORK_TREE` from the child's environment: git exports them to its hooks, so a test run from a hook (a pre-commit suite run) that keeps them acts on the real repository.
 - UI work: besides the component in isolation, one check of it in its real container with the real data state (loaded, not the loading placeholder), named as the evidence.
@@ -50,6 +53,7 @@ Throwaway prototypes, generated code and pure configuration need no test-first. 
 - Each failed for the expected reason, and the minimal code made it pass.
 - Focused tests are green, output clean.
 - Edge cases and errors covered.
+- For each realistic break (wrong constant, missing side effect, empty return, missing validation) at least one test fails.
 - Regression guards were seen failing once against deliberately broken code.
 - UI work: one check ran in the real container with the real data state.
 
