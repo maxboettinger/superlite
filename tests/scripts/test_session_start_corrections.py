@@ -55,3 +55,9 @@ def test_lead_session_gets_them(tmp_path):
 def test_output_stays_valid_json(tmp_path):
     put(tmp_path, HEADER + '- say "hi" \\ there\tend\n')
     assert 'say "hi" \\ there\tend' in ctx(tmp_path)
+
+
+def test_oversize_in_bytes_is_skipped(tmp_path):
+    put(tmp_path, HEADER + "- " + "é" * 1100 + "\n")
+    t = ctx(tmp_path, LC_ALL="en_US.UTF-8", LANG="en_US.UTF-8")
+    assert "Project corrections" not in t and CAPTURE in t
