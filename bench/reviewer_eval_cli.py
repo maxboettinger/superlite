@@ -87,6 +87,8 @@ def run(a):
     d = set_dir(a.set)
     cases = ev.load_cases(d)
     if a.limit is not None:
+        if a.limit < 1:
+            return _err("--limit must be at least 1")
         cases = cases[:a.limit]
     variants = [ev.parse_variant(v) for v in a.variant] or [default_variant()]
     work = Path(a.work) if a.work else Path(tempfile.mkdtemp(prefix="reviewer-eval-"))

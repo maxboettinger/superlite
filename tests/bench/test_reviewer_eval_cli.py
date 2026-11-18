@@ -135,6 +135,15 @@ def test_usage_errors_exit_2(monkeypatch):
     assert cli.main([]) == 2
 
 
+def test_non_positive_limit_is_a_usage_error(monkeypatch):
+    write_cases(3)
+    seen = []
+    fake_live(monkeypatch, seen)
+    assert cli.main(["run", "--set", "own", "--limit", "-1"]) == 2
+    assert cli.main(["run", "--set", "own", "--limit", "0"]) == 2
+    assert seen == []
+
+
 def test_experiments_doc_has_the_section():
     text = (ROOT / "docs" / "experiments.md").read_text(encoding="utf-8")
     assert "## Reviewer eval" in text
