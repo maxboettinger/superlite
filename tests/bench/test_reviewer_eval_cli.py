@@ -162,3 +162,11 @@ def test_run_results_keep_the_unverified_findings_per_case_and_variant(monkeypat
     row = json.loads(next((d / "results").glob("*.json")).read_text())["rows"][0]
     assert row["case"] == "c0" and row["unverified_items"] == {"a": [item]}
     assert row["variants"]["a"]["unverified"] == 1
+
+
+def test_a_repeated_variant_name_is_a_usage_error(monkeypatch):
+    write_cases(1)
+    seen = []
+    fake_live(monkeypatch, seen)
+    assert cli.main(["run", "--set", "own", "--variant", "a=opus:high", "--variant", "a=sonnet:low"]) == 2
+    assert seen == []

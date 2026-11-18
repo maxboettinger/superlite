@@ -105,6 +105,19 @@ def _with_effort(cmd: list, effort: str) -> list:
     return cmd
 
 
+def _relative(clone: Path, name) -> str:
+    text = str(name or "").strip().replace("\\", "/")
+    p = Path(text)
+    if p.is_absolute():
+        for root in (clone, Path(clone).resolve()):
+            try:
+                return p.relative_to(root).as_posix()
+            except ValueError:
+                continue
+        return text
+    return Path(os.path.normpath(text)).as_posix() if text else text
+
+
 def review(case: dict, variant: dict, work: Path) -> dict:
     where = f"case {case['id']}, variant {variant['name']}"
     clone = checkout(case, work)
@@ -121,6 +134,7 @@ def review(case: dict, variant: dict, work: Path) -> dict:
         raise LiveError(f"reviewer gave no result ({where}): {(out.stderr or '').strip()[:200]}")
     findings, unverified = [], []
     for f in fleet_report.parse(run.text)["findings"]:
+        f = {**f, "file": _relative(clone, f["file"])}
         v = finding_check.verify(clone, f)
         if v["state"] == "unverified":
             unverified.append({k: f.get(k) for k in ("file", "line", "quote", "problem")})

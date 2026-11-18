@@ -228,3 +228,16 @@ def test_review_keeps_the_unverified_findings(repo, tmp_path, faked):
 
 def test_grade_pooled_annotated_list_of_dict():
     assert live.grade.__annotations__["pooled"] in (list[dict], "list[dict]")
+
+
+def test_review_makes_paths_relative_to_the_clone_before_fingerprinting(repo, tmp_path, faked):
+    work = tmp_path / "w"
+    clone = (work / repo["id"]).resolve()
+    q = "quote: `for i in range(n - 1):`"
+    faked["stdout"] = stream("Verdict: CHANGES_REQUESTED\n"
+                             f"a.py:2 - off by one - use <= - tier 1 - {q}\n"
+                             f"./a.py:2 - off by one - use <= - tier 1 - {q}\n"
+                             f"{clone}/a.py:2 - off by one - use <= - tier 1 - {q}\n")
+    out = live.review(repo, {"name": "current", "model": "opus", "effort": "high"}, work)
+    assert [f["file"] for f in out["findings"]] == ["a.py"] * 3
+    assert len({f["fp"] for f in out["findings"]}) == 1
