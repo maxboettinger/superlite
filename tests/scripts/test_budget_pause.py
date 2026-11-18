@@ -163,3 +163,16 @@ def test_extend_defaults_to_the_plan_run_folder_from_another_cwd(tmp_path, monke
     capsys.readouterr()
     assert (sl / "progress.md").read_text(encoding="utf-8") == "- Budget cap: 3.75 (extend) - why\n"
     assert not (other / ".superlite").exists()
+
+
+def test_append_cap_uses_incident_lock_and_fsync(tmp_path, monkeypatch):
+    import incident
+
+    calls = []
+    real_lock, real_unlock, real_fsync = incident._lock, incident._unlock, budget.os.fsync
+    monkeypatch.setattr(incident, "_lock", lambda f: (calls.append("lock"), real_lock(f))[1])
+    monkeypatch.setattr(incident, "_unlock", lambda f: (calls.append("unlock"), real_unlock(f))[1])
+    monkeypatch.setattr(budget.os, "fsync", lambda fd: (calls.append("fsync"), real_fsync(fd))[1])
+    budget.append_cap(tmp_path, 3.75, "extend", "why")
+    assert calls == ["lock", "fsync", "unlock"]
+    assert (tmp_path / "progress.md").read_text(encoding="utf-8") == "- Budget cap: 3.75 (extend) - why\n"

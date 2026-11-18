@@ -240,8 +240,18 @@ def append_cap(sl_dir, usd: float, kind: str, ruling: str) -> None:  # O(1)
     f = Path(sl_dir) / "progress.md"  # O(1)
     f.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     num = f"{usd:.2f}".rstrip("0").rstrip(".")  # O(1)
-    with f.open("a", encoding="utf-8") as fh:  # O(1)
-        fh.write(f"- Budget cap: {num} ({kind}) - {' '.join(ruling.split())}\n")  # O(1)
+    import incident  # O(1)
+
+    data = f"- Budget cap: {num} ({kind}) - {' '.join(ruling.split())}\n".encode("utf-8")  # O(len)
+    with open(f, "ab+") as fh:  # incident.py's lock and fsync; incident.append itself writes JSON lines | O(1)
+        incident._lock(fh)  # O(1)
+        try:  # O(1)
+            fh.seek(0, os.SEEK_END)  # O(1)
+            fh.write(data)  # O(len)
+            fh.flush()  # O(1)
+            os.fsync(fh.fileno())  # O(len) I/O flush
+        finally:  # O(1)
+            incident._unlock(fh)  # O(1)
 
 
 def change_cap(a) -> int:  # O(compute)
