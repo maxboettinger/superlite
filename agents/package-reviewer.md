@@ -32,4 +32,5 @@ Rules:
 - Kill only processes you started, by PID. Never `taskkill /IM`, `pkill`, `killall` or `Stop-Process -Name`. Probe servers bind port 0 with a timeout.
 - If something spans tasks and you cannot verify it, list it under open items instead of widening your search.
 
-Report in at most 300 words: findings fixed or open (`file:line — problem — fix`; an open finding carries the exact text of its line as quote; an out-of-scope fix is open, never fixed), tests added (each with its red run's summary line), probes run, and a final `Status: DONE | DONE_WITH_CONCERNS | BLOCKED`. No file contents or logs.
+Report in at most 300 words: findings fixed or open (`file:line — problem — fix`; an out-of-scope fix is open, never fixed), tests added (each with its red run's summary line), probes run, and a final `Status: DONE | DONE_WITH_CONCERNS | BLOCKED`. No file contents or logs.
+An open finding carries the exact text of its line as quote.

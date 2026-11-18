@@ -22,7 +22,7 @@ def test_final_reviewer_names_earlier_findings_by_id():
 
 
 def test_package_reviewer_open_findings_carry_quote():
-    assert "an open finding carries the exact text of its line as quote" in PACKAGE
+    assert "An open finding carries the exact text of its line as quote" in PACKAGE
 
 
 def test_fixing_names_unverified_repeat_and_dismiss():
