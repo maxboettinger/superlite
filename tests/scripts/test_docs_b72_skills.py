@@ -34,7 +34,7 @@ def test_sdd_names_takeover_and_keeps_its_cap():
     assert FROZEN in SDD and STOP in SDD.splitlines()
     assert "a real change is a follow-up" not in SDD and "names the task to unblock first" not in SDD
     budget = next(ln for ln in SDD.splitlines() if ln.startswith("`lint` and `dispatch` print `budget:` lines"))
-    assert budget.endswith("then `commit_task` and finish.")
+    assert budget.endswith("then the user's `budget raise` (`metrics.md`).")
     assert '"takeover"' in (SCRIPTS / "orchestrator.py").read_text(encoding="utf-8")
 
 
