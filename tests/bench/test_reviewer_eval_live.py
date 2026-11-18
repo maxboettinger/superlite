@@ -181,3 +181,21 @@ def test_checkout_refuses_an_id_that_leaves_the_work_folder(repo, tmp_path):
     with pytest.raises(live.LiveError):
         live.checkout({**repo, "id": "../keep"}, tmp_path / "work")
     assert (keep / "f.txt").exists()
+
+
+def _timeout(*a, **k):
+    raise subprocess.TimeoutExpired("cmd", 1)
+
+
+def test_a_timeout_in_grade_git_or_packet_raises_live_error(repo, tmp_path, monkeypatch):
+    fake_ask(monkeypatch, "[]")
+    monkeypatch.setattr(live, "_ask", _timeout)
+    with pytest.raises(live.LiveError, match="timed out"):
+        live.grade(repo, [])
+    monkeypatch.setattr(live, "_run", _timeout)
+    with pytest.raises(live.LiveError, match="timed out"):
+        live.grade(repo, [])
+    with pytest.raises(live.LiveError, match="timed out"):
+        live.checkout(repo, tmp_path / "work")
+    with pytest.raises(live.LiveError, match="timed out"):
+        live.packet(tmp_path, repo)

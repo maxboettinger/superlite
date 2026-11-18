@@ -60,7 +60,10 @@ def _ask(prompt, cwd, model="opus"):
 
 
 def _git(cmd, cwd):
-    out = _run(["git", *cmd], cwd)
+    try:
+        out = _run(["git", *cmd], cwd)
+    except subprocess.TimeoutExpired as exc:
+        raise LiveError(f"git {' '.join(cmd)} timed out") from exc
     if out.returncode != 0:
         raise LiveError(f"git {' '.join(cmd)} failed: {out.stderr.strip()}")
     return out.stdout
@@ -84,7 +87,10 @@ def packet(clone: Path, case: dict) -> Path:
     sd.mkdir(exist_ok=True)
     (sd / "spec.md").write_text(f"# {case['title']}\n\n{case['body']}\n", encoding="utf-8")
     cmd = [str(SCRIPTS / "sl"), "plan_tools", "packet", "--inline", "--spec", ".superlite/spec.md", "--base", case["base"]]
-    out = _run(cmd, Path(clone))
+    try:
+        out = _run(cmd, Path(clone))
+    except subprocess.TimeoutExpired as exc:
+        raise LiveError(f"packet timed out for {case['id']}") from exc
     if out.returncode != 0:
         raise LiveError(f"packet failed for {case['id']}: {out.stderr.strip()}")
     return sd / "review-packet.md"
@@ -125,7 +131,10 @@ def review(case: dict, variant: dict, work: Path) -> dict:
 
 
 def grade(case: dict, pooled: list, model: str = "opus") -> dict:
-    out = _run(["git", "diff", case["base"], case["merge"]], case["repo"])
+    try:
+        out = _run(["git", "diff", case["base"], case["merge"]], case["repo"])
+    except subprocess.TimeoutExpired as exc:
+        raise LiveError(f"git diff timed out for {case['id']}") from exc
     if out.returncode != 0:
         raise LiveError(f"git diff failed for {case['id']}: {(out.stderr or '').strip()}")
     diff = out.stdout or ""
@@ -135,7 +144,10 @@ def grade(case: dict, pooled: list, model: str = "opus") -> dict:
     prompt = (f"Pull request: {case['title']}\n\n{case['body']}\n\n<diff>\n{diff}\n</diff>\n\n"
               f"Findings (fp | file:line | problem | quote):\n{lines}\n\n{GRADE_INSTRUCTION}")
     with tempfile.TemporaryDirectory() as tmp:
-        run = _ask(prompt, tmp, model)
+        try:
+            run = _ask(prompt, tmp, model)
+        except subprocess.TimeoutExpired as exc:
+            raise LiveError(f"grader timed out for {case['id']}") from exc
     items = []
     for m in re.finditer(r"\[", run.text):
         try:
