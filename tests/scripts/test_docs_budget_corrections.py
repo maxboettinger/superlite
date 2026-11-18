@@ -67,3 +67,11 @@ def test_tools_md_rows():
 
 def test_resume_names_budget_raise():
     assert "sl budget raise" in (ROOT / "commands/resume.md").read_text(encoding="utf-8")
+
+
+def test_docs_name_the_real_blocked_lines_and_corrections_file():
+    s = section(SKILL, "Measure and budget")
+    assert "dispatch: BLOCKED: budget: paused" in s and "BLOCKED: fleet spawn: budget: paused" in s
+    t = (ROOT / "docs/tools.md").read_text(encoding="utf-8")
+    r = row(t, "corrections")
+    assert "docs/superlite/corrections.md" in r and "list" in r and "rm" in r

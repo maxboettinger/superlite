@@ -96,7 +96,7 @@ flowchart TB
 
 ## Measure and budget
 
-`lint` and `dispatch` print `budget:` lines (`**Budget-usd:**`: cap). At `WARN` finish in-flight work. Over the cap, paused: `dispatch` and `fleet spawn` exit 3 with `BLOCKED: budget ...`. An AI orchestrator runs `"$SL" budget extend --plan $PLAN --ruling "<why>"` once; refused or paused again: commit, write `.superlite/stopped.md`, `fleet stop --all`, end the turn with the least cap. The user's raise: `"$SL" budget raise --to <usd> --ruling "<their words>" --plan $PLAN`, then `/superlite:resume`. A human never extends.
+`lint` and `dispatch` print `budget:` lines (`**Budget-usd:**`: cap). At `WARN` finish in-flight work. Over the cap, paused: exit 3 with `dispatch: BLOCKED: budget: paused` or `BLOCKED: fleet spawn: budget: paused`. AI orchestrator: `"$SL" budget extend --plan $PLAN --ruling "<why>"` once; refused or paused again: commit, write `.superlite/stopped.md`, `fleet stop --all`, end the turn with the least cap. The user's raise: `"$SL" budget raise --to <usd> --ruling "<their words>" --plan $PLAN`, then `/superlite:resume`.
 
 ## Freeze, rulings, finish
 

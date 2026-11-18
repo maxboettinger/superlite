@@ -35,7 +35,7 @@ refreshes stats. Rows hold no code, prompts or file contents.
 
 ## `sl budget [--plan P] [--changed] [--json]`
 One line: elapsed, cost so far, projected finish and cost against `**Target-min:**` and `**Budget-usd:**`, `[stats n=..]`.
-`WARN` at 70% of the cap, naming the projected cost; `OVER CAP`: the run is paused (`dispatch` and `fleet spawn` exit 3 with `BLOCKED: budget ...`), finish what
+`WARN` at 70% of the cap, naming the projected cost; `OVER CAP`: the run is paused (`dispatch` and `fleet spawn` exit 3 with `dispatch: BLOCKED: budget: paused ...` and `BLOCKED: fleet spawn: budget: paused ...`), finish what
 is in flight; `LATE: critical path T1 -> T5` when the projection overruns the target. `lint` and `dispatch` print it
 only when it changed (`.superlite/budget.state`) and only when `metrics.jsonl` exists.
 The cap is the newest ledger line `- Budget cap: <usd> (extend|raise) - <ruling>`, else the header.
