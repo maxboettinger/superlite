@@ -164,6 +164,25 @@ fi  # O(1)
 content="${content}"$'
 '"superlite ${version} at ${root}: run its tools as ${root}/skills/subagent-driven-development/scripts/sl <tool>; never search for another copy."  # O(s)
 
+# Project corrections (docs/superlite/corrections.md, relative to the hook's folder): its "- " lines, unless the file is over
+# 2,048 characters, then the line that tells the session to record a user correction. Builtins only; any failure adds nothing.
+ctext=""  # O(1)
+if [ -f docs/superlite/corrections.md ] && IFS= read -r -d '' ctext < docs/superlite/corrections.md 2>/dev/null || [ -n "$ctext" ]; then  # read -d '' returns 1 at EOF | O(c)
+  clines=""  # O(1)
+  if [ "${#ctext}" -le 2048 ]; then  # O(1)
+    ctext="${ctext//$'\r'/}"  # O(c)
+    while [ -n "$ctext" ]; do  # O(c) lines
+      cl="${ctext%%$'\n'*}"  # O(c)
+      if [ "$cl" = "$ctext" ]; then ctext=""; else ctext="${ctext#*$'\n'}"; fi  # O(c)
+      [[ $cl == "- "* ]] && clines="${clines}"$'\n'"${cl}"  # O(c)
+    done  # O(1)
+  fi  # O(1)
+  if [ -n "$clines" ]; then  # O(1)
+    content="${content}"$'\n\n'"Project corrections (binding, from the user; docs/superlite/corrections.md):${clines}"  # O(s)
+  fi  # O(1)
+fi  # O(1)
+content="${content}"$'\n\n''When the user corrects you in a way later runs need, record it: sl corrections add "<rule>".'  # O(s)
+
 # After a compaction a session with a run (main or a batch lead; a worker left above) is told how to go on and shown the
 # run state (compact_text.py: `sl status` lines, capped). Off with SUPERLITE_NO_AUTOCOMPACT=1; any failure adds nothing.
 if [[ $input =~ $re_compact ]] && [ "${SUPERLITE_NO_AUTOCOMPACT:-}" != 1 ] && . "${0%/*}/superlite-state.sh" 2>/dev/null; then  # O(input)
