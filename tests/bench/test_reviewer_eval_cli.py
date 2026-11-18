@@ -150,3 +150,15 @@ def test_experiments_doc_has_the_section():
     section = text.split("## Reviewer eval", 1)[1].split("\n## ", 1)[0]
     for cmd in ("make-case", "run", "report"):
         assert cmd in section
+
+
+def test_run_results_keep_the_unverified_findings_per_case_and_variant(monkeypatch):
+    d = write_cases(1)
+    item = {"file": "a", "line": 3, "quote": "q2", "problem": "p2"}
+    monkeypatch.setattr(live, "review", lambda case, variant, work: {
+        "findings": [], "unverified": 1, "unverified_items": [item], "cost_usd": 1.0, "seconds": 1.0})
+    monkeypatch.setattr(live, "grade", lambda case, pooled, model="opus": {})
+    assert cli.main(["run", "--set", "own", "--variant", "a=sonnet:low"]) == 0
+    row = json.loads(next((d / "results").glob("*.json")).read_text())["rows"][0]
+    assert row["case"] == "c0" and row["unverified_items"] == {"a": [item]}
+    assert row["variants"]["a"]["unverified"] == 1
