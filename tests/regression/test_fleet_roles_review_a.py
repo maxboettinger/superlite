@@ -23,8 +23,10 @@ def test_findings_directory_and_glob_owns_are_owned(tmp_path):
     plan = make_plan(root, [{"id": "T1", "owns": "src/pkg/, tests/**/*.py"}, {"id": "T2", "owns": "src/z.py"}])
     rp = sd / "r.json"
     rp.write_text(json.dumps({"label": "FR1", "findings": [
-        {"file": "src/pkg/a.py", "line": 1, "problem": "p", "fix": "x", "tier": 1},
-        {"file": "tests/u/test_a.py", "line": 2, "problem": "q", "fix": "x", "tier": 1}]}))
+        {"file": "src/pkg/a.py", "line": 1, "problem": "p", "fix": "x", "tier": 1, "quote": "code at 1"},
+        {"file": "tests/u/test_a.py", "line": 2, "problem": "q", "fix": "x", "tier": 1, "quote": "code at 2"}]}))
+    (root / "src" / "pkg").mkdir(parents=True); (root / "src" / "pkg" / "a.py").write_text("code at 1\n")
+    (root / "tests" / "u").mkdir(parents=True); (root / "tests" / "u" / "test_a.py").write_text("\ncode at 2\n")
     lines = findings.route(sd, plan, [str(rp)], "/sl/sl")
     assert len(lines) == 1 and lines[0].endswith("task=T1")
     assert "--claim" not in (sd / "briefs" / "fix-F-T1-1.md").read_text()
