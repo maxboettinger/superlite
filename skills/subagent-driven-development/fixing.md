@@ -45,6 +45,7 @@ Next: <best next hypothesis, and which spans to read first>
 - **Package reviewers** still fix what they find, but must close every finding, including ones sent later, and report a closed list.
 - **Final reviewer** only reports findings. They go to fixers, routed by tier and split by file.
 - **Unverified findings:** an `UNVERIFIED` line (stderr of `findings route`) is no finding and goes to no fixer; a review whose findings are all unverified is no review: start a fresh final reviewer.
+- **Later rounds:** pass `"$SL" findings rounds --plan PLAN` output as the packet's `--previous`.
 - **Repeats:** a finding that is a `repeat of` an earlier routed one arrives one tier up and counts as a failed round.
 - **No defect:** a finding ruled no defect is closed with `"$SL" findings dismiss <fp> --ruling "<why>" --plan PLAN`.
 - **Probe failures:** a failure ruled no defect: `"$SL" probe_run --dismiss ID --plan PLAN` (ID: generated test name, group id or probe id); it deletes the generated test and closes its incident, and later runs list it under `results["dismissed"]`. `lint` prints `ADAPTER:` when it rebuilt the probe adapter and `RUN:` when you must (`plan_tools adapter`). `commit_task` prints `Tn: probe files committed: ...` when a checkpoint took generated probe files.

@@ -41,6 +41,7 @@ only when it changed (`.superlite/budget.state`) and only when `metrics.jsonl` e
 The cap is the newest ledger line `- Budget cap: <usd> (extend|raise) - <ruling>`, else the header.
 `sl budget extend --plan P --ruling TEXT`: the AI orchestrator's one +25% extension per run (exit 2 without a cap or ruling, after an extension, or for a human orchestrator).
 `sl budget raise --to USD --ruling TEXT --plan P`: the user's raise, run on their word (exit 2 unless USD is above the spend).
+Paused again after the extension or refused: commit, write `.superlite/stopped.md`, `fleet stop --all`, end the turn with the least cap. After the user's raise run `/superlite:resume`.
 Not built: a PreToolUse hook that refuses new `Agent` calls over the cap; auto-downgrading optional reviewers to the haiku tier.
 
 ## Coordinator, accuracy and reconcile

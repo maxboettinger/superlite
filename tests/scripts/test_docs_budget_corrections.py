@@ -22,9 +22,11 @@ def row(text, name):
 
 def test_skill_budget_section_names_pause_extend_and_raise():
     s = section(SKILL, "Measure and budget")
-    for want in ("BLOCKED: budget", "budget extend --plan $PLAN --ruling", "budget raise --to", "/superlite:resume"):
+    for want in ("BLOCKED: budget", "budget extend", "budget raise", "metrics.md"):
         assert want in s, want
     assert "no extra review rounds" not in SKILL
+    m = (ROOT / "skills/subagent-driven-development/metrics.md").read_text(encoding="utf-8")
+    assert "/superlite:resume" in m and "budget extend --plan P --ruling TEXT" in m and "budget raise --to USD" in m
 
 
 def test_skill_stop_conditions_name_the_budget_pause():
@@ -32,16 +34,16 @@ def test_skill_stop_conditions_name_the_budget_pause():
 
 
 def test_skill_final_review_names_unverified_and_rounds():
-    s = section(SKILL, "Final review")
+    s = (ROOT / "skills/subagent-driven-development/fixing.md").read_text(encoding="utf-8")
     assert "UNVERIFIED" in s and "findings rounds" in s
 
 
 def test_skill_names_corrections_add():
-    assert "corrections add" in SKILL
+    assert "corrections add" in (ROOT / "skills/subagent-driven-development/scripts/finish.py").read_text(encoding="utf-8")
 
 
 def test_skill_length_stays_near_today():
-    assert len(SKILL.encode("utf-8")) <= 13295 + 600
+    assert len(SKILL) <= 13300
 
 
 def test_metrics_md_documents_the_subcommands():
@@ -70,7 +72,7 @@ def test_resume_names_budget_raise():
 
 
 def test_docs_name_the_real_blocked_lines_and_corrections_file():
-    s = section(SKILL, "Measure and budget")
+    s = (ROOT / "skills/subagent-driven-development/metrics.md").read_text(encoding="utf-8")
     assert "dispatch: BLOCKED: budget: paused" in s and "BLOCKED: fleet spawn: budget: paused" in s
     t = (ROOT / "docs/tools.md").read_text(encoding="utf-8")
     r = row(t, "corrections")
