@@ -35,6 +35,7 @@ Library: route, screen, standing_note, main. Stdlib only.
 #   r = reports, k = findings overall, n = plan tasks, o = owned paths overall, f = files in <sd>/fixes and <sd>/briefs
 import argparse  # O(1)
 import json  # O(1)
+import os  # O(1)
 import re  # O(1)
 import sys  # O(1)
 from pathlib import Path  # O(1)
@@ -47,6 +48,7 @@ import testcmd  # noqa: E402 | O(1)
 import commit_task  # noqa: E402 | O(1)
 import corrections  # noqa: E402 | O(1)
 import finding_check as fc  # noqa: E402 | O(1)
+import incident  # noqa: E402 | O(1)
 from pool import currents  # noqa: E402 | O(1)
 
 TIERS = {1: "sonnet", 2: "sonnet-high", 3: "opus"}  # finding tier -> fixer tier name | O(1)
@@ -493,8 +495,16 @@ def dismiss(sd: Path, fp: str, ruling: str) -> tuple[int, str]:  # O(r)
     if not old:  # O(1)
         return 2, f"error: unknown finding fingerprint {fp}"  # O(1)
     fc.append(sd, {**old, "state": "dismissed", "ruling": ruling})  # O(1) I/O
-    with (Path(sd) / "progress.md").open("a", encoding="utf-8") as fh:  # O(1)
-        fh.write(f"- Ruling: finding {fp} {old.get('file')}:{old.get('line')} dismissed - {ruling}\n")  # O(s) I/O
+    line = f"- Ruling: finding {fp} {old.get('file')}:{old.get('line')} dismissed - {ruling}\n"  # O(s)
+    with open(Path(sd) / "progress.md", "ab+") as fh:  # incident's lock, text line (its append writes JSON) | O(1)
+        incident._lock(fh)  # O(1)
+        try:  # O(1)
+            fh.seek(0, 2)  # O(1)
+            fh.write(line.encode("utf-8"))  # O(s) I/O
+            fh.flush()  # O(1)
+            os.fsync(fh.fileno())  # O(s) I/O
+        finally:  # O(1)
+            incident._unlock(fh)  # O(1)
     return 0, f"dismissed {fp}"  # O(1)
 
 

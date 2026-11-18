@@ -89,6 +89,19 @@ def test_dismissed_fingerprint_is_dropped(run, capsys):
     assert not (sd / "briefs" / "fix-F-T1-2.md").exists()
 
 
+def test_dismiss_appends_ruling_under_the_incident_lock(run, monkeypatch):
+    import incident
+    root, sd, plan, report = run
+    r = report("FR1", [f("src/a.py", 12, 1, "off by one", quote=QUOTE)])
+    findings.main(["route", "--plan", str(plan), r])
+    fp = fp_of()
+    locks = []
+    real = incident._lock
+    monkeypatch.setattr(incident, "_lock", lambda fh: (locks.append(fh.name), real(fh))[1])
+    assert findings.main(["dismiss", fp, "--ruling", "not a defect", "--plan", str(plan)]) == 0
+    assert any(str(n).endswith("progress.md") for n in locks)
+
+
 def test_dismiss_records_ruling_and_refuses_unknown_fp(run, capsys):
     root, sd, plan, report = run
     findings.route(sd, plan, [report("T1", [f("src/a.py", 12, 1, "off by one", quote=QUOTE)])], "/sl/sl")
