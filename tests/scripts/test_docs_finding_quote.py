@@ -38,3 +38,9 @@ def test_fleet_md_names_rounds():
 def test_final_reviewer_keeps_its_older_rules():
     for phrase in ("Checked:", "FAST PATH", "partial: lines A-B not read", "at most 300 words"):
         assert phrase in FINAL, phrase
+
+
+def test_fleet_md_repeat_is_a_brief_note_not_a_stderr_line():
+    assert "`UNVERIFIED ...` (the quoted line is not in the file; no fixer), `DISMISSED ...` (ruled no defect earlier)" in FLEET
+    assert "`repeat of ...` (routed one tier up)" not in FLEET
+    assert "the brief's finding line says `repeat of <id>`" in FLEET
