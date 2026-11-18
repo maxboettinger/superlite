@@ -43,6 +43,7 @@ No further menus or typed confirmations. Act on the answer.
 
 - **Merge locally:** if the work ran in a worktree, run the merge from the main checkout (where the base branch lives). Check out the base branch, merge the feature branch. If the merge was not a fast-forward or had conflicts, run `<skill-dir>/../subagent-driven-development/scripts/sl run_tests --full` again. Remove the worktree (step 6), then delete the feature branch with `git branch -d`.
 - **Push and PR:** `git push -u origin <branch>`, then `gh pr create` with a title and a body holding the summary and test evidence. Report the PR URL. Keep the branch.
+- **Detached HEAD** (no branch name): no local merge. For a PR push `HEAD:refs/heads/<new-branch>`; otherwise keep.
 - **Keep:** report the branch name and any worktree path. Nothing else.
 
 ## Conflict after finish
@@ -53,7 +54,7 @@ When the PR or the merge conflicts with the base branch after the run finished: 
 
 For a superlite build, first end the run in every case, while the worktree still exists: `<skill-dir>/../subagent-driven-development/scripts/sl orchestrator end --plan <absolute plan path>` (archives the run markers and logs; the coordinator guard stops). When `end` refuses because another session owns the run (this session took over a run whose first session ran out of usage or crashed; `finish` names it too), run `<skill-dir>/../subagent-driven-development/scripts/sl orchestrator takeover --plan <absolute plan path>` first, then `end` again.
 
-Only if the work ran in a worktree you created and the branch was merged: `git worktree remove <path>`. For push-and-PR or keep, leave it in place.
+Only if the work ran in a worktree you created (its path is under `.claude/worktrees/`) and the branch was merged: `git worktree remove <path>`. If git refuses (uncommitted or untracked files), name the files and keep the worktree; never add `--force`. For push-and-PR or keep, leave it in place.
 
 ## Never
 
@@ -61,3 +62,4 @@ Only if the work ran in a worktree you created and the branch was merged: `git w
 - Force-push, or delete a branch with unmerged work.
 - Proceed with failing tests.
 - Ask which base branch to use.
+- Remove a worktree with `--force`.
