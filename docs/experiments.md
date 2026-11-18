@@ -47,3 +47,19 @@ Two arms that differ only in `lead.build_model` compare one lead against a plann
 ## Golden batches
 
 Three fixed golden batches replay real merged work in a sealed copy before a minor or major release: see [release](release.md). The effort sweep is parked.
+
+## Reviewer eval
+
+Measure the final reviewer on real merged pull requests. A case set lives outside the repository, in `$SUPERLITE_HOME/reviewer-eval/<set>/` (default `~/.superlite/`): `cases.json` (a list of `id`, `repo` (a local clone), `base`, `merge`, `title`, `body`) and `results/<UTC timestamp>.json`.
+
+    uv run --no-project python bench/reviewer_eval_cli.py make-case --repo PATH --pr 7 --set own
+    uv run --no-project python bench/reviewer_eval_cli.py run --set own --variant a=sonnet:high --variant b=opus:high
+    uv run --no-project python bench/reviewer_eval_cli.py report --set own
+
+- `make-case` reads the pull request with `gh` and adds the case `pr-N`; the base is the merge commit's first parent.
+- `run` clones each case at its merge commit (no remote), builds an inline review packet against the base, runs the `final-reviewer` agent per variant (`name=model:effort`; without `--variant`: one variant `current` from `agents/final-reviewer.md`), verifies and fingerprints each finding, pools the findings of all variants without their names and has one strong-model call per case grade them. `--limit N` runs the first N cases. A case that fails is listed under `failed` and the exit code is 1.
+- `report` prints the table of the newest result.
+
+Reading the table, per variant: `real`, `nit`, `wrong` and `ungraded` findings; `serious` (a real finding with wrong results, data loss, a crash or a security hole); `unver` (findings whose quoted line was not in the file, left out of the pool); `recall` (its real findings over the pool's real findings, across cases); `prec` (real over real plus wrong); `cost` (mean USD per review). Recall is relative to what the variants found together, not to every defect there is.
+
+Change one setting per comparison (model, or effort, or the prompt), as in the experiments above. A run spends model quota per case and variant: start with `--limit 2`.
