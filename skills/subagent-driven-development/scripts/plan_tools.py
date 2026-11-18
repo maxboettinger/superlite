@@ -177,6 +177,15 @@ def scan_fences(lines: list[str]):  # O(L+C) total
     return flags, blocks  # O(1)
 
 
+def hidden_tasks(plan: "Plan") -> tuple[int, list[str]] | None:  # O(block len)
+    """(1-based line of an unclosed last fence, ids of task headings it swallows), None when there is none."""
+    b = plan.blocks[-1] if plan.blocks else None  # O(1)
+    if b is None or len(b.content) != b.end - b.start:  # terminated blocks hold end - start - 1 lines | O(1)
+        return None  # O(1)
+    ids = [m.group(1) for m in (HEADING_RE.match(ln) for ln in b.content) if m]  # O(block len)
+    return (b.start + 1, ids) if ids else None  # O(1)
+
+
 def expand_braces(s: str) -> list[str]:  # O(s*A) total, A = expansions
     m = re.search(r"\{([^{}]*)\}", s)  # O(s) regex scan
     if not m:  # O(1)
