@@ -377,6 +377,13 @@ def review_brief(sd, plan, tasks, sl_path, superlite_root, package=None):  # the
         lines += ["Red runs (task reports):"] + [f"- {t}: {g}" for t, g in gaps] + [RED_PROOF, ""]  # O(k)
     adapter = sd / "probes" / "adapter.py"  # O(1)
     lines.append(f"Probe adapter: {adapter if adapter.is_file() else 'none'}")  # O(1)
+    try:  # fail open: a corrections error leaves the brief as it was | O(b)
+        import corrections  # lazy | O(1)
+        sec = corrections.section(root)  # O(b)
+    except Exception:  # O(1)
+        sec = None  # O(1)
+    if sec:  # O(1)
+        lines += ["", sec]  # O(b)
     return "\n".join(lines) + "\n"  # O(out)
 
 
