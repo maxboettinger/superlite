@@ -42,7 +42,7 @@ def _read(root: Path):  # O(b)
         return None  # O(1)
 
 
-def lines(root: Path) -> list:  # O(b)
+def lines(root: Path) -> list[str]:  # O(b)
     text = _read(root)  # O(b)
     if text is None:  # O(1)
         return []  # O(1)
@@ -105,7 +105,7 @@ def _key(text: str) -> str:  # O(w)
     return " ".join(text.split()).casefold()  # O(w)
 
 
-def add(root: Path, text: str, commit: bool = True) -> tuple:  # O(b) + git processes
+def add(root: Path, text: str, commit: bool = True) -> tuple[int, str]:  # O(b) + git processes
     text = " ".join(str(text).split())  # O(w)
     if text.startswith("- "):  # O(1)
         text = text[2:].strip()  # O(w)
@@ -136,7 +136,7 @@ def add(root: Path, text: str, commit: bool = True) -> tuple:  # O(b) + git proc
     return 0, msg + (_commit(root, text) if commit else "")  # O(1)
 
 
-def remove(root: Path, n: int, commit: bool = True) -> tuple:  # O(b) + git processes
+def remove(root: Path, n: int, commit: bool = True) -> tuple[int, str]:  # O(b) + git processes
     items = lines(root)  # O(b)
     if not 1 <= n <= len(items):  # O(1)
         return 2, f"corrections: refused: no line {n} (the file has {len(items)})"  # O(1)

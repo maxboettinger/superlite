@@ -162,3 +162,9 @@ def test_cli_add_list_rm_exit_codes(tmp_path):
     assert "1. Use uv, never pip" in cli("list", "--root", str(tmp_path), cwd=tmp_path).stdout
     assert cli("rm", "9", "--root", str(tmp_path), cwd=tmp_path).returncode == 2
     assert cli("rm", "1", "--root", str(tmp_path), cwd=tmp_path).returncode == 0
+
+
+def test_return_annotations_match_the_planned_contract():
+    assert corrections.lines.__annotations__["return"] == list[str]
+    assert corrections.add.__annotations__["return"] == tuple[int, str]
+    assert corrections.remove.__annotations__["return"] == tuple[int, str]
