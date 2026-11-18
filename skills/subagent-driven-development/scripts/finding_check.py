@@ -23,12 +23,14 @@ _WS = re.compile(r"\s+")  # O(1)
 
 def normalize(s):  # O(n)
     """Collapse whitespace runs to one space; strip surrounding whitespace and backticks."""
-    return _WS.sub(" ", s or "").strip().strip("`").strip()  # O(n)
+    s = s if isinstance(s, str) else ("" if s is None or isinstance(s, (list, dict)) else str(s))  # O(n)
+    return _WS.sub(" ", s).strip().strip("`").strip()  # O(n)
 
 
 def fingerprint(file, quote, problem=""):  # O(n)
     """Ten hex characters over the file and the normalized quote (the problem text when the quote is empty)."""
     q = normalize(quote)  # O(n)
+    file = file if isinstance(file, str) else ""  # O(1)
     key = file + "\n" + q if q else file + "\n?" + normalize(problem)  # O(n)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]  # O(n)
 
@@ -47,7 +49,7 @@ def verify(root, finding, window=10):  # O(s) read + O(L n) scan
     def res(state, at, reason):  # O(1)
         return {"state": state, "line": at, "reason": reason}  # O(1)
 
-    q = normalize(finding.get("quote") or "")  # O(n)
+    q = normalize(finding.get("quote"))  # O(n)
     if not q:  # O(1)
         return res("unverified", line, "no quote")  # O(1)
     if len(q) < MIN_QUOTE:  # O(1)

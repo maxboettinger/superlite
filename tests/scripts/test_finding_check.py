@@ -99,3 +99,13 @@ def test_prior_ignores_unverified_rows():
     assert fc.prior(rows, "ab12")["n"] == 2
     assert fc.prior(rows, "q") is None
     assert fc.prior([{"fp": "ab12", "state": "unverified"}], "ab12") is None
+
+
+def test_non_string_fields_do_not_raise(tmp_path):
+    root = _repo(tmp_path, "hello world\n")
+    assert fc.normalize(None) == ""
+    assert fc.fingerprint(None, None, None) == fc.fingerprint("", "", "")
+    assert fc.fingerprint("a", 12345678) == fc.fingerprint("a", "12345678")
+    r = fc.verify(root, {"file": "src/a.py", "line": 1, "quote": ["hello world"]})
+    assert r["state"] == "unverified"
+    assert fc.verify(root, {"file": "src/a.py", "line": 1, "quote": 12345678})["reason"] == "quote not in file"
