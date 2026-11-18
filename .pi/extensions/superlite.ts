@@ -14,26 +14,8 @@ const agentsDir = resolve(packageRoot, "agents");
 let cachedBootstrap: string | null | undefined;
 
 export default function superlitePiExtension(pi: ExtensionAPI) {
-	let injectBootstrap = true;
-
-	pi.on("resources_discover", async () => ({
-		skillPaths: [skillsDir],
-	}));
-
-	pi.on("session_start", async () => {
-		injectBootstrap = true;
-	});
-
-	pi.on("session_compact", async () => {
-		injectBootstrap = true;
-	});
-
-	pi.on("agent_end", async () => {
-		injectBootstrap = false;
-	});
-
+	// Injected on every request: context results are not stored, and an unchanged first message keeps the prompt cache.
 	pi.on("context", async (event) => {
-		if (!injectBootstrap) return;
 		if (event.messages.some(messageContainsBootstrap)) return;
 
 		const bootstrap = getBootstrapContent();
