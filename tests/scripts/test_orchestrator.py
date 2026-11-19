@@ -401,6 +401,8 @@ SDD_PINNED = (
     "(or `--affected` for `--fast PATHS`)",
     # test_sdd_scope_ruling_898.py
     "a deliverable added, dropped or changed after approval: `Ruling: [scope] <decision> - <why> - <cost if wrong>` (`orchestrator.md` `## Scope rulings`).",
+    # test_docs_b255_skill.py
+    "then `run_tests --base-skips` if it skipped tests.",
 )
 
 
