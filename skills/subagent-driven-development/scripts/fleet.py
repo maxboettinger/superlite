@@ -1130,6 +1130,7 @@ def _report(sd, ids):  # print each worker's last report or a report by label; r
     bad = False  # O(1)
     for x in ids:  # O(ids)
         label = x  # O(1)
+        rd = sd / "fleet" / "reports"  # O(1)
         if x in ws:  # O(1)
             w = ws[x]  # O(1)
             rec = _ended_stop(sd, x, w)  # O(m + w)
@@ -1155,6 +1156,8 @@ def _report(sd, ids):  # print each worker's last report or a report by label; r
                 bad = True  # O(1)
                 continue  # O(1)
             label = w["last_task"]  # O(1)
+            import fleet_io as fio  # noqa: E402 | O(1) lazy
+            rd = fio.report_dir(sd, w)  # O(1)
         key = label.split(",")[0]  # O(1)
         f = next((q for q in (rd / f"{key}.md", rd / f"{key}.json") if q.is_file()), None)  # O(1)
         if f is None:  # O(1)
