@@ -12,6 +12,7 @@ import accounts as ac
 @pytest.fixture(autouse=True)
 def _home(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path))
+    monkeypatch.setattr(ac, "read_listing", lambda env=None: {"accounts": []})
     return tmp_path
 
 
@@ -77,3 +78,14 @@ def test_skip_line_examples():
     assert ac.skip_line(U, ["b"]) is None
     assert ac.skip_line({}, ["a", "b"]) is None
     assert ac.skip_line({}, ["a"], signed_out=["d"]) == "accounts skipped: d (signed out)"
+
+
+def test_whole_call_failure_unstored_listed_account_is_usable(capsys, monkeypatch):
+    now = time.time()
+    store("a", 600, now, limit("weekly_all", 100, iso(3600)))
+    monkeypatch.setattr(ac, "read_listing", lambda env=None: {"accounts": [{"name": "a"}, {"name": "b"}, {"name": "c", "signed_in": False}]})
+    usage = ac.with_fallback({}, now=now)
+    assert ac.pick_account(usage, ["a", "b"]) == "b"
+    assert [x["name"] for x in usage["accounts"]] == ["a", "b"]
+    err = capsys.readouterr().err.splitlines()
+    assert len(err) == 1 and err[0].endswith("; no stored reading: b")

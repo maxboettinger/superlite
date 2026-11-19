@@ -132,8 +132,11 @@ def with_fallback(report, env=None, now=None):  # O(a*l) plus one `list` call wh
         rebuilt = [(n, r) for n, r in rebuilt if r]  # O(a)
         if not rebuilt:  # O(1)
             return report if isinstance(report, dict) else {}  # O(1)
-        print("usage: claude-profile usage gave no report; using last readings: %s" % ", ".join("%s %s old" % (n, age_text(r[1])) for n, r in rebuilt), file=sys.stderr)  # O(a)
-        return {"accounts": [r[0] for _, r in rebuilt]}  # O(a)
+        have = {n for n, _ in rebuilt}  # O(a)
+        extra = [x["name"] for x in read_listing(env).get("accounts") or [] if isinstance(x, dict) and x.get("name") and x["name"] not in have and x.get("signed_in") is not False]  # O(a) listed, signed in, no stored reading
+        line = "usage: claude-profile usage gave no report; using last readings: %s" % ", ".join("%s %s old" % (n, age_text(r[1])) for n, r in rebuilt)  # O(a)
+        print(line + ("; no stored reading: %s" % ", ".join(extra) if extra else ""), file=sys.stderr)  # O(a)
+        return {"accounts": [r[0] for _, r in rebuilt] + [{"name": n, "limits": [], "error": None, "unknown": True} for n in extra]}  # O(a)
     _remember(report, now)  # O(a)
     failed = lambda a: isinstance(a, dict) and a.get("error") and a.get("name")  # O(1)
     if not any(failed(a) for a in report["accounts"]):  # O(a)
