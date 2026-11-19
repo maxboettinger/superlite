@@ -1646,6 +1646,26 @@ def _parse_pytest(lines: list[str], rc: int) -> tuple[int, int, int, list[str], 
     return passed, failed, skipped, names, reasons  # O(1)
 
 
+def _pytest_skipped(lines: list[str]) -> list[str]:  # O(o)
+    """JUnit-form ids of the unfolded `SKIPPED <node id>` lines in pytest's last short test summary."""
+    ends = [i for i, ln in enumerate(lines) if PYTEST_SUMMARY.match(ln.strip())]  # O(o)
+    heads = [i for i, ln in enumerate(lines) if re.match(r"^=+ short test summary info =+$", ln.strip())]  # O(o)
+    if not ends or not heads or heads[-1] >= ends[-1]:  # no summary block above the summary line | O(1)
+        return []  # O(1)
+    found: list[str] = []  # O(1)
+    for ln in lines[heads[-1] + 1:ends[-1]]:  # O(o)
+        m = re.match(r"^SKIPPED (?!\[\d+\] )(.+?)(?: - .*)?$", ln.strip())  # O(w)
+        if not m:  # O(1)
+            continue  # O(1)
+        head, bracket, params = m.group(1).partition("[")  # O(w)
+        parts = head.split("::")  # O(w)
+        name = parts[-1] + bracket + params if len(parts) > 1 else re.sub(r"\.py$", "", parts[0]).replace("/", ".")  # a module-level skip is named by its dotted module | O(w)
+        jid = f"{parts[0]}::{name}"  # O(1)
+        if jid not in found and len(found) < 50:  # O(1)
+            found.append(jid)  # O(1)
+    return found  # O(1)
+
+
 def _int_key(d: dict, key: str) -> int | None:  # an int that is not a bool, else None | O(1)
     v = d.get(key)  # O(1)
     return v if isinstance(v, int) and not isinstance(v, bool) else None  # O(1)
@@ -1725,6 +1745,7 @@ def parse_output(text: str, rc: int) -> dict:  # O(o)
     names: list[str] = []  # O(1)
     reasons: dict[str, tuple[str, int]] = {}  # O(1)
     py = _parse_pytest(lines, rc)  # O(o)
+    skipped_names = _pytest_skipped(lines) if py is not None else []  # O(o)
     for ln in lines if rc and py is None else []:  # names are failures: only a red exit collects them | O(o)
         for pat in NAME_PATTERNS:  # O(1)
             m = re.match(pat, ln)  # O(w)
@@ -1750,7 +1771,7 @@ def parse_output(text: str, rc: int) -> dict:  # O(o)
     if rc and not failed:  # a red exit with nothing parsed is one failure, not counted | O(1)
         failed = 1  # O(1)
     empty = "" if counted else next((ln.strip() for ln in lines if re.search(r"\bno tests? (?:files? )?(?:found|ran|to run)|\b0 tests? (?:ran|run|found)|\bno matching tests?(?: cases?)?\b", ln, re.I)), "")  # the runner's own "no tests" line | O(o)
-    return {"passed": passed, "failed": failed, "skipped": skipped, "names": names, "tail": lines[-40:], "empty": empty, "counted": counted, "reasons": reasons, "skipped_names": [], **_error_marker(lines)}  # O(1)
+    return {"passed": passed, "failed": failed, "skipped": skipped, "names": names, "tail": lines[-40:], "empty": empty, "counted": counted, "reasons": reasons, "skipped_names": skipped_names, **_error_marker(lines)}  # O(1)
 
 
 def main(argv=None):  # O(m + f)
