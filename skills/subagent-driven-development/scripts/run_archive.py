@@ -152,7 +152,7 @@ def prune(archive: Path, keep: int = KEEP_FULL) -> int:  # O(1)
 
 
 def plans_dir(root: Path) -> Path:  # O(1)
-    """`<root>/docs/superpowers/plans` when that folder exists, else `<root>/docs/plans`; creates nothing."""
+    """`<root>/docs/superpowers/plans` when that folder exists, else `<root>/docs/plans`; creates nothing."""  # O(1)
     root = Path(root)  # O(1)
     sp = root / "docs" / "superpowers" / "plans"  # O(1)
     return sp if sp.is_dir() else root / "docs" / "plans"  # O(1)
@@ -166,8 +166,7 @@ def _same_bytes(a: Path, b: Path) -> bool:  # O(size)
 
 
 def keep_in_plans(plan: str, sd: str, today: str | None = None) -> list[str]:  # O(F)
-    """Copy the plan, its build report and progress.md into the plans folder; return the paths written, relative to the root.
-    Fails open: an OSError ends the copy and returns what was written so far."""
+    """Copy the plan, its build report and progress.md into the plans folder; return the paths written."""  # O(1) fails open on OSError
     written: list[str] = []  # O(1)
     try:  # O(1)
         sdp = Path(sd)  # O(1)
