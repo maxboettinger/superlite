@@ -147,3 +147,56 @@ def prune(archive: Path, keep: int = KEEP_FULL) -> int:  # O(1)
         if not r["dir"].is_symlink() and _trim(r["dir"]):  # O(F)
             n += 1  # O(1)
     return n  # O(1)
+
+
+def plans_dir(root: Path) -> Path:  # O(1)
+    """`<root>/docs/superpowers/plans` when that folder exists, else `<root>/docs/plans`; created when missing."""
+    root = Path(root)  # O(1)
+    sp = root / "docs" / "superpowers" / "plans"  # O(1)
+    d = sp if sp.is_dir() else root / "docs" / "plans"  # O(1)
+    try:  # O(1)
+        d.mkdir(parents=True, exist_ok=True)  # O(1)
+    except OSError:  # O(1)
+        pass  # O(1)
+    return d  # O(1)
+
+
+def _same_bytes(a: Path, b: Path) -> bool:  # O(size)
+    try:  # O(1)
+        return a.read_bytes() == b.read_bytes()  # O(size)
+    except OSError:  # O(1)
+        return False  # O(1)
+
+
+def keep_in_plans(plan: str, sd: str, today: str | None = None) -> list[str]:  # O(F)
+    """Copy the plan, its build report and progress.md into the plans folder; return the paths written, relative to the root.
+    Fails open: an OSError ends the copy and returns what was written so far."""
+    written: list[str] = []  # O(1)
+    try:  # O(1)
+        sdp = Path(sd)  # O(1)
+        if not plan or sdp.name != ".superlite" or not Path(plan).is_file():  # O(1)
+            return []  # O(1)
+        root = sdp.resolve().parent  # O(1)
+        src = Path(plan).resolve()  # O(1)
+        dest = plans_dir(root)  # O(1)
+        if src.parent == dest.resolve():  # O(1) the plan already lives in the plans folder
+            stem, pairs = src.stem, []  # O(1)
+        else:  # O(1)
+            stem = src.stem  # O(1)
+            if not re.match(r"\d{4}-\d{2}-\d{2}-", stem):  # O(1)
+                stem = (today or time.strftime("%Y-%m-%d")) + "-" + stem  # O(1)
+            base, n = stem, 1  # O(1)
+            while (dest / f"{stem}.md").exists() and not _same_bytes(src, dest / f"{stem}.md"):  # O(clashes)
+                n += 1  # O(1)
+                stem = f"{base}-{n}"  # O(1)
+            pairs = [(src, f"{stem}.md"), (src.with_name(src.stem + ".build-report.md"), f"{stem}.build-report.md"),  # O(1)
+                     (src.with_name(src.stem + ".build-report.json"), f"{stem}.build-report.json")]  # O(1)
+        pairs.append((sdp.resolve() / "progress.md", f"{stem}.progress.md"))  # O(1)
+        for s, name in pairs:  # O(1) iterations
+            if not s.is_file():  # O(1)
+                continue  # O(1)
+            shutil.copyfile(s, dest / name)  # O(size)
+            written.append((dest / name).resolve().relative_to(root).as_posix())  # O(1)
+    except (OSError, ValueError):  # O(1)
+        pass  # O(1)
+    return written  # O(F)

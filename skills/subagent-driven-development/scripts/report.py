@@ -559,7 +559,7 @@ def main(argv=None):  # O(M + B + n*(n + e))
     ap.add_argument("--json", action="store_true")  # O(1)
     ap.add_argument("--list", action="store_true", help="list the stored reports, newest first")  # O(1)
     ap.add_argument("--show", metavar="NAME", help="print a stored build's summary (with --full: its file)")  # O(1)
-    ap.add_argument("--plans", default=next((d for d in ("docs/superpowers/plans", "docs/plans") if Path(d).is_dir()), "docs/plans"),
+    ap.add_argument("--plans", default=str(run_archive.plans_dir(Path("."))),
                     help="where the plans and their stored reports are (default: docs/superpowers/plans when it exists, else docs/plans)")  # O(1)
     ap.add_argument("--batches", action="store_true", help="print the batch cost and quality rows")  # O(1)
     ap.add_argument("--root", help="the project root holding .superlite/batch-costs.jsonl and .superlite/runs (default: the main checkout)")  # O(1)
