@@ -103,3 +103,23 @@ def test_status_appends_waits(world, monkeypatch, capsys):
     monkeypatch.setattr(fleet_waits, "suffixes", broken)
     fleet.main(["status"])
     assert next(l for l in capsys.readouterr().out.splitlines() if l.startswith("W1 busy")).endswith("task=-")
+
+
+def test_fallback_spawn_after_unsent_remote_brief_keeps_bounds(world, monkeypatch):
+    import fleet_io as fio
+    fleet.main(["on"])
+    brief = world.sd / "b.md"; brief.write_text("do it\n")
+    seen = []
+    def fake_spawn(sd, plan, tier, proj, **k):
+        seen.append(k.get("bounds")); return {"id": "W%d" % len(seen)}
+    def send(sd, wid, *a, **k):
+        if wid == "W1":
+            raise OSError("not taken")
+    monkeypatch.setattr(fleet, "spawn", fake_spawn)
+    monkeypatch.setattr(fleet, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(fleet, "_unavailable", lambda *a, **k: None)
+    monkeypatch.setattr(fleet, "add_constraints", lambda *a, **k: None)
+    monkeypatch.setattr(fio, "send_brief", send)
+    monkeypatch.setattr(fleet, "_placed", lambda *a, **k: "box")
+    fleet.main(["spawn", "--role", "research", "--over-limit", "--max-workers", "6", "--brief", str(brief), "--plan", str(world.sd)])
+    assert len(seen) == 2 and seen[-1] == seen[0] and seen[-1]["max_workers"] == 6

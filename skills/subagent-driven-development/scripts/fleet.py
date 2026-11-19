@@ -1311,7 +1311,7 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
                     pass  # O(1)
                 _unavailable(sd, a.machine, f"{w['id']} not sent: {why}")  # O(k)
                 placed = False  # O(1)
-                w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=True)  # O(w)
+                w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=True, **bkw)  # O(w)
         if a.wait:  # O(1)
             restore()  # the signal handlers end with the start phase | O(1)
             fio.wait(sd, [w["id"]], tmo)  # O(wait)
