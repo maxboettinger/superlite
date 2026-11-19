@@ -61,10 +61,10 @@ def test_follow_moves_fleet(tmp_path):
     S = folder(tmp_path, "S"); W = folder(tmp_path, "W"); (W / "stable.json").write_text("{}")
     fleet(S, workers={"W1": {"state": "busy", "task": "R1"}}); fs.remember(S, "s1")
     r = fs.follow(W, "s1")
-    assert r == {"from": str(S.resolve()), "to": str(W.resolve()), "workers": 1}
+    assert (r["from"], r["to"], r["workers"]) == (str(S.resolve()), str(W.resolve()), 1)
     assert fs.is_on(W) and fs.load(W)["workers"]["W1"]["state_dir"] == str(S.resolve())
-    assert fs.load(S)["moved_to"] == str(W.resolve()) and not fs.is_on(S)
-    assert fs.home(S) == W.resolve() and fs.session_fleet("s1") == W.resolve()
+    assert (S / "fleet.json").is_symlink() and (W / "fleet.json").is_symlink() and "moved_to" not in fs.load(S)
+    assert fs.path(S) == fs.path(W) and fs.session_fleet("s1") == fs.path(W).parent
 
 
 def test_follow_noop_when_target_on(tmp_path):
@@ -77,10 +77,12 @@ def test_follow_fallback(tmp_path):
     S = folder(tmp_path, "S"); W = folder(tmp_path, "W"); (W / "stable.json").write_text("{}")
     fleet(S, workers={"W1": {"state": "busy", "task": "R1"}})
     r = fs.follow(W, "s1", fallback=S)
-    assert r == {"from": str(S.resolve()), "to": str(W.resolve()), "workers": 1}
+    assert (r["from"], r["to"], r["workers"]) == (str(S.resolve()), str(W.resolve()), 1)
+    assert (S / "fleet.json").is_symlink() and (W / "fleet.json").is_symlink() and fs.path(S) == fs.path(W)
+    assert fs.load(W)["workers"]["W1"]["state_dir"] == str(S.resolve())
 
 
-def test_follow_never_overwrites_a_target_report(tmp_path):
+def test_follow_copies_no_report_and_keeps_the_target_one(tmp_path):
     S = folder(tmp_path, "S"); W = folder(tmp_path, "W"); (W / "stable.json").write_text("{}")
     fleet(S); fs.remember(S, "s1")
     (S / "fleet" / "reports").mkdir(parents=True); (S / "fleet" / "reports" / "R1.md").write_text("old")
@@ -88,7 +90,7 @@ def test_follow_never_overwrites_a_target_report(tmp_path):
     (W / "fleet" / "reports").mkdir(parents=True); (W / "fleet" / "reports" / "R1.md").write_text("new")
     assert fs.follow(W, "s1") is not None
     assert (W / "fleet" / "reports" / "R1.md").read_text() == "new"
-    assert (W / "fleet" / "reports" / "R2.md").read_text() == "two"
+    assert not (W / "fleet" / "reports" / "R2.md").exists()
 
 
 def test_follow_skips_a_running_lead(tmp_path):
@@ -123,15 +125,15 @@ def test_set_on_remembers_and_drops_moved_to(tmp_path, monkeypatch):
     fs.save(W, {**fs.default(), "moved_to": "/elsewhere"})
     fs.set_on(W, "x", [])
     assert "moved_to" not in fs.load(W)
-    assert pointer("s1").read_text() == str(W.resolve()) + "\n"
+    import state
+    assert pointer("s1").read_text() == str((state.home() / "fleets" / "s1").resolve()) + "\n"
 
 
-def test_follow_copy_failure_leaves_source_the_only_fleet(tmp_path, monkeypatch):
+def test_follow_link_failure_leaves_source_the_only_fleet(tmp_path, monkeypatch):
     S = folder(tmp_path, "S"); W = folder(tmp_path, "W")
     fleet(S, workers={"W1": {"state": "busy", "task": "R1"}}); fs.remember(S, "s1")
-    (S / "fleet").mkdir(); (S / "fleet" / "a.md").write_text("x")
-    def boom(a, b):
-        raise OSError("disk full")
-    monkeypatch.setattr(fs.shutil, "copy2", boom)
+    def boom(sd, h):
+        raise OSError("read-only")
+    monkeypatch.setattr(fs, "link", boom)
     assert fs.follow(W, "s1") is None
-    assert not fs.is_on(W) and fs.is_on(S) and "moved_to" not in fs.load(S)
+    assert not fs.is_on(W) and fs.is_on(S) and not (S / "fleet.json").is_symlink() and "moved_to" not in fs.load(S)

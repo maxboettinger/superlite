@@ -1,4 +1,4 @@
-# tests/scripts/test_fleet_follow_cli_580.py: fleet commands and state.bind move the session's fleet into their folder (#580)
+# tests/scripts/test_fleet_follow_cli_580.py: fleet commands and state.bind link the session's fleet into their folder (#580, #786)
 import json, sys
 import pytest
 from test_plan_tools import SCRIPTS
@@ -46,7 +46,10 @@ def test_wait_delegation_follows_first(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(fleet_io, "main", lambda argv: seen.append(fs.is_on(W)) or 0)
     assert fleet.main(["wait", "--plan", str(W)]) == 0
     assert seen == [True]
-    assert f"fleet: this session's fleet moved from {S.resolve()} to {W.resolve()} (1 workers)" in capsys.readouterr().err
+    home = (state.home() / "fleets" / "s1").resolve()
+    err = capsys.readouterr().err
+    assert f"fleet: this session's fleet moved from {S.resolve()} to {home} (1 workers)" in err
+    assert f"fleet: this session's fleet in {home} now also serves {W.resolve()} (1 workers)" in err
 
 
 def test_fleet_on_elsewhere_follows_then_turns_on(tmp_path, monkeypatch):

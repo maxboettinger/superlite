@@ -273,7 +273,8 @@ def choose_account(sd, model, env, avoid=None, lead=False):  # O(a * e + w) plus
     data = fs.load(sd)  # O(w)
     usage, listing = ac.read_usage(env), ac.read_listing(env)  # O(1) plus subprocess time
     entries = data.get("accounts") or [a["name"] for a in (usage.get("accounts") or listing.get("accounts") or [])] or ["current"]  # O(a)
-    entries = [e for e in entries if ac.entry_name(e) != avoid]  # the account of a slow first try | O(a)
+    skip = {avoid} if isinstance(avoid, str) else set(avoid or ())  # a str is one name | O(a)
+    entries = [e for e in entries if ac.entry_name(e) not in skip]  # the accounts of a slow first try or a signed-out pair | O(a)
     out = signed_out_accounts(sd)  # O(a)
     entries = [e for e in entries if ac.entry_name(e) not in out]  # accounts that showed the sign-in screen lately | O(a)
     allowed = [ac.entry_name(e) for e in entries]  # config dir paths go by basename | O(a)
@@ -378,7 +379,7 @@ def open_pane(sd, wid, cwd, env, record, machine=None):  # O(w + p) plus herdr c
 def _retry_account(sd, model, env, avoid, lead=False):  # O(a * e + w): another account than `avoid`, else the same one
     try:  # O(1)
         with contextlib.redirect_stdout(io.StringIO()):  # O(1)
-            return choose_account(sd, model, env, avoid=avoid, lead=lead)  # O(a * e + w)
+            return choose_account(sd, model, env, avoid={avoid}, lead=lead)  # O(a * e + w)
     except SystemExit as e:  # no other account has headroom | O(1)
         if e.code != 3:  # O(1)
             raise  # O(1)
@@ -689,7 +690,12 @@ def _placed(sd, role, project, tier=None):  # O(w + m): the machine placement pi
 
 def _unavailable(sd, machine, why):  # O(k): say the remote start failed and keep the machine out of placement for a while
     why = re.sub(r"^(BLOCKED: )?(fleet spawn: )?(machine " + re.escape(machine) + r": )?", "", why or "").strip() or "failed"  # O(len)
-    print(f"placement: {machine} unavailable ({why}); local")  # O(1)
+    import fleet_remote_account as fra  # noqa: PLC0415 | O(1) lazy
+    acct = fra.signed_out_account(why)  # O(len)
+    if acct:  # O(1)
+        print(f"placement: account {acct} skipped on {machine} (not signed in there); local")  # O(1)
+    else:  # O(1)
+        print(f"placement: {machine} unavailable ({why}); local")  # O(1)
     try:  # O(1)
         import fleet_placement as fp  # noqa: E402 | O(1) lazy
         fp.skip(sd, machine, why)  # O(k)
@@ -1173,7 +1179,7 @@ def _follow(plan, named=False):  # O(w)
         print(f"fleet: warning: fleet not moved ({e})", file=sys.stderr)  # O(1)
         return  # O(1)
     if r:  # O(1)
-        print(f"fleet: this session's fleet moved from {r['from']} to {r['to']} ({r['workers']} workers)", file=sys.stderr)  # O(1)
+        print(r["line"], file=sys.stderr)  # O(1)
 
 
 class _Stopped(BaseException):  # a signal during the start phase of `fleet spawn`: not an Exception, so no `except Exception` of a start swallows it | O(1)
