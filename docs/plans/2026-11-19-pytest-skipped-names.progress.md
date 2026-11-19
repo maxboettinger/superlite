@@ -1,0 +1,10 @@
+- start 78e9fcddace3cb55c626ae32b31493a6b98e6742
+- unblocked: dispatched T1 at 18:31:47; waiting on fixes: none
+- Ruling: fleet placement local for this run - B238 and B257 lost remote implementer work (no snapshot) - cost if wrong: a slower local start
+- tests fast passed=2 failed=7 skipped=0 seconds=0.4
+- tests fast passed=9 failed=0 skipped=0 seconds=0.3
+- tests fast passed=91 failed=0 skipped=0 seconds=7.2
+- commit T1 2bd3d59090 pytest skip names
+- tests fast passed=100 failed=0 skipped=0 seconds=8.1
+- tests full passed=12936 failed=0 skipped=12 seconds=308.9
+- tests full passed=12936 failed=0 skipped=12 seconds=421.6

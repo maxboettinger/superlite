@@ -20,6 +20,8 @@ The unit suite's dependencies (pytest, pytest-xdist) are the `dev` dependency gr
 
 `pyproject.toml` sets `testpaths = ["tests"]`, so a bare `pytest`, and `sl run_tests --full` without a configured test command, collect what `pytest tests` collects. It registers two markers: `slow` (deselect with `-m "not slow"`) and `live` (a real agent turn that spends quota). The worker count stays in the command, never in `addopts`, which would also apply to `--fast` runs and nested xdist runs. A machine's `.superlite/test-cmd.json` still sets the command `sl run_tests` runs. The project table's version is a fixed `0.0.0`, not the plugin's version (`.version-bump.json` holds that), so a version bump never touches `pyproject.toml` or `uv.lock`. `pyproject.toml` and `uv.lock` map to the unit layer, so a pytest-config or pin change reruns the suite.
 
+This repository's `.superlite/test-cmd.json` is untracked, so each machine sets its own. Its `test` command runs `uv run --group dev python -m pytest tests -q -rfEs --no-fold-skipped -p no:cacheprovider -n 4`: `--group dev` runs the pytest that `uv.lock` pins, as a fresh clone does, and `-rs --no-fold-skipped` prints one `SKIPPED <node id>` line per skipped test, which `sl run_tests` reads into the summary's `skipped_tests` when the run writes no JUnit file, so `sl run_tests --base-skips` has names to compare. pytest's default folded lines (`SKIPPED [N] <path>:<line>: <reason>`) name no test, and `--no-fold-skipped` needs pytest 8.3 or newer.
+
 ## Stamps
 
 A layer is stale when its hash is not among the green hashes stored for it. The hash is a SHA-256 over the sorted `path` and per-file digest pairs of all files the layer maps to. Two rules keep it stable:
