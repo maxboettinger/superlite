@@ -1,0 +1,39 @@
+- start 8c60fa5b8177e1f128fd6d497e888a5e543d250f
+- unblocked: dispatched T1 T2 T3 T4 at 11:53:18; waiting on fixes: none
+- tests fast passed=0 failed=5 skipped=0 seconds=0.5
+- tests fast passed=3 failed=1 skipped=0 seconds=0.3
+- tests fast passed=17 failed=18 skipped=0 seconds=0.7
+- tests fast passed=7 failed=7 skipped=0 seconds=2.6
+- tests fast passed=102 failed=0 skipped=0 seconds=20.0
+- Ruling: accept predicted 31.7 min - T4 -> T5 is forced (both edit pt_review.py) and T6 docs wait for the code they describe - cost: about 10 min of wall time
+- Ruling: fleet placement local for this run, as in B235/B236 (remote write workers lost fixes) - cost: none
+- tests fast passed=13 failed=1 skipped=0 seconds=3.7
+- tests fast passed=13 failed=1 skipped=0 seconds=3.6
+- tests fast passed=783 failed=1 skipped=0 seconds=79.3
+- tests fast passed=42 failed=0 skipped=0 seconds=9.8
+- tests fast passed=847 failed=1 skipped=0 seconds=86.8
+- tests fast passed=794 failed=0 skipped=0 seconds=75.4
+- commit T1 beda393870 stopfailure binding
+- commit T2 3c7c93b681 worker git deny
+- commit T3 82733d2393 run_tests base skips
+- commit T4 4bc8e8e25e packet base tag
+- tests fast passed=14 failed=0 skipped=0 seconds=5.2
+- tests fast passed=0 failed=15 skipped=0 seconds=0.5
+- tests fast passed=148 failed=1 skipped=0 seconds=8.9
+- tests fast passed=786 failed=2 skipped=0 seconds=79.5
+- tests fast passed=161 failed=0 skipped=0 seconds=11.0
+- tests fast passed=847 failed=1 skipped=0 seconds=86.7
+- tests fast passed=788 failed=0 skipped=0 seconds=72.2
+- commit T5 a050ab658f serve args lint
+- tests fast passed=0 failed=6 skipped=0 seconds=0.2
+- tests fast passed=50 failed=0 skipped=0 seconds=6.8
+- tests fast passed=140 failed=0 skipped=0 seconds=20.0
+- commit T6 2d45e014b9 docs
+- tests fast passed=50 failed=0 skipped=0 seconds=8.7
+- tests fast passed=4 failed=0 skipped=0 seconds=16.6
+- tests fast passed=3 failed=0 skipped=0 seconds=160.7
+- tests full passed=12269 failed=0 skipped=12 seconds=334.9
+- tests fast passed=14 failed=2 skipped=0 seconds=11.2
+- tests fast passed=16 failed=0 skipped=0 seconds=6.0
+- commit T3 42e6207840 run_tests base skips
+- tests full passed=12271 failed=0 skipped=12 seconds=538.9

@@ -3,6 +3,8 @@
 # (pkill, killall, taskkill /IM or /FI, Stop-Process -Name, Get-Process | Stop-Process, kill ... -1)
 # and `kill PID` of a service shared with the user (Xcode, the Simulator, herdr, claude, launchd ...).
 # Killing your own PIDs is allowed.
+# Fleet workers (SUPERLITE_FLEET_WORKER set, role not lead) also never run git checkout, restore or stash,
+# behind git's global options too (-C <dir> ...): rule worker-git (#889).
 #
 # Only a command word is read (#666): the command string is split into simple commands the way the
 # shell does (quotes, escapes, comments, redirects, heredocs, substitutions) and each command word is
@@ -56,8 +58,11 @@ t=$SUBST
 cmd=${t%%\"*}
 [ -n "$cmd" ] || exit 0
 
-# Fast path: no kill word anywhere (a \u escape could hide one).
-if [[ $cmd != *kill* && $cmd != *stop-process* && $cmd != *spps* && $cmd != *\\u* ]]; then
+WORKERGIT=0
+[[ -n ${SUPERLITE_FLEET_WORKER-} && ${SUPERLITE_FLEET_ROLE-} != lead ]] && WORKERGIT=1
+
+# Fast path: no kill word anywhere (a \u escape could hide one); a fleet worker's git word goes on too.
+if [[ $cmd != *kill* && $cmd != *stop-process* && $cmd != *spps* && $cmd != *\\u* ]] && { ((!WORKERGIT)) || [[ $cmd != *git* ]]; }; then
   exit 0
 fi
 
@@ -108,6 +113,12 @@ tel_gate() {
 block() {
   tel_gate block kill-pattern "$TOOLN" "$cmd"
   echo "$BLOCK_MSG" >&2
+  exit 2
+}
+
+block_git() {
+  tel_gate block worker-git "$TOOLN" "$cmd"
+  echo "Blocked: fleet workers never run git checkout, git restore or git stash (also behind -C <dir> and other git options): the run root is shared with other workers and the coordinator, and a dirty git status is its normal state. Leave files you did not change alone; to undo your own edit, edit the file back." >&2
   exit 2
 }
 
@@ -191,6 +202,23 @@ judge_words() {
         continue ;;
       pkill | killall)
         block ;;
+      git)
+        ((WORKERGIT)) || return 0
+        j=$((i + 1))
+        while ((j < n)); do
+          t=${a[j]}
+          case $t in
+            -C | -c | --git-dir | --work-tree | --namespace | --super-prefix | --config-env) j=$((j + 2)) ;;
+            -*) j=$((j + 1)) ;;
+            *) break ;;
+          esac
+        done
+        if ((j < n)); then
+          case ${a[j]} in
+            checkout | restore | stash) block_git ;;
+          esac
+        fi
+        return 0 ;;
       taskkill)
         for ((j = i + 1; j < n; j++)); do
           case ${a[j]} in
