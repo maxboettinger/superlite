@@ -38,6 +38,8 @@ def seed_test_cmd(root: Path, wt: Path) -> bool:
     """Copy the main checkout's .superlite/test-cmd.json into a new lead worktree (#334).
 
     Only when the main checkout has the file and the worktree has none (a lead's own file is kept).
+    On True, backlog_run.cmd_start calls testcmd.record_seed(wt), which writes the copied bytes to the
+    worktree's .superlite/test-cmd.seeded, so an unedited copy follows the main checkout's file (#638).
     A failed copy prints one stderr line and returns False; `backlog start` goes on."""
     src, dst = Path(root) / TEST_CMD, Path(wt) / TEST_CMD  # O(1)
     if not src.is_file() or os.path.lexists(dst):  # O(1)

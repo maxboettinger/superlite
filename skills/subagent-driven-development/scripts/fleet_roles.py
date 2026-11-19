@@ -27,7 +27,12 @@ BRIEF_ONLY = ("No prime and no plan run: this brief is your whole task (no READY
 NO_TIER = "%s takes no --tier (its agent file sets the model); --tier works for implementer, fixer, research and writer"  # O(1)
 GIT_DENY = ("Bash(git checkout *)", "Bash(git restore *)", "Bash(git stash)", "Bash(git stash *)")  # O(1) a worker never rewrites the shared tree (#784)
 TAIL = ["--disallowedTools", "AskUserQuestion", *GIT_DENY]  # O(1) a worker never asks the user
-RESEARCH_TAIL = TAIL + ["Edit", "Write", "NotebookEdit", "Bash"]  # O(1) research is read-only by its tools, not by prose
+RESEARCH_BASH = ("Bash(git log *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git status *)", "Bash(git blame *)",  # O(1) read-only commands the researcher may run (#809)
+                 "Bash(git ls-files *)", "Bash(git rev-parse *)", "Bash(git merge-base *)", "Bash(git cat-file *)",  # O(1)
+                 "Bash(git worktree list *)", "Bash(git apply --check *)", "Bash(ls *)", "Bash(xcrun simctl list *)")  # O(1)
+RESEARCH_DENY = ("Bash(git * --output*)", "Bash(git apply * --apply*)")  # O(1) the allowlisted forms that write a file or apply a patch (#809)
+RESEARCH_TAIL = ["--permission-mode", "dontAsk", "--allowedTools", "Read", "Grep", "Glob", *RESEARCH_BASH,  # O(1) dontAsk refuses every off-list command without a dialog (#809)
+                 "--disallowedTools", "AskUserQuestion", *GIT_DENY, *RESEARCH_DENY, "Edit", "Write", "NotebookEdit"]  # O(1)
 
 
 def frontmatter(agent: str, agents_dir: Path) -> dict:  # O(f)

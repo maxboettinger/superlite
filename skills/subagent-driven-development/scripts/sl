@@ -2,7 +2,8 @@
 # Complexity notation:
 #   a = args forwarded to the tool, p = Python candidates tried (at most 5), D = script directories searched (2)
 # superlite tool launcher: bash on every platform (Git Bash on Windows), no .cmd wrappers.
-#   <skill-dir>/scripts/sl <tool> [args...]
+#   <skill-dir>/scripts/sl [-C DIR | --root DIR] <tool> [args...]
+# Leading -C DIR / --root DIR / --root=DIR (repeatable, like git -C) runs the tool in DIR; a bad DIR exits 2.
 # <tool> is a script name without extension: incident, plan_tools, predict, pt_review,
 # coverage, next_tasks, assign, dispatch, pool, wave0, routing, metrics, history, report, budget, run_tests, commit_task, build_prime, task, finish, feedback, graphify_gate,
 # or probe_run (in ../probes); `sl version` prints this copy's root and version. A tool with a .sh file runs under bash; a .py tool runs
@@ -24,6 +25,20 @@ set -u  # O(1)
 export PYTHONUTF8=1 PYTHONIOENCODING=utf-8  # O(1)
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # O(1) + subshell
+while :; do  # leading -C/--root options, each one cd | O(o) options
+  case "${1:-}" in  # O(1)
+    -C|--root)  # O(1)
+      opt="$1"; dir="${2:-}"  # O(1)
+      if [ -z "$dir" ]; then echo "sl: $opt needs a directory" >&2; exit 2; fi  # O(1)
+      shift 2 ;;  # O(1)
+    --root=*)  # O(1)
+      opt="--root"; dir="${1#--root=}"  # O(1)
+      if [ -z "$dir" ]; then echo "sl: --root needs a directory" >&2; exit 2; fi  # O(1)
+      shift ;;  # O(1)
+    *) break ;;  # O(1)
+  esac  # O(1)
+  cd -- "$dir" 2>/dev/null || { echo "sl: $opt $dir: not a directory" >&2; exit 2; }  # O(1)
+done  # O(1)
 tool="${1:-}"  # O(1)
 
 # Error path only: print the sorted tool names (no _* helpers) from both script directories.
@@ -50,7 +65,7 @@ copy_line() {  # O(pkg)
 
 if [ -z "$tool" ]; then  # O(1)
   copy_line >&2  # O(pkg)
-  echo "usage: sl <tool> [args...]" >&2  # O(1)
+  echo "usage: sl [-C DIR | --root DIR] <tool> [args...]" >&2  # O(1)
   echo "tools: $(list_tools)" >&2  # O(F)
   exit 2  # O(1)
 fi  # O(1)

@@ -83,15 +83,15 @@ def test_timeout_for_uses_the_measured_run_timeout_and_the_cap():
 
 
 def test_slow_start_raises_the_run_timeout(tmp_path):
-    root = project(tmp_path, "3.6")
+    root = project(tmp_path, "3.2")
     p, res, calls = probe(root, FAKE_START="2.0")
     assert p.returncode == 0, p.stdout + p.stderr
     warm = res["run_warmup"]
-    assert warm["second"] >= 2.0 and 7.0 <= warm["timeout"] <= 9.0, warm
+    assert warm["second"] >= 2.0 and warm["timeout"] == pr.run_timeout_from(warm["second"]) and warm["timeout"] >= 7.0, warm
     assert res["stats"]["run_timeout"] == warm["timeout"]
     assert [x["status"] for x in res["probes"]] == ["pass"], res["probes"]
     assert res["stats"]["workers_started"] == 2
-    assert calls[-1] == f"3.6 {warm['timeout']} {warm['timeout']}", calls
+    assert calls[-1] == f"3.2 {warm['timeout']} {warm['timeout']}", calls
 
 
 def test_fast_start_keeps_the_default(tmp_path):
