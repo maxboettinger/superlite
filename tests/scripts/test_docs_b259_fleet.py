@@ -20,7 +20,7 @@ STALE = [
 ]
 NAMED = [  # (section, text the section holds exactly once)
     ("## What it is", "`~/.superlite/fleets/<sid>/fleet.json`"),
-    ("## Commands", "(on, off, status, spawn, placement, stop, name, report, send, keys, wait, run, restore, resume)"),
+    ("## Commands", "(on, off, status, spawn, placement, stop, name, report, collect, send, keys, wait, run, restore, resume)"),
     ("## Commands", "`~/.superlite/fleets/<sid>/fleet.json`"),
     ("## Commands", "`fleet: this session's fleet in F now also serves R (N workers)`"),
     ("## Commands", "`fleet: this session's fleet moved from R to F (N workers)`"),

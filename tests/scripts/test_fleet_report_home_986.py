@@ -45,8 +45,7 @@ def test_finish_files_report_in_worker_run(tmp_path, monkeypatch, capsys):
     assert (B / "fleet/reports/T1.md").is_file() and (B / "fleet/reports/T1.json").is_file()
     assert not (A / "fleet" / "reports" / "T1.json").exists() and not (A / "fleet" / "reports" / "T1.md").exists()
     assert str(B / "fleet/reports/T1.json") in capsys.readouterr().out
-    if isinstance(rep, dict) and "report" in rep:
-        assert str(rep["report"]) == str(B / "fleet/reports/T1.json")
+    assert str(rep["report"]) == str(B / "fleet/reports/T1.json")
 
 
 def test_layer_report_in_worker_run(tmp_path, monkeypatch):
