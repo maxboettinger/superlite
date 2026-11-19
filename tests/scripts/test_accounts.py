@@ -62,10 +62,15 @@ def test_missing_binary_returns_empty():
     env = {**os.environ, "SUPERLITE_CLAUDE_PROFILE_BIN": "/nonexistent/claude-profile"}
     assert ac.read_usage(env) == {} and ac.read_listing(env) == {}
 
-def test_fake_binary_parsed_and_bad_json_empty(tmp_path):
+def test_fake_binary_parsed_and_bad_json_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path))
     env = {**os.environ, "SUPERLITE_CLAUDE_PROFILE_BIN": str(FAKE), "FAKE_PROFILE_USAGE": json.dumps({"accounts": [acc("claude1", 1, weekly_all=5)]})}
+    env["FAKE_PROFILE_USAGE"] = "not json"; assert ac.read_usage(env) == {}  # no stored reading yet
+    env["FAKE_PROFILE_USAGE"] = json.dumps({"accounts": [acc("claude1", 1, weekly_all=5)]})
     assert ac.read_usage(env)["accounts"][0]["name"] == "claude1"
-    env["FAKE_PROFILE_USAGE"] = "not json"; assert ac.read_usage(env) == {}
+    env["FAKE_PROFILE_USAGE"] = "not json"
+    again = ac.read_usage(env)["accounts"]  # rebuilt from the store
+    assert [a["name"] for a in again] == ["claude1"] and "stale_s" in again[0]
 
 def test_account_dir_path_entry_needs_no_listing(monkeypatch):
     monkeypatch.setenv("HOME", "/h")
