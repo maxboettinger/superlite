@@ -1,0 +1,78 @@
+- start 4482afdcdfde786fa1eb767d470afb42103d92ed
+- Ruling: accept predicted 38.9 min - T1 -> T2 -> T11 is sequential (finish calls keep_in_plans; the tools docs quote finish's new lines) - cost if wrong: wall time
+- Ruling: fleet placement local for this run after four remote researchers' panes vanished - cost if wrong: slower spawns on this Mac
+- tests fast passed=2 failed=2 skipped=0 seconds=0.3
+- tests fast passed=1 failed=5 skipped=0 seconds=0.5
+- tests fast passed=4 failed=0 skipped=0 seconds=0.2
+- tests fast passed=6 failed=0 skipped=0 seconds=0.3
+- unblocked: dispatched T1 T3 T4 T5 T6 T7 T8 T9 at 10:14:07; waiting on fixes: none
+- tests fast passed=1 failed=4 skipped=0 seconds=0.2
+- tests fast passed=2 failed=7 skipped=0 seconds=0.3
+- tests fast passed=0 failed=7 skipped=0 seconds=0.3
+- tests fast passed=0 failed=5 skipped=0 seconds=0.2
+- tests fast passed=95 failed=3 skipped=0 seconds=5.8
+- tests fast passed=0 failed=3 skipped=0 seconds=0.2
+- tests fast passed=10 failed=0 skipped=0 seconds=0.3
+- tests fast passed=32 failed=0 skipped=0 seconds=0.5
+- tests fast passed=64 failed=9 skipped=1 seconds=1.4
+- tests fast passed=98 failed=0 skipped=0 seconds=6.1
+- tests fast passed=2 failed=8 skipped=0 seconds=0.3
+- tests fast passed=6 failed=0 skipped=0 seconds=0.3
+- tests fast passed=64 failed=9 skipped=1 seconds=1.1
+- tests fast passed=4 failed=1 skipped=0 seconds=0.2
+- tests fast passed=16 failed=0 skipped=0 seconds=1.2
+- tests fast passed=5 failed=0 skipped=0 seconds=0.2
+- tests fast passed=66 failed=7 skipped=1 seconds=1.2
+- tests fast passed=73 failed=0 skipped=1 seconds=1.1
+- commit T1 49003754bc keep run files in plans
+- commit T3 e8ebdbc5e2 dispatch log of primes
+- commit T4 8f829d6e90 backlog note, left-outs, by
+- commit T5 2d27f848b4 task message Steps and affected
+- commit T6 09485e3adf agents offer affected
+- commit T7 64c396bc49 stale tool names and remote writes
+- commit T8 ce7d3c9978 lead brief follow-up rule
+- commit T9 7dfa80d059 fleet docs
+- unblocked: dispatched T2 T10 at 10:15:55; waiting on fixes: none
+- tests fast passed=4 failed=0 skipped=0 seconds=0.3
+- tests fast passed=6 failed=0 skipped=0 seconds=0.3
+- tests fast passed=43 failed=0 skipped=0 seconds=0.7
+- tests fast passed=3 failed=0 skipped=0 seconds=0.2
+- tests fast passed=3 failed=0 skipped=0 seconds=0.2
+- tests fast passed=2 failed=1 skipped=0 seconds=0.2
+- tests fast passed=3 failed=0 skipped=0 seconds=0.2
+- tests fast passed=10 failed=3 skipped=0 seconds=0.3
+- tests fast passed=3 failed=6 skipped=0 seconds=0.3
+- tests fast passed=13 failed=0 skipped=0 seconds=0.2
+- tests fast passed=165 failed=0 skipped=0 seconds=26.2
+- tests fast passed=165 failed=0 skipped=0 seconds=25.7
+- commit T1 496c722f98 keep run files in plans
+- commit T2 e1e0aeb764 finish rulings, send, archive
+- commit T10 7911e3267a backlog command docs
+- unblocked: dispatched T11 at 10:18:00; waiting on fixes: none
+- tests fast passed=6 failed=1 skipped=0 seconds=0.5
+- tests fast passed=7 failed=0 skipped=0 seconds=0.3
+- tests fast passed=15 failed=1 skipped=0 seconds=0.3
+- tests fast passed=258 failed=0 skipped=1 seconds=6.5
+- tests fast passed=16 failed=0 skipped=0 seconds=0.4
+- tests fast passed=52 failed=0 skipped=0 seconds=19.4
+- tests fast passed=16 failed=0 skipped=0 seconds=0.4
+- commit T8 f4e0dedfe6 lead brief follow-up rule
+- commit T11 76d2e3cc60 tools docs
+- tests fast passed=0 failed=6 skipped=0 seconds=0.4
+- tests fast passed=40 failed=0 skipped=0 seconds=1.2
+- tests full passed=12113 failed=3 skipped=12 seconds=301.8
+- tests fast passed=25 failed=0 skipped=0 seconds=1.4
+- tests fast passed=4 failed=1 skipped=0 seconds=0.3
+- commit T1 f7fb2da5bb keep run files in plans
+- tests fast passed=5 failed=0 skipped=0 seconds=0.4
+- tests fast passed=23 failed=0 skipped=0 seconds=0.5
+- Ruling: T7 also commits tests/scripts/fixtures/rules_684/backlog.txt - final-review fix outside every Owns
+- commit T11 58384427ba tools docs
+- commit T7 bf42a8b6e5 stale tool names and remote writes
+- Ruling: dismissed the four steps_runs probe groups - the probe ran before T5 committed steps_runs (AttributeError on every input) - cost if wrong: none, the probes pass on the committed code
+- tests full passed=12107 failed=0 skipped=12 seconds=325.5
+- tests fast passed=4 failed=0 skipped=0 seconds=15.6
+- tests fast passed=9 failed=2 skipped=0 seconds=0.6
+- tests fast passed=70 failed=0 skipped=1 seconds=1.6
+- commit T5 d733e71d48 task message Steps and affected
+- tests full passed=12107 failed=0 skipped=12 seconds=331.5
