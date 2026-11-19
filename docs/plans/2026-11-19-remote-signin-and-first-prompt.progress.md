@@ -1,0 +1,25 @@
+- start 8c60fa5b8177e1f128fd6d497e888a5e543d250f
+- unblocked: dispatched T1 T2 T3 T4 at 11:32:52; waiting on fixes: none
+- tests fast passed=0 failed=6 skipped=0 seconds=0.7
+- tests fast passed=39 failed=2 skipped=0 seconds=2.2
+- tests fast passed=1 failed=3 skipped=0 seconds=1.5
+- tests fast passed=41 failed=0 skipped=0 seconds=1.1
+- tests fast passed=0 failed=5 skipped=0 seconds=0.3
+- Ruling: fleet placement local after the first dispatch (T4 already on mxn), as in B235/B236, because remote write workers' work did not always reach the run root (B238 follow-up) - cost if wrong: slower spawns
+- tests fast passed=12 failed=3 skipped=0 seconds=0.7
+- tests fast passed=26 failed=0 skipped=0 seconds=0.3
+- tests fast passed=15 failed=0 skipped=0 seconds=0.6
+- commit T1 fcf0414d98 lead sign-in
+- commit T2 8f51a3a5b7 restore sign-in
+- commit T3 27080da0a4 pair skip
+- tests fast passed=3 failed=4 skipped=0 seconds=1.1
+- tests fast passed=33 failed=0 skipped=0 seconds=0.6
+- tests fast passed=32 failed=0 skipped=0 seconds=7.2
+- commit T4 2e0208ef10 remote prompt
+- tests fast passed=73 failed=0 skipped=0 seconds=7.9
+- tests full passed=12208 failed=1 skipped=12 seconds=336.7
+- tests fast passed=12 failed=1 skipped=0 seconds=3.1
+- tests fast passed=20 failed=0 skipped=0 seconds=3.5
+- Ruling: T4 also commits tests/scripts/test_fleet_remote_hygiene.py - the hygiene test pinned the old unnamed signed-out message; #932 names the account on purpose
+- commit T4 aab90618f6 remote prompt
+- tests full passed=12209 failed=0 skipped=12 seconds=401.5
