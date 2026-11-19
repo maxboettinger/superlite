@@ -10,7 +10,10 @@ FLEET_CHECKER = ("- Checker: `--role checker` (`superlite:checker`; fleet off: A
                  "`sl-check-<worktree>` simulator, `.build/CheckDerivedData`, throwaway renders through `render_edit`) are in "
                  "`agents/checker.md`. It answers one `C<n> PASS|FAIL|NOT REACHABLE` line per check and writes its screenshots and "
                  "`index.md` lines into `.superlite/render/`; FAIL findings go to fixers (`fixing.md`); at freeze delete the "
-                 "simulators its `Simulators:` line names.")
+                 "simulators its `Simulators:` line names. Before-screenshots of the run's start: `\"$SL\"` "
+                 "`worktree scratch -- '<build and capture command>'` builds the start SHA in a scratch tree that shares "
+                 "`.build/SourcePackages` and is removed afterwards, and the command writes its shots to "
+                 "`$SUPERLITE_RUN_ROOT/.superlite/render/before-<name>.png`; never swap files in the run's worktree for them (#816).")
 SDD_CHECKER = "A plan's `## Running-app checks` run here once, by a checker (fleet.md); FAIL lines are findings."
 WP_RULE = ("- **Running-app checks.** A check that needs the running artifact (a simulator, the built macOS app, a widget, an app "
            "extension, a browser page) is never a plan task or a task step: an implementer skips it or cannot reach it. List each "
