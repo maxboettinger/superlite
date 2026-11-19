@@ -15,7 +15,7 @@
 **File structure:** every file and its one responsibility.
 **Finish each task block before starting the next.** No placeholders, and every field filled.
 **Graph:** every edge is an execution dependency, with no cycles, and no two tasks that can run at once share a file.
-**Header** (an Xcode project: put `.superlite/test-cmd.json` `{"language":"swift","test":"xcodebuild test -scheme X {only_testing}"}` in the plan's setup; `{only_testing}` expands per test file): Goal, Architecture, Tech stack, Spec path, `**Detail:** contracts | tests | full` (default `tests`), `**Target-min:** N` (predicted-total target, default 11), `**Ticket:** KEY` (prefixes commit messages `KEY Tn: title`), `**Wave0:** none` (no Wave 0 skeleton; use it when the project already builds), `**Edges:** hard` (every taskgraph edge is hard: prune and `EDGE:` keep them all, `EXAMPLE:` skips their consumers, and a consumer waits for its producer's commit even with Wave 0 stubs; use it when a consumer cannot compile without its producer, such as a Swift package's whole-package compile), `**Coverage:** off` (skips the coverage check), global constraints (exact values copied from the spec: version floors, names, formats).
+**Header** (an Xcode project: put `.superlite/test-cmd.json` `{"language":"swift","test":"xcodebuild test -scheme X {only_testing}"}` in the plan's setup; `{only_testing}` expands per test file): Goal, Architecture, Tech stack, Spec path, `**Detail:** contracts | tests | full` (default `tests`), `**Target-min:** N` (predicted-total target, default 11), `**Ticket:** KEY` (prefixes commit messages `KEY Tn: title`), `**Wave0:** none` (no Wave 0 skeleton; use it when the project already builds), `**Edges:** hard` (every taskgraph edge is hard: prune and `EDGE:` keep them all, `EXAMPLE:` skips their consumers, and a consumer waits for its producer's commit even with Wave 0 stubs; use it when a consumer cannot compile without its producer, such as a Swift package's whole-package compile), `**Coverage:** off` (skips the coverage check), `**Read first:** a, b` (files every primed implementer reads in full before its first task), global constraints (exact values copied from the spec: version floors, names, formats).
 **Human orchestrator** (the human validates the plan before it runs), two phases:
 **Interface stubs in Wave 0.** Wave 0 holds the skeleton (manifest, package inits, test config, shared error types) and interface stubs for every `Produces` another task consumes.
 **Keep every task inside the size band.** The only measure is predicted time, held in `config/predictor.json` as `size_band` (low_min 1.5, high_min 6.0).
@@ -29,7 +29,7 @@
 **Mini diagram only where something interacts:** a sequence across components, a state machine or a protocol, at most about 15 nodes.
 **Model:** sonnet
 **Notes:** only non-obvious detail (a tie-break rule, an ordering).
-**One Write, written as if in chunks.** Write the plan whole, in one Write, but order it as if it were written in chunks, so the first tasks stand alone as a stable prefix: the header, Global constraints and the main diagram with its `%% taskgraph`; then, optionally, a Wave 0 skeleton task (`Kind: mechanical`, `Model: haiku`; if you omit it, `sl wave0` builds the skeleton brief from your Produces lines and Global constraints, so state the language and test command there); then the root and producer tasks (no incoming edges), each with exact `Produces` lines, the correct `Kind` and a size inside the band; then the consumers, each after its producers.
+**Root tasks first, then the rest.** Write the plan in two Writes, so the first tasks build while you write the rest.
 **Only execution dependencies are edges:** Tm's tests must run Tn's code.
 **Owns:** src/minisheet/server.py, tests/minisheet/test_server.py
 **Placeholders:** none.
@@ -89,7 +89,7 @@ Do not ask about an execution method: it is `superlite:subagent-driven-developme
 Docs that describe other tasks' output depend on them.
 END THE TURN and do nothing else until the human replies; changes mean revise and ask again.
 Every Mermaid block must parse.
-Every block is complete, with no placeholders, so lint can mark it stable and the prefix dispatches before any later task is fixed.
+Every block is complete, with no placeholders, so lint can mark it stable.
 First dispatch every task on the `DISPATCH NOW:` line, then patch the FIX tasks listed under `--stable` (edit or rewrite; keep dispatched blocks unchanged), rerun `schedule --insert` then `lint --stable`, until only `MISSED TARGET` and `NOTE:` remain.
 Fix in place, with no re-review.
 Fold setup, config and docs into the task that needs them.

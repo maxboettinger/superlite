@@ -24,11 +24,11 @@ Save to `<plans>/YYYY-MM-DD-<topic>.md`; `<plans>` is `docs/superpowers/plans/` 
 
 In both modes, write for the split:
 
-Read `split.md` before you order the tasks: the seven rules (one Write, producers first, finished blocks, sizing, fewest edges, easy ones, contract examples).
+Read `split.md` before you order the tasks: the seven rules (root tasks first, producers first, finished blocks, sizing, fewest edges, easy ones, contract examples), then interface stubs, waits and size band.
 
 ## Plan shape, in this order
 
-1. **Header** (an Xcode project: put `.superlite/test-cmd.json` `{"language":"swift","test":"xcodebuild test -scheme X {only_testing}"}` in the plan's setup; `{only_testing}` expands per test file): Goal, Architecture, Tech stack, Spec path, `**Detail:** contracts | tests | full` (default `tests`), `**Target-min:** N` (predicted-total target, default 11), `**Ticket:** KEY` (prefixes commit messages `KEY Tn: title`), `**Wave0:** none` (no Wave 0 skeleton; use it when the project already builds), `**Edges:** hard` (every taskgraph edge is hard: prune and `EDGE:` keep them all, `EXAMPLE:` skips their consumers, and a consumer waits for its producer's commit even with Wave 0 stubs; use it when a consumer cannot compile without its producer, such as a Swift package's whole-package compile), `**Coverage:** off` (skips the coverage check), global constraints (exact values copied from the spec: version floors, names, formats). Every agent gets them once, with the Tech stack and Architecture lines (its prime or fleet brief; `sl task Tn --constraints` prints them), so do not repeat constraints per task.
+1. **Header** (an Xcode project: put `.superlite/test-cmd.json` `{"language":"swift","test":"xcodebuild test -scheme X {only_testing}"}` in the plan's setup; `{only_testing}` expands per test file): Goal, Architecture, Tech stack, Spec path, `**Detail:** contracts | tests | full` (default `tests`), `**Target-min:** N` (predicted-total target, default 11), `**Ticket:** KEY` (prefixes commit messages `KEY Tn: title`), `**Wave0:** none` (no Wave 0 skeleton; use it when the project already builds), `**Edges:** hard` (every taskgraph edge is hard: prune and `EDGE:` keep them all, `EXAMPLE:` skips their consumers, and a consumer waits for its producer's commit even with Wave 0 stubs; use it when a consumer cannot compile without its producer, such as a Swift package's whole-package compile), `**Coverage:** off` (skips the coverage check), `**Read first:** a, b` (files every primed implementer reads in full before its first task), global constraints (exact values copied from the spec: version floors, names, formats). Every agent gets them once, with the Tech stack and Architecture lines (its prime or fleet brief; `sl task Tn --constraints` prints them), so do not repeat constraints per task.
 2. **Coverage:** the `## Coverage` table from brainstorming (`../brainstorming/coverage.md`); spike tasks (`S1`, ...) come first.
 3. **Main diagram** (always): Mermaid of components and data flow.
 4. **File structure:** every file and its one responsibility. Split by responsibility, not by layer, and follow the repo's patterns.
@@ -62,10 +62,6 @@ flowchart LR
 ```
 
 Here T1, T2 and T3 run in parallel; T2 and T3 build against T1's stubs, not its code. Waves are only a planning view: the scheduler dispatches a task the moment its dependencies are committed, with no wave barrier and no wave width cap.
-
-## Split by interface
-
-Read `split.md` before you order the tasks: interface stubs in Wave 0, when a task waits, the size band.
 
 ## Task template
 

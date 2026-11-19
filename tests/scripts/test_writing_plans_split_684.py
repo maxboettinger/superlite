@@ -5,7 +5,7 @@ sentences the split rewrites: "Follow all six rules" (now seven, naming split.md
 the "Who decides sets the mode" link (now "Who orchestrates sets the mode"), and the
 probe part's MCP sentence, and the moved review step 4 ("in the order of `SKILL.md`
 Plan shape" instead of "in the order below"), and review step 1 (now "no taskgraph and no
-code outside its `## Key code changes` snippets", #851).
+code outside its `## Key code changes` snippets", #851), and rule 1 (now "Root tasks first, then the rest", #831).
 """
 import re
 from pathlib import Path

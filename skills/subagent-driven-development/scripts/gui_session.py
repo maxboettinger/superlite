@@ -2,7 +2,7 @@
 """macOS GUI session check for xcodebuild tests (#561).
 
 A macOS `xcodebuild test` needs the desktop login session (testmanagerd). Without it the run fails before any test, which is an
-environment fault, not a red test. Library: needs_gui, session_kind, preflight, runner_unreachable, unreachable_reason. Stdlib only.
+environment fault, not a red test. Library: needs_gui, session_kind, preflight, runner_unreachable, unreachable_reason, spawn_warning (#798). Stdlib only.
 """
 # Complexity notation:
 #   n = command length, w = words in a segment, o = output length
@@ -62,6 +62,22 @@ def preflight(commands: list[str]) -> str | None:  # ENV-ERROR text when a macOS
         return None  # O(1)
     return (f"ENV-ERROR: no macOS GUI session (launchctl managername: {kind}, not Aqua): xcodebuild test on macOS needs the "
             f"desktop login session (testmanagerd), so nothing ran; {FALLBACK}; SUPERLITE_GUI_CHECK=0 skips this check")  # O(1)
+
+
+def spawn_warning(cfg: dict | None) -> str | None:  # one-line warning when a worker spawned now lands outside Aqua and the project drives a Mac app | O(c*n)
+    if os.environ.get("SUPERLITE_GUI_CHECK") == "0" or not isinstance(cfg, dict):  # O(1)
+        return None  # O(1)
+    cmds = [cfg[k] for k in ("test", "test_file") if isinstance(cfg.get(k), str)]  # O(1)
+    launch = cfg.get("launch")  # O(1)
+    entries = [launch.get(p) for p in GUI_PLATFORMS] if isinstance(launch, dict) else []  # O(1)
+    mac_launch = any(isinstance(e, dict) and e.get("worker") is not False for e in entries)  # O(1)
+    if not (mac_launch or any(needs_gui(c) for c in cmds)):  # O(c*n)
+        return None  # O(1)
+    kind = session_kind()  # O(1)
+    if kind is None or kind == "Aqua":  # O(1)
+        return None  # O(1)
+    return (f"launchd session {kind}, not Aqua: a worker spawned now cannot launch or drive a Mac app window or run a macOS xcodebuild test; "
+            f"{FALLBACK}; SUPERLITE_GUI_CHECK=0 skips this check")  # O(1)
 
 
 def runner_unreachable(text: str) -> bool:  # xcodebuild could not reach its test runner and no test executed | O(o)
