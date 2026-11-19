@@ -191,10 +191,16 @@ def stub_picks(plan, root: Path | None = None) -> list[tuple]:  # O(n*q*s)
 
 
 def stubbed_ids(plan, root: Path | None = None) -> set[str]:  # O(n*q*s)
-    """Ids of the tasks Wave 0 stubs: none when the plan header says `**Wave0:** none`, else the `stub_picks` tasks."""
+    """Ids of the tasks Wave 0 stubs: none when the plan header says `**Wave0:** none`, else the `stub_picks` tasks
+    that have a file in the run's Wave 0 record `stubs` list (all of them when there is no usable record)."""
     if plan.header_wave0_off():  # O(L)
         return set()  # O(1)
-    return {t.id for t, _, _ in stub_picks(plan, root)}  # O(n*q*s)
+    rec = pending_info(str(plan.path)) if getattr(plan, "path", None) else None  # O(size)
+    listed = rec.get("stubs") if rec else None  # O(1)
+    picks = stub_picks(plan, root)  # O(n*q*s)
+    if not isinstance(listed, list):  # O(1)
+        return {t.id for t, _, _ in picks}  # O(n)
+    return {t.id for t, _, files in picks if any(f in listed for f in files)}  # O(n*o*l)
 
 
 def stub_files(plan, root: Path | None = None) -> list[str]:  # O(n*q*s)
