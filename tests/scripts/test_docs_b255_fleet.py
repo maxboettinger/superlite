@@ -8,7 +8,7 @@ SCRIPTS = ROOT / "skills" / "subagent-driven-development" / "scripts"
 USAGE = ("- `fleet spawn` names the accounts it left out in one stderr line once it picked one: `accounts skipped: claude2 (<why>), claude3 (signed out)`. "
          "When `claude-profile usage` gives no report at all, the pick takes every account's stored last reading, of any age, and says so on stderr: "
          "`usage: claude-profile usage gave no report; using last readings: claude1 3 h old, ...`, plus `; no stored reading: <accounts>` for listed, signed-in accounts with none, "
-         "which count as unknown; a single failed reading also takes its stored reading of any age, so the 30-minute limit above is gone (#909).")
+         "which count as unknown; a single failed reading also takes its stored reading of any age (#909).")
 REFUSAL = ("- A machine-gate refusal names what drove it (#902): `BLOCKED: fleet spawn: machine busy after N s: memory <figures> (N agents, about X GB each)<cause>; "
            "gave up after K checks in N s: <what>; room comes when <ways>; rerun later, or pass --over-limit`. `<figures>` starts with `P% free, floor F%, ` only for a floor refusal, "
            "then `pressure <level>` and the swap and compressor figures it knows; `<cause>` is `; N agents of limit L from <source>`, `; swap free under --min-swap-free-mb M`, "
@@ -21,7 +21,7 @@ BOUNDS = ("- `fleet spawn --over-limit --max-workers N --min-swap-free-mb M` (ei
           "Either flag without `--over-limit` is an error (`--max-workers and --min-swap-free-mb bound --over-limit; pass --over-limit too`); plain `--over-limit` skips every check as before.")
 REVIEW = ("- Reviews go first (#902): a package or final reviewer spawn that waits for room writes `machine-wait/<pid>.json` in `~/.superlite` (`SUPERLITE_HOME` moves it), "
           "and any other spawn the gate would admit waits while such a file is live (cause `a review spawn waits first: <what>`), so the review starts first. "
-          "A file of a dead process or older than an hour is dropped; plain `--over-limit` does not wait for it, a bounded one does.")
+          "The file of a dead process is deleted, and one older than an hour (`WAIT_TTL`) no longer holds other spawns; plain `--over-limit` does not wait for it, a bounded one does.")
 WORKTREE = ("- A plain `fleet status` (no `--plan`) in a worktree whose own `.superlite` is not the folder status read, and whose fleet is on where that folder's is off or the reverse, "
             "adds one line after `fleet: on` or `fleet: off`: `worktree: fleet is on in <W>, the folder fleet spawn --plan <W> uses (this status read <S>); sl fleet status --plan <W> shows its workers`, "
             "or `worktree: fleet is off in <W>, the folder fleet spawn --plan <W> checks (this status read <S>); run sl fleet on --plan <W> first` (#904).")
