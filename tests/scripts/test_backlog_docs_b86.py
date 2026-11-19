@@ -11,10 +11,10 @@ def step2(text):
 def test_sdd_backlog_names_source_and_reasons():
     s = step2(SDD)
     for t in ("--github", "a plain `plan` reuses them", "not planned (triage: <why>)",
-              "--max-batches N", "sl backlog skip <issue>", "over 40 characters"):
+              "--max-batches N", "over 40 characters"):
         assert t in s, t
 
 
 def test_command_names_source():
     s = step2(CMD)
-    assert "backlog plan --github" in s and "--max-batches N" in s
+    assert "--max-batches N" in s

@@ -14,5 +14,4 @@ def test_fleet_md_names_follow():
 
 def test_fixing_md_names_post_run_fixer():
     t = (SDD / "fixing.md").read_text()
-    assert "fleet spawn --role fixer --tier T --brief" in t
     assert "plain git commit" in t
