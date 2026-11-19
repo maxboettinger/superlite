@@ -17,7 +17,7 @@ FIXER_LINE = "- Run only the touched test files, in the background: `<abs sl> ru
 REVIEWER_LINE = "- Focused tests, in the background: `<abs sl> run_tests --fast PATHS --background` (or `<abs sl> run_tests --affected --task Tn --background` for the task under review: run_tests picks the tests its change touches), " + RULE + " Do not run the full suite."
 OLD = "then the `wait:` line it prints (`"
 OLD_REVIEWER = "(the printed `wait:` line) for the summary"
-BRIEF_VERIFY = "Verify: `/x/sl run_tests --fast <the test files you touched> --background`, then run the printed `wait:` line in the foreground (never as a background command) and end your turn only after it reports."
+BRIEF_VERIFY = "Verify: `/x/sl run_tests --fast <the test files you touched> --worker fix-F-T1-1 --background`, then run the printed `wait:` line in the foreground (never as a background command) and end your turn only after it reports."
 
 
 def test_fixers_run_wait_in_foreground():

@@ -18,6 +18,7 @@ Every run keeps its full output (pytest with `-rP`, so a passing test's prints s
 A no-result stop keeps its command, exit and output in `.superlite/no-result-*.log` (newest 20) and its incident carries them as `target`, `command`, `exit`, `log`.
 An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change except files owned by unfinished sibling tasks (kept at base, named on the line), a `--full` tree the task's own files.
 A fleet worker's `--fast` run without `--task` (package reviewer, fixer; not a lead) on an isolated stack runs in its own tree `.superlite/trees/worker-<Wn>`: every working-tree change except files of unfinished tasks and changed files another busy fixer's or reviewer's brief names (#479); `--full` runs stay in the run root.
+`--worker NAME` (1 to 64 of `[A-Za-z0-9_-]`, else exit 2) gives a fleet-off (in-process Agent) reviewer or fixer the same tree as `worker-NAME`; a fleet worker's own id wins (#826).
 
 An isolated tree links `.superlite/` to the project's, so a test command finds its scripts there. Before each run, every overlaid file whose bytes changed since the tree's last run gets a fresh mtime (`.superlite/trees/<task>.digests.json`), so a build tool sees the edit (#507).
 With --task Tn whose plan **Tests:** field holds cmd=<command>, the run executes that command instead of the project's runner (a fast run; --fast paths are not passed; with no readable count its exit code is one test).
@@ -1436,6 +1437,9 @@ def free_disk(a, keep):  # O(T) + drops: reap, then gate; a removal or a low lev
     return None  # O(1)
 
 
+WORKER_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")  # O(1) a --worker NAME (#826)
+
+
 def usage_error(a, label, reason):  # O(summary size) a usage error: stderr, zero summary, exit 2
     print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
     write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
@@ -1500,6 +1504,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     ap.add_argument("--timeout", type=float, default=None, help="--wait limit in seconds (default: the run's predicted remaining time + 60 s, at least 540 s, at most one harness call less 60 s)")  # O(1)
     ap.add_argument("--limit", type=float, default=DEFAULT_LIMIT, help="wall-clock seconds before the test command tree is killed (default %(default)g; 0 = none)")  # O(1)
     ap.add_argument("--lock-wait", type=float, default=DEFAULT_LOCK_WAIT, help="seconds a full run waits for the machine-wide full-suite lock (default 3600; 0 = no limit)")  # O(1)
+    ap.add_argument("--worker", default=None, metavar="NAME", help="fleet-off reviewer or fixer: its own test tree .superlite/trees/worker-NAME on an isolated stack (a fleet worker's id wins)")  # O(1)
     ap.add_argument("--task", default=None, help="task id: compiled stacks run in .superlite/trees/<task> (own files only); incidents carry it and a green run closes its red ones")  # O(1)
     ap.add_argument("--also", nargs="+", action="extend", default=[], metavar="F", help="declare files this --task commits besides its Owns, before the run (ledger ruling; needs --task)")  # O(1)
     ap.add_argument("--ruling", default=ALSO_RULING, help=argparse.SUPPRESS)  # O(1)
@@ -2397,6 +2402,8 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
     global DROPPED  # O(1)
     paths = [p for chunk in (a.fast or []) for p in split_fast(chunk)]  # O(p)
     label = "fast" if paths or a.marker or getattr(a, "passthrough", None) else "full"  # O(1)
+    if a.worker is not None and not WORKER_NAME.fullmatch(a.worker):  # O(1)
+        return usage_error(a, label, f"--worker NAME: 1 to 64 letters, digits, - or _ (got {a.worker[:80]!r})")  # O(summary size)
     if a.also and not a.task:  # O(1)
         return usage_error(a, label, "--also needs --task Tn")  # O(summary size)
     if a.also:  # the claim is recorded before any runner or tree, so the tree below holds the file | O(c + k)
@@ -2487,13 +2494,13 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         hit = stamp_hit(a, spec, label)  # O(d + n)
         if hit is not None:  # O(1)
             return hit  # O(1)
-    refused = free_disk(a, {k for k in (a.task, worker_tree_name()) if k})  # before any tree or build | O(T + c)
+    refused = free_disk(a, {k for k in (a.task, worker_tree_name(worker=a.worker)) if k})  # before any tree or build | O(T + c)
     if refused:  # O(1)
         return usage_error(a, label, refused)  # O(summary size)
     if not spec["python"]:  # O(1)
         with contextlib.ExitStack() as stack:  # the tree is busy from before prepare to the end of the run (#574) | O(1)
             tree = None  # O(1)
-            key = a.task or (worker_tree_name() if paths and spec.get("isolate", False) else None)  # a fleet worker's --fast run without --task gets worker-<Wn> (#479) | O(env)
+            key = a.task or (worker_tree_name(worker=a.worker) if paths and spec.get("isolate", False) else None)  # a fleet worker's --fast run without --task gets worker-<Wn> (#479) | O(env)
             if key and spec.get("isolate", False):  # compiled stack: test own files only, in an isolated tree | O(1)
                 plan, tried = task_plan(a)  # --plan (a file or a run folder), else the first existing of stable.json's plan and the default | O(S)
                 if not a.task:  # a worker has no task of its own: no plan just means no unfinished tasks to hold back | O(1)
@@ -2657,11 +2664,11 @@ def full_overlay(root, task, info, ledger):  # O(f * T * o) + two spawns: task's
     return list(info[task]["owns"]) + [p for p in extra if p not in info[task]["owns"]]  # O(f)
 
 
-def worker_tree_name(env=None):  # O(1) `worker-<Wn>` for a fleet worker that tests (not a lead), else None
+def worker_tree_name(env=None, worker=None):  # O(1) `worker-<Wn>` for a fleet worker that tests (not a lead), else `worker-<worker>` from --worker (#826), else None
     env = os.environ if env is None else env  # O(1)
     wid, agent = env.get("SUPERLITE_FLEET_WORKER") or "", (env.get("SUPERLITE_FLEET_AGENT") or "").split(":")[-1]  # O(1)
     if not re.fullmatch(r"[A-Za-z0-9_-]+", wid) or env.get("SUPERLITE_FLEET_ROLE") == "lead" or agent in ("", "lead"):  # O(1)
-        return None  # O(1)
+        return f"worker-{worker}" if worker and WORKER_NAME.fullmatch(worker) else None  # O(1)
     return f"worker-{wid}"  # O(1)
 
 
