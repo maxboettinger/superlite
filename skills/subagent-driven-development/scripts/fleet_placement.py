@@ -29,6 +29,7 @@ MARGIN = 2  # O(1) a remote must beat local by this much: the push and the pull 
 TIMEOUT = 20  # O(1) seconds for the room command
 LIVE = ("ready", "busy", "starting")  # O(1)
 ROLES = ("implementer", "fixer", "package-reviewer", "final-reviewer", "research")  # O(1) roles that may run remote
+PAIR_MINUTES = 15.0  # O(1) a signed-out (machine, account) pair stays out this long
 MODES = ("spread", "local")  # O(1)
 UNKNOWN = {"local": {"state": "unknown", "room": None}}  # O(1)
 
@@ -139,15 +140,32 @@ def _skips(sd):  # O(k)
     return _json(Path(sd) / "room-skip.json")  # O(k)
 
 
-def skip(sd, label, why, minutes=10.0, now=None):  # O(k)
+def signed_out_pairs(sd, label, now=None):  # O(k): accounts recorded signed out on a machine and not yet expired
     now = time.time() if now is None else now  # O(1)
+    accs = (_skips(sd).get(label) or {}).get("accounts")  # O(k)
+    return {a for a, t in accs.items() if isinstance(t, (int, float)) and t > now} if isinstance(accs, dict) else set()  # O(a)
+
+
+def skip(sd, label, why, minutes=10.0, now=None):  # O(k): a sign-in reason skips the (machine, account) pair, any other reason the machine
+    import fleet_remote_account as fra  # noqa: PLC0415 | O(1)
+    now = time.time() if now is None else now  # O(1)
+    name, named = fra.signed_out_account(why), False  # O(len)
     try:  # O(1)
         with _lock(sd):  # the read-modify-write of two parallel rounds must not drop an entry | O(1) plus wait
             d = _skips(sd)  # O(k)
-            d[label] = {"until": now + minutes * 60, "why": why}  # O(1)
+            old = d.get(label) if isinstance(d.get(label), dict) else {}  # O(1)
+            if name:  # O(1)
+                accs = old.get("accounts") if isinstance(old.get("accounts"), dict) else {}  # O(1)
+                named = name not in accs  # O(1)
+                d[label] = {**old, "accounts": {**accs, name: now + PAIR_MINUTES * 60}}  # O(a)
+            else:  # O(1)
+                d[label] = {**old, "until": now + minutes * 60, "why": why}  # O(1)
             _write(Path(sd) / "room-skip.json", d)  # O(k)
     except OSError:  # O(1)
-        pass  # O(1)
+        return  # O(1)
+    if named:  # O(1)
+        print(f"placement: account {name} is signed out on {label}; {label} stays in placement with its other accounts; "
+              f"sign {name} in there once (claude, then /login)", file=sys.stderr)  # O(1)
 
 
 def _swift(project):  # O(entries)
