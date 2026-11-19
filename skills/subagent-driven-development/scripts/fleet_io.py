@@ -68,6 +68,7 @@ STATUS_LINE = "Status: DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED"  # O
 FINAL = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "APPROVED", "CHANGES_REQUESTED")  # a one-turn worker with one of these is stopped | O(1)
 SETTLE_MS = 10000  # a stop record must appear within this long after the state change | O(1)
 PROBE_MS = 10000  # an unlisted busy worker is probed for existence at most this often | O(1)
+TOOK_MS = 10000  # a fresh one-turn worker is given this long to start or finish a turn after its brief | O(1)
 READ_MS = 10000  # a transcript that lags its stop record is re-read this long before the report is UNKNOWN | O(1)
 ASK = ("Your last turn ended without your report. If your work is not done, finish it first: run any wait in the foreground and do not end your turn to wait. "  # O(1)
        "Then end your reply with your report.")  # O(1)
@@ -771,6 +772,20 @@ def _busy(sd, wid, label, sent, brief=None):  # worker busy on LABEL since SENT,
                 pass  # O(1)
 
 
+def took_brief(sd, wid, name, sent_ms):  # False when the pane went idle after the send with no turn of its own; a failed wait counts as taken | O(m + w)
+    try:  # O(1)
+        hc.wait_state(name, ["idle", "done"], TOOK_MS)  # O(1)
+    except hc.HerdrError:  # a timeout means it is still working | O(1)
+        return True  # O(1)
+    end = now_ms() + SETTLE_MS  # a stop record can lag the state change by up to SETTLE_MS | O(1)
+    while True:  # O(SETTLE_MS / 0.5 * (m + w))
+        if latest_stop(sd, wid, sent_ms) is not None:  # O(m + w)
+            return True  # O(1)
+        if now_ms() >= end:  # O(1)
+            return False  # O(1)
+        sleep(0.5)  # O(1)
+
+
 def send_brief(sd, wid, brief, label="", full=False, preface=""):  # O(w + len brief path + pool bytes)
     """Tell worker WID to read the brief file and answer as its role's report contract says; returns the label
     (LABEL, else the brief's stem). FileNotFoundError for a missing brief, KeyError for an unknown worker."""
@@ -789,7 +804,14 @@ def send_brief(sd, wid, brief, label="", full=False, preface=""):  # O(w + len b
     label = label or path.stem  # O(1)
     sent = now_ms()  # O(1)
     name = fs.name_of(sd, wid, w)  # O(w)
+    first = bool(w.get("one_turn")) and not w.get("sent")  # a fresh one-turn worker may drop its brief | O(1)
     _prompt(name, msg)  # O(len msg)
+    if first and not took_brief(sd, wid, name, sent):  # O(m + w)
+        print(f"{wid}: brief not taken (the pane went idle with no turn); resending once", file=sys.stderr)  # O(1)
+        sent = now_ms()  # O(1)
+        _prompt(name, msg)  # O(len msg)
+        if not took_brief(sd, wid, name, sent):  # O(m + w)
+            raise hc.HerdrError("brief_not_taken", "brief not taken after one resend")  # O(1)
     _busy(sd, wid, label, sent, str(path))  # O(w + pool bytes)
     pane_label(sd, wid, pane_title(sd, wid, label))  # O(w)
     print(f"{wid} {label} sent")  # O(1)
@@ -947,7 +969,7 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follow
             _remote().stop(sd, wid)  # O(1) plus remote calls
         except Exception:  # O(1)
             pass  # O(1)
-    return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n, **({"partial": True} if part else {})}  # O(1)
+    return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n, "role": w.get("role") or "implementer", **({"partial": True} if part else {})}  # O(1)
 
 
 def _pane_tail(sd, wid, w):  # the last pane lines, or the reason there are none | O(s)
@@ -1050,7 +1072,8 @@ WAVE_OK = ("DONE", "DONE_WITH_CONCERNS", "APPROVED", "GREEN")  # statuses that l
 
 
 def wave_failure(r):  # a result that ends a wave: a status outside WAVE_OK, findings, or a partial review | O(1)
-    return r.get("status") not in WAVE_OK or (r.get("findings") or 0) > 0 or bool(r.get("partial"))  # O(1)
+    found = (r.get("findings") or 0) > 0 and r.get("role") not in ("research", "writer")  # a research or writer report lists findings as its result | O(1)
+    return r.get("status") not in WAVE_OK or found or bool(r.get("partial"))  # O(1)
 
 
 def test_result(path):  # the finished background test run PATH as a wait result (and its line), else None while it runs | O(summary size)

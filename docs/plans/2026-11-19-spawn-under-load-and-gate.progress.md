@@ -1,0 +1,78 @@
+- start 69d409ca742053d1daa0a28649fa7d75d9f67ae3
+- unblocked: dispatched T1 T3 T4 T5 at 11:59:01; waiting on fixes: none
+- tests fast passed=30 failed=7 skipped=0 seconds=0.9
+- Ruling: fleet placement local from now on (W7 T5 already went to a remote host); B233/B238 saw remote write workers' work not reach the run root - cost if wrong: slower spawns on a loaded machine
+- tests fast passed=21 failed=18 skipped=0 seconds=0.4
+- tests fast passed=36 failed=1 skipped=0 seconds=0.9
+- tests fast passed=1 failed=4 skipped=0 seconds=0.4
+- tests fast passed=60 failed=0 skipped=1 seconds=1.1
+- tests fast passed=65 failed=1 skipped=0 seconds=0.7
+- tests fast passed=66 failed=0 skipped=0 seconds=0.6
+- commit T1 b847081b99 machine figures and refusal
+- commit T4 8de7a202eb brief taken check
+- tests fast passed=37 failed=0 skipped=0 seconds=0.7
+- unblocked: dispatched T2 T6 (T5 again, W7 lost its remote pane) at 12:02:14; waiting on fixes: none
+- Ruling: accept predicted 30.8 min - T1->T2->T7->T8 is file-ordered (machine_load.py, fleet.py) - cost: about 20 min over target
+- tests fast passed=0 failed=1 skipped=0 seconds=0.4
+- tests fast passed=18 failed=0 skipped=0 seconds=0.3
+- tests fast passed=67 failed=0 skipped=0 seconds=0.5
+- tests fast passed=5 failed=4 skipped=0 seconds=0.6
+- tests fast passed=48 failed=0 skipped=0 seconds=0.4
+- tests fast passed=4 failed=4 skipped=0 seconds=0.3
+- tests fast passed=71 failed=1 skipped=1 seconds=1.1
+- commit T3 285758f8cb usage fallback and skip line
+- Ruling: T3 also commits tests/scripts/test_accounts.py - test_accounts bad-json case now isolates SUPERLITE_HOME and asserts the store rebuild (T3's whole-call fallback)
+- commit T2 734b0d0639 bounded override and review first
+- commit T5 9d8a7b1901 waits-on finder
+- unblocked: dispatched T7 at 12:03:56; waiting on fixes: T6 test pin
+- tests fast passed=71 failed=1 skipped=1 seconds=1.1
+- tests fast passed=72 failed=0 skipped=1 seconds=1.1
+- tests fast passed=37 failed=0 skipped=0 seconds=0.6
+- tests fast passed=18 failed=0 skipped=0 seconds=0.7
+- tests fast passed=75 failed=0 skipped=0 seconds=0.9
+- tests fast passed=9 failed=7 skipped=0 seconds=0.5
+- tests fast passed=84 failed=3 skipped=0 seconds=2.3
+- commit T6 495804b5fd research findings end no wave
+- Ruling: T6 also commits tests/scripts/test_fleet_io.py - test_fleet_io's exact _finish dict gains role implementer (#903 adjacent fix)
+- tests fast passed=87 failed=0 skipped=0 seconds=2.4
+- tests fast passed=64 failed=0 skipped=1 seconds=1.2
+- commit T7 27951dcb25 fleet spawn and status wiring
+- Ruling: T7 also commits tests/scripts/test_fleet_round_queue_916.py - the round-queue gate fake takes **k for spawn's rank, bounds and run_workers keywords
+- unblocked: dispatched T8 at 12:06:08; waiting on fixes: none
+- tests fast passed=0 failed=1 skipped=0 seconds=0.2
+- tests fast passed=87 failed=0 skipped=0 seconds=2.2
+- tests fast passed=20 failed=1 skipped=0 seconds=0.4
+- tests fast passed=20 failed=1 skipped=0 seconds=0.4
+- tests fast passed=21 failed=0 skipped=0 seconds=0.4
+- commit T8 476e6d1fbf fleet.md rules
+- tests fast passed=4 failed=0 skipped=0 seconds=15.1
+- tests full passed=12274 failed=7 skipped=12 seconds=395.4
+- tests fast passed=48 failed=7 skipped=0 seconds=0.7
+- tests fast passed=48 failed=7 skipped=0 seconds=0.7
+- tests fast passed=168 failed=0 skipped=1 seconds=2.9
+- commit T6 b3ee48a31d research findings end no wave
+- Ruling: T4 also commits tests/scripts/test_fleet_roles.py - F1: the brief-only spawn test patches took_brief (T4's check is not its subject)
+- tests full passed=12281 failed=0 skipped=12 seconds=777.8
+- tests fast passed=5 failed=1 skipped=0 seconds=0.5
+- tests fast passed=7 failed=1 skipped=0 seconds=0.5
+- tests fast passed=57 failed=0 skipped=1 seconds=1.5
+- tests fast passed=7 failed=1 skipped=0 seconds=0.5
+- commit T4 ee1d3f051f brief taken check
+- tests fast passed=7 failed=1 skipped=0 seconds=0.5
+- tests fast passed=16 failed=1 skipped=0 seconds=0.8
+- tests fast passed=17 failed=0 skipped=0 seconds=0.6
+- commit T7 92243fe672 fleet spawn and status wiring
+- tests full passed=12283 failed=0 skipped=12 seconds=647.1
+- tests fast passed=18 failed=4 skipped=0 seconds=0.7
+- tests fast passed=72 failed=1 skipped=0 seconds=2.0
+- tests fast passed=73 failed=0 skipped=0 seconds=2.6
+- commit T1 509b0138dc machine figures and refusal
+- commit T7 f6a1167dbe fleet spawn and status wiring
+- tests full passed=12286 failed=0 skipped=12 seconds=525.6
+- tests fast passed=6 failed=1 skipped=0 seconds=0.6
+- tests fast passed=14 failed=1 skipped=0 seconds=0.4
+- tests fast passed=46 failed=0 skipped=0 seconds=1.4
+- commit T3 8a931a3aa9 usage fallback and skip line
+- tests fast passed=52 failed=0 skipped=0 seconds=0.8
+- commit T1 e7a17f5c91 machine figures and refusal
+- tests full passed=12288 failed=0 skipped=12 seconds=623.9

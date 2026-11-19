@@ -98,7 +98,7 @@ def _prompts(world):
 
 @_skip_real
 def test_spawn_brief_only_implementer_without_prime(world, monkeypatch):
-    import fleet_io; monkeypatch.setattr(fleet_io, "hc", world.fh)
+    import fleet_io; monkeypatch.setattr(fleet_io, "hc", world.fh); monkeypatch.setattr(fleet_io, "took_brief", lambda *a, **k: True)
     fleet.main(["on"]); (world.sd / "prime.md").unlink(); F = _brief(world)
     assert fleet.main(["spawn", "--role", "implementer", "--brief", str(F), "--plan", str(world.sd)]) == 0
     ps = _prompts(world)

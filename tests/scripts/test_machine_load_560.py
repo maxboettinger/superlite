@@ -29,7 +29,7 @@ def test_agent_trees_survive_cycles_and_unknown_parents():
 
 
 def test_darwin_memory_parse():
-    assert ml._darwin(f"{64 * G}\n81\n1\n") == {"total": 64 * G, "free": 64 * G * 81 // 100, "pressure": "normal"}
+    assert ml._darwin(f"{64 * G}\n81\n1\n") == {"total": 64 * G, "free": 64 * G * 81 // 100, "pressure": "normal", "swap_total": None, "swap_used": None, "compressed": None}
     assert ml._darwin(f"{64 * G}\n9\n2\n")["pressure"] == "warn"
     assert ml._darwin(f"{64 * G}\n9\n4\n")["pressure"] == "critical"
     assert ml._darwin("garbage") is None
@@ -38,7 +38,7 @@ def test_darwin_memory_parse():
 def test_linux_memory_parse():
     meminfo = "MemTotal:       16384000 kB\nMemFree:  100 kB\nMemAvailable:    8192000 kB\n"
     psi = "some avg10=0.50 avg60=0.10 avg300=0.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
-    assert ml._linux(meminfo, psi) == {"total": 16384000 * 1024, "free": 8192000 * 1024, "pressure": "normal"}
+    assert ml._linux(meminfo, psi) == {"total": 16384000 * 1024, "free": 8192000 * 1024, "pressure": "normal", "swap_total": None, "swap_used": None, "compressed": None}
     assert ml._linux(meminfo, psi.replace("some avg10=0.50", "some avg10=12.00"))["pressure"] == "warn"
     assert ml._linux(meminfo, psi.replace("full avg10=0.00", "full avg10=10.00"))["pressure"] == "critical"
     assert ml._linux(meminfo, "")["pressure"] == "normal"
@@ -70,7 +70,8 @@ def test_floor_and_limit_sources(monkeypatch):
 def test_measure_mean_and_default():
     mem = {"total": 64 * G, "free": 52 * G, "pressure": "normal"}
     m = ml.measure(procs=[(10, 1, 600 * M, "claude"), (20, 1, 800 * M, "claude")], mem=mem)
-    assert m == {"agents": 2, "each": 700 * M, "total": 64 * G, "free": 52 * G, "pressure": "normal", "other": None}
+    assert m == {"agents": 2, "each": 700 * M, "total": 64 * G, "free": 52 * G, "pressure": "normal", "other": None,
+                 "swap_total": None, "swap_used": None, "compressed": None}
     m0 = ml.measure(procs=[], mem=mem)
     assert m0["agents"] == 0 and m0["each"] == G
 
@@ -110,7 +111,8 @@ def _measures(monkeypatch, frees):
 
 def test_gate_busy_line(monkeypatch):
     _measures(monkeypatch, [7 * G])
-    assert ml.gate("backlog start B7", 0) == "machine busy after 0 s: memory 10% free, floor 15% (23 agents, about 0.7 GB each)"
+    assert ml.gate("backlog start B7", 0) == ("machine busy after 0 s: memory 10% free, floor 15%, pressure normal (23 agents, about 0.7 GB each); "
+                                                 "gave up after 1 check in 0 s: free memory under the floor; room comes when agents end (23 running)")
 
 
 def test_gate_waits_then_starts(monkeypatch, capsys):
@@ -118,14 +120,16 @@ def test_gate_waits_then_starts(monkeypatch, capsys):
     assert ml.gate("fleet spawn (fixer)", 30, poll_s=0) is None
     err = capsys.readouterr().err
     assert [x for x in err.splitlines() if x.startswith("machine busy:")] == [
-        "machine busy: memory 10% free, floor 15% (23 agents, about 0.7 GB each); waiting up to 30 s for fleet spawn (fixer)"]
+        "machine busy: memory 10% free, floor 15%, pressure normal (23 agents, about 0.7 GB each); waiting up to 30 s for fleet spawn (fixer)"]
     assert err.count("machine has room after") == 1 and "starting fleet spawn (fixer)" in err
 
 
 def test_gate_count_cap_names_source(monkeypatch):
     monkeypatch.setenv("SUPERLITE_MACHINE_LIMIT", "16")
     monkeypatch.setattr(ml, "measure", lambda *a, **k: {"agents": 16, "each": 600 * M, "total": 64 * G, "free": 52 * G, "pressure": "normal"})
-    assert ml.gate("x", 0) == "machine busy after 0 s: memory 81% free, floor 15% (16 agents, about 0.6 GB each); 16 agents of limit 16 from SUPERLITE_MACHINE_LIMIT"
+    assert ml.gate("x", 0) == (
+        "machine busy after 0 s: memory pressure normal (16 agents, about 0.6 GB each); 16 agents of limit 16 from SUPERLITE_MACHINE_LIMIT; "
+        "gave up after 1 check in 0 s: agent count at the limit; room comes when agents end (16 running)")
 
 
 def test_gate_over_limit(monkeypatch, capsys):

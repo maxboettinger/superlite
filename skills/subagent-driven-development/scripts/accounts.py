@@ -21,7 +21,6 @@ from history import home  # $SUPERLITE_HOME | O(1)
 
 FIVE_HOUR_MAX = 90  # O(1) 5-hour (`session`) percent at or above this skips the account
 WEEKLY_MAX = 100  # O(1) weekly percent at or above this skips the account
-RECENT_S = 1800  # O(1) an account whose usage reading failed takes its last good reading while that is this young (#917)
 
 
 def _run(sub, env):  # O(1) plus subprocess time
@@ -87,25 +86,62 @@ def _remember(report, now):  # O(a) keep each account's last good reading in <ho
         pass  # O(1)
 
 
+def age_text(seconds):  # "10 min" below two hours, else whole hours | O(1)
+    return "%d min" % (seconds // 60) if seconds < 7200 else "%d h" % (seconds // 3600)  # O(1)
+
+
+def _live(limits, now):  # the limits whose window has not reset yet; an unparsable or missing `resets_at` keeps the limit | O(l)
+    out = []  # O(1)
+    for x in limits or []:  # O(l)
+        try:  # O(1)
+            gone = datetime.fromisoformat(str(x.get("resets_at")).replace("Z", "+00:00")).timestamp() <= now  # O(1)
+        except (TypeError, ValueError, AttributeError, OSError, OverflowError):  # O(1)
+            gone = False  # O(1)
+        if not gone:  # O(1)
+            out.append(x)  # O(1)
+    return out  # O(l)
+
+
+def _stored(prev, now):  # a stored entry as a usage account (`stale_s` set, expired limits dropped), with its age; None when unusable | O(l)
+    if not isinstance(prev, dict) or not isinstance(prev.get("account"), dict) or not isinstance(prev.get("at"), (int, float)):  # O(1)
+        return None  # O(1)
+    age = max(0, now - prev["at"])  # O(1)
+    a = prev["account"]  # O(1)
+    return {**a, "limits": _live(a.get("limits"), now), "error": None, "stale_s": int(age)}, age  # O(l)
+
+
+def _load():  # O(file)
+    try:  # O(1)
+        last = json.loads(_store().read_text())  # O(file)
+    except (OSError, ValueError):  # O(1)
+        return {}  # O(1)
+    return last if isinstance(last, dict) else {}  # O(1)
+
+
 def with_fallback(report, env=None, now=None):  # O(a*l) plus one `list` call when an account has no recent reading
     """The usage report with each failed reading replaced, one stderr line per replacement (#917).
 
-    A failed account takes its last good reading while that is at most RECENT_S old (`stale_s` set). Else the account the
+    A failed account takes its last good reading, whatever its age, minus limits that have reset (`stale_s` set). A report
+    that is no usable dict is rebuilt from the whole store. Else the account the
     coordinator's own session runs on (its CLAUDE_CONFIG_DIR, `current`) counts as usable without limits (`unknown` set),
     unless `claude-profile list` says it is signed out; `pick_account` ranks it after every account with a reading.
     Any other failed account keeps its error."""
-    if not isinstance(report, dict) or not isinstance(report.get("accounts"), list):  # O(1)
-        return report if isinstance(report, dict) else {}  # O(1)
     now = time.time() if now is None else now  # O(1)
+    if not isinstance(report, dict) or not isinstance(report.get("accounts"), list):  # O(1)
+        rebuilt = [(n, _stored(v, now)) for n, v in sorted(_load().items())]  # O(a*l)
+        rebuilt = [(n, r) for n, r in rebuilt if r]  # O(a)
+        if not rebuilt:  # O(1)
+            return report if isinstance(report, dict) else {}  # O(1)
+        have = {n for n, _ in rebuilt}  # O(a)
+        extra = [x["name"] for x in read_listing(env).get("accounts") or [] if isinstance(x, dict) and x.get("name") and x["name"] not in have and x.get("signed_in") is not False]  # O(a) listed, signed in, no stored reading
+        line = "usage: claude-profile usage gave no report; using last readings: %s" % ", ".join("%s %s old" % (n, age_text(r[1])) for n, r in rebuilt)  # O(a)
+        print(line + ("; no stored reading: %s" % ", ".join(extra) if extra else ""), file=sys.stderr)  # O(a)
+        return {"accounts": [r[0] for _, r in rebuilt] + [{"name": n, "limits": [], "error": None, "unknown": True} for n in extra]}  # O(a)
     _remember(report, now)  # O(a)
     failed = lambda a: isinstance(a, dict) and a.get("error") and a.get("name")  # O(1)
     if not any(failed(a) for a in report["accounts"]):  # O(a)
         return report  # O(1)
-    try:  # O(1)
-        last = json.loads(_store().read_text())  # O(file)
-    except (OSError, ValueError):  # O(1)
-        last = {}  # O(1)
-    last = last if isinstance(last, dict) else {}  # O(1)
+    last = _load()  # O(file)
     own, listing = None, None  # O(1)
     out = []  # O(1)
     for a in report["accounts"]:  # O(a)
@@ -113,11 +149,10 @@ def with_fallback(report, env=None, now=None):  # O(a*l) plus one `list` call wh
             out.append(a)  # O(1)
             continue  # O(1)
         name, err = a["name"], a["error"]  # O(1)
-        prev = last.get(name) if isinstance(last.get(name), dict) else {}  # O(1)
-        age = now - prev["at"] if isinstance(prev.get("at"), (int, float)) else None  # O(1)
-        if age is not None and 0 <= age <= RECENT_S and isinstance(prev.get("account"), dict):  # O(1)
-            out.append({**prev["account"], "error": None, "stale_s": int(age)})  # O(1)
-            print("%s: usage unreadable (%s); using its reading from %d min ago" % (name, err, age // 60), file=sys.stderr)  # O(1)
+        got = _stored(last.get(name), now)  # O(l)
+        if got:  # O(1)
+            out.append(got[0])  # O(1)
+            print("%s: usage unreadable (%s); using its reading from %s ago" % (name, err, age_text(got[1])), file=sys.stderr)  # O(1)
             continue  # O(1)
         if listing is None:  # O(1) one listing call for the whole report
             listing = read_listing(env)  # O(1) plus subprocess time
@@ -125,7 +160,7 @@ def with_fallback(report, env=None, now=None):  # O(a*l) plus one `list` call wh
         entry = next((x for x in listing.get("accounts") or [] if x.get("name") == name), {})  # O(a)
         if name == own and entry.get("signed_in") is not False:  # O(1)
             out.append({**a, "error": None, "limits": [], "unknown": True})  # O(1)
-            print("%s: usage unreadable (%s), no reading in the last %d min; usable as the coordinator's own account" % (name, err, RECENT_S // 60), file=sys.stderr)  # O(1)
+            print("%s: usage unreadable (%s), no stored reading; usable as the coordinator's own account" % (name, err), file=sys.stderr)  # O(1)
             continue  # O(1)
         out.append(a)  # O(1)
     return {**report, "accounts": out}  # O(a)
@@ -213,6 +248,17 @@ def reasons(usage, allowed, tier=None, alias=None):  # O(a*l)
         if why:  # O(1)
             out.append("%s: %s" % (name, why))  # O(1)
     return out  # O(1)
+
+
+def skip_line(usage, allowed, tier=None, alias=None, signed_out=None):  # "accounts skipped: ..." naming each skipped account and why, or None | O(a*l)
+    parts = []  # O(1)
+    if isinstance((usage or {}).get("accounts"), list):  # O(1)
+        for r in reasons(usage, allowed, tier, alias):  # O(a*l)
+            name, _, why = r.partition(": ")  # O(1)
+            if why != "not in usage":  # O(1)
+                parts.append("%s (%s)" % (name, why))  # O(1)
+    parts += ["%s (signed out)" % n for n in signed_out or []]  # O(s)
+    return "accounts skipped: " + ", ".join(parts) if parts else None  # O(a)
 
 
 def is_path(entry):  # O(1)

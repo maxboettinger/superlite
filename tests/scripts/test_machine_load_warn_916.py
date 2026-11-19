@@ -45,4 +45,6 @@ def test_busy_line_names_the_largest_non_agent_process(monkeypatch):
     low = {**HALF_FREE, "free": 9 * G, "other": ("bigd", 20 * G)}
     monkeypatch.setattr(ml, "measure", lambda *a, **k: dict(low))
     busy = ml.gate("fleet spawn (implementer)", 0)
-    assert busy == "machine busy after 0 s: memory pressure warn, 14% free, floor 15% (9 agents, about 0.4 GB each); largest non-agent process bigd 20.0 GB"
+    assert busy == ("machine busy after 0 s: memory 14% free, floor 15%, pressure warn (9 agents, about 0.4 GB each); "
+                    "largest non-agent process bigd 20.0 GB; gave up after 1 check in 0 s: free memory under the floor; "
+                    "room comes when agents end (9 running) or when bigd (20.0 GB) ends")

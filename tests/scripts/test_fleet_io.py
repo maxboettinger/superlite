@@ -17,6 +17,9 @@ class FakeHerdr:
         if name in self.gone: raise self.HerdrError("agent_not_found", "agent target not found")
         return "idle"
     def prompt(self, name, text, until, timeout_ms): self.calls.append(("prompt", name, text, until)); return "working"
+    def wait_state(self, name, until, timeout_ms):
+        if list(until) == ["idle", "done"]: raise self.HerdrError("timeout", "still working")
+        return "idle"
     def agent_states(self): self.calls.append(("agent_states",)); return self.states.pop(0) if len(self.states) > 1 else self.states[0]
     def read_screen(self, name, lines=40, source="visible"): self.calls.append(("read_screen", name)); return self.screen
     def send_keys(self, name, keys): self.calls.append(("send_keys", name, keys))
@@ -142,7 +145,7 @@ def test_wait_reads_report_from_transcript(world, tmp_path, capsys):
     (world.sd / "metrics.jsonl").write_text(json.dumps({"ev": "stop", "t": sent + 10, "agent_id": "W1", "type": "fleet:superlite:implementer", "transcript": str(tr), "last": "Status: DONE"}) + "\n")
     world.fh.states = [{"sl-proj-w1": "working", "sl-proj-w2": "idle"}, {"sl-proj-w1": "done", "sl-proj-w2": "idle"}]
     out = io.wait(world.sd, ["W1"], 10000)
-    assert out == [{"id": "W1", "task": "T3", "status": "DONE", "report": str(world.sd / "fleet" / "reports" / "T3.json"), "source": "transcript", "findings": 0}]
+    assert out == [{"id": "W1", "task": "T3", "status": "DONE", "report": str(world.sd / "fleet" / "reports" / "T3.json"), "source": "transcript", "findings": 0, "role": "implementer"}]
     assert (world.sd / "fleet" / "reports" / "T3.md").read_text() == "Status: DONE\nFiles changed: src/c.py"
     assert f"W1 T3 DONE findings=0 {world.sd / 'fleet' / 'reports' / 'T3.json'}" in capsys.readouterr().out
     assert json.loads((world.sd / "fleet.json").read_text())["workers"]["W1"]["state"] == "ready"

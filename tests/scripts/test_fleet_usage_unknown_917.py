@@ -1,5 +1,5 @@
 """#917: an account whose usage cannot be read is unknown, not out of headroom: it takes its last good reading while that
-is at most 30 min old, else the coordinator's own account goes ahead; BLOCKED only when every account is known full."""
+of any age, else the coordinator's own account goes ahead; BLOCKED only when every account is known full."""
 import json
 import time
 
@@ -34,7 +34,10 @@ def remember(name, minutes_ago, **limits):
     f = fleet.ac._store()
     f.parent.mkdir(parents=True, exist_ok=True)
     last = json.loads(f.read_text()) if f.exists() else {}
-    last[name] = {"at": time.time() - minutes_ago * 60, "account": acc(name, int(name[-1]), **limits)}
+    stored = acc(name, int(name[-1]), **limits)
+    for x in stored["limits"]:
+        x["resets_at"] = "2999-01-01T00:00:00+00:00"  # a limit whose window has not reset yet
+    last[name] = {"at": time.time() - minutes_ago * 60, "account": stored}
     f.write_text(json.dumps(last))
 
 
@@ -44,7 +47,7 @@ def test_every_usage_unreadable_starts_on_the_coordinators_account(world, usage,
     assert w["account"] == "claude3" and any(c[0] == "start_agent" for c in world.fh.calls)
     cap = capsys.readouterr()
     assert "BLOCKED" not in cap.out
-    assert f"claude3: usage unreadable ({ERR.format('claude3')}), no reading in the last 30 min; usable as the coordinator's own account" in cap.err.splitlines()
+    assert f"claude3: usage unreadable ({ERR.format('claude3')}), no stored reading; usable as the coordinator's own account" in cap.err.splitlines()
 
 
 def test_a_recent_reading_stands_in_and_ranks_before_the_unknown_account(world, usage, capsys):
@@ -60,8 +63,15 @@ def test_a_recent_reading_over_its_limit_still_skips_the_account(world, usage):
     assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["account"] == "claude3"
 
 
-def test_an_old_reading_and_a_foreign_coordinator_block(world, usage, monkeypatch, capsys):
+def test_an_old_reading_stands_in_whatever_its_age(world, usage, monkeypatch, capsys):
     remember("claude1", 40, weekly_all=5)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/u/.claude-elsewhere")
+    usage["report"] = {"accounts": [unreadable("claude1", 1), unreadable("claude3", 3)]}
+    assert fleet.spawn(world.sd, world.plan, "sonnet", world.proj)["account"] == "claude1"
+    assert "using its reading from 40 min ago" in capsys.readouterr().err
+
+
+def test_no_stored_reading_and_a_foreign_coordinator_block(world, usage, monkeypatch, capsys):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/u/.claude-elsewhere")
     usage["report"] = {"accounts": [unreadable("claude1", 1), unreadable("claude3", 3)]}
     with pytest.raises(SystemExit) as e:
