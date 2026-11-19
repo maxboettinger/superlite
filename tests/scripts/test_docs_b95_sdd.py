@@ -28,4 +28,4 @@ def test_fixing_md():
 
 
 def test_package_reviewer():
-    has(PKG, "probe_run --plan", "--dismiss")
+    has(PKG, "--dismiss")

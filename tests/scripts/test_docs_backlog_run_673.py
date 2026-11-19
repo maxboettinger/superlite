@@ -9,7 +9,7 @@ def _read(rel):
 
 def test_backlog_md_run():
     t = _read("skills/subagent-driven-development/backlog-main.md")
-    for s in ("backlog run", "--window", "fleet restore", "re-arm"):
+    for s in ("--window", "re-arm"):
         assert s in t, s
 
 

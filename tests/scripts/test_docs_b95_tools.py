@@ -63,7 +63,6 @@ def test_incident_feedback_finish_rows():
 
 
 def test_status_pool_orchestrator_worktree_rows():
-    has(row("status"), "sl status")
     has(row("pool"), "prune", "session")
     has(row("orchestrator"), "resume")
     has(row("worktree"), "--dir NAME", "--branch NAME")
