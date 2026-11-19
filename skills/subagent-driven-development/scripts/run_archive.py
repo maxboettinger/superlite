@@ -10,6 +10,8 @@ API:
   runs(archive)                      manifests (plus "id", "dir") newest name first
   run_dirs(sd)                       run folders that belong to the checkout of sd, oldest first (legacy sd/runs included)
   prune(archive, keep)               trims runs older than the newest `keep` to their ledger files; returns runs trimmed
+  plans_dir(root)                    <root>/docs/superpowers/plans when it exists, else <root>/docs/plans; creates nothing
+  keep_in_plans(plan, sd, today)     copies the plan, its build report and progress.md into the plans folder; returns the paths written
 Stdlib only.
 """
 # Complexity notation:
@@ -150,15 +152,10 @@ def prune(archive: Path, keep: int = KEEP_FULL) -> int:  # O(1)
 
 
 def plans_dir(root: Path) -> Path:  # O(1)
-    """`<root>/docs/superpowers/plans` when that folder exists, else `<root>/docs/plans`; created when missing."""
+    """`<root>/docs/superpowers/plans` when that folder exists, else `<root>/docs/plans`; creates nothing."""
     root = Path(root)  # O(1)
     sp = root / "docs" / "superpowers" / "plans"  # O(1)
-    d = sp if sp.is_dir() else root / "docs" / "plans"  # O(1)
-    try:  # O(1)
-        d.mkdir(parents=True, exist_ok=True)  # O(1)
-    except OSError:  # O(1)
-        pass  # O(1)
-    return d  # O(1)
+    return sp if sp.is_dir() else root / "docs" / "plans"  # O(1)
 
 
 def _same_bytes(a: Path, b: Path) -> bool:  # O(size)
@@ -195,6 +192,7 @@ def keep_in_plans(plan: str, sd: str, today: str | None = None) -> list[str]:  #
         for s, name in pairs:  # O(1) iterations
             if not s.is_file():  # O(1)
                 continue  # O(1)
+            dest.mkdir(parents=True, exist_ok=True)  # O(1)
             shutil.copyfile(s, dest / name)  # O(size)
             written.append((dest / name).resolve().relative_to(root).as_posix())  # O(1)
     except (OSError, ValueError):  # O(1)

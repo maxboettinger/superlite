@@ -112,3 +112,20 @@ def test_report_list_uses_plans_dir(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     report.main(["--list", "--root", str(tmp_path)])
     assert os.path.join("docs", "superpowers", "plans") in capsys.readouterr().out
+
+
+def test_plans_dir_creates_nothing(tmp_path):
+    d = run_archive.plans_dir(tmp_path)
+    assert d == tmp_path / "docs" / "plans"
+    assert not (tmp_path / "docs").exists()
+
+
+def test_report_list_in_empty_folder_leaves_no_plans_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    report.main(["--list", "--root", str(tmp_path)])
+    assert not (tmp_path / "docs").exists()
+
+
+def test_module_docstring_names_plans_helpers():
+    doc = run_archive.__doc__
+    assert "plans_dir(" in doc and "keep_in_plans(" in doc
