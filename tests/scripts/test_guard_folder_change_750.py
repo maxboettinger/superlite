@@ -147,3 +147,57 @@ def test_python_one_liner_import_rebinds_name(code):
 
 def test_git_shell_alias_cd_makes_relative_unknown():
     assert t("git", "-c", "alias.x=!cd src && rm a.py", "x") == ["?"]
+
+
+@pytest.mark.parametrize("code", [
+    f"{CP}.execSync(\"rm \\a.py\")",
+    f"{CP}.execSync(\"rm \\e.py\")",
+])
+def test_js_has_no_bell_or_escape_letter_escapes(code):
+    assert t("node", "-e", code) == ["?"]
+
+
+def test_js_reads_its_own_escapes():
+    assert t("node", "-e", f"{CP}.execSync(\"rm \\x41.py\")") == ["A.py"]
+    assert t("node", "-e", f"{CP}.execSync(\"rm \\u0041.py\")") == ["A.py"]
+    assert t("node", "-e", f"{CP}.execSync(\"rm \\u{{41}}.py\")") == ["A.py"]
+
+
+@pytest.mark.parametrize("code,want", [
+    ('shell_exec("rm \\a.py");', ["?"]),
+    ('shell_exec("rm \\u0041.py");', ["?"]),
+    ('shell_exec("rm \\b.py");', ["?"]),
+    ('shell_exec("rm A.py");', ["A.py"]),
+    ('shell_exec("rm \\u{41}.py");', ["A.py"]),
+    ('shell_exec("rm \\x41.py");', ["A.py"]),
+])
+def test_php_escape_table(code, want):
+    assert t("php", "-r", code) == want
+
+
+def test_python_bytes_literal_has_no_unicode_escape():
+    assert t("python3", "-c", 'import os; os.system(b"rm \\u0041.py")') == ["?"]
+    assert t("python3", "-c", 'import os; os.system("rm \\u0041.py")') == ["A.py"]
+    assert t("python3", "-c", 'import os; os.system(b"rm \\x41.py")') == ["A.py"]
+
+
+def test_perl_case_modifier_escape_is_unknown():
+    assert t("perl", "-e", 'system("rm \\u\\x61.py");') == ["?"]
+    assert t("perl", "-e", 'system("rm \\x61.py");') == ["a.py"]
+
+
+def test_ruby_escape_table():
+    assert t("ruby", "-e", 'system("rm \\x61.py")') == ["a.py"]
+    assert t("ruby", "-e", 'system("rm \\q.py")') == ["?"]
+
+
+@pytest.mark.parametrize("code", [
+    'import os; os.system("if cd src; then rm a.py; fi")',
+    'import os; os.system("while cd src; do rm a.py; done")',
+    'import os; os.system("until cd src; do rm a.py; done")',
+    'import os; os.system("eval cd src; rm a.py")',
+    'import os; os.system("eval \\"cd src\\"; rm a.py")',
+    'import os; os.system("{ cd src; rm a.py; }")',
+])
+def test_cd_after_any_control_word_or_in_eval(code):
+    assert t("python3", "-c", code) == ["?"]

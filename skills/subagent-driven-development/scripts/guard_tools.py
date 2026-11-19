@@ -1325,13 +1325,31 @@ def _unq(m: re.Match, lang: str) -> str | None:  # O(len(text)) | a literal's te
     pre = m.group(0).lstrip(" \t\r\n")[:-len(text) - 2].lower() if q != "`" else ""  # the string prefix (r, b, u)  # O(len(text))
     if "r" in pre and lang == "py":  # a raw string keeps its backslashes  # O(1)
         return text  # O(1)
-    return _decode_esc(text, lang, q)  # O(len(text))
+    return _decode_esc(text, lang, q, "b" in pre)  # O(len(text))
 
 
-_ESC1 = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "f": "\f", "v": "\v", "e": "\x1b", "\\": "\\", '"': '"', "'": "'", "`": "`"}  # O(1)
+_ESC_COMMON = {"n": "\n", "t": "\t", "r": "\r", "f": "\f", "\\": "\\", '"': '"'}  # O(1)
+_ESC_NUM = {  # the numeric escapes each language decodes (octal first; a bare \0 only where the language has just that)  # O(1)
+    "py": re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}"),
+    "pyb": re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}"),
+    "js": re.compile(r"0(?![0-9])|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|u\{[0-9A-Fa-f]{1,6}\}"),
+    "rb": re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}"),
+    "php": re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]{1,6}\}"),
+    "pl": re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}"),
+}
+_ESC_TAB = {  # the letter and sign escapes each language decodes to a known character; any other alphanumeric escape is unknown  # O(1)
+    "py": {**_ESC_COMMON, "'": "'", "a": "\a", "b": "\b", "v": "\v"},
+    "pyb": {**_ESC_COMMON, "'": "'", "a": "\a", "b": "\b", "v": "\v"},
+    "js": {**_ESC_COMMON, "'": "'", "b": "\b", "v": "\v", "`": "`"},
+    "rb": {**_ESC_COMMON, "s": " ", "a": "\a", "b": "\b", "e": "\x1b", "v": "\v", "`": "`"},
+    "php": {**_ESC_COMMON, "v": "\v", "e": "\x1b", "$": "$", "`": "`"},
+    "pl": {**_ESC_COMMON, "a": "\a", "b": "\b", "e": "\x1b", "$": "$", "@": "@", "`": "`"},
+}
 
 
-def _decode_esc(text: str, lang: str, q: str) -> str | None:  # O(len(text)) | the value of a string literal's text: its escapes decoded (None: an escape that cannot be read)
+def _decode_esc(text: str, lang: str, q: str, byt: bool = False) -> str | None:  # O(len(text)) | the value of a string literal's text: its escapes decoded (None: an escape that language does not decode to a known character)
+    key = "pyb" if byt and lang == "py" else lang  # O(1)
+    tab, num = _ESC_TAB.get(key, _ESC_TAB["py"]), _ESC_NUM.get(key, _ESC_NUM["py"])  # O(1)
     out: list[str] = []  # O(1)
     i = 0  # O(1)
     while i < len(text):  # O(len(text))
@@ -1345,20 +1363,28 @@ def _decode_esc(text: str, lang: str, q: str) -> str | None:  # O(len(text)) | t
             out.append(e if e in ("\\", "'") else "\\" + e)  # O(1)
             i += 2  # O(1)
             continue  # O(1)
-        m = re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}").match(text, i + 1)  # O(1)
+        m = num.match(text, i + 1)  # O(1)
         if m:  # O(1)
             g = m.group(0)  # O(1)
-            out.append(chr(int(g, 8)) if g[0].isdigit() else chr(int(g[1:], 16)))  # O(1)
+            if g[0] == "u" and g[1:2] == "{":  # O(1)
+                v = int(g[2:-1], 16)  # O(1)
+            elif g[0] in "xuU":  # O(1)
+                v = int(g[1:], 16)  # O(1)
+            else:  # O(1)
+                v = int(g, 8)  # O(1)
+            if v > 0x10FFFF or (v > 255 and key != "py" and g[0] not in "uU"):  # O(1)
+                return None  # O(1)
+            out.append(chr(v))  # O(1)
             i = m.end()  # O(1)
-        elif e in _ESC1 and (lang != "py" or e not in "e`"):  # O(1)
-            out.append(_ESC1[e])  # O(1)
+        elif e in tab:  # O(1)
+            out.append(tab[e])  # O(1)
             i += 2  # O(1)
         elif e == "\n" and lang in ("py", "js", "rb"):  # a line continuation  # O(1)
             i += 2  # O(1)
         elif e and not e.isalnum() and e != "\n":  # an escaped sign: python and php keep the backslash, the others drop it  # O(1)
             out.append(("\\" + e) if lang in ("py", "php") and e not in "$\"'\\" else e)  # O(1)
             i += 2  # O(1)
-        else:  # u{..}, \N{..}, a letter no decoder here knows  # O(1)
+        else:  # a letter or digit this language does not decode (\a in JS, \u in PHP, \N{..}, \u in bytes)  # O(1)
             return None  # O(1)
     return "".join(out)  # O(len(text))
 
@@ -1600,8 +1626,10 @@ def _shell(text: str, cd: bool = True) -> list[str]:  # O(len(text) * |commands|
 
 def _is_cd(words: list[str]) -> bool:  # O(len(words)) | does the command change the shell's folder?
     k = 0  # O(1)
-    while k < len(words) and (_cmd(words[k]) in ("command", "builtin", "then", "do", "else", "elif", "!", "time") or re.match(r"[A-Za-z_]\w*=", words[k])):  # O(w)
+    while k < len(words) and (_cmd(words[k]) in ("command", "builtin", "{") or words[k] in guard_lex._CONTROL or re.match(r"[A-Za-z_]\w*=", words[k])):  # O(w)
         k += 1  # O(1)
+    if k < len(words) and _cmd(words[k]) == "eval":  # eval text that holds a cd moves the folder  # O(len(words))
+        return _shell1(" ".join(words[k + 1:]), False, True)[1]  # O(len(words))
     return k < len(words) and _cmd(words[k]) in ("cd", "pushd", "popd", "chdir")  # O(1)
 
 
@@ -1640,6 +1668,8 @@ def _shell1(text: str, moved: bool, cd: bool) -> tuple[list[str], bool]:  # O(le
 
 
 def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the paths one command (decoded words) writes
+    while words and words[0] in guard_lex._CONTROL:  # a control word (then, do, !, ...) before the command word  # O(w)
+        words = words[1:]  # O(w)
     if not words:  # O(1)
         return []  # O(1)
     k = 0  # O(1)
