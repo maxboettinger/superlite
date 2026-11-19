@@ -1,0 +1,28 @@
+- start 78e9fcddace3cb55c626ae32b31493a6b98e6742
+- unblocked: dispatched T1 T2 at 18:33:22; waiting on fixes: none
+Ruling: fleet placement local for this run's build - remote write workers lost snapshots in B233/B241/B257 - a slower build if wrong
+- tests fast passed=2 failed=3 skipped=0 seconds=1.0
+- tests fast passed=2 failed=5 skipped=0 seconds=0.6
+- tests fast passed=155 failed=0 skipped=1 seconds=2.0
+- tests fast passed=45 failed=0 skipped=0 seconds=10.7
+- commit T2 2ac5c45236 collect sync and hints
+- Ruling: T2 also commits tests/scripts/test_fleet_remote_collect_953.py - T2 updated the two pinned tests that assert the old concern texts, as the plan's Global constraints allow
+- Ruling: T2 also commits tests/scripts/test_fleet_remote_collect.py - T2 updated the two pinned tests that assert the old concern texts, as the plan's Global constraints allow
+- commit T1 36646367d4 reports in worker run
+- unblocked: dispatched T3 at 18:35:20; waiting on fixes: none
+- tests fast passed=45 failed=0 skipped=0 seconds=10.7
+- tests fast passed=1 failed=12 skipped=0 seconds=1.7
+- tests fast passed=107 failed=4 skipped=1 seconds=6.2
+- tests fast passed=110 failed=1 skipped=1 seconds=6.2
+- tests fast passed=26 failed=1 skipped=0 seconds=2.1
+- tests fast passed=83 failed=0 skipped=1 seconds=3.0
+- commit T3 8f9648ed9d fleet collect command
+- Ruling: T3 also commits tests/scripts/test_fleet_cli_b54.py - T3 updated the pinned fleet --help test for the new collect subcommand, as the plan's Global constraints allow
+- tests fast passed=176 failed=0 skipped=1 seconds=6.4
+- tests fast passed=7 failed=0 skipped=0 seconds=0.3
+- tests full passed=12952 failed=2 skipped=12 seconds=382.9
+- tests fast passed=63 failed=0 skipped=0 seconds=0.4
+- commit T1 f0c328410e reports in worker run
+- Ruling: T3 also commits tests/scripts/test_docs_b259_fleet.py - B259's pinned subcommand lists gain collect (T3's new fleet subcommand); fixer FX1
+- Ruling: T3 also commits tests/scripts/test_fleet_resume_route_985.py - B259's pinned subcommand lists gain collect (T3's new fleet subcommand); fixer FX1
+- tests full passed=12954 failed=0 skipped=12 seconds=296.0
