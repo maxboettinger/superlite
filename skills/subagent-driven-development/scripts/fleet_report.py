@@ -26,6 +26,10 @@ STATUSES = ("APPROVED", "CHANGES_REQUESTED", "DONE_WITH_CONCERNS", "DONE", "NEED
 BLOCK = re.compile(r"^[ \t]*```json[^\n]*\n(.*?)\n?^[ \t]*```[ \t]*$", re.DOTALL | re.M)  # a fenced json block; only a fence line closes it, so a fence inside a string does not | O(s) per opener
 VERDICT = re.compile(r"^\s*\**Verdict:\**\s*(APPROVED|CHANGES_REQUESTED)\b", re.M)  # O(1)
 PARTIAL = re.compile(r"^\s*\**Verdict:\**\s*APPROVED\s*\(partial\b", re.M | re.I)  # O(1)
+NOT_RUN = ("Run every check your brief names (a running-app check on a simulator or the Mac, a launch, a named command). "
+           "For each one you did not run, write one line `Not run: <check> - <why>` before the Status line, and end DONE_WITH_CONCERNS, never DONE.")  # O(1)
+NOT_RUN_LINE = re.compile(r"^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?[*`]*not run[*`]*[ \t]*:[*`]*[ \t]*(.*?)[ \t]*\r?$", re.I)  # a `Not run:` line, bullet and bold allowed | O(1)
+NOT_RUN_NONE = ("none", "nothing", "n/a", "no", "-")  # O(1)
 RED_LINE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?([*`]*)Red run([*`]*):([*`]*)[ \t]*(\S.*?)[ \t]*\r?$", re.M)  # O(1)
 TID = r"[A-Z]{1,3}\d+[A-Za-z]?"  # a plan task id | O(1)
 RED_TASK = re.compile(r"^[ \t]*(?:[-*][ \t]+)?([*`]*)Red run[ \t]+\(?(" + TID + r")\)?[*`]*:[*`]*[ \t]*(\S.*?)[ \t]*\r?$", re.M)  # `Red run Tn: text` | O(1)
@@ -202,6 +206,37 @@ def _from_json(text: str) -> dict | None:  # O(s)
     return {"status": status, "files": files, "tests": tests, "red": red or _red_line(text), "reds": {**_red_tasks(text), **json_reds}, "findings": findings, "summary": summary, "concerns": concerns, "valid": True}  # O(1)
 
 
+def _unrun_item(v: str) -> str:  # one named check, markup stripped; "" for a none word | O(len v)
+    v = v.replace("`", "").strip("* \t")  # O(len v)
+    return "" if v.rstrip(".").strip().lower() in NOT_RUN_NONE else v  # O(len v)
+
+
+def not_run(text: str) -> list[str]:  # the checks a reply names as not run, in order | O(s)
+    out: list[str] = []  # O(1)
+    lines = (text if isinstance(text, str) else "").splitlines()  # O(s)
+    fence, i = False, 0  # O(1)
+    while i < len(lines):  # O(s)
+        line = lines[i]  # O(1)
+        i += 1  # O(1)
+        if line.lstrip().startswith("```"):  # O(1)
+            fence = not fence  # O(1)
+            continue  # O(1)
+        m = None if fence else NOT_RUN_LINE.match(line)  # O(1)
+        if not m:  # O(1)
+            continue  # O(1)
+        if m.group(1).strip("*` \t"):  # O(1)
+            v = _unrun_item(m.group(1))  # O(len)
+            if v:  # O(1)
+                out.append(v)  # O(1)
+            continue  # O(1)
+        while i < len(lines) and (it := ITEM.match(lines[i])):  # the bullets right below an empty label | O(s)
+            v = _unrun_item(it.group(1))  # O(len)
+            if v:  # O(1)
+                out.append(v)  # O(1)
+            i += 1  # O(1)
+    return out  # O(1)
+
+
 def partial(text: str) -> bool:  # an APPROVED verdict that left packet lines unread | O(s)
     return bool(PARTIAL.search(text if isinstance(text, str) else ""))  # O(s)
 
@@ -244,4 +279,6 @@ def brief_message(role: str, path: str, full: bool = False) -> str:  # O(size of
         return f"Review the packet {path} as your instructions say. {FULL + ' ' if full else ''}{REVIEW}"  # O(1)
     if role == "lead" and _planning(path):  # O(size of the brief)
         return f"Read {path} and do what it says. {PLANNED}"  # O(1)
+    if role == "package-reviewer":  # O(1)
+        return f"Read {path} and do what it says. {WORK} {NOT_RUN}"  # O(1)
     return f"Read {path} and do what it says. {WORK}"  # O(1)

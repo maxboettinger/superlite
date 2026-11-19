@@ -26,7 +26,7 @@ rest. A stop record ends the wait in any Herdr state when it holds a status; one
 pane is UNKNOWN plus the last pane lines. A stop record whose transcript reads empty, or without the status its cut `last` line holds, is re-read for READ_MS (10 s), then reported UNKNOWN (transcript unread); the cut line is never the report. Its exit code is always 0. A report is written as `<id>.md` (the text) and `<id>.json` (`fleet_report.parse`);
 a one-turn worker (fixer, reviewer, research, layer) is stopped once its status is final.
 A turn that ends without a status (stop record, or a done/idle screen) is asked once per send for its report (`W1 T3 ASKED`, `asked` in fleet.json); the next miss is UNKNOWN. Leads are never asked.
-A report with concerns adds ` concerns=N` to the wait line. `send WID --brief FILE --full` asks a final-reviewer worker for a full review (exit 2 for another role or without --brief).
+A report with concerns adds ` concerns=N` to the wait line; a report with `Not run:` lines adds ` not_run=N` (a DONE becomes DONE_WITH_CONCERNS, an APPROVED partial; research and writer reports are exempt). `send WID --brief FILE --full` asks a final-reviewer worker for a full review (exit 2 for another role or without --brief).
 `send --brief` resends the brief once when Herdr reports agent_prompt_stalled; a second stall is the error.
 `send`, `send --brief` and `send --text` resend once after a stall, and after a slow Herdr reply ("timed out waiting for app response") unless the worker already shows `working`.
 A lead's stop records written by its own child sessions (a transcript outside the lead's worktree project folder) never count as the lead's stop.
@@ -839,6 +839,8 @@ def report_contract(wrec):  # the contract a worker's texts end with | O(size of
         return fleet_report.PLANNED  # O(size of the brief)
     if role == "implementer" and "," in str(wrec.get("task") or ""):  # a batch implementer reports its red run per task | O(1)
         return fleet_report.WORK_BATCH  # O(1)
+    if role == "package-reviewer":  # O(1)
+        return fleet_report.WORK + " " + fleet_report.NOT_RUN  # O(1)
     return fleet_report.WORK  # O(1)
 
 
@@ -954,11 +956,19 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follow
     rep = fleet_report.parse(text, rid, allow_json=source == "transcript")  # a screen holds no trustworthy json block | O(len)
     if _write_remote(w) and rep["status"] in FINAL:  # its snapshot comes home first (a final turn only): the report holds the collected status and concerns | O(w)
         rep = importlib.import_module("fleet_remote_collect").collect(sd, wid, rep)  # O(1) plus remote calls
-    part = rep["status"] == "APPROVED" and fleet_report.partial(text)  # O(len)
-    _write(jp, json.dumps({**rep, **({"partial": True} if part else {}), "id": wid, "label": label, "role": w.get("role") or "implementer", "source": source, "report": str(mp)}, indent=2) + "\n")  # O(len)
+    role = w.get("role") or "implementer"  # O(1)
+    unrun = [] if role in ("research", "writer") else fleet_report.not_run(text)  # O(len)
+    extra = {}  # O(1)
+    if unrun:  # O(1)
+        extra = {"not_run": unrun}  # O(1)
+        if rep["status"] == "DONE":  # O(1)
+            extra["status_reported"] = "DONE"  # O(1)
+            rep = {**rep, "status": "DONE_WITH_CONCERNS"}  # O(1)
+    part = rep["status"] == "APPROVED" and (fleet_report.partial(text) or bool(unrun))  # O(len)
+    _write(jp, json.dumps({**rep, **extra, **({"partial": True} if part else {}), "id": wid, "label": label, "role": w.get("role") or "implementer", "source": source, "report": str(mp)}, indent=2) + "\n")  # O(len)
     n = len(rep["findings"])  # O(1)
     nc = len(rep.get("concerns") or [])  # O(1)
-    print(f"{wid} {label} {rep['status']} findings={n}" + (f" concerns={nc}" if nc else "") + (" partial" if part else "") + f" {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
+    print(f"{wid} {label} {rep['status']} findings={n}" + (f" concerns={nc}" if nc else "") + (f" not_run={len(unrun)}" if unrun else "") + (" partial" if part else "") + f" {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
     _tel_finish(sd, wid, w, rep, label)  # O(T + w)
     _ready(sd, wid, label)  # O(w)
     pane_label(sd, wid, pane_title(sd, wid, label, "reported, waiting for coordinator"))  # before the worker may be stopped | O(w)
