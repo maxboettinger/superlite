@@ -45,12 +45,13 @@ Low memory: Claude Code stops an idle session's background commands when the mac
   - `UNKNOWN` (no parsable report): `"$SL" fleet report Wn --plan $PLAN` prints the saved `.superlite/fleet/reports/<id>.md` (read-only; a busy worker or one with no collected report exits 1); read it once, then decide.
   - `NEEDS_CONTEXT`: answer with `"$SL" fleet send Wn --text "..."`, then wait again.
 - `findings=N` of a research or writer worker is its answer, not a failure: `--wave` keeps waiting (#903).
+- ` not_run=N` (after `findings=` and ` concerns=`): the report names N checks it did not run (`Not run: <check> - <why>` lines); `fleet wait` turns its DONE into DONE_WITH_CONCERNS and its APPROVED into ` partial` (#807). Send the worker back with `"$SL" fleet_resume Wn --text "run <check>" --plan $PLAN`, or rule the check out.
 - `Wn <label> ASKED`: the turn ended without a report; the worker was asked once. Wait again; a second miss reports UNKNOWN.
 - `Wn layer-L GREEN|RED exit=<n> <log path>` plus `  <last line>`: a layer result; read the log on RED.
 - `Wn Tn BLOCKED-UI <screen path>`: read the screen file; answer with `"$SL" fleet keys Wn KEY...` or `fleet send Wn --text "..."`, or treat the task as BLOCKED.
 - `TIMEOUT Wn Wm`: run `fleet wait` again.
 
-`"$SL" fleet status` lists workers; `reported` means the turn ended and `fleet wait Wn` collects it (`fleet report Wn` reads it first), `dead` (also `Wn <label> DEAD` from wait) means its agent is gone: the line names the fresh `fleet spawn`. `fleet send` to a stopped or dead worker exits 2 with that spawn line. `fleet stop Wn` or `--all` closes them. At freeze, `"$SL" fleet stop --all` runs before `trees clean` (no-op without fleet mode).
+`"$SL" fleet status` lists workers; `reported` means the turn ended and `fleet wait Wn` collects it (`fleet report Wn` reads it first), `dead` (also `Wn <label> DEAD` from wait) means its agent is gone: the line names the fresh `fleet spawn`. `fleet send` to a stopped or dead worker exits 2 with that spawn line. A stopped one-turn worker (a reviewer, fixer, research, writer or checker on this machine) continues its own session instead: `"$SL" fleet_resume Wn --text "..." --plan $PLAN` opens a fresh pane, starts its agent with `--resume <session>` and sends the text with its report contract; wait for it as for a send, and `fleet wait` stops it again after its report (#808). `fleet stop Wn` or `--all` closes them. At freeze, `"$SL" fleet stop --all` runs before `trees clean` (no-op without fleet mode).
 
 A busy line ending ` waits on <command> <N min>` means a test or build command runs under the worker (run_tests, pytest, xcodebuild, maxapp test or build, ...): the worker is alive, and a `maxapp test` may wait queued on a busy build host. Never stop, resend or replace it; keep waiting with `fleet wait --wave`; only past twice the run's usual length ask it with `fleet send Wn --text`.
 
