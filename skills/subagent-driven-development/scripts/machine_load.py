@@ -277,24 +277,92 @@ def _line(m: dict, flo: float, lim: int, src: str) -> str:  # O(1)
     return s + (f"; {m['agents']} agents of limit {lim} from {src}" if lim else "")  # O(1)
 
 
-def refusal(m: dict, floor_pct: float, lim: int, src: str, why: str) -> str:  # the figures that drive the refusal; the percentage only when the floor refused (#902) | O(1)
+def _bound_text(bounds) -> str:  # the given bounds as flags (#902) | O(1)
+    b = bounds or {}  # O(1)
+    parts = []  # O(1)
+    if b.get("max_workers") is not None:  # O(1)
+        parts.append(f"--max-workers {b['max_workers']}")  # O(1)
+    if b.get("min_swap_free_mb") is not None:  # O(1)
+        parts.append(f"--min-swap-free-mb {b['min_swap_free_mb']}")  # O(1)
+    return " and ".join(parts)  # O(1)
+
+
+def bounded_cause(m: dict, bounds: dict, run_workers):  # why `--over-limit` with bounds still refuses, or None (#902) | O(1)
+    if m.get("pressure") == "critical":  # O(1)
+        return "critical"  # O(1)
+    mb, st, su = bounds.get("min_swap_free_mb"), m.get("swap_total"), m.get("swap_used")  # O(1)
+    if mb is not None and st and su is not None and st - su < mb * 2**20:  # O(1)
+        return "swap"  # O(1)
+    mw = bounds.get("max_workers")  # O(1)
+    if mw is not None and run_workers is not None and run_workers >= mw:  # O(1)
+        return "workers"  # O(1)
+    return None  # O(1)
+
+
+WAIT_TTL = 3600  # a review waiter older than this is stale | O(1)
+
+
+def _wait_dir() -> Path:  # O(1)
+    return home() / "machine-wait"  # O(1)
+
+
+def _alive(pid: int) -> bool:  # O(1)
+    try:  # O(1)
+        os.kill(pid, 0)  # O(1)
+    except ProcessLookupError:  # O(1)
+        return False  # O(1)
+    except (PermissionError, OSError):  # O(1)
+        return True  # O(1)
+    return True  # O(1)
+
+
+def review_waiting(own_pid=None, now=None):  # what a live review spawn waits for, or None; dead waiters' files go (#902) | O(files)
+    now = time.time() if now is None else now  # O(1)
+    for f in sorted(_wait_dir().glob("*.json")):  # O(files)
+        try:  # O(1)
+            d = json.loads(f.read_text())  # O(1)
+            pid, rank, what, t = int(d["pid"]), d["rank"], str(d["what"]), float(d["t"])  # O(1)
+        except (OSError, ValueError, KeyError, TypeError):  # O(1)
+            continue  # O(1)
+        if not _alive(pid):  # O(1)
+            f.unlink(missing_ok=True)  # O(1)
+            continue  # O(1)
+        if pid != own_pid and rank == 0 and now - t <= WAIT_TTL:  # O(1)
+            return what  # O(1)
+    return None  # O(1)
+
+
+def _register(what: str) -> Path:  # O(1)
+    f = _wait_dir() / f"{os.getpid()}.json"  # O(1)
+    f.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+    f.write_text(json.dumps({"pid": os.getpid(), "rank": 0, "what": what, "t": time.time()}))  # O(1)
+    return f  # O(1)
+
+
+def refusal(m: dict, floor_pct: float, lim: int, src: str, why: str, bounds=None, run_workers=None, waiter=None) -> str:  # the figures that drive the refusal; the percentage only when the floor refused (#902) | O(1)
     head = f"memory {m['free'] * 100 // m['total']}% free, floor {floor_pct:g}%, " if why == "floor" else "memory "  # O(1)
-    count = f"; {m['agents']} agents of limit {lim} from {src}" if why == "count" else ""  # O(1)
+    mb, mw = (bounds or {}).get("min_swap_free_mb"), (bounds or {}).get("max_workers")  # O(1)
+    extra = {"count": f"; {m['agents']} agents of limit {lim} from {src}", "swap": f"; swap free under --min-swap-free-mb {mb}",
+             "workers": f"; {run_workers} live workers in this run, --max-workers {mw}",
+             "review": f"; a review spawn waits first: {waiter}"}.get(why, "")  # O(1)
     other = m.get("other")  # O(1)
     held = f"; largest non-agent process {other[0]} {other[1] / 2**30:.1f} GB" if other else ""  # O(1)
-    return f"{head}{figures(m)} ({_fleet(m)}){count}{held}"  # O(1)
+    return f"{head}{figures(m)} ({_fleet(m)}){extra}{held}"  # O(1)
 
 
-PHRASES = {"count": "agent count at the limit", "critical": "pressure critical", "floor": "free memory under the floor"}  # O(1)
+PHRASES = {"count": "agent count at the limit", "critical": "pressure critical", "floor": "free memory under the floor",
+           "review": "a review spawn waits first"}  # O(1)
 
 
-def gave_up(causes: list, el: int, m: dict) -> str:  # what the gate saw and what would change it (#902) | O(k)
+def gave_up(causes: list, el: int, m: dict, bounds=None) -> str:  # what the gate saw and what would change it (#902) | O(k)
     k = len(causes)  # O(1)
     seen = list(dict.fromkeys(causes))  # first-seen order | O(k)
+    ph = {**PHRASES, "swap": f"swap free under {(bounds or {}).get('min_swap_free_mb')} MB",
+          "workers": f"this run at --max-workers {(bounds or {}).get('max_workers')}"}  # O(1)
     if len(seen) == 1:  # O(1)
-        what = PHRASES[seen[0]] + (" at every check" if k > 1 else "")  # O(1)
+        what = ph[seen[0]] + (" at every check" if k > 1 else "")  # O(1)
     else:  # O(1)
-        what = ", ".join(f"{PHRASES[c]} at {causes.count(c)}" for c in seen)  # O(k)
+        what = ", ".join(f"{ph[c]} at {causes.count(c)}" for c in seen)  # O(k)
     ways = []  # O(1)
     if m["agents"] > 0:  # O(1)
         ways.append(f"agents end ({m['agents']} running)")  # O(1)
@@ -304,9 +372,18 @@ def gave_up(causes: list, el: int, m: dict) -> str:  # what the gate saw and wha
     return f"gave up after {k} check{'' if k == 1 else 's'} in {el} s: {what}; {room_part}"  # O(1)
 
 
-def gate(what: str, wait_s: float, over: bool = False, poll_s: float = 10.0):  # O(wait_s / poll_s * p)
-    if not enabled():  # O(1)
+def gate(what: str, wait_s: float, over: bool = False, poll_s: float = 10.0, rank: int = 1, bounds=None, run_workers=None):  # O(wait_s / poll_s * p)
+    has_b = bool(bounds) and any(v is not None for v in bounds.values())  # O(1)
+    if not enabled() and not has_b:  # O(1)
         return None  # O(1)
+    try:  # O(1)
+        return _gate(what, wait_s, over, poll_s, rank, bounds if has_b else None, run_workers, lambda: _register(what) if rank == 0 else None)  # O(wait_s / poll_s * p)
+    finally:  # O(1)
+        if rank == 0:  # O(1)
+            (_wait_dir() / f"{os.getpid()}.json").unlink(missing_ok=True)  # O(1)
+
+
+def _gate(what, wait_s, over, poll_s, rank, bounds, run_workers, register):  # O(wait_s / poll_s * p)
     flo, _ = floor()  # O(1)
     lim, src = limit()  # O(1)
     t0 = time.monotonic()  # O(1)
@@ -315,20 +392,30 @@ def gate(what: str, wait_s: float, over: bool = False, poll_s: float = 10.0):  #
     while True:  # O(wait_s / poll_s)
         m = measure()  # O(p)
         el = int(time.monotonic() - t0)  # O(1)
-        why = cause(m, flo, lim)  # O(1)
+        plain = cause(m, flo, lim)  # O(1)
+        waiter = None  # O(1)
+        if over and bounds is None:  # plain override: as before, no queue | O(1)
+            if plain:  # O(1)
+                print(f"machine limit overridden (--over-limit): {_line(m, flo, lim, src)}", file=sys.stderr)  # O(1)
+            return None  # O(1)
+        why = bounded_cause(m, bounds, run_workers) if over else plain  # O(1)
+        if why is None and rank == 1:  # O(1)
+            waiter = review_waiting(os.getpid())  # O(files)
+            why = "review" if waiter else None  # O(1)
         if why is None:  # O(1)
-            if waited:  # O(1)
+            if over and plain:  # O(1)
+                print(f"machine limit overridden (--over-limit within {_bound_text(bounds)}): {_line(m, flo, lim, src)}", file=sys.stderr)  # O(1)
+            elif waited:  # O(1)
                 print(f"machine has room after {el} s: {_line(m, flo, lim, src)}; starting {what}", file=sys.stderr)  # O(1)
             return None  # O(1)
         causes.append(why)  # O(1)
-        if over:  # O(1)
-            print(f"machine limit overridden (--over-limit): {_line(m, flo, lim, src)}", file=sys.stderr)  # O(1)
-            return None  # O(1)
+        text = refusal(m, flo, lim, src, why, bounds, run_workers, waiter)  # O(1)
         if time.monotonic() - t0 >= wait_s:  # O(1)
-            return f"machine busy after {el} s: {refusal(m, flo, lim, src, why)}; {gave_up(causes, el, m)}"  # O(1)
+            return f"machine busy after {el} s: {text}; {gave_up(causes, el, m, bounds)}"  # O(1)
         if not waited:  # O(1)
-            print(f"machine busy: {refusal(m, flo, lim, src, why)}; waiting up to {int(wait_s)} s for {what}", file=sys.stderr)  # O(1)
+            print(f"machine busy: {text}; waiting up to {int(wait_s)} s for {what}", file=sys.stderr)  # O(1)
             waited = True  # O(1)
+            register()  # O(1)
         time.sleep(poll_s)  # O(1)
 
 
