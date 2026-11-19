@@ -4,7 +4,7 @@
     run_tests.py [--fast PATHS... | --full | --affected [--base REV] [--files F...]] [--log PATH] [--ledger PATH]
                  [--summary PATH] [--background] [-m EXPR]
     run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] [--scope WORD] --command CMD   (a result run outside run_tests; mode `recorded` with its scope, default external, never the full run; report only, closes no incidents)
-    run_tests.py [--timeout S] [--summary PATH] --wait [PATH]
+    run_tests.py [--timeout S] [--summary PATH] --wait [PATH]   (without --timeout: the run's predicted remaining time + 60 s, at least 540 s, at most one harness call less 60 s, `BASH_MAX_TIMEOUT_MS` / 1000; a timeout line says how long the run is predicted to need and when the cap cut the wait)
 
 The test command comes from, in order: the project's `.superlite/test-cmd.json`, the main checkout's, the user-level entry for the detected language (`~/.config/superlite/test-cmd.json`), then detection.
 Every exit path leaves a summary: a usage error, an unknown task, a missing pytest, an unprepared tree or a crash (`run_tests crashed: ...`, exit 2) writes a red zero summary; `--wait` names a background run whose process died (its pid sits in `<summary>.pid`) and the log of one that timed out.
@@ -519,6 +519,58 @@ def read_pointer(summary):  # O(1)
         return None  # O(1)
 
 
+def call_cap(env=None) -> float:  # seconds one --wait may last: the harness call length (BASH_MAX_TIMEOUT_MS, else 600 s) less 60 s, half of it under 120 s | O(1)
+    raw = (os.environ if env is None else env).get("BASH_MAX_TIMEOUT_MS")  # O(1)
+    try:  # O(1)
+        call = float(raw) / 1000.0 if raw is not None else 600.0  # O(1)
+    except ValueError:  # O(1)
+        call = 600.0  # O(1)
+    if not call > 0 or call == float("inf"):  # zero, negative, nan or inf: the default | O(1)
+        call = 600.0  # O(1)
+    return call / 2 if call < 120 else call - 60  # O(1)
+
+
+def predicted_length(root, mode: str) -> tuple:  # (seconds, source text) the plan forecast gives for a run of this mode, else (None, None) | O(L)
+    try:  # O(1)
+        import predict_live  # predict_live imports run_tests, so not at module level | O(1)
+        t = predict_live.project_tests(Path(root), {})  # O(L)
+        minutes = t.get(f"{mode}_min")  # O(1)
+        if minutes is None:  # O(1)
+            return None, None  # O(1)
+        src = t.get(f"{mode}_source")  # O(1)
+        label = f"median of {t.get(f'{mode}_runs')} ledger runs" if src == "history" else f"run_min in {src}"  # O(1)
+        return float(minutes) * 60.0, label  # O(1)
+    except Exception:  # a forecast failure never blocks a run | O(1)
+        return None, None  # O(1)
+
+
+def write_run_meta(mine, started: float, mode: str, limit: float, root) -> None:  # <summary>.meta beside the summary: what --wait needs to size its wait | O(L)
+    predicted, source = predicted_length(root, mode)  # O(L)
+    atomic_write(Path(mine).with_suffix(".meta"), json.dumps({"started": started, "mode": mode, "limit": limit, "predicted": predicted, "predicted_from": source}) + "\n")  # O(1)
+
+
+def run_meta(mine):  # the run's .meta as a dict, else None | O(1)
+    try:  # O(1)
+        data = json.loads(Path(mine).with_suffix(".meta").read_text(encoding="utf-8"))  # O(1)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+    return data if isinstance(data, dict) else None  # O(1)
+
+
+def _pos(v):  # a number above 0, else None | O(1)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None  # O(1)
+
+
+def wait_seconds(meta, now: float, cap: float) -> tuple:  # (seconds the default --wait lasts, whether the cap cut it) | O(1)
+    expected = [v for v in (_pos((meta or {}).get("predicted")), _pos((meta or {}).get("limit"))) if v is not None]  # O(1)
+    started = _pos((meta or {}).get("started"))  # O(1)
+    if not expected or started is None:  # O(1)
+        return cap, False  # O(1)
+    want = min(expected) - (now - started) + 60.0  # O(1) remaining time plus the margin
+    want = max(want, min(DEFAULT_WAIT, cap))  # the prediction only lengthens a wait | O(1)
+    return (cap, True) if want > cap else (want, False)  # O(1)
+
+
 WAIT_CUE = "next: tests still running; run the wait line below now, in the foreground (never as a background command), and do not end your turn until it reports."  # O(1)
 
 
@@ -541,6 +593,10 @@ def start_background(a, argv):  # O(len argv) + one detached spawn
     proc = pyrun.spawn_detached(child, mine.with_suffix(".log"))  # O(1) + process spawn
     try:  # the pid lets --wait name a child that died without a summary | O(1)
         atomic_write(mine.with_suffix(".pid"), f"{proc.pid}\n")  # O(1)
+    except OSError:  # O(1)
+        pass  # O(1)
+    try:  # the meta lets --wait size its default wait | O(L)
+        write_run_meta(mine, ptr["started"], ptr["mode"], a.limit, Path("."))  # O(L)
     except OSError:  # O(1)
         pass  # O(1)
     print(f"summary: {mine}")  # O(1)
@@ -654,7 +710,9 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
     if mine is None:  # O(1)
         print("run_tests: no background run to wait for", file=sys.stderr)  # O(1)
         return 2  # O(1)
-    limit = a.timeout if a.timeout is not None else DEFAULT_WAIT  # O(1)
+    meta = run_meta(mine)  # O(1)
+    cap = call_cap(os.environ)  # O(1)
+    limit, capped = (a.timeout, False) if a.timeout is not None else wait_seconds(meta, time.time(), cap)  # O(1)
     deadline = time.monotonic() + limit  # O(1)
     redirected = False  # O(1)
     while True:  # O(timeout / POLL_SECONDS) iterations
@@ -686,7 +744,15 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
                 pid = int(mine.with_suffix(".pid").read_text(encoding="utf-8").strip())  # O(1)
             except (OSError, ValueError):  # O(1)
                 pass  # O(1)
-            alive = f" (pid {pid} still running)" if pid and pid > 0 and pid_alive(mine) else ""  # O(1)
+            parts = [f"pid {pid} still running"] if pid and pid > 0 and pid_alive(mine) else []  # O(1)
+            predicted = _pos((meta or {}).get("predicted"))  # O(1)
+            started = _pos((meta or {}).get("started"))  # O(1)
+            if predicted is not None and started is not None:  # O(1)
+                left = predicted - (time.time() - started)  # O(1)
+                parts.append(f"about {left:.0f} s left of a predicted {predicted:.0f} s run" if left >= 0 else f"{-left:.0f} s past its predicted {predicted:.0f} s")  # O(1)
+            if capped and a.timeout is None:  # O(1)
+                parts.append(f"one call waits at most {cap:g} s; BASH_MAX_TIMEOUT_MS raises it")  # O(1)
+            alive = f" ({'; '.join(parts)})" if parts else ""  # O(1)
             note = mine.with_suffix(".lockwait")  # O(1)
             adm = admission_note(note)  # O(file)
             if adm:  # the run still waits for the admission command | O(1)
@@ -1431,7 +1497,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                     help="start a detached run, print `summary: <path>`, exit 0")  # O(1)
     ap.add_argument("--wait", nargs="?", const="", default=None, dest="wait_path", metavar="PATH",  # O(1)
                     help="wait for PATH's run (the `summary:` line); bare: the latest background run")  # O(1)
-    ap.add_argument("--timeout", type=float, default=None, help=f"--wait limit in seconds (default {DEFAULT_WAIT:.0f})")  # O(1)
+    ap.add_argument("--timeout", type=float, default=None, help="--wait limit in seconds (default: the run's predicted remaining time + 60 s, at least 540 s, at most one harness call less 60 s)")  # O(1)
     ap.add_argument("--limit", type=float, default=DEFAULT_LIMIT, help="wall-clock seconds before the test command tree is killed (default %(default)g; 0 = none)")  # O(1)
     ap.add_argument("--lock-wait", type=float, default=DEFAULT_LOCK_WAIT, help="seconds a full run waits for the machine-wide full-suite lock (default 3600; 0 = no limit)")  # O(1)
     ap.add_argument("--task", default=None, help="task id: compiled stacks run in .superlite/trees/<task> (own files only); incidents carry it and a green run closes its red ones")  # O(1)
