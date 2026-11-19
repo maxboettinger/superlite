@@ -36,6 +36,8 @@ def test_steps_runs_empty_and_odd():
     assert io.steps_runs("") == []
     assert io.steps_runs("2 run: FAIL (red)") == []
     assert io.steps_runs("5 run X, 6 run X") == ["X"]
+    assert io.steps_runs("5 run failover_test.py") == ["failover_test.py"]
+    assert io.steps_runs("5 run PasswordTests") == ["PasswordTests"]
 
 
 def test_fast_line_offers_affected(tmp_path):

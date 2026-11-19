@@ -131,7 +131,7 @@ def steps_runs(steps):  # what a task's Steps line runs beyond its FAIL/PASS run
     for item in (steps or "").split(","):  # O(items) iterations
         m = RUN_ITEM.match(item)  # O(len)
         x = m.group(1).replace("`", "").strip() if m else ""  # O(len)
-        if x and not re.match(r"(?i)(fail|pass)", x) and x not in out:  # O(r)
+        if x and not re.match(r"(?i)(fail|pass)\b", x) and x not in out:  # O(r)
             out.append(x)  # O(1)
     return out  # O(1)
 
@@ -167,7 +167,7 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
             return f"`{sl_path} run_tests --full --task {tid}{dest} --background` (Tests: build, a build check)" + tail  # O(1)
         if not code:  # O(1)
             return None  # O(1)
-        return f"`{sl_path} run_tests --fast {' '.join(tests)} --task {tid}{dest} --background` (or `{sl_path} run_tests --affected --task {tid} --background`, which picks the tests your change touches)" + tail  # O(o)
+        return f"`{sl_path} run_tests --fast {' '.join(tests)} --task {tid}{dest} --background` (or `{sl_path} run_tests --affected --task {tid}{dest} --background`, which picks the tests your change touches)" + tail  # O(o)
     if ext:  # O(1)
         out += [f"Verify: `{sl_path} plan_tools external {tasks[0]} --plan {plan} --test` (its **Repo test:** command in the task's tree), not run_tests."]  # O(1)
     else:  # O(1)
