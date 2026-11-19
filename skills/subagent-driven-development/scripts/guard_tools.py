@@ -203,7 +203,7 @@ def _alias(words: list[str], i: int, al: str, cfg: dict[str, str], cwd: str | No
     """A -c alias of a subcommand that is no git command, judged as what it runs (one level deep)."""
     rest = words[i:]  # O(len(words))
     if al.startswith("!"):  # git runs a shell alias at the work tree's top  # O(len(al))
-        paths = _shell(al[1:] + "".join(" " + shlex.quote(a) for a in rest), False)  # O(len(al))
+        paths = _shell(al[1:] + "".join(" " + shlex.quote(a) for a in rest))  # O(len(al))
         if top and (cflag or _inside(cwd, top)):  # O(1)
             paths = [_join(top, p) for p in paths]  # O(len(paths))
         return paths  # O(len(paths))

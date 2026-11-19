@@ -143,3 +143,7 @@ def test_perl_chdir_makes_relative_unknown():
 ])
 def test_python_one_liner_import_rebinds_name(code):
     assert "?" in t("python3", "-c", code)
+
+
+def test_git_shell_alias_cd_makes_relative_unknown():
+    assert t("git", "-c", "alias.x=!cd src && rm a.py", "x") == ["?"]
