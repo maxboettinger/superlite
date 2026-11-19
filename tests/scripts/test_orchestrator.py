@@ -399,6 +399,8 @@ SDD_PINNED = (
     "Never pass `model` to a superlite agent.",
     # test_docs_affected_847.py
     "(or `--affected` for `--fast PATHS`)",
+    # test_sdd_scope_ruling_898.py
+    "a deliverable added, dropped or changed after approval: `Ruling: [scope] <decision> - <why> - <cost if wrong>` (`orchestrator.md` `## Scope rulings`).",
 )
 
 
