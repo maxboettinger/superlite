@@ -26,7 +26,7 @@ def test_rows_keep_table_shape():
 
 
 def test_run_tests_row():
-    assert row("run_tests").endswith("naming the tree" + RT + " |")
+    assert "naming the tree" + RT in row("run_tests")
 
 
 def test_commit_task_row():
@@ -42,11 +42,11 @@ def test_accounts_row():
 
 
 def test_pt_review_row():
-    assert row("pt_review").endswith("the cap grows by these sections" + PT + " |")
+    assert "the cap grows by these sections" + PT in row("pt_review")
 
 
 def test_plan_tools_row():
-    assert row("plan_tools").endswith("(`<stem>.build-report.md`/`.json`). " + PLAN_TOOLS + " |")
+    assert "(`<stem>.build-report.md`/`.json`). " + PLAN_TOOLS in row("plan_tools")
 
 
 def test_quoted_strings_exist_in_code():

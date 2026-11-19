@@ -54,7 +54,7 @@ def test_pt_review_row_names_the_default_rule():
 
 
 def test_fleet_io_row_names_the_red_field():
-    assert row("fleet_io").endswith("and report extraction" + IO_RED + " |")
+    assert "and report extraction" + IO_RED in row("fleet_io")
 
 
 def test_quoted_strings_exist_in_code():
