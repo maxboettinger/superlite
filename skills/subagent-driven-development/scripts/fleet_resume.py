@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Continue a stopped one-turn worker in its own session with a follow-up text (#808).
 
-    fleet_resume.py WID --text TEXT [--plan P]
+    sl fleet resume WID --text TEXT [--plan P]    (sl fleet_resume runs the same tool)
 
 `fleet wait` stops a one-turn worker (fixer, reviewer, research) once its status is final. This relaunches its agent with
 `--resume <session>` in a fresh pane (the helpers of `fleet_restore`), then sends TEXT as `fleet send --text` does (the report
@@ -21,7 +21,7 @@ import fleet_io  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
 
-CMD = "sl fleet_resume"  # the spelling every hint prints | O(1)
+CMD = "sl fleet resume"  # the spelling every hint prints | O(1)
 
 
 def _refuse(msg):  # O(1)
@@ -96,7 +96,7 @@ def resume(sd, wid, text):  # 0 resumed, 2 refused (nothing touched), 3 blocked 
 
 
 def main(argv=None):  # O(w + m) plus herdr calls
-    p = argparse.ArgumentParser(prog="fleet_resume.py")  # O(1)
+    p = argparse.ArgumentParser(prog="sl fleet resume")  # O(1)
     p.add_argument("wid")  # O(1)
     p.add_argument("--text", default="")  # O(1)
     p.add_argument("--plan")  # O(1)

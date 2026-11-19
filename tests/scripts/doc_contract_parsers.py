@@ -38,6 +38,7 @@ def _build_routes() -> dict:
         routes[("fleet", sub)] = ("fleet_io", "main")
     routes[("fleet", "run")] = ("fleet_layer", "main")
     routes[("fleet", "restore")] = ("fleet_restore", "main")
+    routes[("fleet", "resume")] = ("fleet_resume", "main")
     for sub in _tuple_const(scripts / "backlog.py", "ROUTED"):
         # backlog._start reads the repository state before it parses; its parser is backlog_run's "start" one
         routes[("backlog", sub)] = ("backlog_run", "main")

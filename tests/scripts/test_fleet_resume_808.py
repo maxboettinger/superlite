@@ -1,4 +1,4 @@
-# tests/scripts/test_fleet_resume_808.py: sl fleet_resume continues a stopped one-turn worker in its own session (#808)
+# tests/scripts/test_fleet_resume_808.py: sl fleet resume continues a stopped one-turn worker in its own session (#808)
 import json
 import pytest
 from test_fleet_io import world, io  # noqa: F401
@@ -170,7 +170,7 @@ def test_send_refusal_names_resume(stopped, fake, capsys):
     sd = io.state.resolve(str(stopped.sd))
     assert io.main(["send", "W1", "--text", "hi", "--plan", str(stopped.sd)]) == 2
     assert capsys.readouterr().err.strip() == (
-        f'error: W1 is stopped (package-reviewer, last task rev-T3); continue its session: sl fleet_resume W1 --text "..." --plan {sd}; '
+        f'error: W1 is stopped (package-reviewer, last task rev-T3); continue its session: sl fleet resume W1 --text "..." --plan {sd}; '
         f"or start a fresh one: sl fleet spawn --role package-reviewer --plan {sd}")
     patch(stopped, machine="mx")
     assert io.main(["send", "W1", "--text", "hi", "--plan", str(stopped.sd)]) == 2
