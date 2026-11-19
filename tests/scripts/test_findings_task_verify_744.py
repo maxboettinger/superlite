@@ -10,7 +10,7 @@ import findings  # noqa: E402
 from test_findings_route import put  # noqa: E402
 import run_tests  # noqa: E402
 
-PLAIN = "Verify: `/sl/sl run_tests --fast <the test files you touched> --background`, then run the printed `wait:` line in the foreground (never as a background command) and end your turn only after it reports."
+PLAIN = "Verify: `/sl/sl run_tests --fast <the test files you touched> --worker fix-F-T2-1 --background`, then run the printed `wait:` line in the foreground (never as a background command) and end your turn only after it reports."
 
 
 def f(file, line, tier=1):
@@ -72,7 +72,7 @@ def test_coordinator_brief_has_no_task_flag(run):
     (sd / "pool.json").write_text(json.dumps({"agents": [{"id": "W1", "busy": True, "current": "T1"}]}))
     findings.route(sd, plan, [report([f("src/a.py", 3)])], "/sl/sl")
     t = brief(sd, "F-C-1")
-    assert PLAIN in t.split("\n")
+    assert PLAIN.replace("fix-F-T2-1", "fix-F-C-1") in t.split("\n")
     assert "No `--task` here: the tasks owning these files are in progress, so the project's test command runs these files (a task's **Tests:** cmd= does not apply)." in t.split("\n")
     assert "--task T1" not in t
 

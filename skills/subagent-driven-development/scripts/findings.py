@@ -220,14 +220,19 @@ def task_cmd(task) -> str | None:  # the task's **Tests:** cmd= command, or None
     return testcmd.task_command(field("tests")) if field else None  # O(len)
 
 
-def shared_lines(sl_path: str, task_id: str | None = None, plan_file: Path | None = None, cmd: str | None = None, coordinator: bool = False) -> list[str]:  # O(1)
+def worker_name(fid: str) -> str:  # the run_tests --worker name of a fixer brief: fix-<first finding id>, 64 characters at most | O(s)
+    return ("fix-" + re.sub(r"[^A-Za-z0-9_-]", "-", fid))[:64]  # O(s)
+
+
+def shared_lines(sl_path: str, task_id: str | None = None, plan_file: Path | None = None, cmd: str | None = None, coordinator: bool = False, worker: str | None = None) -> list[str]:  # O(1)
     """The Per finding and Verify paragraphs every fixer brief holds."""
     tail = "then run the printed `wait:` line in the foreground (never as a background command) and end your turn only after it reports."  # O(1)
     if task_id and plan_file and cmd:  # O(1)
         verify = (f"Verify: `{sl_path} run_tests --fast <the test files you touched> --task {task_id} --plan {plan_file} --background` "  # O(1)
                   f"runs {task_id}'s **Tests:** cmd= (`{cmd}`; the paths are not passed to it), {tail}")  # O(1)
     else:  # O(1)
-        verify = f"Verify: `{sl_path} run_tests --fast <the test files you touched> --background`, {tail}"  # O(1)
+        wflag = f" --worker {worker}" if worker else ""  # O(1)
+        verify = f"Verify: `{sl_path} run_tests --fast <the test files you touched>{wflag} --background`, {tail}"  # O(1)
     out = ["",  # O(1)
            "Per finding: read `.superlite/fixes/<id>.md` first if it exists, and rewrite it when you finish (fixing.md format). "  # O(1)
            "Fix only these findings, one regression test each, except a doc- or comment-only fix (no code a test runs): "  # O(1)
@@ -311,7 +316,7 @@ def brief_text(sl_path: str, plan: Path, task, items: list[dict], tier: int, not
     lines += ["", *corr_lines(corr)] if corr else [""]  # O(1)
     lines.append("Findings:")  # O(1)
     lines += [finding_line(i) for i in items]  # O(k)
-    lines += shared_lines(sl_path, task.id, plan_file or plan, task_cmd(task))  # O(1)
+    lines += shared_lines(sl_path, task.id, plan_file or plan, task_cmd(task), worker=worker_name(items[0]["id"]))  # O(1)
     lines.append(f"Commit: `{sl_path} commit_task {task.id} --plan {plan}`")  # O(1)
     if not commit_task.autocommit.is_on():  # autocommit makes real commits: a dirty status then means files left uncommitted | O(1)
         lines.append(CHECKPOINT_RULE)  # O(1)
@@ -336,7 +341,7 @@ def coordinator_text(sl_path: str, plan: Path, items: list[dict], tier: int, run
     lines += ["", *corr_lines(corr)] if corr else [""]  # O(1)
     lines.append("Findings:")  # O(1)
     lines += [finding_line(i) for i in items]  # O(k)
-    lines += shared_lines(sl_path, coordinator=True)  # O(1)
+    lines += shared_lines(sl_path, coordinator=True, worker=worker_name(items[0]["id"]))  # O(1)
     lines.append(f"Commit: none by you: no committed task is free ({held} in progress). Do not run commit_task; "  # O(1)
                  "end your report with `commit: held for the coordinator` instead of the commit id. "  # O(1)
                  "The coordinator commits these files once those tasks are done.")  # O(1)
