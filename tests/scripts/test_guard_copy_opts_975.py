@@ -72,3 +72,18 @@ def test_option_after_operand_counts_every_operand(proj):
 ])
 def test_reads_that_stay_passing(proj, cmd):
     assert _j(proj, cmd) is None
+
+
+@pytest.mark.parametrize("opt", ["-Sbat", "-Stxt"])
+def test_suffix_value_with_t_is_no_target_directory(proj, opt):
+    import guard_judge
+    from types import SimpleNamespace
+
+    w = ["cp", opt, ".superlite/a/evil.sh", ".superlite/scratch/run.sh"]
+    c = SimpleNamespace(inn=[proj])
+    dst = proj + "/.superlite/scratch/run.sh"
+    st = SimpleNamespace(shared={"copied": [], "scripts": {dst: "echo hi\n"}, "wrote": set()}, made=set())
+    guard_judge._copy_reach(w, [False] * 4, c, st, "cp")
+    assert st.shared["copied"] == []  # -S owns "bat": no target folder, so no copy lands in a made-up one
+    guard_judge._copy_text(w, [False] * 4, c, st, set(), {})
+    assert dst not in st.shared["scripts"] or st.shared["scripts"][dst] is None  # the stale text is dropped

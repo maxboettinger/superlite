@@ -1781,7 +1781,7 @@ def _copy_text(w, wd, c, st, old, heredocs=None):  # O(w * d) | a cp/mv of one r
     optx, ops, maybe = _copy_words(w, wd, "cp")  # O(w * m)
     opts = [w[i] for i in optx]  # O(w)
     ops = [(x, dy) for x, dy, _i in ops]  # O(w)
-    if maybe or len(ops) < 2 or any(o != "--" and (not re.fullmatch(r"-[a-zA-Z]*", o) or "t" in o or "T" in o) for o in opts):  # a target-directory option or a long option: not read | O(w)
+    if maybe or len(ops) < 2 or any(o != "--" and (not re.fullmatch(r"-[a-zA-Z]*", o) or "t" in _cluster_flags(o, "cp")[0] or "T" in _cluster_flags(o, "cp")[0]) for o in opts):  # a target-directory option or a long option: not read | O(w)
         return  # O(1)
     safe = all(o == "--" or re.fullmatch(r"-[fpva]+", o) for o in opts)  # -n -u -i may skip the copy, -l -s link it: the destination gets no text | O(w)
     if any(dy or re.search(r"[$`*?\[{~]", x) for x, dy in ops):  # O(w)
@@ -1847,6 +1847,14 @@ def _copied(full, st):  # O(c) | may a copy of this call have written the path? 
     return False  # O(1)
 
 
+def _cluster_flags(x, base):  # O(m) | (the flag letters of a short cluster before its first value-taking letter, that letter's value text or None): -Sbat is -S with the value bat
+    vals = guard_files._SPEC.get(base, ("", "", None))[0]  # O(1)
+    for i, ch in enumerate(x[1:]):  # O(m)
+        if ch in vals:  # O(1)
+            return x[1:i + 2], x[i + 2:]  # O(1)
+    return x[1:], None  # O(1)
+
+
 def _copy_reach(w, wd, c, st, base):  # O(w * d) | note every path a cp/mv/install/rsync may give a file in this call: a glob, an unknown name or a folder tree counts as written, so running one is an unknown target (#883)
     optx, allops, maybe = _copy_words(w, wd, base)  # O(w * m)
     opts = [w[i] for i in optx]  # O(w)
@@ -1859,8 +1867,8 @@ def _copy_reach(w, wd, c, st, base):  # O(w * d) | note every path a cp/mv/insta
             elif i + 1 < len(w):  # O(1)
                 tdir = (w[i + 1], wd[i + 1])  # O(1)
                 skip.add(i + 1)  # O(1)
-        elif re.fullmatch(r"-[a-zA-Z]*t.*", x) and not x.startswith("--"):  # O(1)
-            rest = x.split("t", 1)[1]  # O(1)
+        elif re.fullmatch(r"-[a-zA-Z]*t.*", x) and not x.startswith("--") and _cluster_flags(x, base)[0].endswith("t"):  # a t after a value-taking letter (-Sbat) is that value's text | O(m)
+            rest = _cluster_flags(x, base)[1]  # O(m)
             if rest:  # -tDIR | O(1)
                 tdir = (rest, wd[i])  # O(1)
             elif i + 1 < len(w):  # O(1)
@@ -1884,7 +1892,7 @@ def _copy_reach_ops(w, wd, c, st, base, opts, ops, tdir):  # O(w * d) | the dest
     dest, srcs = ops[-1], ops[:-1]  # O(w)
     if dest[1] or re.search(r"[$`*?\[{~]", dest[0]):  # an unknown destination is judged as a target, not here | O(w)
         return  # O(1)
-    rec = base == "rsync" or any(o in ("--recursive", "--archive") or (not o.startswith("--") and re.search(r"[rRa]", o)) for o in opts)  # O(w)
+    rec = base == "rsync" or any(o in ("--recursive", "--archive") or (not o.startswith("--") and re.search(r"[rRa]", _cluster_flags(o, base)[0])) for o in opts)  # O(w)
     for d in c.inn:  # O(d)
         if d is None:  # O(1)
             continue  # O(1)
