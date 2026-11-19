@@ -53,7 +53,7 @@ NO_REVIEW = "BLOCKED: write the review plan first, then approve --review <path>"
 EXIT_BLOCKED = 4  # exit 3 already means "no Python" for sl | O(1)
 BLOCK = ("BLOCKED: human orchestrator selected, show the plan, ask for approval, then run sl orchestrator approve")  # O(1)
 RUN_FILES = ("stable.json", "prime.md", "prime-haiku.md", "pool.json", FILE, REPLIES,  # what `end` archives: markers, gate, | O(1)
-             "progress.md", "incidents.jsonl", "metrics.jsonl", "lint-log.jsonl", "chain-rulings.json",  # and the run's logs, so
+             "progress.md", "incidents.jsonl", "metrics.jsonl", "lint-log.jsonl", "dispatch-log.jsonl", "chain-rulings.json",  # and the run's logs, so
              "test-summary.json", "briefs")  # the next run starts clean (config, checkpoints and probes stay)
 KEEP_BRIEFS = ("lead.md", "lead-build.md")  # the lead's own briefs outlive `end` (#791) | O(1)
 NO_SESSION = "orchestrator: no session id (CLAUDE_CODE_SESSION_ID); set SUPERLITE_STATE_DIR instead"  # O(1)
