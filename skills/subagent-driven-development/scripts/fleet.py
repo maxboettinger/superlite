@@ -35,7 +35,7 @@ A primed worker whose pane shows the folder trust dialog gets Down, Enter and th
 While the run's fleet.json says off, `spawn` (both forms) starts nothing: `BLOCKED: fleet is off in <state dir>; run sl fleet on [--plan P] first ...`, exit 3 (#355).
 `stop` drops the worker's tree `worker-<id>` unless a live process marks it busy (#614).
 While the budget is paused (spend above the cap), every `spawn` that names a `--plan` refuses: `BLOCKED: fleet spawn: budget: paused: ...`, exit 3, before any pane.
-`spawn` (not `--for-dispatch`, which dispatch gates itself) refuses on a nearly full disk: `BLOCKED: fleet spawn: disk: ...`, exit 3; below the warn level it warns on stderr (#614).
+`spawn` (not `--for-dispatch`, which dispatch gates itself) refuses on a nearly full disk: `BLOCKED: fleet spawn: disk: ...`, exit 3; below the warn level it warns on stderr (#614). A local spawn from a launchd session other than Aqua, in a project that drives a Mac app, prints one `fleet: warning: launchd session ...` stderr line (#798).
 `sl fleet restore` re-launches every worker and lead of the run after a Herdr restart, each resuming its own Claude session; `status` names it after a worker found dead (#577).
 `spawn --for-review|--package ... --note FILE` appends FILE to the generated review brief under `## Coordinator notes` (#604).
 `spawn --role writer --brief F` needs an `Output: <file>` line in F: the writer may write only that file, inside the project or the run folder (#604).
@@ -1206,6 +1206,15 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
             return 3  # O(1) before any pane
         if level == "warn":  # O(1)
             print(f"fleet: {line}", file=sys.stderr)  # O(1)
+    if not a.machine:  # a local worker lands in this launchd session (#798) | O(1)
+        try:  # never blocks a spawn | O(1)
+            import gui_session  # noqa: E402 | O(1) lazy
+            import testcmd  # noqa: E402 | O(1) lazy
+            warn = gui_session.spawn_warning(testcmd.read_config(state.git_root(sd) or sd.parent))  # O(file)
+            if warn:  # O(1)
+                print(f"fleet: warning: {warn}", file=sys.stderr)  # O(1)
+        except Exception:  # noqa: BLE001 | O(1)
+            pass  # O(1)
     if a.for_dispatch:  # O(1)
         return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent, a.over_limit, a.machine_wait, a.machine, not forced)  # O(R * (spawn + send))
     if a.for_review is not None or a.package:  # O(1)
