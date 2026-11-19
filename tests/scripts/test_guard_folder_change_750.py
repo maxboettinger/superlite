@@ -124,3 +124,22 @@ def test_python_unreadable_escape_is_unknown():
 def test_node_newline_escape_in_shell_text():
     assert t("node", "-e", f"{CP}.execSync(\"cd src\\nrm a.py\")") == ["?"]
     assert t("node", "-e", f"{CP}.execSync(\"rm a.py\\nrm b.py\")") == ["a.py", "b.py"]
+
+
+def test_node_process_chdir_makes_relative_unknown():
+    assert t("node", "-e", f"process.chdir('src'); {CP}.execSync('rm a.py')") == ["?"]
+    assert guard_tools.unresolved() == FOLDER
+
+
+def test_perl_chdir_makes_relative_unknown():
+    assert t("perl", "-e", 'chdir("src"); system("rm a.py")') == ["?"]
+
+
+@pytest.mark.parametrize("code", [
+    's = "docs/x"; from cfg import s; open(s + "/a.py", "w")',
+    's = "docs/x"; import cfg as s; open(s + "/a.py", "w")',
+    's = "docs/x"\nif 1: from cfg import s\nopen(s + "/a.py", "w")',
+    's = "docs/x"\ntry: import cfg as s\nexcept Exception: pass\nopen(s + "/a.py", "w")',
+])
+def test_python_one_liner_import_rebinds_name(code):
+    assert "?" in t("python3", "-c", code)
