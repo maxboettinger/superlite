@@ -94,7 +94,7 @@ def test_collect_conflict_blocked(env):
     (env.proj / "src" / "a.py").write_text("local\n")
     out = frc.collect(env.sd, "W2", report())
     assert out["status"] == "BLOCKED"
-    assert out["concerns"] == [f"remote changes conflict with local edits: src/a.py (kept at refs/maxapp/box/{NAME}/superlite/remote/p-1a2b3c/W2/stop)"]
+    assert out["concerns"] == [f"remote changes conflict with local edits: src/a.py (kept at refs/maxapp/box/{NAME}/superlite/remote/p-1a2b3c/W2/stop); sl fleet collect W2 retries once those local edits are resolved"]
     assert (env.proj / "src" / "a.py").read_text() == "local\n"
     assert collected(env) is None
 
