@@ -73,6 +73,7 @@ def world(tmp_path, monkeypatch):
         return ("claude2@box", "/rh/.cfg2") if world_cfg.get("cdir") else ("claude1@box", None)
     world_cfg = {}
     monkeypatch.setattr(fra, "pick", pick)
+    monkeypatch.setattr(rw, "_took", lambda *a, **k: True)
     monkeypatch.chdir(proj)
     return type("W", (), {"git": staticmethod(git), "proj": proj, "sd": sd, "fh": fh, "panes": panes, "trees": th / "proj", "tmp": tmp_path, "picks": picks, "cfg": world_cfg, "base": base})
 

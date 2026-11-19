@@ -108,12 +108,17 @@ def test_collect_read_only_untouched(env):
     assert (env.proj / "src" / "a.py").read_text() == "one\n"
 
 
-def test_collect_no_snapshot(env):
+def test_collect_no_snapshot(env, monkeypatch):
     worker(env, snap=None)
     out = frc.collect(env.sd, "W2", report())
-    assert out["status"] == "BLOCKED" and out["concerns"] == ["remote worker W2 left no snapshot"]
+    assert out["status"] == "BLOCKED" and out["concerns"][0].startswith("remote worker W2 left no snapshot: its stop hook took none")
+    t = [0.0]
+    monkeypatch.setattr(frc, "now_s", lambda: t[0])
+    monkeypatch.setattr(frc, "sleep", lambda s: t.__setitem__(0, t[0] + s))
+    monkeypatch.setattr(frc.fr, "sync", lambda sd, wid: 0)
+    (env.sd / "remote" / "W2" / "metrics.jsonl").unlink()
     worker(env)  # no mirrored record at all
-    assert frc.collect(env.sd, "W2", report())["concerns"] == ["remote worker W2 left no snapshot"]
+    assert frc.collect(env.sd, "W2", report())["concerns"][0].startswith("remote worker W2 left no snapshot: no stop record of its task")
 
 
 def test_collect_fetch_error(env):
