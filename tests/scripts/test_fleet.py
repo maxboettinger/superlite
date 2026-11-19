@@ -48,7 +48,7 @@ class FakeHerdr:
     def prompt(self, name, text, until, timeout_ms): self.calls.append(("prompt", name, text)); return self.prompt_state
     def send_keys(self, name, keys): self.calls.append(("send_keys", name, keys))
     def wait_state(self, name, until, timeout_ms): self.calls.append(("wait_state", name, until)); return "idle"
-    def exit_agent(self, name): self.calls.append(("exit_agent", name))
+    def exit_agent(self, name, slash=False): self.calls.append(("exit_agent", name))
     def close_pane(self, pane_id):
         self.calls.append(("close_pane", pane_id))
         if pane_id in self.tab_panes: self.tab_panes.remove(pane_id)
