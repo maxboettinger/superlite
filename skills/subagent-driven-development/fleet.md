@@ -11,6 +11,8 @@ Fleet covers one taskgraph plan in one checkout: several tickets go into one pla
 Every worker's prime can carry files to read first: a plan header line `**Read first:** a, b` or a `"read_first": [...]` list in test-cmd.json becomes a `## Read first` section of the prime.
 
 Give every `fleet spawn` Bash call a timeout of 600000 ms: the shorter default stops a spawn that waits on a slow start (`fleet spawn stopped by ... give the Bash call a timeout of 600000 ms, then rerun`).
+
+A machine-gate refusal names its cause (pressure, swap, compressor, largest non-agent process; the free percentage only when the floor refused) and ends `gave up after K checks ...; room comes when ...`. Told to go on anyway, use `--over-limit --max-workers N --min-swap-free-mb M`: it still refuses at critical pressure, under M MB swap free while swap is in use, and at N live workers of the run; plain `--over-limit` has no bound. The gate admits a waiting review spawn (package or final reviewer) before a waiting implementer spawn. A failed usage check falls back to each account's last stored reading with its age (`using its reading from N h ago`), and `accounts skipped: a (...), b (...)` on stderr names the accounts passed over. A one-turn worker that does not take its brief is resent once, then `BLOCKED: Wn L not sent (brief not taken after one resend)`: rerun the spawn.
 By hand, one line: `fresh tier=T agent=TYPE`: `"$SL" fleet spawn --tier T --plan $PLAN` prints `Wn account=A pane=P agent=TYPE`; then `"$SL" fleet send Wn Tn [Tm ...] --plan $PLAN`. `agent=Wn`: `"$SL" fleet send Wn Tn --plan $PLAN`.
 
 Fleet workers start with no MCP server (`--strict-mcp-config`), except an implementer, fixer or package-reviewer of a project that needs one: the servers its test-cmd.json `"mcp"` list names, else `xcode` (`xcrun mcpbridge`; `XcodeOpenWorkspace` and `XcodeCloseWorkspace` denied) for a Swift or Xcode project on macOS. Each server is checked before the start (a macOS GUI session; `SUPERLITE_MCP_CHECK=0` skips the check) and a usage note goes into the worker's system prompt.
@@ -42,12 +44,15 @@ Low memory: Claude Code stops an idle session's background commands when the mac
   - ` partial` (a final reviewer's APPROVED that left packet lines unread): no approval; start a fresh final reviewer for the round.
   - `UNKNOWN` (no parsable report): `"$SL" fleet report Wn --plan $PLAN` prints the saved `.superlite/fleet/reports/<id>.md` (read-only; a busy worker or one with no collected report exits 1); read it once, then decide.
   - `NEEDS_CONTEXT`: answer with `"$SL" fleet send Wn --text "..."`, then wait again.
+- `findings=N` of a research or writer worker is its answer, not a failure: `--wave` keeps waiting (#903).
 - `Wn <label> ASKED`: the turn ended without a report; the worker was asked once. Wait again; a second miss reports UNKNOWN.
 - `Wn layer-L GREEN|RED exit=<n> <log path>` plus `  <last line>`: a layer result; read the log on RED.
 - `Wn Tn BLOCKED-UI <screen path>`: read the screen file; answer with `"$SL" fleet keys Wn KEY...` or `fleet send Wn --text "..."`, or treat the task as BLOCKED.
 - `TIMEOUT Wn Wm`: run `fleet wait` again.
 
 `"$SL" fleet status` lists workers; `reported` means the turn ended and `fleet wait Wn` collects it (`fleet report Wn` reads it first), `dead` (also `Wn <label> DEAD` from wait) means its agent is gone: the line names the fresh `fleet spawn`. `fleet send` to a stopped or dead worker exits 2 with that spawn line. `fleet stop Wn` or `--all` closes them. At freeze, `"$SL" fleet stop --all` runs before `trees clean` (no-op without fleet mode).
+
+A busy line ending ` waits on <command> <N min>` means a test or build command runs under the worker (run_tests, pytest, xcodebuild, maxapp test or build, ...): the worker is alive, and a `maxapp test` may wait queued on a busy build host. Never stop, resend or replace it; keep waiting with `fleet wait --wave`; only past twice the run's usual length ask it with `fleet send Wn --text`.
 
 Remote machines (#919): with `remote_room` and `remote_tree` in `~/.superlite/machine.json`, `fleet spawn` places a research, final-reviewer, implementer, fixer or package-reviewer worker on the machine with the most room and falls back to this Mac when a remote fails (`placement: <label> unavailable (...); local`); `--machine <label>` forces a machine, `--machine local` forces here, `fleet placement local|spread` switches it for the run.
 A remote write worker's result comes back as a snapshot applied to the local tree; a conflict is BLOCKED and writes nothing, so treat it like any BLOCKED worker. See docs/fleet.md "Remote machines".
