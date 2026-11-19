@@ -377,8 +377,21 @@ def _git_args(sub: str, args: list[str], base: str, cwd: str | None, why: list[s
         return whole()  # O(1)
     if sub in _GIT_OUT:  # a command that writes its output to a named file or folder  # O(len(args))
         return _git_out(sub, args, base)  # O(len(args))
-    if sub == "stash":  # O(1)
-        return whole() if ops and ops[0] in ("pop", "apply", "branch") else []  # O(1)
+    if sub == "stash":  # the first word that is not an option or an option's value is the subcommand; an unknown one may rewrite the tree (#750)  # O(1)
+        first, skip = None, False  # O(1)
+        for a in args:  # O(len(args))
+            if skip:  # O(1)
+                skip = False  # O(1)
+            elif a in ("-m", "--message", "--pathspec-from-file"):  # O(1)
+                skip = True  # O(1)
+            elif a == "--":  # O(1)
+                break  # O(1)
+            elif not a.startswith("-"):  # O(1)
+                first = a  # O(1)
+                break  # O(1)
+        if first is None or first in ("push", "save", "list", "show", "create", "store", "drop", "clear"):  # O(1)
+            return []  # O(1)
+        return whole()  # pop, apply, branch and a word that is not known  # O(1)
     if sub == "reset":  # O(1)
         for a in args:  # also shortened (--har); an unclear --m counts as --merge  # O(len(args))
             if a == "--":  # O(1)
@@ -623,6 +636,10 @@ _TEMP_NAMED = re.compile(r"\b(?:TMPDIR|TEMP|TMP|tempdir)\b")  # O(1)
 _PATH_CTORS = frozenset({"Path", "PurePath", "PosixPath", "WindowsPath", "PurePosixPath", "PureWindowsPath"})
 _JOINS = frozenset({"os.path.join", "posixpath.join", "ntpath.join", "path.join", "join"})
 _IDENT = re.compile(r"[A-Za-z_]\w*")
+_WALRUS = re.compile(r"(?<![\w$.])([A-Za-z_]\w*)\s*:=()(?!=)\s*")  # O(1) | NAME := value; group 2 is empty: a plain binding (#750)
+_ATTR_STORE = re.compile(r"\.\s*([A-Za-z_]\w*)\s*(?:[-+*/%|&^@]|//|\*\*|<<|>>)?=(?![=>])")  # O(1) | OBJ.NAME = v: the name may be a module's global (#750)
+_TEXT_STORE = re.compile(r"\bsetattr\s*\([^,()]*(?:\([^()]*\))?[^,()]*,\s*['\"](\w+)['\"]|\b(?:globals|vars|locals)\s*\(\s*\)\s*\[\s*['\"](\w+)['\"]|__dict__\s*\[\s*['\"](\w+)['\"]")  # O(1) | a name rebound through its text (#750)
+_IMPORT = re.compile(r"(?m)(?:^|[;:])[ \t]*(?:from\s+[\w.]+\s+)?import\s+(\([^)]*\)|[^\n;]*)")  # O(1) | the names an import statement binds (#750)
 _STR_OPEN = re.compile(r"([rRbBuUfF]{0,2})('''|\"\"\"|'|\")")
 
 
@@ -1045,6 +1062,16 @@ def _assigned(code: str, lang: str, scan: str | None = None,
     events += [(off, (name, vals)) for off, name, vals in params or []]  # a helper's parameter, at its def line  # O(len(params))
     events += [(m.start(), (m.end(), None, None)) for m in _WITH.finditer(scan)] if lang == "py" else []  # a `with` header, read in code  # O(len(code))
     other: set[str] = set()  # names bound by something other than `NAME = tempfile.TemporaryDirectory()`  # O(1)
+    if lang == "py":  # a walrus binds like `=`; an attribute store, an import and a text rebinding make the name unknown (#750)  # O(len(code))
+        events += [(m.start(), _WALRUS.match(code, m.start())) for m in _WALRUS.finditer(scan)]  # O(len(code))
+        for m in _ATTR_STORE.finditer(scan):  # O(len(code))
+            bad.add(m.group(1))  # O(1)
+        for m in _TEXT_STORE.finditer(code):  # O(len(code))
+            bad.add(next(g for g in m.groups() if g))  # O(1)
+        for m in _IMPORT.finditer(scan):  # O(len(code))
+            bad.update(_IDENT.findall(m.group(1)))  # O(len(m))
+            if "*" in m.group(1):  # any name may be bound  # O(len(m))
+                return {}  # O(1)
     events.sort(key=lambda e: e[0])  # O(events * log events)
     for _, m in events:  # O(events)
         known = {k: v for k, v in lits.items() if k not in bad}  # O(len(lits))
@@ -1295,7 +1322,71 @@ def _unq(m: re.Match, lang: str) -> str | None:  # O(len(text)) | a literal's te
     if (q == "`" and "${" in text) or (q == '"' and lang in ("php", "pl") and ("$" in text or "@" in text)) or (
             q == '"' and lang == "rb" and "#{" in text):  # O(len(text))
         return None  # O(1)
-    return re.sub(r"\\(.)", r"\1", text, flags=re.S)  # O(len(text))
+    pre = m.group(0).lstrip(" \t\r\n")[:-len(text) - 2].lower() if q != "`" else ""  # the string prefix (r, b, u)  # O(len(text))
+    if "r" in pre and lang == "py":  # a raw string keeps its backslashes  # O(1)
+        return text  # O(1)
+    return _decode_esc(text, lang, q, "b" in pre)  # O(len(text))
+
+
+_ESC_COMMON = {"n": "\n", "t": "\t", "r": "\r", "f": "\f", "\\": "\\", '"': '"'}  # O(1)
+_ESC_NUM = {  # the numeric escapes each language decodes (octal first; a bare \0 only where the language has just that)  # O(1)
+    "py": re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}"),
+    "pyb": re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}"),
+    "js": re.compile(r"0(?![0-9])|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|u\{[0-9A-Fa-f]{1,6}\}"),
+    "rb": re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}"),
+    "php": re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]{1,6}\}"),
+    "pl": re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}"),
+}
+_ESC_TAB = {  # the letter and sign escapes each language decodes to a known character; any other alphanumeric escape is unknown  # O(1)
+    "py": {**_ESC_COMMON, "'": "'", "a": "\a", "b": "\b", "v": "\v"},
+    "pyb": {**_ESC_COMMON, "'": "'", "a": "\a", "b": "\b", "v": "\v"},
+    "js": {**_ESC_COMMON, "'": "'", "b": "\b", "v": "\v", "`": "`"},
+    "rb": {**_ESC_COMMON, "s": " ", "a": "\a", "b": "\b", "e": "\x1b", "v": "\v", "`": "`"},
+    "php": {**_ESC_COMMON, "v": "\v", "e": "\x1b", "$": "$", "`": "`"},
+    "pl": {**_ESC_COMMON, "a": "\a", "b": "\b", "e": "\x1b", "$": "$", "@": "@", "`": "`"},
+}
+
+
+def _decode_esc(text: str, lang: str, q: str, byt: bool = False) -> str | None:  # O(len(text)) | the value of a string literal's text: its escapes decoded (None: an escape that language does not decode to a known character)
+    key = "pyb" if byt and lang == "py" else lang  # O(1)
+    tab, num = _ESC_TAB.get(key, _ESC_TAB["py"]), _ESC_NUM.get(key, _ESC_NUM["py"])  # O(1)
+    out: list[str] = []  # O(1)
+    i = 0  # O(1)
+    while i < len(text):  # O(len(text))
+        c = text[i]  # O(1)
+        if c != "\\":  # O(1)
+            out.append(c)  # O(1)
+            i += 1  # O(1)
+            continue  # O(1)
+        e = text[i + 1] if i + 1 < len(text) else ""  # O(1)
+        if lang in ("rb", "php", "pl") and q == "'":  # a single-quoted string reads only \\ and \'  # O(1)
+            out.append(e if e in ("\\", "'") else "\\" + e)  # O(1)
+            i += 2  # O(1)
+            continue  # O(1)
+        m = num.match(text, i + 1)  # O(1)
+        if m:  # O(1)
+            g = m.group(0)  # O(1)
+            if g[0] == "u" and g[1:2] == "{":  # O(1)
+                v = int(g[2:-1], 16)  # O(1)
+            elif g[0] in "xuU":  # O(1)
+                v = int(g[1:], 16)  # O(1)
+            else:  # O(1)
+                v = int(g, 8)  # O(1)
+            if v > 0x10FFFF or (v > 255 and key != "py" and g[0] not in "uU"):  # O(1)
+                return None  # O(1)
+            out.append(chr(v))  # O(1)
+            i = m.end()  # O(1)
+        elif e in tab:  # O(1)
+            out.append(tab[e])  # O(1)
+            i += 2  # O(1)
+        elif e == "\n" and lang in ("py", "js", "rb"):  # a line continuation  # O(1)
+            i += 2  # O(1)
+        elif e and not e.isalnum() and e != "\n":  # an escaped sign: python and php keep the backslash, the others drop it  # O(1)
+            out.append(("\\" + e) if lang in ("py", "php") and e not in "$\"'\\" else e)  # O(1)
+            i += 2  # O(1)
+        else:  # a letter or digit this language does not decode (\a in JS, \u in PHP, \N{..}, \u in bytes)  # O(1)
+            return None  # O(1)
+    return "".join(out)  # O(len(text))
 
 
 _WHY: list[str] = []  # O(1) | the reasons the last targets() call recorded for a subprocess call it names "?" (#705)
@@ -1528,13 +1619,35 @@ def _known(w: str) -> bool:  # O(len(w))
             or _PY.match(c) is not None)  # O(1)
 
 
-def _shell(text: str) -> list[str]:  # O(len(text) * |commands|) | the paths shell text writes
+def _shell(text: str, cd: bool = True) -> list[str]:  # O(len(text) * |commands|) | the paths shell text writes; cd: a later relative target after cd, pushd or popd is unknown (#750)
+    out, moved = _shell1(text, False, cd)  # O(len(text) * |commands|)
+    return out  # O(1)
+
+
+def _is_cd(words: list[str]) -> bool:  # O(len(words)) | does the command change the shell's folder?
+    k = 0  # O(1)
+    while k < len(words) and (_cmd(words[k]) in ("command", "builtin", "{") or words[k] in guard_lex._CONTROL or re.match(r"[A-Za-z_]\w*=", words[k])):  # O(w)
+        k += 1  # O(1)
+    if k < len(words) and _cmd(words[k]) == "eval":  # eval text that holds a cd moves the folder  # O(len(words))
+        return _shell1(" ".join(words[k + 1:]), False, True)[1]  # O(len(words))
+    return k < len(words) and _cmd(words[k]) in ("cd", "pushd", "popd", "chdir")  # O(1)
+
+
+def _shell1(text: str, moved: bool, cd: bool) -> tuple[list[str], bool]:  # O(len(text) * |commands|) | (the paths, whether a folder change came before the end)
     out: list[str] = []  # O(1)
+
+    def add(items: list[str]) -> None:  # O(len(items))
+        for t in items:  # O(len(items))
+            m = _in_dir(None, t) if moved else t  # O(len(t))
+            if m == "?" and t != "?":  # O(1)
+                _why("shell text changes folder (cd, pushd, popd)")  # O(1)
+            out.append(m)  # O(1)
+
     for seg in guard_lex.split(text):  # O(len(text))
         words = ["?" if d else w for w, d in zip(seg.words, seg.dyn)]  # O(w)
         if words and seg.dyn[0]:  # a command that is not literal  # O(1)
             out.append("?")  # O(1)
-        out.extend(_argv(words))  # O(w)
+        add(_argv(words))  # O(w)
         for r in seg.redirects:  # O(redirects)
             if r.op.startswith(("<<", "<")) and r.op != "<>":  # O(1)
                 continue  # O(1)
@@ -1544,13 +1657,19 @@ def _shell(text: str) -> list[str]:  # O(len(text) * |commands|) | the paths she
             if any(c in t for c in "$`") or t.startswith("~"):  # O(len(t))
                 out.append("?")  # O(1)
             elif guard_files._real(t):  # O(len(t))
-                out.append(t)  # O(1)
+                add([t])  # O(1)
         for body in list(seg.bodies) + ([seg.subshell] if seg.subshell else []):  # O(bodies)
-            out.extend(_shell(body))  # O(len(body))
-    return _uniq(out)  # O(len(out))
+            sub, m2 = _shell1(body, moved, cd)  # O(len(body))
+            out.extend(sub)  # O(len(sub))
+            moved = moved or m2  # a folder change inside ( ) or { } is not undone  # O(1)
+        if cd and _is_cd(words):  # O(w)
+            moved = True  # O(1)
+    return _uniq(out), moved  # O(len(out))
 
 
 def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the paths one command (decoded words) writes
+    while words and words[0] in guard_lex._CONTROL:  # a control word (then, do, !, ...) before the command word  # O(w)
+        words = words[1:]  # O(w)
     if not words:  # O(1)
         return []  # O(1)
     k = 0  # O(1)
@@ -1583,12 +1702,18 @@ def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the pat
     return _uniq(out)  # O(len(out))
 
 
+_SRC: list[str | None] = [None]  # O(1) | the code in hand, any language (#750)
 _CALL_FN: list[str] = [""]  # O(1) | the function name of the call being read
 
 
 def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(raw)) | os.system, subprocess.run, ...
+    whole = raw  # O(1)
+    if lang == "php" and _CALL_FN[0] == "proc_open" and raw[:1] == "(":  # the command is its first argument; the others are descriptors and the folder  # O(len(raw))
+        raw = "(" + _split_top(raw[1:-1])[0] + ")"  # O(len(raw))
     found = _cmd_words(raw, lang)  # O(len(raw))
     if found is None or _depth[0] >= 4:  # O(1)
+        if lang != "py" and _call_dir(args, lang, whole)[0]:  # O(len(raw))
+            return _why("subprocess folder option (cwd, chdir, proc_open cwd) is not followed")  # O(1)
         return ["?"]  # O(1)
     words, kinds = found  # O(1)
     if kinds[0]:  # the program, or the shell string, is not a literal (#705)  # O(1)
@@ -1597,7 +1722,7 @@ def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(ra
     cause = f"subprocess argument {k + 1} is not a string literal"  # the program is argument 1  # O(1)
     if 2 in kinds:  # an unpacked list or a `+` tail: any words, -c CODE too  # O(w)
         return _why(cause)  # O(1)
-    named, d = _call_dir(args, lang)  # O(len(args))
+    named, d = _call_dir(args, lang, whole)  # O(len(args))
     prev = _CALL_DIR[0]  # O(1)
     if named:  # O(1)
         _CALL_DIR[0] = None if prev is None or d is None else _join(prev, d)  # O(len(d))
@@ -1614,14 +1739,24 @@ def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(ra
     if named:  # O(len(out))
         moved = [_in_dir(d, t) for t in out]  # O(len(out))
         if any(m == "?" and t != "?" for m, t in zip(moved, out)):  # O(len(out))
-            _why("subprocess cwd= is not a string literal")  # O(1)
+            _why("subprocess cwd= is not a string literal" if lang == "py" else "subprocess folder option (cwd, chdir, proc_open cwd) is not followed")  # O(1)
         out = _uniq(moved)  # O(len(out))
     return out  # O(1)
 
 
-def _call_dir(args: list[Arg], lang: str) -> tuple[bool, str | None]:  # O(len(args)) | does a Python call name cwd=, and its folder (None: not a literal) (#728)
+def _call_dir(args: list[Arg], lang: str, raw: str = "") -> tuple[bool, str | None]:  # O(len(args) + len(raw)) | does a call name a folder, and its folder (None: not followed) (#728, #750)
     if lang != "py":  # O(1)
-        return False, ""  # O(1)
+        src = _SRC[0] or ""  # O(1)
+        if lang == "js":  # a cwd option in the call or in any object of the code (process.cwd() is a read)  # O(len(src))
+            hit = re.search(r"(?<![.\w$])cwd\s*(?::|(?=[,}]))|[\"'`]cwd[\"'`]|\bprocess\s*\.\s*chdir\b", raw + "\n" + src)  # O(len(src))
+        elif lang in ("rb", "pl"):  # O(1)
+            hit = re.search(r"\bchdir\b", raw + "\n" + src)  # O(len(src))
+        elif lang == "php":  # proc_open's fourth argument, or chdir()  # O(len(src))
+            parts = _split_top(raw[1:-1]) if _CALL_FN[0] == "proc_open" and raw[:1] == "(" else []  # O(len(raw))
+            hit = (len(parts) > 3 and parts[3].strip().lower() != "null") or re.search(r"\bchdir\s*\(", src)  # O(len(src))
+        else:  # O(1)
+            hit = None  # O(1)
+        return (True, None) if hit else (False, "")  # O(1)
     for k, v in args:  # O(len(args))
         if k == "cwd":  # O(1)
             if not isinstance(v, str) or not v or _UNK in v or v.startswith("~"):  # O(len(v))
@@ -2030,7 +2165,8 @@ def temp_root(text: str | None) -> str | None:  # O(len(text)) | tempfile's temp
 
 
 def _code(code: str, lang: str, root: str | None = None, file: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
-    prev, prev_t, prev_c = _NAMES[0], _TEMP[0], _CODE[0]  # O(1)
+    prev, prev_t, prev_c, prev_s = _NAMES[0], _TEMP[0], _CODE[0], _SRC[0]  # O(1)
+    _SRC[0] = code  # O(1)
     _TEMP[0] = root  # O(1)
     _CODE[0] = code if lang == "py" else None  # O(1)
     scan = code  # O(1)
@@ -2049,7 +2185,7 @@ def _code(code: str, lang: str, root: str | None = None, file: str | None = None
             _NAMES[0] = {**_NAMES[0], "__file__": [file]}  # O(len(names))
         return _code1(code, lang, scan)  # O(len(code) * |patterns|)
     finally:  # O(1)
-        _NAMES[0], _TEMP[0], _CODE[0] = prev, prev_t, prev_c  # O(1)
+        _NAMES[0], _TEMP[0], _CODE[0], _SRC[0] = prev, prev_t, prev_c, prev_s  # O(1)
 
 
 def _code1(code: str, lang: str, scan: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
