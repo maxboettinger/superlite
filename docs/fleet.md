@@ -134,6 +134,7 @@ Escalation: a lead that needs a major decision lets its workers finish, writes `
 - `BLOCKED: Wn no READY (pane R rows, C cols)`: the prime prompt did not land. Check with `herdr agent read sl-<repo>-<worktree>-wn`.
 - `agent_prompt_stalled` (a herdr error code, shown in the `error:` line): spawn resends the prime once; a second stall is BLOCKED. For a `fleet send` to a worker that was mid-turn: run `fleet wait`, then resend.
 - `Blocked: fleet is on` in a session that never ran `sl fleet on`: the folder the message names holds a fleet without `owner_session` (turned on before #495). When its run is finished, `sl fleet off --plan <that folder>`; to use it, `sl fleet on --plan <that folder>` takes it over.
+- `fleet: warning: launchd session <kind>, not Aqua: ...` (stderr, a spawn on this Mac; the spawn goes on): the test config launches or tests a Mac app and this session is not the desktop login session, so the new worker cannot launch or drive a Mac app window or run a macOS `xcodebuild test`; the line names the fallback (`swift test`, an iOS Simulator destination, or the logged-in desktop session). `SUPERLITE_GUI_CHECK=0` skips the check, and the run_tests GUI preflight with it (#798).
 
 ## Run root and task trees
 

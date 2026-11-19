@@ -1,0 +1,27 @@
+- unblocked: dispatched D1 P1 P2 S1 at 11:36:37; waiting on fixes: none
+Ruling: accept predicted 19 min - four independent one-task lanes, P1 alone is the critical path - cost: none, the batch has no edge
+- start 8c60fa5b8177e1f128fd6d497e888a5e543d250f
+- tests fast passed=0 failed=4 skipped=0 seconds=0.5
+- tests fast passed=0 failed=3 skipped=0 seconds=0.4
+- tests fast passed=1 failed=2 skipped=0 seconds=0.3
+- tests fast passed=3 failed=1 skipped=0 seconds=0.4
+- tests fast passed=3 failed=0 skipped=0 seconds=0.3
+- tests fast passed=3 failed=0 skipped=0 seconds=0.2
+- tests fast passed=31 failed=1 skipped=0 seconds=4.6
+- tests fast passed=32 failed=0 skipped=0 seconds=4.4
+- commit P1 c33072a031 nothing to plan names in progress
+- commit S1 6659ce62a1 SKILL names scope rulings
+- tests fast passed=3 failed=1 skipped=0 seconds=0.4
+- tests fast passed=4 failed=0 skipped=0 seconds=0.4
+- tests fast passed=3333 failed=0 skipped=5 seconds=199.0
+- commit P2 3bf8e0fcf6 testcmd prints cwd
+- commit D1 b084102960 docs lines for wait spawn wave0 plan
+- tests fast passed=42 failed=0 skipped=0 seconds=4.5
+- tests fast passed=4 failed=0 skipped=0 seconds=26.9
+- tests full passed=12199 failed=1 skipped=12 seconds=391.3
+- tests fast passed=2 failed=1 skipped=0 seconds=0.4
+- tests fast passed=5 failed=0 skipped=0 seconds=0.4
+- commit P1 0ccfe37f44 nothing to plan names in progress
+- tests fast passed=4 failed=0 skipped=0 seconds=22.8
+- tests full passed=12200 failed=0 skipped=12 seconds=465.9
+Ruling: skip evals - B245 edits only SDD SKILL.md (Rulings line and three wording trims) and commands/backlog.md step 2 prose; no eval case (ai-asks-once, ai-bounded-quiet, brainstorm-coverage, brainstorm-first, debug-flow, feature-routing, mvp-routing, setup-report) loads either file; headless green twice, full suite 12200 passed

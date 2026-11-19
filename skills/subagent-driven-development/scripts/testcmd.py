@@ -14,6 +14,7 @@ when the project has no file of its own; (b) detection from the project's own ma
 vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo.toml, Package.swift, *.sln / *.csproj, then Python
 (pyproject.toml, pytest.ini, setup.cfg, tox.ini, conftest.py, or test_*.py files); (c) otherwise None.
 `not_code` in (a) is a list of globs of paths that are not code (read by not_code_globs, returned as spec["not_code"]).
+`cwd` in (a) is the folder, relative to the project root (`.` is the root), that run_tests runs `setup` and the test command in (run_tests.run_folder checks it; unset: the `.maxapp` package folder, else the root); resolve returns it as written as spec["cwd"], `""` when unset, so `sl testcmd` prints it.
 `{only_testing}` expands (to `--only <Target>/<Suite>` pairs in a `maxapp test` command) to one shell-quoted -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing); the target comes from Xcode target membership and Package.swift test targets, else the folder name; a path in no test target runs the unfiltered `test` command.
 Library: resolve, file_slot_note (a {file} typo for {files} in a config's test or test_file, said once per process), propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, select_affected (the test files a change touches, by changed file, name, related template, Swift module, test-map and mention; a shared-setup change selects everything), pytest_testpaths, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit), xcsift_summary (the `summary` object's int `passed_tests`, `failed_tests` and `skipped_tests` and the `failed_tests` entries of xcsift's JSON, when no raw xcodebuild lines were printed). Stdlib only.
 """
@@ -1466,7 +1467,7 @@ def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
     lang = cfg.get("language") or "unknown"  # O(1)
     iso = cfg["isolate"] if isinstance(cfg.get("isolate"), bool) else lang in ISOLATE_LANGS  # explicit config wins | O(1)
     if cfg.get("test") is None and cfg.get("language") == "python":  # O(1)
-        return {"language": "python", "python": True, "command": None, "junit": "", "env": {}, "setup": "", "source": src, "origin": origin, "isolate": iso, "lock": lock_enabled(cfg), "destinations": destinations(cfg), "not_code": not_code_globs(cfg), "paths_dropped": False}  # O(1)
+        return {"language": "python", "python": True, "command": None, "junit": "", "env": {}, "setup": "", "source": src, "origin": origin, "isolate": iso, "lock": lock_enabled(cfg), "destinations": destinations(cfg), "not_code": not_code_globs(cfg), "cwd": cfg.get("cwd", ""), "paths_dropped": False}  # O(1)
     files = " ".join(f'"{p}"' if " " in p else p for p in paths)  # O(p)
     template = cfg.get("test_file") or cfg["test"]  # O(1)
     dropped = bool(paths) and not any(sl in template for sl in ("{files}", "{names}", "{only_testing}"))  # the command cannot take the paths | O(1)
@@ -1498,7 +1499,7 @@ def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
                 ids = " ".join("--only " + shlex.quote(t.split(":", 1)[1]) for t in shlex.split(ids))  # O(p)
             command = command.replace("{only_testing}", ids)  # O(p)
     return {"language": lang, "isolate": iso, "python": False, "command": command, "junit": cfg.get("junit") or "",  # O(1)
-            "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src, "origin": origin, "lock": lock_enabled(cfg), "destinations": destinations(cfg), "not_code": not_code_globs(cfg), "paths_dropped": dropped}  # O(1)
+            "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src, "origin": origin, "lock": lock_enabled(cfg), "destinations": destinations(cfg), "not_code": not_code_globs(cfg), "cwd": cfg.get("cwd", ""), "paths_dropped": dropped}  # O(1)
 
 
 NAME_PATTERNS = [r"^--- FAIL: (\S+)", r"^test (\S+) \.\.\. FAILED", r"^\s*(?:FAIL|✗|×|✕)\s+(.+?)\s*$", r"^\s*Failed\s+((?:[\w`]+(?:\.|::|/))+[\w`]\S*)",  # a dotted, `::` or path name: "Failed to connect" is no test | O(1)

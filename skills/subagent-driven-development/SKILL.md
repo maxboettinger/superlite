@@ -11,7 +11,7 @@ Shorthand: `SUPERLITE` = plugin root, two levels above this skill's "Base direct
 
 **You never edit code or run raw `pytest`; fixes go to fixer agents per `fixing.md`. Never pass `model` to a superlite agent.**
 
-**Rulings, not stalls.** Decide conflicts and plan defects (spec binds); append `Ruling: <decision> - <why> - <cost if wrong>` to `.superlite/progress.md`.
+**Rulings, not stalls.** Decide conflicts and plan defects (spec binds); append `Ruling: <decision> - <why> - <cost if wrong>` to `.superlite/progress.md`; a deliverable added, dropped or changed after approval: `Ruling: [scope] <decision> - <why> - <cost if wrong>` (`orchestrator.md` `## Scope rulings`).
 
 ## Setup
 
@@ -48,7 +48,7 @@ flowchart TB
   C -. both sides in .-> SM[pt_review contract seam]
 ```
 
-Keep `.superlite/pool.json` (agents: id, tasks, files, context_k, idle_min, busy, current, tier = the line's, T0 haiku). Sending a task sets `busy: true`, `current: Tn` (batch `Tn,Tm`); `commit_task` frees members singly. Never edit pool.json by hand (zsh: quote loop vars; `status`, `path` reserved): `"$SL" pool` (`add`, `busy`, `free`, `list`, `sync`) and `dispatch` (syncs first: real `context_k`, `idle_min` from transcripts, `busy` cleared by a newer stop record) keep it.
+Keep `.superlite/pool.json` (agents: id, tasks, files, context_k, idle_min, busy, current, tier = the line's, T0 haiku). Sending a task sets `busy: true`, `current: Tn` (batch `Tn,Tm`); `commit_task` frees members singly. Never edit pool.json by hand (zsh: quote loop vars; `status`, `path` reserved): `"$SL" pool` (`add`, `busy`, `free`, `list`, `sync`) and `dispatch` (syncs it first) keep it.
 
 1. `"$SL" dispatch --plan $PLAN --cap 10` prints per ready task, longest first: `Tn agent=ID tier=T`, `Tn poll ID,ID tier=T` or `Tn fresh tier=T agent=TYPE`; `Tn` may be a batch `Tn,Tm` (same tier, never critical-path; `--batch 1` turns it off). Tiers come from `config/routing.json` via lint, never overridden; a task goes only to an agent of its tier. Start all.
 2. Per line: `agent=ID`: SendMessage the task to that agent. `poll ID,ID`: one SendMessage to each listed agent, "Relevance 0-10 for Tn (files, consumes)? Reply `score: N - reason`"; next turn highest wins (tie: least `context_k`). `fresh tier=T agent=TYPE`: Agent TYPE with the message "Read <abs>/.superlite/prime.md, then reply READY" (haiku: `prime-haiku.md`), same text per tier; never paste the prime; send the task only after its reply `READY`, then register it: `"$SL" pool add ID --tier T --current Tn`. Idle agent: `"$SL" pool busy ID Tn[,Tm]`; `pool add --current Tn,Tm` for a batch. `evict=ID` (stderr): drop it. `dispatch` never offers a busy agent or one past `routing.json` limits (20 tasks, 80k, 50m). Stderr `unstable=Tn <reason>; rerun sl plan_tools lint --stable`: patch and re-lint; a FIX task held only by `depends on unstable <ids>` is offered once those ids are committed.
@@ -74,7 +74,7 @@ flowchart LR
 
 - One message per turn: all dispatches, reviews, background starts.
 - Every test run is `run_tests ... --background`; wait in Final review 2 and 5.
-- `run_tests` and `dispatch` refuse below 20 GB free (warn below 50) and remove trees of committed tasks and stopped workers; refused: `"$SL" trees clean`.
+- `run_tests` and `dispatch` refuse below 20 GB free (warn below 50); refused: `"$SL" trees clean`.
 
 ## Final review
 
@@ -100,7 +100,7 @@ flowchart TB
 
 ## Freeze, rulings, finish
 
-Green: freeze. Archive `incidents.jsonl`, `progress.md` by the plan. Run `"$SL" fleet stop --all` (no-op off fleet), `"$SL" trees clean` (also orphaned DerivedData; `--module-cache-hours 24` prunes module cache), delete what you created (simulators, build folders, `-derivedDataPath` folders in your session scratchpad), then `"$SL" finish --plan $PLAN`; print its rulings in your closing message under "Rulings I made" with cost, and its last block (report summary) before any merge or PR option; full: `<plan>.build-report.md`. Then invoke `superlite:finishing-a-development-branch`.
+Green: freeze. Archive `incidents.jsonl`, `progress.md` by the plan. Run `"$SL" fleet stop --all` (no-op off fleet), `"$SL" trees clean` (`--module-cache-hours 24` also prunes module cache), delete what you created (simulators, build folders, `-derivedDataPath` folders in your session scratchpad), then `"$SL" finish --plan $PLAN`; print its rulings in your closing message under "Rulings I made" with cost, and its last block (report summary) before any merge or PR option; full: `<plan>.build-report.md`. Then invoke `superlite:finishing-a-development-branch`.
 
 ## Stop conditions
 
