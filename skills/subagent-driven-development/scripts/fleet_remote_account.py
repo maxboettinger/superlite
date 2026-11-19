@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Account mirroring for remote fleet workers: the account a local spawn would pick, mapped to the host.
 
-`pick(sd, label, model, env, remote_home, local_home)` runs `fleet.choose_account` (a ready remote worker counts like a local one) and returns
+`pick(sd, label, model, env, remote_home, local_home)` runs `fleet.choose_account` with the pair's signed-out accounts as `avoid` (a ready remote worker counts like a local one) and returns
 `("<account>@<label>", <config dir on the host or None for the default dir>)`; `login_screen(text)` is true for Claude Code's sign-in screen.
 """
 # Complexity notation:
@@ -25,14 +25,7 @@ def signed_out_account(why):  # O(l): the account name a sign-in failure reason 
 def pick(sd, label, model, env, remote_home, local_home=None):  # O(a * e + w) plus herdr and usage calls
     import fleet  # noqa: PLC0415 | O(1) fleet imports this module's callers
     import fleet_placement  # noqa: PLC0415 | O(1)
-    out = fleet_placement.signed_out_pairs(sd, label)  # O(k)
-    orig = fleet.signed_out_accounts  # O(1)
-    if out:  # choose_account reads fleet.signed_out_accounts: wrap it for this one call | O(1)
-        fleet.signed_out_accounts = lambda *a, **k: orig(*a, **k) | out  # O(w)
-    try:  # O(1)
-        account, cdir, _ = fleet.choose_account(sd, model, env)  # O(a * e + w)
-    finally:  # O(1)
-        fleet.signed_out_accounts = orig  # O(1)
+    account, cdir, _ = fleet.choose_account(sd, model, env, avoid=fleet_placement.signed_out_pairs(sd, label))  # O(a * e + w)
     name = f"{account}@{label}"  # O(1)
     if ac.is_default_dir(cdir, env):  # the host's own default dir: leave CLAUDE_CONFIG_DIR unset | O(1)
         return name, None  # O(1)

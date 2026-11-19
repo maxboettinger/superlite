@@ -110,7 +110,9 @@ def test_follow_into_a_run_moves(tmp_path, marker):
     session_fleet(S)
     W.mkdir()
     (W / marker).write_text('{"on": false}' if marker == "fleet.json" else "{}")
-    assert fs.follow(W, "s1") == {"from": str(S.resolve()), "to": str(W.resolve()), "workers": 1}
+    r = fs.follow(W, "s1")
+    assert (r["from"], r["to"], r["workers"]) == (str(S.resolve()), str(W.resolve()), 1)
+    assert (W / "fleet.json").is_symlink()
 
 
 def test_plan_dir_bare_value_walks_to_nearest_run(tmp_path, monkeypatch):

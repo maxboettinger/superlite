@@ -74,14 +74,11 @@ def test_machine_skip_keeps_pairs(env):
 def test_pick_skips_signed_out_pair(env, monkeypatch):
     import time
     fp.skip(env.sd, "box", WHY, now=time.time())
-    orig = fleet.signed_out_accounts
 
     def choose(sd, model, e, avoid=None, lead=False):
-        out = fleet.signed_out_accounts(sd)
-        a = "claude1" if "claude2" in out else "claude2"
+        a = "claude1" if "claude2" in (avoid or ()) else "claude2"
         return a, "/Users/u/.claude-" + a, a
     monkeypatch.setattr(fleet, "choose_account", choose)
     e = {"HOME": "/Users/u"}
     assert fra.pick(env.sd, "box", "sonnet", e, "/home/u", "/Users/u")[0] == "claude1@box"
     assert fra.pick(env.sd, "other", "sonnet", e, "/home/u", "/Users/u")[0] == "claude2@other"
-    assert fleet.signed_out_accounts is orig

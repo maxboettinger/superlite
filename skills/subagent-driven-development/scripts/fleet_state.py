@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""The run's fleet state, `<run>/.superlite/fleet.json`: on/off, accounts, workspace and workers.
+"""The run's fleet state: on/off, accounts, workspace and workers.
 
+With a session id the fleet file lives in a session folder `~/.superlite/fleets/<name>/fleet.json` and each run it serves holds
+`<run>/.superlite/fleet.json` as a symlink to it (#786); `path` returns the file the link names, so `load`, `save` and `locked` follow it.
 `remember` stores per session, in `~/.superlite/sessions/<sid>.fleet`, the folder that holds the session's fleet; `session_fleet` reads it
-back; `follow` moves that fleet into the folder a later fleet command or session binding names and leaves `moved_to` behind, which `home`
-follows; each worker record keeps the `state_dir` its stop hook writes to."""
+back; `follow` links a further run to it (first moving a fleet kept as a plain file in a run into the session folder); `home` still
+follows the `moved_to` an old run left; each worker record keeps the `state_dir` its stop hook writes to."""
 
 # Complexity notation:
 # w = workers in the fleet, p = panes of a tab, a = agents herdr lists
@@ -28,7 +30,68 @@ def default():  # O(1)
 
 
 def path(sd):  # O(1)
-    return Path(sd) / "fleet.json"  # O(1)
+    """The fleet file of the run `sd`: the file its `fleet.json` link names, else `sd/fleet.json`."""
+    p = Path(sd) / "fleet.json"  # O(1)
+    if p.is_symlink():  # O(1)
+        with contextlib.suppress(OSError):  # O(1)
+            t = Path(os.readlink(p))  # O(1)
+            return t if t.is_absolute() else p.parent / t  # O(1)
+    return p  # O(1)
+
+
+def link(sd, home):  # O(1)
+    """Make `sd/fleet.json` an absolute symlink to `home/fleet.json` (a temp link, then an atomic replace)."""
+    d = Path(sd)  # O(1)
+    tmp = d / f"fleet.json.{os.getpid()}.lnk"  # O(1)
+    try:  # O(1)
+        tmp.unlink(missing_ok=True)  # O(1)
+        os.symlink(str(Path(home).resolve() / "fleet.json"), tmp)  # O(1)
+        os.replace(tmp, d / "fleet.json")  # O(1)
+    except BaseException:  # O(1)
+        with contextlib.suppress(OSError):  # O(1)
+            tmp.unlink(missing_ok=True)  # O(1)
+        raise  # O(1)
+
+
+def _fleets():  # O(1)
+    import state  # O(1)
+    return state.home() / "fleets"  # O(1)
+
+
+def _is_home(d):  # O(1)
+    """Whether the resolved folder `d` is a session folder under `~/.superlite/fleets`."""
+    return d.parent == _fleets().resolve()  # O(1)
+
+
+def new_home(sid):  # O(n) n = folders of the session
+    """The session folder for a new fleet: `<sid>`, else `<sid>-2`, ... while the earlier one holds a fleet that is on."""
+    n = 1  # O(1)
+    while True:  # O(n) iterations
+        d = _fleets() / (sid if n == 1 else f"{sid}-{n}")  # O(1)
+        if not is_on(d):  # O(w)
+            return d  # O(1)
+        n += 1  # O(1)
+
+
+def prune(keep=()):  # O(f) f = files under the fleet folders
+    """Drop the session folders whose newest file is older than `state.PRUNE_S`, never one of `keep`."""
+    import state  # O(1)
+    import time  # O(1)
+    now = time.time()  # O(1)
+    held = {Path(k).resolve() for k in keep}  # O(k)
+    try:  # O(1)
+        folders = list(_fleets().iterdir())  # O(f)
+    except OSError:  # O(1)
+        return  # O(1)
+    for d in folders:  # O(f)
+        try:  # O(1)
+            if not d.is_dir() or d.resolve() in held:  # O(1)
+                continue  # O(1)
+            newest = max(f.stat().st_mtime for f in (d, *d.rglob("*")))  # O(f)
+            if now - newest > state.PRUNE_S:  # O(1)
+                shutil.rmtree(d, ignore_errors=True)  # O(f)
+        except OSError:  # O(1)
+            continue  # O(1)
 
 
 def load(sd):  # O(w)
@@ -44,15 +107,20 @@ def load(sd):  # O(w)
 
 @contextlib.contextmanager  # O(1)
 def locked(sd):  # O(1) plus wait for the lock
-    p = path(sd)  # O(1)
-    p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
-    with open(p.with_name(p.name + ".lock"), "a") as lf:  # O(1)
-        fcntl.flock(lf, fcntl.LOCK_EX)  # O(1) blocks until free
-        yield  # O(1)
+    """Lock the fleet file `path(sd)`; when the file became a link while waiting, lock the file it names (at most 5 tries)."""
+    for i in range(5):  # O(1) iterations (5)
+        p = path(sd)  # O(1)
+        p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+        with open(p.with_name(p.name + ".lock"), "a") as lf:  # O(1)
+            fcntl.flock(lf, fcntl.LOCK_EX)  # O(1) blocks until free
+            if i == 4 or path(sd) == p:  # O(1)
+                yield  # O(1)
+                return  # O(1)
 
 
 def save(sd, data):  # O(w), atomic
     p = path(sd)  # O(1)
+    p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=p.name + ".", suffix=".tmp")  # O(1) unique temp file
     try:  # O(1)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:  # O(1)
@@ -87,7 +155,7 @@ def pointer_path(sid):  # O(1)
 
 
 def remember(sd, sid=None):  # O(1)
-    """Record that the session's fleet lives in `sd`; None without a session id or when the write fails."""
+    """Record that the session's fleet lives in the folder holding `sd`'s fleet file; None without a session id or when the write fails."""
     if sid is None:  # O(1)
         import state  # O(1)
         sid = state.session_id()  # O(1)
@@ -96,7 +164,7 @@ def remember(sd, sid=None):  # O(1)
     p = pointer_path(sid)  # O(1)
     try:  # O(1)
         p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
-        p.write_text(str(Path(sd).resolve()) + "\n", encoding="utf-8")  # O(1)
+        p.write_text(str(path(sd).parent.resolve()) + "\n", encoding="utf-8")  # O(1)
     except OSError:  # O(1)
         return None  # O(1)
     return p  # O(1)
@@ -132,32 +200,33 @@ def home(sd):  # O(w)
     return d  # O(1)
 
 
-def _copy_tree(src, dst):  # O(f) f = files under src
-    """Copy the report tree; False when a file failed to copy (the rest still copy)."""
-    ok = True  # O(1)
-    root = src / "fleet"  # O(1)
-    if not root.is_dir():  # O(1)
-        return ok  # O(1)
-    for f in sorted(root.rglob("*")):  # O(f)
-        if f.is_symlink() or not f.is_file():  # O(1)
-            continue  # O(1)
-        t = dst / "fleet" / f.relative_to(root)  # O(1)
-        if t.exists():  # O(1)
-            continue  # O(1)
-        try:  # O(1)
-            t.parent.mkdir(parents=True, exist_ok=True)  # O(1)
-            shutil.copy2(f, t)  # O(size)
-        except OSError:  # O(1)
-            ok = False  # O(1)
-    return ok  # O(1)
-
-
 def _blocked(src, sd):  # O(w)
     return any(w.get("role") == "lead" and w.get("state") != "stopped" for w in load(src)["workers"].values())  # O(w)
 
 
-def follow(sd, sid=None, fallback=None, named=False):  # O(w + f)
-    """Move the session's fleet into `sd`; {"from", "to", "workers"} when it moved, else None. A folder without run state is a target only when named (`fleet on`)."""
+def _adopt(sd, sid, check=None):  # O(w)
+    """Move the plain fleet file of the run `sd` into a new session folder and link the run to it; the folder, or None on a failure (the run keeps its file)."""
+    h = new_home(sid).resolve()  # O(n)
+    with locked(sd):  # O(1)
+        if check is not None and not check():  # O(w)
+            return None  # O(1)
+        data = load(sd)  # O(w)
+        for w in data["workers"].values():  # O(w)
+            w.setdefault("state_dir", str(Path(sd).resolve()))  # O(1)
+        try:  # O(1)
+            save(h, data)  # O(w)
+            link(sd, h)  # O(1)
+        except OSError:  # O(1)
+            with contextlib.suppress(OSError):  # O(1)
+                (h / "fleet.json").unlink(missing_ok=True)  # O(1)
+            return None  # O(1)
+    return h  # O(1)
+
+
+def follow(sd, sid=None, fallback=None, named=False):  # O(w)
+    """Link the run `sd` to the session's fleet; {"from", "to", "home", "workers", "line"} when something changed, else None.
+
+    A fleet still kept as a plain file in a run folder moves into the session folder first. A folder without run state is a target only when named (`fleet on`)."""
     if sid is None:  # O(1)
         import state  # O(1)
         sid = state.session_id()  # O(1)
@@ -171,25 +240,46 @@ def follow(sd, sid=None, fallback=None, named=False):  # O(w + f)
         import state  # O(1)
         if not state.holds_run_state(target):  # O(1)
             return None  # O(1)
-    if src is None or src.resolve() == target or is_on(sd) or _blocked(src, sd):  # O(w)
+    if src is None:  # O(1)
         return None  # O(1)
-    src = src.resolve()  # O(1)
-    first, second = sorted([src, target], key=str)  # O(1)
-    with locked(first), locked(second):  # O(1)
-        if not _owned(src, sid) or is_on(target) or _blocked(src, target):  # O(w)
-            return None  # O(w)
-        data = load(src)  # O(w)
-        for w in data["workers"].values():  # O(w)
-            w.setdefault("state_dir", str(src))  # O(1)
-        if not _copy_tree(src, target):  # O(f)
-            return None  # O(1); the source stays the only fleet
-        save(target, data)  # O(w)
-        save(src, {**default(), "moved_to": str(target)})  # O(1)
-    remember(target, sid)  # O(1)
-    return {"from": str(src), "to": str(target), "workers": sum(1 for w in data["workers"].values() if w.get("state") != "stopped")}  # O(w)
+    run = path(src).parent.resolve()  # O(1) the folder holding the fleet file
+    plain = not _is_home(run)  # O(1)
+    if _blocked(src, sd) or (is_on(target) and not (plain and run == target)):  # O(w)
+        return None  # O(w)
+    held, origin, lines = run, str(run), []  # O(1)
+    if plain:  # O(1)
+        held = _adopt(run, sid, lambda: _owned(run, sid) and not _blocked(run, run) and not _is_home(path(run).parent.resolve()))  # O(w)
+        if held is None:  # O(1)
+            return None  # O(1)
+        lines.append(f"fleet: this session's fleet moved from {run} to {held} ({_count(held)} workers)")  # O(w)
+        remember(held, sid)  # O(1)
+    if not (plain and run == target):  # O(1)
+        first, second = sorted([target, held], key=str)  # O(1)
+        try:  # O(1)
+            with locked(first), (locked(second) if first != second else contextlib.nullcontext()):  # O(1)
+                if is_on(target):  # O(w)
+                    return _result(origin, target, held, lines) if lines else None  # O(w)
+                link(target, held)  # O(1)
+        except OSError:  # O(1)
+            return _result(origin, target, held, lines) if lines else None  # O(w)
+        lines.append(f"fleet: this session's fleet in {held} now also serves {target} ({_count(held)} workers)")  # O(w)
+        remember(held, sid)  # O(1)
+    return _result(origin, target, held, lines)  # O(w)
+
+
+def _count(h):  # O(w)
+    return sum(1 for w in load(h)["workers"].values() if w.get("state") != "stopped")  # O(w)
+
+
+def _result(origin, target, held, lines):  # O(w)
+    return {"from": origin, "to": str(target), "home": str(held), "workers": _count(held), "line": "\n".join(lines)}  # O(w)
 
 
 def set_on(sd, label, accounts):  # O(w)
+    import state  # O(1)
+    sid = state.session_id()  # O(1)
+    if sid is not None and not ((Path(sd) / "fleet.json").is_symlink() and path(sd).exists()):  # O(1)
+        _adopt(sd, sid)  # O(w) a run without a live linked fleet gets one in its session folder
     with locked(sd):  # O(1)
         data = load(sd)  # O(w)
         data.update({"on": True, "label": label, "accounts": list(accounts)})  # O(a)
@@ -199,12 +289,15 @@ def set_on(sd, label, accounts):  # O(w)
         data.update(owner())  # O(1)
         save(sd, data)  # O(w)
     remember(sd)  # O(1)
+    prune((path(sd).parent,))  # O(f)
     return data  # O(1)
 
 
 def set_off(sd):  # O(1)
     with locked(sd):  # O(1)
         path(sd).unlink(missing_ok=True)  # O(1)
+        if (Path(sd) / "fleet.json").is_symlink():  # O(1)
+            (Path(sd) / "fleet.json").unlink()  # O(1)
 
 
 def next_id(sd):  # O(w)

@@ -382,7 +382,7 @@ def bind(sd, sid=None, force=False):  # O(b + d)
             import fleet_state  # noqa: E402 | O(1) lazy
             r = fleet_state.follow(sd, sid, fallback=old)  # O(w)
             if r:  # O(1)
-                print(f"fleet: this session's fleet moved from {r['from']} to {r['to']} ({r['workers']} workers)", file=sys.stderr)  # O(1)
+                print(r["line"], file=sys.stderr)  # O(1)
         except Exception:  # noqa: BLE001 | a fleet that cannot move must not fail the binding | O(1)
             pass  # O(1)
     return sid  # O(1)

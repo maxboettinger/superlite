@@ -9,7 +9,7 @@ def test_fleet_md_names_follow():
     t = (SDD / "fleet.md").read_text()
     assert "follows the session" in t
     assert "before a plan, $PLAN is the worktree's .superlite" in t
-    assert "fleet: this session's fleet moved from" in (SDD / "scripts" / "fleet.py").read_text()
+    assert "fleet: this session's fleet moved from" in (SDD / "scripts" / "fleet_state.py").read_text()
 
 
 def test_fixing_md_names_post_run_fixer():
