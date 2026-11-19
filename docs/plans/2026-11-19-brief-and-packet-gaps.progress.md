@@ -1,0 +1,39 @@
+- start eee19e7c56758074709857049d64862d5f6c8019
+- unblocked: dispatched T1 T2 T3 at 14:14:41; waiting on fixes: none
+- tests fast passed=0 failed=1 skipped=0 seconds=0.3
+- tests fast passed=2 failed=3 skipped=0 seconds=1.6
+- tests fast passed=40 failed=0 skipped=0 seconds=0.9
+- tests fast passed=133 failed=0 skipped=0 seconds=26.5
+- tests fast passed=29 failed=0 skipped=0 seconds=0.4
+- tests fast passed=5 failed=0 skipped=0 seconds=0.2
+- tests fast passed=2 failed=3 skipped=0 seconds=0.3
+- tests fast passed=29 failed=0 skipped=0 seconds=0.4
+- commit T1 7cd879c028 packet cut code not fast
+- commit T2 056ddd6f6e resume brief progress lines
+- commit T3 e22c71eb00 brief check at send
+- tests fast passed=40 failed=0 skipped=0 seconds=1.0
+- tests fast passed=869 failed=0 skipped=0 seconds=157.0
+- tests fast passed=29 failed=0 skipped=0 seconds=1.9
+- tests full passed=12605 failed=0 skipped=12 seconds=314.1
+- tests fast passed=5 failed=1 skipped=0 seconds=0.4
+- tests fast passed=6 failed=0 skipped=0 seconds=4.8
+- tests fast passed=9 failed=1 skipped=0 seconds=1.4
+- commit T2 a4719a4ea7 resume brief progress lines
+- tests fast passed=10 failed=0 skipped=0 seconds=1.5
+- commit T3 8682985405 brief check at send
+- tests full passed=12607 failed=0 skipped=12 seconds=447.8
+- tests fast passed=4 failed=1 skipped=0 seconds=2.4
+- tests fast passed=5 failed=0 skipped=0 seconds=2.1
+- commit T1 5755eb9a2a packet cut code not fast
+- tests full passed=12607 failed=0 skipped=12 seconds=1006.9
+- tests fast passed=6 failed=1 skipped=0 seconds=0.5
+- tests fast passed=7 failed=0 skipped=0 seconds=0.4
+- commit T2 5f22bc1219 resume brief progress lines
+- tests fast passed=10 failed=1 skipped=0 seconds=1.5
+- tests fast passed=11 failed=0 skipped=0 seconds=1.4
+- commit T3 82c7dea995 brief check at send
+- tests full passed=12609 failed=0 skipped=12 seconds=392.1
+- tests fast passed=11 failed=1 skipped=0 seconds=1.1
+- tests fast passed=12 failed=0 skipped=0 seconds=1.2
+- commit T3 7048d11939 brief check at send
+- tests full passed=12610 failed=0 skipped=12 seconds=440.6

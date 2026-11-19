@@ -272,6 +272,21 @@ def _planning(path: str) -> bool:  # O(size of the brief)
 
 
 def brief_message(role: str, path: str, full: bool = False) -> str:  # O(size of the brief)
+    """`_brief_line` plus, for every role but the final reviewer, the brief check's note (stderr gets each problem too)."""
+    text = _brief_line(role, path, full)  # O(size of the brief)
+    if role == "final-reviewer":  # O(1)
+        return text  # O(1)
+    try:  # a failing check leaves the text unchanged | O(1)
+        import brief_check as bc  # noqa: E402 | O(1)
+        found = bc.problems(path)  # O(size of the brief)
+        for item in found:  # O(1)
+            print(f"brief check: {path}: {item}", file=sys.stderr)  # O(1)
+        return f"{text} {bc.note(found)}" if found else text  # O(1)
+    except Exception:  # O(1)
+        return text  # O(1)
+
+
+def _brief_line(role: str, path: str, full: bool = False) -> str:  # O(size of the brief)
     """The one line a worker gets for a brief file: read PATH, then how to end the reply (the final reviewer has its
     own, a packet and a json block after its `Checked:` lines; a lead whose brief holds the plan-phase End line gets
     PLANNED, naming `DONE planned: <plan path>`). FULL asks a final reviewer for a full review."""

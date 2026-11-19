@@ -3224,6 +3224,11 @@ def cut_files(text: str) -> set[str]:  # O(len(text)) total
     return out  # O(1)
 
 
+def cut_code_files(text: str) -> list[str]:  # O(len(text) + F log F) total
+    """Changed code files a rendered excerpt section cuts: `cut_files` without test files and `.md` files, sorted (#819)."""
+    return sorted(f for f in cut_files(text) if not is_test_path(f) and not f.endswith(".md"))  # O(F log F)
+
+
 def shard_path(out: Path) -> Path:  # O(1)
     """The tests shard next to a packet: `<stem>-tests.md` (#381)."""
     return out.with_name(out.stem + "-tests.md")  # O(1)
@@ -3524,7 +3529,18 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
         mt = re.match(r"\(truncated: .*; read (.+) in full\)$", ln)  # O(len(ln))
         if mt:  # O(1)
             cuts.append(f"section 8 truncated: {mt.group(1)}")  # O(1)
-    parts = [(f"Cut to fit the size cap: {'; '.join(cuts)}" if cuts else None) if x == CUT_TOKEN else x for x in parts]  # O(parts)
+    cut_code = cut_code_files(excerpts)  # code files whose diff section 8 cut: never the fast path (#819) | O(len(excerpts))
+    if fast and cut_code:  # O(1)
+        fast = False  # tool_only stays as computed above | O(1)
+        parts = [("# Review packet: REVIEW REQUIRED (code diffs cut)" if i == 0 else  # O(parts)
+                  "Nothing is open, but section 8 cut the diff of changed code files: read each file the `Read in full` line above names, "  # O(1)
+                  "then review it; the fast path does not apply." if x.startswith("Nothing is open:") else x)  # O(1)
+                 for i, x in enumerate(parts)]  # O(parts)
+    cut_line = (f"Cut to fit the size cap: {'; '.join(cuts)}" if cuts else None)  # O(cuts)
+    if cut_code:  # O(1)
+        cut_line = (cut_line + "\n" if cut_line else "") + ("Read in full before your verdict (section 8 cut their diff; one Read each): "  # O(1)
+                                                            + ", ".join(cut_code))  # O(F)
+    parts = [cut_line if x == CUT_TOKEN else x for x in parts]  # O(parts)
     body = "\n".join(x for x in parts if x is not None).rstrip("\n")  # O(output size)
     n_lines = body.count("\n") + 1 + 2  # the blank line and the End line; the N digits add no line | O(output size)
     n_at = next(i for i, x in enumerate(head) if N_TOKEN in x)  # the packet-size line, ahead of the spec, rounds and coverage in `front` | O(head)
@@ -3534,7 +3550,8 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     out.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     out.write_text(text, encoding="utf-8", newline="\n")  # O(1)
     print(f"wrote {out} ({len(text)} chars, ~{int(len(text) / CHARS_PER_TOKEN)} tokens) - "  # O(1)
-          f"{'FAST PATH' if fast else f'{n_open} open item(s)'}{', inline build' if inline else ''}")  # O(1)
+          f"{'FAST PATH' if fast else f'{n_open} open item(s)'}{', inline build' if inline else ''}"  # O(1)
+          f"{f', {len(cut_code)} cut code diff(s)' if cut_code else ''}")  # O(1)
     for note in cuts:  # O(cuts) iterations
         print(f"cut: {note}")  # O(1)
     if len(text) > cap:  # the packet stays whole: only section 8 shrank | O(1)
