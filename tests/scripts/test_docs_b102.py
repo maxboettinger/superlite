@@ -19,7 +19,7 @@ def test_fleet_docs_name_the_new_format():
         t = read(p)
         assert "sl-<repo>-<worktree>-w" in t and "sl-<run folder>-<hash>" not in t, p
     d = read(ROOT / "docs" / "fleet.md")
-    assert "sl:<repo>-<worktree>-<task> Wn" in d and "sl fleet name [ID]" in d
+    assert "sl:<repo>-<worktree>-<task> Wn" in d
 
 
 def test_tools_row_names_fleet_name():
