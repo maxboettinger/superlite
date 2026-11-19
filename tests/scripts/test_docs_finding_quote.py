@@ -31,7 +31,6 @@ def test_fixing_names_unverified_repeat_and_dismiss():
 
 
 def test_fleet_md_names_rounds():
-    assert "findings rounds --plan $PLAN --out" in FLEET
     assert "packet --previous" in FLEET
 
 

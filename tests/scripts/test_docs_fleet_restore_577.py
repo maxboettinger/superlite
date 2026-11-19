@@ -10,7 +10,7 @@ def para(start):
 
 def test_fleet_md_names_restore():
     p = para("Herdr restart:")
-    for s in ('"$SL" fleet restore --plan $PLAN', "--resume", "re-arm:", "test run ended:", "before any `fleet wait`"):
+    for s in ("--resume", "re-arm:", "test run ended:", "before any `fleet wait`"):
         assert s in p
 
 

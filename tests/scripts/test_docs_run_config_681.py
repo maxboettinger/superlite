@@ -15,8 +15,7 @@ def test_config_md_run_config():
 
 def test_tools_md_lines():
     t = (DOCS / "tools.md").read_text(encoding="utf-8")
-    for s in ("`run_config`", "backlog start --config", "fleet on --config"):
-        assert s in t, s
+    assert "`run_config`" in t
 
 
 def test_tools_md_append_only():

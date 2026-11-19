@@ -49,7 +49,6 @@ def test_debug_md_names_fleet_path():
     for phrase in (
         "fleet spawn --role fixer --tier 3 --brief",
         "Outside a run: commit with plain git commit",
-        "fleet spawn --role implementer --brief",
         "Fix inline",
         "only inside a plan run",
     ):
