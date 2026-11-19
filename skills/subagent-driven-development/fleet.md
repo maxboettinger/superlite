@@ -10,6 +10,7 @@ Fleet covers one taskgraph plan in one checkout: several tickets go into one pla
 
 Every worker's prime can carry files to read first: a plan header line `**Read first:** a, b` or a `"read_first": [...]` list in test-cmd.json becomes a `## Read first` section of the prime.
 
+Give every `fleet spawn` Bash call a timeout of 600000 ms: the shorter default stops a spawn that waits on a slow start (`fleet spawn stopped by ... give the Bash call a timeout of 600000 ms, then rerun`).
 By hand, one line: `fresh tier=T agent=TYPE`: `"$SL" fleet spawn --tier T --plan $PLAN` prints `Wn account=A pane=P agent=TYPE`; then `"$SL" fleet send Wn Tn [Tm ...] --plan $PLAN`. `agent=Wn`: `"$SL" fleet send Wn Tn --plan $PLAN`.
 
 Fleet workers start with no MCP server (`--strict-mcp-config`), except an implementer, fixer or package-reviewer of a project that needs one: the servers its test-cmd.json `"mcp"` list names, else `xcode` (`xcrun mcpbridge`; `XcodeOpenWorkspace` and `XcodeCloseWorkspace` denied) for a Swift or Xcode project on macOS. Each server is checked before the start (a macOS GUI session; `SUPERLITE_MCP_CHECK=0` skips the check) and a usage note goes into the worker's system prompt.
