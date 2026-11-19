@@ -1,0 +1,12 @@
+- unblocked: dispatched T1 at 19:59:10; waiting on fixes: none
+- start bd8fd1e6054cd4c55beeb355a5e1c17ed4fcc9fe
+- Ruling: fleet placement local for the rest of the run - remote W2 finished T1 but left no snapshot and its tree went with fleet stop - cost if wrong: slower local builds
+- tests fast passed=0 failed=7 skipped=0 seconds=1.2
+- tests fast passed=121 failed=0 skipped=0 seconds=9.8
+- commit T1 a190291f7f anchor plan
+- tests fast passed=121 failed=0 skipped=0 seconds=9.6
+- tests full passed=13145 failed=1 skipped=12 seconds=338.9
+- tests fast passed=6 failed=1 skipped=0 seconds=1.3
+- tests fast passed=70 failed=0 skipped=0 seconds=5.7
+- commit T1 5f45cc8c5d anchor plan
+- tests full passed=13146 failed=0 skipped=12 seconds=339.7
