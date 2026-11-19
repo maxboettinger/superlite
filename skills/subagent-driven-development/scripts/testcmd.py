@@ -32,6 +32,9 @@ import subprocess  # O(1)
 import sys  # O(1)
 from pathlib import Path  # O(1)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+import _pyrun as pyrun  # noqa: E402  # O(1) module load
+
 CONFIG = ".superlite/test-cmd.json"  # O(1)
 SIDE_KEYS = ("pythonpath", "related")  # keys read from the file itself, not the command config (#712) | O(1)
 SEEDED = ".superlite/test-cmd.seeded"  # the bytes the lead start copied into a lead worktree (#638) | O(1)
@@ -1017,6 +1020,12 @@ def python_full_args(root: Path) -> list:  # O(file)
     return []  # O(1)
 
 
+def python_command(root: Path, paths: list, marker: str | None = None, junit: str = "{junit}") -> list:  # the default pytest argv run_tests runs; PytestUnavailable when no runner | O(file + P)
+    """pytest prefix, the paths (else the full-run args), `-m marker`, the report flags and `--junitxml=junit`."""
+    return [*pyrun.pytest_cmd(), *(paths or python_full_args(root)), *(["-m", marker] if marker else []), "-q", "-rP", "-p", "no:cacheprovider",  # O(file + P)
+            "-o", "junit_family=xunit1", f"--junitxml={junit}"]  # O(1)
+
+
 def _raw_config(root: Path):  # O(file)
     try:  # O(1)
         d = json.loads((root / CONFIG).read_text(encoding="utf-8"))  # O(file)
@@ -1804,7 +1813,13 @@ def main(argv=None):  # O(m + f)
         print(f"testcmd: run_tests in {Path(root).resolve().as_posix()} reads {reads}")  # O(1)
         return 0  # O(1)
     try:  # O(1)
-        print(json.dumps(resolve(root, a.fast)))  # O(1)
+        spec = resolve(root, a.fast)  # O(m + f)
+        if spec and spec.get("python") and spec.get("command") is None:  # the default pytest run has no configured command (#806) | O(1)
+            try:  # O(1)
+                spec = {**spec, "command": shlex.join(python_command(root, a.fast)), "default_command": True}  # O(file + P)
+            except pyrun.PytestUnavailable as e:  # O(1)
+                print(f"testcmd: {e}", file=sys.stderr)  # O(1)
+        print(json.dumps(spec))  # O(1)
         note = seed_note(root)  # O(file)
         if note:  # O(1)
             print(f"testcmd: {note}", file=sys.stderr)  # O(1)
