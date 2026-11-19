@@ -203,7 +203,7 @@ def _alias(words: list[str], i: int, al: str, cfg: dict[str, str], cwd: str | No
     """A -c alias of a subcommand that is no git command, judged as what it runs (one level deep)."""
     rest = words[i:]  # O(len(words))
     if al.startswith("!"):  # git runs a shell alias at the work tree's top  # O(len(al))
-        paths = _shell(al[1:] + "".join(" " + shlex.quote(a) for a in rest))  # O(len(al))
+        paths = _shell(al[1:] + "".join(" " + shlex.quote(a) for a in rest), False)  # O(len(al))
         if top and (cflag or _inside(cwd, top)):  # O(1)
             paths = [_join(top, p) for p in paths]  # O(len(paths))
         return paths  # O(len(paths))
@@ -1528,13 +1528,33 @@ def _known(w: str) -> bool:  # O(len(w))
             or _PY.match(c) is not None)  # O(1)
 
 
-def _shell(text: str) -> list[str]:  # O(len(text) * |commands|) | the paths shell text writes
+def _shell(text: str, cd: bool = True) -> list[str]:  # O(len(text) * |commands|) | the paths shell text writes; cd: a later relative target after cd, pushd or popd is unknown (#750)
+    out, moved = _shell1(text, False, cd)  # O(len(text) * |commands|)
+    return out  # O(1)
+
+
+def _is_cd(words: list[str]) -> bool:  # O(len(words)) | does the command change the shell's folder?
+    k = 0  # O(1)
+    while k < len(words) and (_cmd(words[k]) in ("command", "builtin") or re.match(r"[A-Za-z_]\w*=", words[k])):  # O(w)
+        k += 1  # O(1)
+    return k < len(words) and _cmd(words[k]) in ("cd", "pushd", "popd", "chdir")  # O(1)
+
+
+def _shell1(text: str, moved: bool, cd: bool) -> tuple[list[str], bool]:  # O(len(text) * |commands|) | (the paths, whether a folder change came before the end)
     out: list[str] = []  # O(1)
+
+    def add(items: list[str]) -> None:  # O(len(items))
+        for t in items:  # O(len(items))
+            m = _in_dir(None, t) if moved else t  # O(len(t))
+            if m == "?" and t != "?":  # O(1)
+                _why("shell text changes folder (cd, pushd, popd)")  # O(1)
+            out.append(m)  # O(1)
+
     for seg in guard_lex.split(text):  # O(len(text))
         words = ["?" if d else w for w, d in zip(seg.words, seg.dyn)]  # O(w)
         if words and seg.dyn[0]:  # a command that is not literal  # O(1)
             out.append("?")  # O(1)
-        out.extend(_argv(words))  # O(w)
+        add(_argv(words))  # O(w)
         for r in seg.redirects:  # O(redirects)
             if r.op.startswith(("<<", "<")) and r.op != "<>":  # O(1)
                 continue  # O(1)
@@ -1544,10 +1564,14 @@ def _shell(text: str) -> list[str]:  # O(len(text) * |commands|) | the paths she
             if any(c in t for c in "$`") or t.startswith("~"):  # O(len(t))
                 out.append("?")  # O(1)
             elif guard_files._real(t):  # O(len(t))
-                out.append(t)  # O(1)
+                add([t])  # O(1)
         for body in list(seg.bodies) + ([seg.subshell] if seg.subshell else []):  # O(bodies)
-            out.extend(_shell(body))  # O(len(body))
-    return _uniq(out)  # O(len(out))
+            sub, m2 = _shell1(body, moved, cd)  # O(len(body))
+            out.extend(sub)  # O(len(sub))
+            moved = moved or m2  # a folder change inside ( ) or { } is not undone  # O(1)
+        if cd and _is_cd(words):  # O(w)
+            moved = True  # O(1)
+    return _uniq(out), moved  # O(len(out))
 
 
 def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the paths one command (decoded words) writes
@@ -1583,12 +1607,18 @@ def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the pat
     return _uniq(out)  # O(len(out))
 
 
+_SRC: list[str | None] = [None]  # O(1) | the code in hand, any language (#750)
 _CALL_FN: list[str] = [""]  # O(1) | the function name of the call being read
 
 
 def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(raw)) | os.system, subprocess.run, ...
+    whole = raw  # O(1)
+    if lang == "php" and _CALL_FN[0] == "proc_open" and raw[:1] == "(":  # the command is its first argument; the others are descriptors and the folder  # O(len(raw))
+        raw = "(" + _split_top(raw[1:-1])[0] + ")"  # O(len(raw))
     found = _cmd_words(raw, lang)  # O(len(raw))
     if found is None or _depth[0] >= 4:  # O(1)
+        if lang != "py" and _call_dir(args, lang, whole)[0]:  # O(len(raw))
+            return _why("subprocess folder option (cwd, chdir, proc_open cwd) is not followed")  # O(1)
         return ["?"]  # O(1)
     words, kinds = found  # O(1)
     if kinds[0]:  # the program, or the shell string, is not a literal (#705)  # O(1)
@@ -1597,7 +1627,7 @@ def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(ra
     cause = f"subprocess argument {k + 1} is not a string literal"  # the program is argument 1  # O(1)
     if 2 in kinds:  # an unpacked list or a `+` tail: any words, -c CODE too  # O(w)
         return _why(cause)  # O(1)
-    named, d = _call_dir(args, lang)  # O(len(args))
+    named, d = _call_dir(args, lang, whole)  # O(len(args))
     prev = _CALL_DIR[0]  # O(1)
     if named:  # O(1)
         _CALL_DIR[0] = None if prev is None or d is None else _join(prev, d)  # O(len(d))
@@ -1614,14 +1644,24 @@ def _a_sh(args: list[Arg], raw: str, lang: str = "py") -> list[str]:  # O(len(ra
     if named:  # O(len(out))
         moved = [_in_dir(d, t) for t in out]  # O(len(out))
         if any(m == "?" and t != "?" for m, t in zip(moved, out)):  # O(len(out))
-            _why("subprocess cwd= is not a string literal")  # O(1)
+            _why("subprocess cwd= is not a string literal" if lang == "py" else "subprocess folder option (cwd, chdir, proc_open cwd) is not followed")  # O(1)
         out = _uniq(moved)  # O(len(out))
     return out  # O(1)
 
 
-def _call_dir(args: list[Arg], lang: str) -> tuple[bool, str | None]:  # O(len(args)) | does a Python call name cwd=, and its folder (None: not a literal) (#728)
+def _call_dir(args: list[Arg], lang: str, raw: str = "") -> tuple[bool, str | None]:  # O(len(args) + len(raw)) | does a call name a folder, and its folder (None: not followed) (#728, #750)
     if lang != "py":  # O(1)
-        return False, ""  # O(1)
+        src = _SRC[0] or ""  # O(1)
+        if lang == "js":  # a cwd option in the call or in any object of the code (process.cwd() is a read)  # O(len(src))
+            hit = re.search(r"(?<![.\w$])cwd\s*(?::|(?=[,}]))|[\"'`]cwd[\"'`]", raw + "\n" + src)  # O(len(src))
+        elif lang == "rb":  # O(1)
+            hit = re.search(r"\bchdir\b", raw + "\n" + src)  # O(len(src))
+        elif lang == "php":  # proc_open's fourth argument, or chdir()  # O(len(src))
+            parts = _split_top(raw[1:-1]) if _CALL_FN[0] == "proc_open" and raw[:1] == "(" else []  # O(len(raw))
+            hit = (len(parts) > 3 and parts[3].strip().lower() != "null") or re.search(r"\bchdir\s*\(", src)  # O(len(src))
+        else:  # O(1)
+            hit = None  # O(1)
+        return (True, None) if hit else (False, "")  # O(1)
     for k, v in args:  # O(len(args))
         if k == "cwd":  # O(1)
             if not isinstance(v, str) or not v or _UNK in v or v.startswith("~"):  # O(len(v))
@@ -2030,7 +2070,8 @@ def temp_root(text: str | None) -> str | None:  # O(len(text)) | tempfile's temp
 
 
 def _code(code: str, lang: str, root: str | None = None, file: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
-    prev, prev_t, prev_c = _NAMES[0], _TEMP[0], _CODE[0]  # O(1)
+    prev, prev_t, prev_c, prev_s = _NAMES[0], _TEMP[0], _CODE[0], _SRC[0]  # O(1)
+    _SRC[0] = code  # O(1)
     _TEMP[0] = root  # O(1)
     _CODE[0] = code if lang == "py" else None  # O(1)
     scan = code  # O(1)
@@ -2049,7 +2090,7 @@ def _code(code: str, lang: str, root: str | None = None, file: str | None = None
             _NAMES[0] = {**_NAMES[0], "__file__": [file]}  # O(len(names))
         return _code1(code, lang, scan)  # O(len(code) * |patterns|)
     finally:  # O(1)
-        _NAMES[0], _TEMP[0], _CODE[0] = prev, prev_t, prev_c  # O(1)
+        _NAMES[0], _TEMP[0], _CODE[0], _SRC[0] = prev, prev_t, prev_c, prev_s  # O(1)
 
 
 def _code1(code: str, lang: str, scan: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
