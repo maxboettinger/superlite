@@ -1268,7 +1268,7 @@ def main(argv=None) -> int:
     r.add_argument("--retry", type=int, default=300)  # O(1)
     an = sub.add_parser("answer")  # O(1)
     an.add_argument("batch")  # O(1)
-    an.add_argument("--file", required=True)  # O(1)
+    an.add_argument("--file", required=True, help='answers file {"answers": {question: answer}, "by": "user"|"main"|{question: "user"|"main"}}; "by" is required')  # O(1)
     t = sub.add_parser("tell")  # O(1)
     t.add_argument("batch")  # O(1)
     t.add_argument("--text", required=True)  # O(1)

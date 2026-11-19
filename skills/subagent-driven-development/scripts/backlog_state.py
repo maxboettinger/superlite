@@ -305,7 +305,7 @@ def set_note(data: dict, text: str, src: str, now: str) -> str:
         return "note: cleared; lead briefs carry no note"
     data["note"] = {"text": text, "file": src, "time": now}
     n = len(text.split("\n"))
-    return f"note: stored from {src} ({n} line{'' if n == 1 else 's'}); every lead brief from now on carries it"
+    return f"note: stored from {src} ({n} line{'' if n == 1 else 's'}, {len(text)} of {NOTE_MAX} characters); every lead brief from now on carries it"
 
 
 def note_line(data: dict):
@@ -313,7 +313,7 @@ def note_line(data: dict):
     if not isinstance(nt, dict) or not isinstance(nt.get("text"), str) or not nt["text"]:
         return None
     n = len(nt["text"].split("\n"))
-    return (f"note: {n} line{'' if n == 1 else 's'} from {nt.get('file')} ({nt.get('time')}) go into every lead brief "
+    return (f"note: {n} line{'' if n == 1 else 's'} ({len(nt['text'])} of {NOTE_MAX} characters) from {nt.get('file')} ({nt.get('time')}) go into every lead brief "
             "(sl backlog start --note FILE replaces it, an empty file clears it)")
 
 

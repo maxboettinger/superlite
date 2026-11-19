@@ -39,7 +39,7 @@ def test_note_stored_and_stripped(run, capsys, tmp_path):
     rc, out = cli(capsys, "start", "B1", "--note", str(f), "--cap", "1")
     want = {"note": "Use uv.\nNo emojis.", "owned": [{"id": "B1", "state": "planned", "files": ["a.py"]}]}
     assert rc == 0 and run.routed == [["start", "B1", "--cap", "1"]]
-    assert out.splitlines()[0] == f"note: stored from {f.resolve()} (2 lines); every lead brief from now on carries it"
+    assert out.splitlines()[0] == f"note: stored from {f.resolve()} (2 lines, 18 of 2000 characters); every lead brief from now on carries it"
     assert run.standing == [want]
     rc, out = cli(capsys, "start", "B1", f"--note={f}", "--cap", "1")
     assert run.routed[1] == ["start", "B1", "--cap", "1"] and run.standing[1] == want
