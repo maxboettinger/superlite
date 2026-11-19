@@ -1,0 +1,19 @@
+- start 8c60fa5b8177e1f128fd6d497e888a5e543d250f
+- unblocked: dispatched T1 T2 T3 T4 T5 T6 at 11:37:33; waiting on fixes: none
+Ruling: accept predicted 26.2 min - T1 is one small task; the forecast's contention factor inflates it - none
+- tests fast passed=1 failed=9 skipped=0 seconds=0.5
+- tests fast passed=40 failed=0 skipped=0 seconds=1.2
+- tests fast passed=41 failed=0 skipped=0 seconds=1.0
+- tests fast passed=57 failed=0 skipped=0 seconds=10.7
+- tests fast passed=19 failed=0 skipped=0 seconds=1.1
+- tests fast passed=19 failed=0 skipped=0 seconds=0.9
+- tests fast passed=29 failed=0 skipped=0 seconds=0.9
+- commit T1 be9b07a231 test_layers: retry-aware evals stamp, pytest config in unit
+- commit T2 52d30d532b trim the backlog doc tests
+- commit T3 86154d9a76 trim the 607/680/b10/b102 doc tests
+- commit T4 a60f2c85c7 trim the b95/673/budget doc tests
+- commit T5 99490a5d32 trim the contract/quote/restore/config/669 doc tests
+- commit T6 60c41e737a trim the b43/roles/hooks/telemetry doc tests
+- tests fast passed=163 failed=0 skipped=0 seconds=10.9
+- commit T5 f5a03f9820 trim the contract/quote/restore/config/669 doc tests
+- tests full passed=12190 failed=0 skipped=12 seconds=367.1
