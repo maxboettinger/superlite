@@ -756,6 +756,7 @@ def cmd_decide(a) -> int:
             print(json.dumps(shape, indent=2))
             for line in steps:  # O(q)
                 print(line, file=sys.stderr)
+            print(BY_LINE, file=sys.stderr)  # O(1)
             return 0
         try:
             b = bs.batch(d, a.batch)
@@ -984,16 +985,24 @@ def cmd_park(a) -> int:
     return _main_only("park", lambda bs, d: bs.park(d, a.batch, a.reason))
 
 
+FILE_HELP = 'answers file {"answers": {question: answer}, "by": "user"|"main"|{question: "user"|"main"}}; "by" is required'  # O(1)
+BY_LINE = ('answers file: {"answers": {"<question>": "<option label>"}, "by": "user"}; "by" is required: '
+           '"user" (the user answered), "main" (main ruled) or {"<question>": "user" | "main"}')  # O(1)
+
+
 def refresh_open(root: Path) -> dict:
     import backlog_state as bs  # O(1)
     p = bs.path(root)  # O(1)
     data = bs.load(p)  # O(size)
     marked = {b["id"]: list(b["open_issues"]) for b in data["batches"] if b.get("open_issues")}  # O(b)
-    if not marked:  # O(1)
+    held = {i for b in data["batches"] for i in b.get("issues", [])}  # O(b * issues)
+    left = [o["number"] for o in data.get("outside", []) if bs._left_out(o) and o.get("number") not in held]  # O(outside)
+    if not marked and not left:  # O(1)
         return {}  # O(1)
     import backlog_tracker  # O(1)
-    union = list(dict.fromkeys(i for old in marked.values() for i in old))  # O(issues)
+    union = list(dict.fromkeys([i for old in marked.values() for i in old] + left))  # O(issues)
     still = set(backlog_tracker.open_now(data.get("repo") or "", union, root))  # O(network)
+    gone = set(left) - still  # O(left)
     fresh = {bid: [i for i in old if i in still] for bid, old in marked.items()}  # O(b * issues)
     changed = {}  # O(1)
 
@@ -1002,6 +1011,8 @@ def refresh_open(root: Path) -> dict:
             if b["id"] in fresh and b.get("open_issues") == marked[b["id"]] and fresh[b["id"]] != marked[b["id"]]:  # O(issues)
                 b["open_issues"] = fresh[b["id"]]  # O(1)
                 changed[b["id"]] = fresh[b["id"]]  # O(1)
+        if gone:  # O(1)
+            d["outside"] = [o for o in d.get("outside", []) if not (bs._left_out(o) and o.get("number") in gone)]  # O(outside)
     bs.update(p, apply)  # O(size)
     return changed  # O(1)
 
@@ -1138,10 +1149,10 @@ def main(argv=None) -> int:
                        ("ship", "ship a batch: ship B merge|done|..."),
                        ("notes", "print a batch's full reason, no-change text and notes: notes B")):  # O(1) routed before parsing; listed for --help
         sub.add_parser(name, help=text)  # O(1)
-    de = sub.add_parser("decide", help="record the user's answers (--print, --file FILE, --approve-ship --source prompt)")
+    de = sub.add_parser("decide", help="record the user's answers (--print, --file FILE, --approve-ship --source prompt); FILE needs \"by\": \"user\", \"main\" or {question: \"user\"|\"main\"}")
     de.add_argument("--print", action="store_true")
     de.add_argument("--batch")
-    de.add_argument("--file")
+    de.add_argument("--file", help=FILE_HELP)
     de.add_argument("--approve-ship", action="store_true", help="record a ship approval the user's prompt gave (needs --source prompt)")
     de.add_argument("--source")
     de.set_defaults(fn=cmd_decide)

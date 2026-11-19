@@ -329,7 +329,7 @@ SDD_PINNED = (
     "sl:<repo>-<worktree>-<id>",
     "fleet name",
     # test_docs_b32_sdd.py
-    "`unstable=Tn <reason>; rerun sl lint --stable`",
+    "`unstable=Tn <reason>; rerun sl plan_tools lint --stable`",
     "then run the printed `wait:` line in the foreground (never as a background command) and end the turn only after it reports)",
     "prints `Tn <sha>`, `Tn FAILED` or `Tn: no change since its last checkpoint <sha>` (one task: the SHA)",
     "`depends on unstable <ids>`",

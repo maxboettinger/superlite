@@ -70,7 +70,7 @@ Main keeps a lean context: never read issue bodies, lead transcripts, panes or r
 Main plans and decides; one lead per batch builds, reviews and ships in its own worktree.
 Never ask the user.
 Never end your turn while your workers run: wait once per wave with `fleet wait --wave --timeout 540000 --plan .superlite` (add `--tests <summary path>` for a background test run).
-Note lines are `Ruling: ...`, `Follow-up: ...` (a follow-up issue; main files it) and `Left undone: ...` (a decided step you could not run, such as a denied remote or production command), `Unverified: <step> (#N)` and `Kind: design`; main's wait line carries follow-ups and left-undone items.
+Note lines are `Ruling: ...`, `Follow-up: ...` (a follow-up issue; main files it from the full text `sl backlog ship B notes` prints, also in a project with an issue tracker; a lead never files one itself) and `Left undone: ...` (a decided step you could not run, such as a denied remote or production command), `Unverified: <step> (#N)` and `Kind: design`; main's wait line carries follow-ups and left-undone items.
 On needs_decision: ask, write the answers file, `"$SL" backlog answer B --file F`.
 One pinned issue (`--issues N`) whose body names tracked files takes the fast path: no triage worker, one `fast path: #N names <files>; no triage worker` line.
 One ship approval covers every batch of one plan round: each `plan` (also `--reset`) asks it again and `plan --add` keeps it; `decide --print` lists it last, `Approve shipping (Recommended)` first.

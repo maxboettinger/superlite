@@ -21,8 +21,8 @@ def test_batch_without_cmd_gets_a_line_per_member(tmp_path):
     plan = make_plan(tmp_path, [{"id": "T1", "owns": "src/a.py, tests/test_a.py"}, {"id": "T2", "owns": "src/b.py, tests/test_b.py"}])
     msg = io.task_message(plan, ["T2", "T1"], "/sl/sl", "/sl")
     assert verify_lines(msg) == [
-        "Verify T2: `/sl/sl run_tests --fast tests/test_b.py --task T2 --background`" + TAIL,
-        "Verify T1: `/sl/sl run_tests --fast tests/test_a.py --task T1 --background`" + TAIL,
+        "Verify T2: `/sl/sl run_tests --fast tests/test_b.py --task T2 --background` (or `/sl/sl run_tests --affected --task T2 --background`, which picks the tests your change touches)" + TAIL,
+        "Verify T1: `/sl/sl run_tests --fast tests/test_a.py --task T1 --background` (or `/sl/sl run_tests --affected --task T1 --background`, which picks the tests your change touches)" + TAIL,
     ]
     lines = msg.splitlines()
     assert BATCH in lines and lines.index(BATCH) == lines.index(verify_lines(msg)[-1]) + 1
@@ -33,7 +33,7 @@ def test_build_member_and_code_member(tmp_path):
     msg = io.task_message(plan, ["T2", "T4"], "/sl/sl", "/sl")
     assert verify_lines(msg) == [
         "Verify T2: `/sl/sl run_tests --full --task T2 --background` (Tests: build, a build check)" + TAIL,
-        "Verify T4: `/sl/sl run_tests --fast tests/test_d.py --task T4 --background`" + TAIL,
+        "Verify T4: `/sl/sl run_tests --fast tests/test_d.py --task T4 --background` (or `/sl/sl run_tests --affected --task T4 --background`, which picks the tests your change touches)" + TAIL,
     ]
 
 
@@ -42,14 +42,14 @@ def test_docs_only_member_gets_its_own_no_test_line(tmp_path):
     msg = io.task_message(plan, ["T1", "T2"], "/sl/sl", "/sl")
     assert verify_lines(msg) == [
         "Verify T1: no test command (no code file in Owns); check that each owned file exists and says what the task asks.",
-        "Verify T2: `/sl/sl run_tests --fast tests/test_b.py --task T2 --background`" + TAIL,
+        "Verify T2: `/sl/sl run_tests --fast tests/test_b.py --task T2 --background` (or `/sl/sl run_tests --affected --task T2 --background`, which picks the tests your change touches)" + TAIL,
     ]
 
 
 def test_single_task_message_unchanged(tmp_path):
     plan = make_plan(tmp_path, [{"id": "T1", "owns": "src/a.py, tests/test_a.py"}, {"id": "T2", "owns": "docs/b.md"}])
     msg = io.task_message(plan, ["T1"], "/sl/sl", "/sl")
-    assert verify_lines(msg) == ["Verify: `/sl/sl run_tests --fast tests/test_a.py --task T1 --background`" + TAIL]
+    assert verify_lines(msg) == ["Verify: `/sl/sl run_tests --fast tests/test_a.py --task T1 --background` (or `/sl/sl run_tests --affected --task T1 --background`, which picks the tests your change touches)" + TAIL]
     assert "Batch:" not in msg
     assert verify_lines(io.task_message(plan, ["T2"], "/sl/sl", "/sl")) == ["Verify: no test command (no code file in Owns); check that each owned file exists and says what the task asks."]
 

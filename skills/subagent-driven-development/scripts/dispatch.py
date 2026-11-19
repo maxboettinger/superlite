@@ -21,7 +21,7 @@ Xcode DerivedData, then drops the trees of committed tasks and stopped workers t
 `<root>/.superlite/`; `run(..., gate=False)` skips the disk check.
 A task with a ledger `- Hold Tn: reason` (and no later `- Release Tn`) is never offered; stderr `held=Tn reason`.
 A stable.json `fix` task whose only reasons are `depends on unstable X` is offered once every such X is committed.
-stderr `unstable=Tn reason; rerun sl lint --stable` names each ready task stable.json still holds back.
+stderr `unstable=Tn reason; rerun sl plan_tools lint --stable` names each ready task stable.json still holds back.
 `--committed` and `--running` take ids separated by commas or spaces; stderr `warning: --committed: T7 is not a task of the plan` per unknown id.
 `--committed T0` also opens the stable-split stub owners, as a `- commit T0` ledger line does.
 stderr: `evict=<id> <reason>` for each idle agent eligible for none of the ready tasks; each is also removed
@@ -45,6 +45,7 @@ records, baseline_k from the READY reply). The plan is parsed once, in this proc
 # n = tasks in the plan, e = dependency edges, L = plan text size, R = ready tasks returned (<= cap)
 # a = agents in the pool, F = files known per agent, o = Owns paths of one task, c = ledger lines
 import argparse  # O(1)
+import datetime  # O(1)
 import json  # O(1)
 import re  # O(1)
 import sys  # O(1)
@@ -317,6 +318,18 @@ def tree_root(sd):  # the checkout a run folder `<root>/.superlite` belongs to, 
     return sd.parent if sd.name == ".superlite" else None  # O(1)
 
 
+def log_fresh(sd, lines, now=None):  # ids of the primed (fresh) lines, appended to sd/dispatch-log.jsonl; never raises | O(R)
+    ids = [t for tasks, d in lines if d.startswith("fresh") for t in tasks.split(",")]  # O(R)
+    if ids:  # O(1)
+        try:  # fail open: the log is bookkeeping | O(1)
+            stamp = now or datetime.datetime.now().isoformat(timespec="seconds")  # O(1)
+            with open(Path(sd) / "dispatch-log.jsonl", "a", encoding="utf-8", newline="\n") as f:  # O(1)
+                f.write(json.dumps({"time": stamp, "fresh": ids}) + "\n")  # O(ids)
+        except OSError:  # O(1)
+            pass  # O(1)
+    return ids  # O(1)
+
+
 def disk_check(sd):  # "ok" | "warn" | "refuse"; sweeps orphaned DerivedData first, prints the gate line to stderr | O(folders + files)
     """Free space of the run's checkout (else the run folder) against the floor and warn level (#574)."""
     try:  # best effort: a sweep never blocks dispatch | O(1)
@@ -382,6 +395,8 @@ def run(plan, pool_path, ledger, committed=None, running=None, cap=10, batch=Non
         cfg = routing.load_cfg()  # O(file)
         lt = (cfg.get("lane") or {}).get("tier", "haiku")  # O(1)
         lines = [(wid, f"wave0 tier={lt} agent={routing.tier_agent(cfg, lt)}")] + lines  # O(R)
+    if tree_root(sd) is not None:  # only a pool in <root>/.superlite/ keeps the log (#804) | O(R)
+        log_fresh(sd, lines)  # O(R)
     return lines, evict  # O(R)
 
 

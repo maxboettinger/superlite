@@ -105,7 +105,7 @@ def test_unsafe_sid_writes_no_odd_marker(tmp_path):
 
 def test_nudge_line_names_the_size_and_the_fix():
     line = compact_due.nudge_line(612345)
-    assert "612k" in line and "/autocompact 400k" in line and "sl setup" in line
+    assert "612k" in line and "/autocompact 400k" in line and "/superlite:setup" in line
 
 
 # --- the hook --------------------------------------------------------------------------------------------------------

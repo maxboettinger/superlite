@@ -30,10 +30,10 @@ def test_fleet_io_send_refuses_two_kinds():
 
 
 def test_next_tasks_and_dispatch_name_the_lapse_the_stderr_lines_and_id_lists():
-    check("next_tasks", "`depends on unstable <ids>`", "`unstable=Tn <reason>; rerun sl lint --stable`",
+    check("next_tasks", "`depends on unstable <ids>`", "`unstable=Tn <reason>; rerun sl plan_tools lint --stable`",
           "`not in stable.json`", "`held=Tn <reason>`", "split on commas or whitespace",
           "`warning: --<flag>: Tn is not a task of the plan`")
-    check("dispatch", "`unstable=Tn <reason>; rerun sl lint --stable`", "`depends on unstable <ids>`",
+    check("dispatch", "`unstable=Tn <reason>; rerun sl plan_tools lint --stable`", "`depends on unstable <ids>`",
           "split on commas or whitespace", "`warning: --committed: T7 is not a task of the plan`")
 
 

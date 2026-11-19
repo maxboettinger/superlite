@@ -62,9 +62,9 @@ def test_read_note_errors(tmp_path):
 def test_set_note_stores_and_clears():
     d = data()
     assert bs.set_note(d, "Use uv.\nNo emojis.", "/m/rules.md", "2026-11-10T22:00:00Z") == \
-        "note: stored from /m/rules.md (2 lines); every lead brief from now on carries it"
+        "note: stored from /m/rules.md (2 lines, 18 of 2000 characters); every lead brief from now on carries it"
     assert d["note"] == {"text": "Use uv.\nNo emojis.", "file": "/m/rules.md", "time": "2026-11-10T22:00:00Z"}
-    assert "(1 line)" in bs.set_note(d, "one", "/m/o.md", "T")
+    assert "(1 line, 3 of 2000 characters)" in bs.set_note(d, "one", "/m/o.md", "T")
     assert bs.set_note(d, "", "/m/empty.md", "T") == "note: cleared; lead briefs carry no note"
     assert "note" not in d
     assert bs.set_note(d, "", "/m/empty.md", "T") == "note: cleared; lead briefs carry no note"
@@ -72,7 +72,7 @@ def test_set_note_stores_and_clears():
 
 def test_status_shows_note():
     note = {"text": "a\nb", "file": "/m/rules.md", "time": "T"}
-    line = ("note: 2 lines from /m/rules.md (T) go into every lead brief "
+    line = ("note: 2 lines (3 of 2000 characters) from /m/rules.md (T) go into every lead brief "
             "(sl backlog start --note FILE replaces it, an empty file clears it)")
     assert bs.note_line({"note": note}) == line
     assert bs.note_line({}) is None and bs.note_line({"note": {"text": 5}}) is None

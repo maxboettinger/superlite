@@ -13,8 +13,8 @@ import findings  # noqa: E402
 
 AGENTS = Path(__file__).resolve().parents[2] / "agents"
 RULE = "then run the `wait:` line it prints (`<abs sl> run_tests --wait <path>`) in the foreground, never as a background command, and end your turn only after it reports; read only its summary."
-FIXER_LINE = "- Run only the touched test files, in the background: `<abs sl> run_tests --fast <touched test files> --background`, " + RULE + " Never run the full suite, raw `pytest` or `python`."
-REVIEWER_LINE = "- Focused tests, in the background: `<abs sl> run_tests --fast PATHS --background`, " + RULE + " Do not run the full suite."
+FIXER_LINE = "- Run only the touched test files, in the background: `<abs sl> run_tests --fast <touched test files> --background` (or `<abs sl> run_tests --affected --task Tn --background` when your brief names the task Tn: run_tests picks the tests your change touches), " + RULE + " Never run the full suite, raw `pytest` or `python`."
+REVIEWER_LINE = "- Focused tests, in the background: `<abs sl> run_tests --fast PATHS --background` (or `<abs sl> run_tests --affected --task Tn --background` for the task under review: run_tests picks the tests its change touches), " + RULE + " Do not run the full suite."
 OLD = "then the `wait:` line it prints (`"
 OLD_REVIEWER = "(the printed `wait:` line) for the summary"
 BRIEF_VERIFY = "Verify: `/x/sl run_tests --fast <the test files you touched> --background`, then run the printed `wait:` line in the foreground (never as a background command) and end your turn only after it reports."

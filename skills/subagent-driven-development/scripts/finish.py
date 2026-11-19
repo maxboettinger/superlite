@@ -323,7 +323,25 @@ def _clock(t):  # O(1) HH:MM:SS
     return t.strftime("%H:%M:%S")  # O(1)
 
 
-def unblocked_report(ledger, lint_log):  # O(R*w + L*n)
+def _dispatched(path):  # O(D*w) task -> time of its first prime dispatch in dispatch-log.jsonl; bad lines are skipped, {} when no file
+    out = {}  # O(1)
+    try:  # O(1)
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()  # O(size)
+    except OSError:  # O(1)
+        return out  # O(1)
+    for ln in lines:  # O(D)
+        try:  # O(1)
+            e = json.loads(ln)  # O(w)
+            when = datetime.fromisoformat(e["time"])  # O(1)
+            for t in e["fresh"]:  # O(n)
+                if isinstance(t, str) and (t not in out or when < out[t]):  # O(1)
+                    out[t] = when  # O(1)
+        except (ValueError, KeyError, TypeError):  # O(1)
+            continue  # O(1)
+    return out  # O(D)
+
+
+def unblocked_report(ledger, lint_log, dispatch_log=None):  # O(R*w + L*n + D*w)
     """One line: were all stable tasks dispatched before the next patch, with the lint and ledger times behind a NO."""
     lp = Path(lint_log)  # O(1)
     if not lp.exists():  # O(1)
@@ -353,6 +371,11 @@ def unblocked_report(ledger, lint_log):  # O(R*w + L*n)
         m = COMMIT.match(line)  # O(w)
         if m:  # O(1)
             committed.add(m.group(1))  # O(1)
+    dispatched = _dispatched(dispatch_log or Path(lint_log).with_name("dispatch-log.jsonl"))  # the prime dispatch is the decision (#804) | O(D*w)
+    for t, dt in dispatched.items():  # O(n)
+        any_sent = True  # O(1)
+        if t not in sent_at or dt < sent_at[t]:  # O(1)
+            sent_at[t] = dt  # O(1)
     offered = {}  # task -> time of the first lint whose pending holds it | O(1)
     for when, pending in lints:  # O(L)
         for t in pending:  # O(n)
@@ -429,6 +452,25 @@ def spec_rulings(sd):  # O(spec bytes) the `Ruling:` lines of <run folder>/spec.
     except OSError:  # O(1)
         return []  # O(1)
     return [m.group(1) for m in (RULING.match(ln) for ln in text.replace("\r\n", "\n").split("\n")) if m]  # O(lines)
+
+
+def plan_rulings(plan):  # O(plan bytes) the `Ruling:` lines of the plan outside fenced code blocks, in order; [] when none or unreadable
+    if not plan:  # O(1)
+        return []  # O(1)
+    try:  # O(1)
+        text = Path(plan).read_text(encoding="utf-8", errors="replace")  # O(size)
+    except OSError:  # O(1)
+        return []  # O(1)
+    out, fence = [], None  # O(1)
+    for ln in text.replace("\r\n", "\n").split("\n"):  # O(lines)
+        mark = ln.lstrip()[:3]  # O(1)
+        if mark in ("```", "~~~"):  # O(1)
+            fence = None if fence == mark else (fence or mark)  # O(1)
+            continue  # O(1)
+        m = None if fence else RULING.match(ln)  # O(w)
+        if m:  # O(1)
+            out.append(m.group(1))  # O(1)
+    return out  # O(lines)
 
 
 OK_CONCLUSIONS = ("success", "skipped", "neutral")  # O(1)
@@ -641,8 +683,18 @@ def corrections_line(ledger, plan=None):  # O(file) + spawn; size of the project
         return "corrections: unreadable"  # O(1)
 
 
-def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None, end_plan=None):  # O(R*w + I*w + C + G)
+def _run_plan(run_sd):  # O(1) the plan file of the run folder as a string, "" when none
+    sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+    import orchestrator  # O(1)
+    found = orchestrator.plan_file(run_sd)  # O(1)
+    return str(found) if found else ""  # O(1)
+
+
+def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None, end_plan=None, archive=False):  # O(R*w + I*w + C + G)
     rulings, commits, _ = read_ledger(ledger)  # O(R*w)
+    plan_path = plan if plan is not None else _run_plan(Path(ledger).resolve().parent)  # "" means none | O(1)
+    have = set(rulings)  # O(R)
+    rulings = rulings + [r for r in dict.fromkeys(plan_rulings(plan_path)) if r not in have]  # O(R + G)
     incidents = open_incidents(log, load_run_summaries(sl_dir or Path(ledger).parent), ledger)  # O(I*w + I*S*F)
     out = ["# superlite run summary", ""]  # O(1)
     run_sd = Path(ledger).resolve().parent  # O(d)
@@ -722,6 +774,13 @@ def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None, end_
     if plan is not None:  # O(1)
         out.append(history_section(plan, sl_dir or str(Path(ledger).parent)))  # see history_section
         out.append("")  # O(1)
+    kept = []  # O(1)
+    if archive and plan_path and Path(plan_path).is_file():  # O(1)
+        import run_archive  # O(1)
+        kept = run_archive.keep_in_plans(str(plan_path), str(Path(ledger).resolve().parent))  # fails open | O(F)
+    if kept:  # O(1)
+        out.append(f"archived: {', '.join(kept)} (commit them with the branch: they outlive the worktree)")  # O(F)
+        out.append("")  # O(1)
     out.append(f"open incidents: {len(incidents)} ({len(ranked_incidents(incidents))} distinct)")  # O(I + G log G)
     out += group_incidents(incidents)  # O(I + G log G)
     if incidents:  # the close form for one an obsolete or fixed one (#116) | O(1)
@@ -788,7 +847,7 @@ def main(argv=None):  # O(R*w + I*w)
         plan = str(found) if found else ""  # O(1)
     elif not plan and orchestrator.plan_file(sd) is None:  # O(d)
         plan = ""  # O(1)
-    sys.stdout.write(summary(ledger, log, a.lint_log or str(Path(ledger).with_name("lint-log.jsonl")), plan, end_plan=a.plan or ""))  # O(output)
+    sys.stdout.write(summary(ledger, log, a.lint_log or str(Path(ledger).with_name("lint-log.jsonl")), plan, end_plan=a.plan or "", archive=True))  # O(output)
     log_auto(read_stops(log), str(Path(log).resolve()))  # after the summary: a feedback failure never costs the closing text (#140) | O(I*w)
     drop_trees(sd)  # the run's trees are not needed after the summary (#614) | O(T + folders)
     return 0  # O(1)

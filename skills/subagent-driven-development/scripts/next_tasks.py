@@ -429,7 +429,7 @@ def warn_unknown(flag, ids, graph):  # O(ids)
 
 def print_unstable(blocked):  # O(blocked)
     for t, why in blocked.items():  # O(blocked)
-        print(f"unstable={t} {why}; rerun sl lint --stable", file=sys.stderr)  # O(1)
+        print(f"unstable={t} {why}; rerun sl plan_tools lint --stable", file=sys.stderr)  # O(1)
 
 
 def draft_blocked(graph, status):  # O(n + e)

@@ -5,7 +5,7 @@
     compact_due.nudge_line(tokens) -> str
     compact_due.mark(sl_dir, sid=None) -> None
 
-With an auto-compact window set (`sl setup` offers 400,000 tokens) Claude Code compacts by itself and the context never
+With an auto-compact window set (`/superlite:setup` offers 400,000 tokens) Claude Code compacts by itself and the context never
 reaches the threshold. A main-conversation request above it means no such window is active, so the agent is asked once
 per session to tell the user how to set one. The size is the input side of the last main-conversation request in the
 transcript (input, cache read and cache write tokens), read from the file's last 256 KB only. The markers it leaves
@@ -90,7 +90,7 @@ def nudge_line(tokens: int) -> str:  # O(1)
     return (  # O(1)
         f"Session context is at about {tokens // 1000}k tokens and no auto-compact window is active below that, so "
         "this session compacts only near the model's limit. Tell the user once, in one line: run `/autocompact 400k` "
-        "(or `sl setup`, which offers the same as a setting) and superlite sessions compact and continue by "
+        "(or `/superlite:setup`, which offers the same as a setting) and superlite sessions compact and continue by "
         "themselves. Then continue the current work."
     )
 

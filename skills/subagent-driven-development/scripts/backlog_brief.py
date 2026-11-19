@@ -50,7 +50,7 @@ WHO = {"user": "Max", "main": "main's ruling"}  # O(1)
 DECISIONS_MAX = 4  # O(1)
 NOTES_RULE = ("First write .superlite/notes.md (at most 6 lines, each one self-contained line of at most 400 characters: "
               "`Ruling: ...` lines that change later batches, one `Ruling: [scope] ...` line per ruling that adds, drops or changes a "
-              "deliverable your issues or plan asked for (the summary lists those first, the shipped wait line counts them), one `Follow-up: ...` line per follow-up issue (main files it) and one "
+              "deliverable your issues or plan asked for (the summary lists those first, the shipped wait line counts them), one `Follow-up: ...` line per follow-up issue (main files it; never file one yourself, also when the project tracks work in an issue tracker) and one "
               "`Left undone: ...` line per decided step you could not run, such as a denied remote or production command, "
               "one `Unverified: <step> (#N)` line per acceptance step shipped unrun with main's yes (that issue gets `Refs #N`, "
               "never `Closes`) and `Kind: design` when the batch ships only a spec and plan (every issue `Refs #N`)) "

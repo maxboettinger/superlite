@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # UserPromptSubmit hint: when the main conversation of a session with a run grew past 500k tokens, no auto-compact
 # window is active (with one, Claude Code would have compacted already), so emit an additionalContext line asking the
-# agent to tell the user how to set one (`/autocompact 400k` or `sl setup`). compact_due.py reads the size from the
+# agent to tell the user how to set one (`/autocompact 400k` or `/superlite:setup`). compact_due.py reads the size from the
 # transcript's tail and marks the session, so the hint shows once per session.
 # Silent when SUPERLITE_NO_AUTOCOMPACT=1, for a fleet worker or lead (no user reads there), without a run, or when not
 # due. Exit 0 always (fail open).
