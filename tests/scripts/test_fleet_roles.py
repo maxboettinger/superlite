@@ -35,7 +35,7 @@ def test_reviewers_take_frontmatter_model_without_model_flag():
 
 def test_research_runs_the_read_only_researcher():
     r = fr.launch("research", None, CFG)
-    assert r["argv"] == ["--agent", "superlite:researcher", "--model", "sonnet", "--effort", "low"] + TAIL + ["Edit", "Write", "NotebookEdit", "Bash"] and r["model"] == "sonnet" and r["one_turn"]
+    assert r["argv"] == ["--agent", "superlite:researcher", "--model", "sonnet", "--effort", "low"] + fr.RESEARCH_TAIL and r["model"] == "sonnet" and r["one_turn"]
     s = fr.launch("research", "sonnet", CFG)
     assert s["argv"][:4] == ["--agent", "superlite:researcher", "--model", "sonnet"] and s["model"] == "sonnet"
 
@@ -59,8 +59,8 @@ def test_missing_agent_file_drops_effort(tmp_path):
 def test_researcher_agent_is_read_only():
     text = (ROOT / "agents" / "researcher.md").read_text(encoding="utf-8")
     fm = text.split("---")[1]
-    assert "name: researcher" in fm and "model: haiku" in fm and "effort: low" in fm and "tools: Read, Grep, Glob\n" in fm
-    assert "absolute" in text and "no shell" in text and "$SL" not in text
+    assert "name: researcher" in fm and "model: haiku" in fm and "effort: low" in fm and "tools: Read, Grep, Glob, Bash\n" in fm
+    assert "absolute" in text and "read-only commands" in text and "$SL" not in text
 
 
 # --- #669: brief-only implementer, tier text ---
