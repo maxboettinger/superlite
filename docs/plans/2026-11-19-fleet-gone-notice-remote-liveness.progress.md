@@ -1,0 +1,11 @@
+- start bd8fd1e6054cd4c55beeb355a5e1c17ed4fcc9fe
+- unblocked: dispatched T1 at 19:57:03; waiting on fixes: none
+- Ruling: fleet placement local for this run - B262 and B263 saw remote write workers end without a snapshot; one small task gains nothing from a remote Mac - cost if wrong: one local worker's load
+- tests fast passed=26 failed=7 skipped=0 seconds=1.3
+- tests fast passed=107 failed=2 skipped=1 seconds=21.9
+- tests fast passed=107 failed=2 skipped=1 seconds=14.5
+- tests fast passed=109 failed=0 skipped=1 seconds=9.9
+- commit T1 dbd7934e59 gone notice asks the worker's machine
+- tests fast passed=109 failed=0 skipped=1 seconds=22.3
+- tests full passed=13148 failed=0 skipped=12 seconds=304.5
+- Ruling: no run_tests --base-skips - the 12 skips are the e2e env guards and platform skips every recent batch saw (B263 follow-up), none in this batch's test files - cost if wrong: a new skip goes unnoticed

@@ -366,11 +366,11 @@ def send_brief(sd, wid, brief, label=""):  # O(w + l) plus remote and herdr call
     return label  # O(1)
 
 
-def states(sd):  # O(w + a) plus herdr calls
+def states(sd, sync=True):  # O(w + a) plus herdr calls; sync=False lists without mirroring stop records (#996)
     sd = Path(sd)  # O(1)
     live = {k: v for k, v in fs.workers(sd).items() if v.get("machine") and v.get("state") != "stopped"}  # O(w)
     for wid, w in live.items():  # a busy worker's stop records are mirrored before its state is read | O(w)
-        if w.get("state") == "busy":  # O(1)
+        if sync and w.get("state") == "busy":  # O(1)
             fr.sync(sd, wid)  # O(m + B)
     out = {}  # O(1)
     for m in sorted({v["machine"] for v in live.values()}):  # O(w)
