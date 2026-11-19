@@ -92,3 +92,35 @@ def test_bash_walk_keeps_cd_reading(proj):  # noqa: F811
     r = bash(proj, "bash -c 'cd .superlite && rm -f x.txt'")  # the start commit's verdict: the judge's own walk, not guard_tools' shell text
     assert r.returncode == 2 and "Blocked target: x.txt" in r.stderr
     assert "folder (cd, pushd, popd)" not in r.stderr
+
+
+@pytest.mark.parametrize("code", [
+    'import os; os.system("if true; then cd src; fi; rm a.py")',
+    'import os; os.system("for i in 1; do cd src; done; rm a.py")',
+    'import os; os.system("! cd src; rm a.py")',
+])
+def test_cd_after_shell_keyword(code):
+    assert t("python3", "-c", code) == ["?"]
+
+
+def test_python_newline_escape_in_shell_text_splits_commands():
+    assert t("python3", "-c", 'import os; os.system("cd src\\nrm a.py")') == ["?"]
+    assert t("python3", "-c", 'import os; os.system("rm a.py\\nrm b.py")') == ["a.py", "b.py"]
+
+
+def test_python_tab_escape_is_a_separator_not_a_letter():
+    out = t("python3", "-c", 'import os; os.system("rm a\\tb.py")')
+    assert out in (["a", "b.py"], ["?"])
+
+
+def test_python_raw_string_keeps_its_backslashes():
+    assert t("python3", "-c", 'import os; os.system(r"rm a\\nrm b.py")') == ["anrm", "b.py"]
+
+
+def test_python_unreadable_escape_is_unknown():
+    assert t("python3", "-c", 'import os; os.system("rm \\N{DIGIT ONE}.py")') == ["?"]
+
+
+def test_node_newline_escape_in_shell_text():
+    assert t("node", "-e", f"{CP}.execSync(\"cd src\\nrm a.py\")") == ["?"]
+    assert t("node", "-e", f"{CP}.execSync(\"rm a.py\\nrm b.py\")") == ["a.py", "b.py"]

@@ -1322,7 +1322,45 @@ def _unq(m: re.Match, lang: str) -> str | None:  # O(len(text)) | a literal's te
     if (q == "`" and "${" in text) or (q == '"' and lang in ("php", "pl") and ("$" in text or "@" in text)) or (
             q == '"' and lang == "rb" and "#{" in text):  # O(len(text))
         return None  # O(1)
-    return re.sub(r"\\(.)", r"\1", text, flags=re.S)  # O(len(text))
+    pre = m.group(0).lstrip(" \t\r\n")[:-len(text) - 2].lower() if q != "`" else ""  # the string prefix (r, b, u)  # O(len(text))
+    if "r" in pre and lang == "py":  # a raw string keeps its backslashes  # O(1)
+        return text  # O(1)
+    return _decode_esc(text, lang, q)  # O(len(text))
+
+
+_ESC1 = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "f": "\f", "v": "\v", "e": "\x1b", "\\": "\\", '"': '"', "'": "'", "`": "`"}  # O(1)
+
+
+def _decode_esc(text: str, lang: str, q: str) -> str | None:  # O(len(text)) | the value of a string literal's text: its escapes decoded (None: an escape that cannot be read)
+    out: list[str] = []  # O(1)
+    i = 0  # O(1)
+    while i < len(text):  # O(len(text))
+        c = text[i]  # O(1)
+        if c != "\\":  # O(1)
+            out.append(c)  # O(1)
+            i += 1  # O(1)
+            continue  # O(1)
+        e = text[i + 1] if i + 1 < len(text) else ""  # O(1)
+        if lang in ("rb", "php", "pl") and q == "'":  # a single-quoted string reads only \\ and \'  # O(1)
+            out.append(e if e in ("\\", "'") else "\\" + e)  # O(1)
+            i += 2  # O(1)
+            continue  # O(1)
+        m = re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}").match(text, i + 1)  # O(1)
+        if m:  # O(1)
+            g = m.group(0)  # O(1)
+            out.append(chr(int(g, 8)) if g[0].isdigit() else chr(int(g[1:], 16)))  # O(1)
+            i = m.end()  # O(1)
+        elif e in _ESC1 and (lang != "py" or e not in "e`"):  # O(1)
+            out.append(_ESC1[e])  # O(1)
+            i += 2  # O(1)
+        elif e == "\n" and lang in ("py", "js", "rb"):  # a line continuation  # O(1)
+            i += 2  # O(1)
+        elif e and not e.isalnum() and e != "\n":  # an escaped sign: python and php keep the backslash, the others drop it  # O(1)
+            out.append(("\\" + e) if lang in ("py", "php") and e not in "$\"'\\" else e)  # O(1)
+            i += 2  # O(1)
+        else:  # u{..}, \N{..}, a letter no decoder here knows  # O(1)
+            return None  # O(1)
+    return "".join(out)  # O(len(text))
 
 
 _WHY: list[str] = []  # O(1) | the reasons the last targets() call recorded for a subprocess call it names "?" (#705)
@@ -1562,7 +1600,7 @@ def _shell(text: str, cd: bool = True) -> list[str]:  # O(len(text) * |commands|
 
 def _is_cd(words: list[str]) -> bool:  # O(len(words)) | does the command change the shell's folder?
     k = 0  # O(1)
-    while k < len(words) and (_cmd(words[k]) in ("command", "builtin") or re.match(r"[A-Za-z_]\w*=", words[k])):  # O(w)
+    while k < len(words) and (_cmd(words[k]) in ("command", "builtin", "then", "do", "else", "elif", "!", "time") or re.match(r"[A-Za-z_]\w*=", words[k])):  # O(w)
         k += 1  # O(1)
     return k < len(words) and _cmd(words[k]) in ("cd", "pushd", "popd", "chdir")  # O(1)
 
