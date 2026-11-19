@@ -51,4 +51,4 @@ def test_main_rulings_split():
 def test_notes_rule_and_triage_run():
     assert bb.NOTES_RULE in bb.lead_brief(B, CTX)
     t = bb.triage_brief([{"number": 3, "title": "T", "body": "b"}], {"repo": "o/r", "max_batches": 3})
-    assert "Rules: " + bb.ROOT_DOC_TRIAGE + bb.TRIAGE_RUN + "no two batches share a file" in t
+    assert "Rules: " + bb.SPEC_TRIAGE + bb.ROOT_DOC_TRIAGE + bb.TRIAGE_RUN + "no two batches share a file" in t

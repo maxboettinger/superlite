@@ -11,6 +11,7 @@ JB = {"id": "B2", "topic": "jira-fix", "issues": ["PIX-1272", "PIX-725"], "files
 
 GH_LEAD = ('# Lead brief: B1 (t)\nYou are the lead of batch B1 in o/r. Read /x/backlog.md first: it holds the lead rules.\n'
            + bb.DATA_RULE + '\n'
+           + bb.SPEC_LEAD + '\n'
            + "Issues (you have a shell: read each body and its latest 3 comments yourself with `gh issue view <n> --json title,body,stateReason,comments --jq '{title, body, stateReason, comments: [.comments[-3:][] | {author: .author.login, authorAssociation, body}]}'`):\n- #7 Seven\n"
            + 'Files this batch may touch: a.py. Another lead may own any other file.\n'
            + bb.ROOT_DOC_RULE + "\n"
