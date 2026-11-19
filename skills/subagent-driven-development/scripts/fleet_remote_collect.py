@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Bring a remote write worker's result home: fetch its snapshot and apply it to the local tree under the three-state rule.
 
-`collect(sd, wid, report)` reads the newest mirrored stop record of the worker (`<sd>/remote/<wid>/metrics.jsonl`), fetches its `snapshot`
+`collect(sd, wid, report)` waits (bounded, syncing the mirror) for the stop record of the worker's task turn (`<sd>/remote/<wid>/metrics.jsonl`, a
+record at or after the worker's `sent`), fetches its `snapshot`
 (`fleet_remote.fetch`) and applies start..snapshot (`remote_apply.apply`). The report gains `collected` {applied, skipped, sha}; skipped paths,
 conflicts, a missing snapshot and an unreachable host become concerns (the last three turn the status BLOCKED). A snapshot is applied once.
 """
@@ -10,6 +11,7 @@ conflicts, a missing snapshot and an unreachable host become concerns (the last 
 import json  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
+import time  # O(1)
 from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
@@ -18,7 +20,13 @@ import fleet_state as fs  # noqa: E402 | O(1)
 import remote_apply  # noqa: E402 | O(1)
 
 
-def _snapshot(sd, wid):  # the snapshot of the newest stop record, None when it has none | O(m)
+WAIT_S = 45  # the hook's 30 s snapshot bound plus the mirror read | O(1)
+POLL_S = 2  # O(1)
+now_s = time.monotonic  # tests patch these two | O(1)
+sleep = time.sleep  # O(1)
+
+
+def _stop(sd, wid, sent):  # the newest mirrored stop record at or after sent (ms), None when there is none | O(m)
     try:  # O(1)
         lines = (Path(sd) / "remote" / wid / "metrics.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()  # O(m)
     except OSError:  # O(1)
@@ -28,9 +36,27 @@ def _snapshot(sd, wid):  # the snapshot of the newest stop record, None when it 
             e = json.loads(raw)  # O(1)
         except ValueError:  # O(1)
             continue  # O(1)
-        if isinstance(e, dict) and e.get("ev") == "stop":  # O(1)
-            return e.get("snapshot") or None  # O(1)
+        if isinstance(e, dict) and e.get("ev") == "stop" and (e.get("t") or 0) >= sent:  # O(1)
+            return e  # O(1)
     return None  # O(1)
+
+
+def _sync(sd, wid):  # any failure counts as nothing new | O(objects)
+    try:  # O(1)
+        fr.sync(sd, wid)  # O(objects)
+    except Exception:  # noqa: BLE001 | O(1)
+        pass  # O(1)
+
+
+def _await_stop(sd, wid, sent):  # the task turn's stop record, waiting up to WAIT_S | O(WAIT_S / POLL_S * m)
+    end = now_s() + WAIT_S  # O(1)
+    stop = _stop(sd, wid, sent)  # O(m)
+    while stop is None and now_s() < end:  # O(WAIT_S / POLL_S)
+        _sync(sd, wid)  # O(objects)
+        stop = _stop(sd, wid, sent)  # O(m)
+        if stop is None:  # O(1)
+            sleep(POLL_S)  # O(1)
+    return stop  # O(1)
 
 
 def _blocked(report, concern):  # O(1)
@@ -53,9 +79,13 @@ def collect(sd, wid, report):  # O(m + f)
     remote = rec.get("remote") or {}  # O(1)
     if not rec.get("machine") or not remote.get("write"):  # a local or read-only worker | O(1)
         return report  # O(1)
-    snap = _snapshot(sd, wid)  # O(m)
+    tree, label = remote.get("tree"), remote.get("label")  # O(1)
+    stop = _await_stop(sd, wid, int(rec.get("sent") or 0))  # O(WAIT_S / POLL_S * m)
+    if stop is None:  # O(1)
+        return _blocked(report, f"remote worker {wid} left no snapshot: no stop record of its task reached this machine within {WAIT_S} s; its tree {tree} stays on {label} (snapshot ref {remote.get('snapshot_ref')})")  # O(1)
+    snap = stop.get("snapshot")  # O(1)
     if not snap:  # O(1)
-        return _blocked(report, f"remote worker {wid} left no snapshot")  # O(1)
+        return _blocked(report, f"remote worker {wid} left no snapshot: its stop hook took none (remote_apply snapshot failed or ran past 30 s); its tree {tree} stays on {label}")  # O(1)
     if snap == remote.get("collected"):  # O(1)
         return report  # O(1)
     ref = remote.get("snapshot_ref") or ""  # O(1)
