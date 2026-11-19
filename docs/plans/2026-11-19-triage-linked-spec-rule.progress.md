@@ -1,0 +1,14 @@
+- start 71b203cbd4f6513c693f6296a6c991b00d16c411
+- unblocked: dispatched T1 at 12:16:18; waiting on fixes: none
+- tests fast passed=0 failed=7 skipped=0 seconds=0.6
+- tests fast passed=14 failed=0 skipped=0 seconds=0.2
+- tests fast passed=47 failed=0 skipped=0 seconds=0.7
+- commit T1 67068493fb linked spec rule
+- tests fast passed=61 failed=0 skipped=0 seconds=0.6
+- tests full passed=12237 failed=2 skipped=12 seconds=940.9
+- tests fast passed=11 failed=2 skipped=0 seconds=0.6
+- tests fast passed=13 failed=0 skipped=0 seconds=0.4
+- Ruling: T1 also commits tests/scripts/test_backlog_brief_b89.py - final-review fix outside every Owns
+- Ruling: T1 also commits tests/scripts/test_backlog_brief_b90.py - final-review fix outside every Owns
+- commit T1 3c2148c8a7 linked spec rule
+- tests full passed=12239 failed=0 skipped=12 seconds=625.1
