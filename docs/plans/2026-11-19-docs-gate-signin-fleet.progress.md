@@ -1,0 +1,18 @@
+- start eee19e7c56758074709857049d64862d5f6c8019
+- unblocked: dispatched D1 D2 D3 at 14:16:44; waiting on fixes: none
+- Ruling: accept predicted 36.2 min - three independent doc tasks run at once; the forecast counts prose contention x4.5 - cost if wrong: none, nothing waits on the target
+- tests fast passed=1 failed=2 skipped=0 seconds=0.2
+- tests fast passed=3 failed=0 skipped=0 seconds=0.3
+- tests fast passed=1 failed=2 skipped=0 seconds=0.2
+- tests fast passed=30 failed=4 skipped=0 seconds=4.6
+- tests fast passed=14 failed=0 skipped=0 seconds=1.0
+- tests fast passed=34 failed=0 skipped=0 seconds=4.2
+- tests fast passed=5 failed=0 skipped=0 seconds=0.3
+- commit D1 14a65d849f fleet md gate signin stop lines
+- commit D2 b7e45a73db tools md wait rule and fleet lines
+- commit D3 8c7336d627 SKILL base skips and main notes rule
+- tests fast passed=51 failed=0 skipped=0 seconds=4.6
+- tests fast passed=51 failed=0 skipped=0 seconds=4.7
+- tests fast passed=4 failed=0 skipped=0 seconds=26.9
+- tests full passed=12597 failed=0 skipped=12 seconds=436.6
+Ruling: skip evals - no eval case loads SDD SKILL.md (cases: ai-asks-once, ai-bounded-quiet, brainstorm-coverage, brainstorm-first, debug-flow, feature-routing, mvp-routing, setup-report); B255 changes only its Final review step 2 text and three unpinned trims
