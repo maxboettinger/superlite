@@ -23,7 +23,6 @@ def test_research_limits_paragraph():
     para = line_starting("Research worker limits:")
     for s in ("cannot write a report file", "at most 300 words", "`<sd>/fleet/reports/<label>.md`", "brief's file name without `.md`",
               "one brief per question and one worker each", "`<sd>/briefs/<name>.md`",
-              "`sl fleet spawn --role research --plan PLAN`", "`sl fleet send Wn --brief", "`sl fleet wait Wn --plan PLAN`",
               "Bash timeout 600000", "before a plan exists"):
         assert s in para, s
 

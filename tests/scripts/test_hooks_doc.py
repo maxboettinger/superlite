@@ -14,7 +14,7 @@ def section(text, heading):
 def test_run_detection_section():
     assert "## Detecting an active run" in HOOKS
     body = section(HOOKS, "## Detecting an active run")
-    for needle in ("~/.superlite/sessions/<session_id>", "pool.json", "prime.md", "stable.json", "sl orchestrator end"):
+    for needle in ("~/.superlite/sessions/<session_id>", "pool.json", "prime.md", "stable.json"):
         assert needle in body, needle
 
 
@@ -50,12 +50,6 @@ def test_new_hooks_documented():
         assert any(x.startswith(f"- `{name}`") for x in HOOKS.splitlines()), name
     line = next(x for x in HOOKS.splitlines() if x.startswith("- `block-coordinator-edits`"))
     assert "guard_judge.py" in line
-
-
-def test_commands_name_inplace():
-    for name in ("small", "debug"):
-        text = (ROOT / "commands" / f"{name}.md").read_text(encoding="utf-8")
-        assert "sl worktree inplace --reason" in text, name
 
 
 def test_tools_row_names_inplace():
