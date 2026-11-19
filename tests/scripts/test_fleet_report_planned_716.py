@@ -56,10 +56,15 @@ def test_unreadable_brief_keeps_work(tmp_path):
     assert fr.brief_message("lead", str(tmp_path)).endswith(fr.WORK)
 
 
-@pytest.mark.parametrize("role", ["implementer", "fixer", "package-reviewer", "research"])
+@pytest.mark.parametrize("role", ["implementer", "fixer", "research"])
 def test_other_roles_keep_work_on_a_plan_brief(tmp_path, role):
     p = brief(tmp_path, "plan")
     assert fr.brief_message(role, p) == f"Read {p} and do what it says. {fr.WORK}"
+
+
+def test_package_reviewer_keeps_work_plus_not_run_on_a_plan_brief(tmp_path):
+    p = brief(tmp_path, "plan")
+    assert fr.brief_message("package-reviewer", p) == f"Read {p} and do what it says. {fr.WORK} {fr.NOT_RUN}"
 
 
 def test_final_reviewer_unchanged(tmp_path):

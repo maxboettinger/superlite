@@ -1,0 +1,30 @@
+- start eee19e7c56758074709857049d64862d5f6c8019
+- unblocked: dispatched T1 T3 at 14:11:01; waiting on fixes: none
+- Ruling: fleet placement local after T1's dispatch to a remote machine - B233, B236 and B243 saw remote write workers' results get lost or their panes vanish - cost if wrong: less parallel room
+- tests fast passed=0 failed=2 skipped=0 seconds=0.3
+- tests fast passed=2 failed=0 skipped=0 seconds=0.3
+- tests fast passed=5 failed=1 skipped=0 seconds=0.4
+- commit T3 672a5d6abf reviewer and fleet docs
+- tests fast passed=0 failed=1 skipped=0 seconds=0.2
+- tests fast passed=2 failed=13 skipped=0 seconds=0.6
+- tests fast passed=1 failed=0 skipped=0 seconds=0.3
+- Ruling: T3 also commits tests/scripts/test_fleet_docs_578_579.py - final-review fix outside every Owns
+- commit T3 ea512a6209 reviewer and fleet docs
+- tests fast passed=129 failed=2 skipped=1 seconds=1.6
+- tests fast passed=14 failed=1 skipped=0 seconds=0.3
+- tests fast passed=14 failed=1 skipped=0 seconds=0.4
+- tests fast passed=65 failed=1 skipped=1 seconds=1.2
+- tests fast passed=66 failed=0 skipped=1 seconds=1.1
+- Ruling: T1's verbatim test asserts " not_run=" not in the wait output instead of "not_run" - pytest's tmp path holds the test name - cost if wrong: none
+- commit T1 2c787b3f6c unrun checks
+- tests fast passed=12 failed=1 skipped=0 seconds=0.2
+- tests fast passed=13 failed=0 skipped=0 seconds=0.2
+- Ruling: T1 also commits tests/scripts/test_fleet_report_planned_716.py - final-review fix outside every Owns
+- commit T1 e278eae1a5 unrun checks
+- tests fast passed=0 failed=1 skipped=0 seconds=0.3
+- tests fast passed=99 failed=0 skipped=1 seconds=2.0
+- commit T2 bc4f60e62f fleet resume
+- tests fast passed=150 failed=0 skipped=1 seconds=1.3
+- tests full passed=12615 failed=0 skipped=12 seconds=308.4
+- Ruling: live check: worktree sl fleet_resume W8 relaunched the stopped package reviewer in its own session (ea7ea541), the next fleet wait printed 'W8 review-T1,T2 DONE_WITH_CONCERNS findings=0 not_run=1' and stopped W8 again - cost if wrong: none
+- tests fast passed=4 failed=0 skipped=0 seconds=24.3

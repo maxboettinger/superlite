@@ -32,6 +32,7 @@ Rules:
 - Outside a run (the brief names no task id `Tn` and no plan, or says outside a run): commit only the files you changed (your fixes and their regression tests) with plain `git add <files>` and `git commit` in the brief's folder once their focused tests pass; leave every other file as it is, and a fix that needs a file outside the brief's folder or scope stays open (`out of scope: ...`). Inside a run every rule above stays; this rule is the one exception to the `git add` and `commit` ban.
 - Kill only processes you started, by PID. Never `taskkill /IM`, `pkill`, `killall` or `Stop-Process -Name`. Probe servers bind port 0 with a timeout.
 - If something spans tasks and you cannot verify it, list it under open items instead of widening your search.
+- Checks your brief names (a running-app check on a simulator or the Mac, a launch, a named command) are part of the review: run each one. A check you did not run (no simulator, not reachable, skipped) gets one line `Not run: <check> - <why>` in your report, and your status is then DONE_WITH_CONCERNS, never DONE; `fleet wait` shows such a report with ` not_run=N`.
 
 Report in at most 300 words: findings fixed or open (`file:line — problem — fix`; an out-of-scope fix is open, never fixed), tests added (each with its red run's summary line), probes run, and a final `Status: DONE | DONE_WITH_CONCERNS | BLOCKED`. No file contents or logs.
 An open finding carries the exact text of its line as quote.
