@@ -9,6 +9,8 @@ Stdlib only.
 
 Lint also warns (REACH:) on a Running-app check with no way in, (OWNS:) on a symlinked Owns entry and (ALSO-TOUCHES:) on a doubtful Also-touches entry.
 
+A relative `--plan` that names nothing at the cwd resolves against the enclosing checkout's top, a bare `.superlite` against the nearest run (anchor_plan, #998).
+
 A repeated `##`/`###` heading inside a task that is followed by a task field is a reference line and does not end the task.
 """
 # Complexity notation:
@@ -89,6 +91,27 @@ def resolve_plan(path: str) -> Path:  # O(d)
             raise PlanError(f"--plan {path} is a run folder with no plan file (stable.json, pool.json and plan.md name none); pass the plan file")  # O(1)
         return found  # O(1)
     raise PlanError(f"plan not found: {path}")  # O(1)
+
+
+def anchor_plan(value: str, cwd: str | None = None) -> str:  # O(d)
+    """A relative --plan that names nothing at cwd, resolved at the enclosing checkout's top (a bare `.superlite`: the nearest run, #707); else unchanged. Creates nothing (#998)."""
+    import state  # lazy: no import cycle | O(1)
+    if not value or os.path.isabs(value):  # O(1)
+        return value  # O(1)
+    base = Path(cwd) if cwd else state._abs(".")  # O(d)
+    if (base / value).exists():  # O(1)
+        return value  # O(1)
+    top = state.git_root(base)  # O(d)
+    if os.path.normpath(value) == ".superlite":  # O(1)
+        for d in (base, *base.parents):  # O(d) iterations
+            if state.holds_run_state(d / ".superlite"):  # O(1)
+                return str(d / ".superlite")  # O(1)
+            if d == top or top is None:  # O(1)
+                break  # O(1)
+        return value  # O(1)
+    if top is not None and (top / value).exists():  # O(1)
+        return str(top / value)  # O(1)
+    return value  # O(1)
 
 
 def is_task(tid: str, has_owns: bool) -> bool:  # O(1)
@@ -3447,6 +3470,7 @@ def _telemetry_run_start(run_keys: dict, sl_dir: Path, plan_path: str, plan) -> 
 def cmd_lint_stable(args) -> int:  # O(lint + n*k*s)
     import orchestrator  # human mode: no lint --stable (and so no dispatch) before approval | O(1)
     import state  # O(1)
+    resolve_plan(args.plan)  # a plan that exists nowhere never binds, mkdirs or moves (#998) | O(d)
     try:  # bind before the gate check: a gate pending in the session's previous folder moves here first | O(1)
         state.bind(stable_root(args.plan) / ".superlite")  # O(b + d)
     except state.Owned as e:  # O(1)
@@ -3754,10 +3778,15 @@ def main(argv=None):  # O(1) + dispatch
         import pt_review  # O(1)
         try:  # O(1)
             for i, tok in enumerate(argv):  # a run folder after --plan becomes its plan file | O(len argv)
-                if tok == "--plan" and i + 1 < len(argv) and Path(argv[i + 1]).is_dir():  # O(1)
-                    argv[i + 1] = str(resolve_plan(argv[i + 1]))  # O(d)
-                elif tok.startswith("--plan=") and Path(tok[7:]).is_dir():  # O(1)
-                    argv[i:i + 1] = ["--plan", str(resolve_plan(tok[7:]))]  # O(len argv)
+                if tok == "--plan" and i + 1 < len(argv):  # O(1)
+                    argv[i + 1] = anchor_plan(argv[i + 1])  # O(d)
+                    if Path(argv[i + 1]).is_dir():  # O(1)
+                        argv[i + 1] = str(resolve_plan(argv[i + 1]))  # O(d)
+                elif tok.startswith("--plan="):  # O(1)
+                    val = anchor_plan(tok[7:])  # O(d)
+                    if Path(val).is_dir():  # O(1)
+                        val = str(resolve_plan(val))  # O(d)
+                    argv[i:i + 1] = ["--plan", val]  # O(len argv)
                     break  # O(1)
         except PlanError as exc:  # O(1)
             print(f"error: {exc}", file=sys.stderr)  # O(1)
@@ -3765,8 +3794,10 @@ def main(argv=None):  # O(1) + dispatch
         return pt_review.main(argv)  # O(1)
     args = build_parser().parse_args(argv)  # O(1)
     try:  # O(1)
-        if isinstance(getattr(args, "plan", None), str) and Path(args.plan).is_dir():  # O(1)
-            args.plan = str(resolve_plan(args.plan))  # O(d)
+        if isinstance(getattr(args, "plan", None), str):  # O(1)
+            args.plan = anchor_plan(args.plan)  # O(d)
+            if Path(args.plan).is_dir():  # O(1)
+                args.plan = str(resolve_plan(args.plan))  # O(d)
         return args.func(args)  # O(1)
     except PlanError as exc:  # O(1)
         print(f"error: {exc}", file=sys.stderr)  # O(1)
