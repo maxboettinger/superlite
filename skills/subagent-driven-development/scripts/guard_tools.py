@@ -1307,6 +1307,13 @@ def _why(reason: str) -> list[str]:  # O(|_WHY|) | record why a subprocess call 
     return ["?"]  # O(1)
 
 
+_LINK: list[bool] = [False]  # O(1) | did the last targets() call read code or shell text that makes a link (#883)
+
+
+def makes_link() -> bool:  # O(1) | True when the last targets() call read code or shell text that makes a link
+    return _LINK[0]  # O(1)
+
+
 def unresolved() -> str:  # O(1) | the first reason the last targets() call recorded for a "?", "" when none
     return _WHY[0] if _WHY else ""  # O(1)
 
@@ -1554,6 +1561,10 @@ def _argv(words: list[str]) -> list[str]:  # O(len(words) * |options|) | the pat
             return ["?"] if first == "?" else []  # a wrapper whose program is not a literal (#705)  # O(1)
     w = words[k:]  # O(w)
     c = _cmd(w[0])  # O(1)
+    if c in ("ln", "link") or (c in ("cp", "install", "rsync") and any(  # a link maker  # O(w)
+            re.fullmatch(r"--(?:link(?:-dest.*|s)?|symbolic-link)|-[A-Za-z]*l[A-Za-z]*" + ("|-[A-Za-z]*s[A-Za-z]*|-[A-Za-z]*[rRaPd][A-Za-z]*|--(?:recursive|archive|no-dereference)" if c == "cp" else "|-[A-Za-z]*a[A-Za-z]*|--archive" if c == "rsync" else ""), a)
+            for a in w[1:])):  # O(w)
+        _LINK[0] = True  # O(1)
     if c == "xargs" or (c == "find" and any(a in _FIND_W or a == "?" for a in w)):  # find: a word that is not a literal may be an action (#705)  # O(w)
         return ["?"]  # O(1)
     if "?" in w[1:-1] and (c in _SHELLS or c in _PSHELLS or _runs_code(c)):  # such a word before the last may be -c and its code (#705)  # O(w)
@@ -1744,6 +1755,13 @@ _CALLS: dict[str, list[tuple[str, object]]] = {
         (r"\$\^I", _a_unknown),
     ],
 }
+_LINKS: dict[str, str] = {  # O(1) | code that makes a link: a call of a link function (readlink, unlink, islink never match)
+    "py": r"(?<![\w.])(?:os\.)?(?:symlink|link)\s*\(|\.\s*(?:symlink_to|hardlink_to|link_to)\s*\(|\.\s*(?:symlink|link)\b|\bimport\b[^\n;]*\b(?:symlink|link)\b",
+    "js": r"(?<![\w$])(?:link|symlink|ensureSymlink|ensureLink|createSymlink|createLink)(?:Sync)?\s*\(",
+    "rb": r"\bFile\.(?:symlink|link)\b|" + _RB_FU + r"(?:ln\w*|link|symlink)\b",
+    "php": _PHP + r"(?:symlink|link)\s*\(",
+    "pl": r"(?<![\w$@%>:])(?:symlink|link)\b",
+}
 _PY_PATH = r"(?:Path|PurePath|PosixPath|WindowsPath)\(\s*(['\"])((?:(?!\1).)*)\1\s*\)\s*$"
 
 
@@ -1789,7 +1807,7 @@ def _str_name(code: str, pos: int) -> bool:  # O(len(code)) | is the receiver en
 def _py_methods(code: str, scan: str | None = None) -> list[str]:  # O(len(code))
     scan = code if scan is None else scan  # O(1)
     out: list[str] = []  # O(1)
-    for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|unlink|open|rename|replace)\s*\(", scan):  # O(len(code))
+    for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|unlink|open|rename|replace|symlink_to|hardlink_to|link_to)\s*\(", scan):  # O(len(code))
         name = m.group(1)  # O(1)
         if re.search(r"\b(?:os|shutil)\s*$", code[max(0, m.start() - 12):m.start()]):  # a module function, matched by name  # O(1)
             continue  # O(1)
@@ -1816,6 +1834,8 @@ def _py_method(name: str, lit: str | None, args: list[Arg], is_os: bool) -> list
         if name in ("rename", "replace"):  # str.replace has no Path receiver: judged only on a literal Path  # O(1)
             if lit is not None:  # O(1)
                 out.extend(_a_arg(0)(args, ""))  # O(1)
+        elif name == "link_to":  # Path(src).link_to(target): the argument is the link  # O(1)
+            out.extend(_a_arg(0)(args, ""))  # O(1)
         elif name == "open":  # O(1)
             if lit is not None:  # Path('p').open('w'): the mode comes first  # O(1)
                 p = _pos(args)  # O(len(args))
@@ -2035,6 +2055,11 @@ def _code(code: str, lang: str, root: str | None = None, file: str | None = None
 def _code1(code: str, lang: str, scan: str | None = None) -> list[str]:  # O(len(code) * |patterns|)
     scan = code if scan is None else scan  # O(1)
     out: list[str] = []  # O(1)
+    if lang in _LINKS and re.search(_LINKS[lang], scan):  # O(len(code))
+        _LINK[0] = True  # O(1)
+    if lang == "py" and any(re.search(r"\bsymlinks\s*=\s*(?!False\b)", scan[m.end():m.end() + 400])  # O(len(code))
+                            for m in re.finditer(r"(?<![\w])(?:\w+\.)*copytree\s*\(", scan)):  # O(len(code))
+        _LINK[0] = True  # O(1)
     for pat, action in _CALLS[lang]:  # O(|patterns|)
         for m in re.finditer(pat, scan):  # O(len(code))
             at = m.end() - 1 if code[m.end() - 1] == "(" else m.end()  # the opening ( is part of the argument list  # O(1)
@@ -2177,6 +2202,7 @@ def targets(words: list[str], cwd: str | None = None, env=None, top: str | None 
     (the project root), text the whole command line (a git config or git dir named anywhere makes the config unknown),
     file the path of the script whose text a Python `-c` argument is (`__file__`; None: unknown)."""
     _WHY.clear()  # the reasons of this call only (#705)  # O(1)
+    _LINK[0] = False  # O(1)
     return _targets(words, cwd, env, top, text, file)  # O(len(words) * |options|)
 
 
