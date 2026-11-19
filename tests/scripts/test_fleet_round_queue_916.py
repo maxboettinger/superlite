@@ -14,7 +14,7 @@ TAIL = "the next round sends it once a worker finishes, or pass --over-limit"
 def gate(monkeypatch, answers):
     """ml.gate answers from the list (the last repeats); returns the recorded (what, wait_s) calls."""
     calls = []
-    def fake(what, wait_s, over=False, poll_s=10.0):
+    def fake(what, wait_s, over=False, poll_s=10.0, **k):
         calls.append((what, wait_s))
         return answers[min(len(calls) - 1, len(answers) - 1)]
     monkeypatch.setattr(ml, "gate", fake)

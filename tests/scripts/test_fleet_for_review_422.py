@@ -121,7 +121,7 @@ def test_for_review_records_the_reviewed_tasks_after_the_send(rw, capsys, monkey
     rw.err = fio.hc.HerdrError("agent_prompt_stalled", "stalled")
     capsys.readouterr()
     assert _go(rw, "--for-review", "T3") == 3
-    assert "BLOCKED: review-T3 not sent (stalled)" in capsys.readouterr().out
+    assert "BLOCKED: W4 review-T3 not sent (stalled)" in capsys.readouterr().out
     assert "review" not in json.loads((rw.sd / "fleet.json").read_text())["workers"]["W4"]
 
 
@@ -131,7 +131,7 @@ def test_for_review_stops_the_reviewer_when_the_send_fails(rw, capsys, monkeypat
     rw.err = fio.hc.HerdrError("agent_prompt_stalled", "stalled")
     capsys.readouterr()
     assert _go(rw, "--for-review", "T3") == 3
-    assert "BLOCKED: review-T3 not sent (stalled)" in capsys.readouterr().out
+    assert "BLOCKED: W4 review-T3 not sent (stalled)" in capsys.readouterr().out
     assert stopped == [["W4"]]
     assert "review" not in json.loads((rw.sd / "fleet.json").read_text())["workers"]["W4"]
 

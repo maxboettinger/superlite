@@ -60,6 +60,7 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import accounts as ac  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
+import fleet_waits  # noqa: E402 | O(1)
 import herdr_client as hc  # noqa: E402 | O(1)
 import machine_load as ml  # noqa: E402 | O(1)
 import pool  # noqa: E402 | O(1)
@@ -309,6 +310,10 @@ def choose_account(sd, model, env, avoid=None, lead=False):  # O(a * e + w) plus
         account = ac.pick_account(usage, allowed, running, model, alias)  # O(a)
         if account in over:  # O(1)
             print(f"{account}: weekly_all {over[account]:g}% >= lead_weekly_max {limit:g}%; no account under it", file=sys.stderr)  # O(1)
+    if account is not None:  # one stderr line naming the accounts left out and why (#909) | O(a * l)
+        line = ac.skip_line(usage, allowed, model, alias, sorted(out))  # O(a * l)
+        if line:  # O(1)
+            print(line, file=sys.stderr)  # O(1)
     if account is None:  # O(1)
         why = ac.reasons(usage, allowed, model, alias)  # O(a)
         unread = bool(why) and not out and all(r.split(": ", 1)[-1].startswith("usage unreadable") for r in why)  # O(a) #917
@@ -409,7 +414,11 @@ def _live_names():  # names of the live herdr agents on this machine; no agent l
         return set()  # O(1)
 
 
-def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0, output=None, brief=False, plain=True, machine=None, task=None, remote_brief=None):  # O(a * e + w) plus herdr calls
+def live_workers(sd):  # workers of this run that hold a pane: every state but stopped and blocked | O(w)
+    return sum(1 for v in fs.workers(sd).values() if v.get("state") not in ("stopped", "blocked"))  # O(w)
+
+
+def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=False, machine_wait=100.0, output=None, brief=False, plain=True, machine=None, task=None, remote_brief=None, bounds=None):  # O(a * e + w) plus herdr calls
     """One worker; a start that stays slow is retried once on another account.
     Implementers, fixers and package reviewers keep the MCP servers their project names or the stack default (`xcode` for an Xcode project), each checked first (#576).
     Every worker starts lean (#377): no MCP server (`--strict-mcp-config`; the exception is the line above), Chrome, skills or slash commands; Artifact, ListAgents, ReadNotifications and ReportFindings denied (LEAN_FLAGS, LEAN_DENY)."""
@@ -417,7 +426,8 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=
         import fleet_remote_worker as frw  # noqa: E402 | O(1) lazy: it imports this module
         rkw = {**({"task": task, "plan": str(plan)} if task else {}), **({"brief": remote_brief} if remote_brief else {})}  # a write worker's task or brief; a research worker passes none | O(1)
         return frw.spawn(sd, role, tier, project, machine, cfg, **rkw)  # O(w) plus remote calls
-    busy = ml.gate(f"fleet spawn ({role})", machine_wait, over)  # the first attempt only; the retry below is the same spawn | O(wait)
+    rank = 0 if role in ("package-reviewer", "final-reviewer") else 1  # a waiting review goes before a waiting implementer (#902) | O(1)
+    busy = ml.gate(f"fleet spawn ({role})", machine_wait, over, rank=rank, bounds=bounds, run_workers=live_workers(sd) if bounds else None)  # the first attempt only; the retry below is the same spawn | O(wait)
     if busy:  # O(1)
         print(f"BLOCKED: {BUSY_HEAD}{busy}{BUSY_TAIL}")  # O(1)
         raise SystemExit(3)  # O(1) before any pane
@@ -623,11 +633,11 @@ def _in_flight(sd):  # O(w) a worker of this fleet is busy, so a later round get
     return any(v.get("state") == "busy" for v in fs.workers(sd).values())  # O(w)
 
 
-def _spawn_quiet(sd, plan, tier, project, over=False, machine_wait=100.0, **extra):  # O(spawn) -> (worker dict, None) or (None, reason of the BLOCKED lines)
+def _spawn_quiet(sd, plan, tier, project, over=False, machine_wait=100.0, bounds=None, **extra):  # O(spawn) -> (worker dict, None) or (None, reason of the BLOCKED lines)
     buf = io.StringIO()  # O(1)
     try:  # spawn prints its own worker or BLOCKED line; a dispatch round reports one line per dispatch line instead | O(1)
         with contextlib.redirect_stdout(buf):  # O(1)
-            return spawn(sd, plan, tier, project, over=over, machine_wait=machine_wait, plain=False, **extra), None  # O(spawn)
+            return spawn(sd, plan, tier, project, over=over, machine_wait=machine_wait, plain=False, **({"bounds": bounds} if bounds else {}), **extra), None  # O(spawn)
     except SystemExit as e:  # O(1)
         if e.code != 3:  # O(1)
             raise  # O(1)
@@ -715,7 +725,7 @@ def _dispatch_placed(sd, plan, project, tasks, decision, sl, fio):  # O(R * (spa
     return ",".join(left), False  # a placed task never blocks: every failure sends it local | O(k)
 
 
-def for_dispatch(sd, plan, project, over=False, machine_wait=100.0, machine=None, place=True):  # O(R * (spawn + send)): one dispatch round, a line after the other
+def for_dispatch(sd, plan, project, over=False, machine_wait=100.0, machine=None, place=True, bounds=None):  # O(R * (spawn + send)): one dispatch round, a line after the other
     import dispatch as dp  # noqa: E402 | O(1) lazy: only this command needs it
     import fleet_io as fio  # noqa: E402 | O(1) lazy
     import orchestrator  # noqa: E402 | O(1) lazy
@@ -759,7 +769,7 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0, machine=None
         if full is not None:  # no room this round: the later fresh lines wait for the next one, untried | O(1)
             return None, full, True  # O(1)
         wait = 0.0 if _in_flight(sd) else max(0.0, deadline - time.monotonic())  # a busy worker frees room for the next round: no wait | O(w)
-        w, why = _spawn_quiet(sd, plan, tier, project, over, wait)  # O(spawn)
+        w, why = _spawn_quiet(sd, plan, tier, project, over, wait, **({"bounds": bounds} if bounds else {}))  # O(spawn)
         if why and why.startswith(BUSY_HEAD + "machine busy") and _in_flight(sd):  # O(w)
             full = why[len(BUSY_HEAD):].removesuffix(BUSY_TAIL)  # O(len)
             return None, full, True  # O(1)
@@ -814,7 +824,7 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0, machine=None
     return 3 if blocked else 0  # O(1)
 
 
-def for_review(sd, plan, project, tasks, package=None, over=False, machine_wait=100.0, note=None, machine=None):  # O(L + e + spawn + send): a package-reviewer for TASKS (or PACKAGE's committed tasks), brief written and sent
+def for_review(sd, plan, project, tasks, package=None, over=False, machine_wait=100.0, note=None, machine=None, bounds=None):  # O(L + e + spawn + send): a package-reviewer for TASKS (or PACKAGE's committed tasks), brief written and sent
     import fleet_io as fio  # noqa: E402 | O(1) lazy
     sd = Path(sd)  # O(1)
     import plan_tools as pt  # noqa: E402 | O(1) lazy
@@ -878,12 +888,12 @@ def for_review(sd, plan, project, tasks, package=None, over=False, machine_wait=
         body = body.rstrip("\n") + "\n\n## Coordinator notes\n\nThese notes add to the review above; review every task and file it lists all the same.\n\n" + note.strip() + "\n"  # O(B)
     f.write_text(body, encoding="utf-8")  # O(B)
     mkw = {"machine": machine, "remote_brief": str(f)} if machine else {}  # the remote reviewer's start commit carries the brief | O(1)
-    w = spawn(sd, plan, None, project, role="package-reviewer", over=over, machine_wait=machine_wait, **mkw)  # prints its own Wn or BLOCKED line; exit 3 stays | O(a * e + w)
+    w = spawn(sd, plan, None, project, role="package-reviewer", over=over, machine_wait=machine_wait, **({"bounds": bounds} if bounds else {}), **mkw)  # prints its own Wn or BLOCKED line; exit 3 stays | O(a * e + w)
     try:  # O(1)
         fio.send_brief(sd, w["id"], str(f), label)  # prints `Wn review-.. sent` | O(w + len)
     except (fio.hc.HerdrError, OSError, KeyError) as e:  # O(1)
         stop(sd, [w["id"]])  # close the reviewer just spawned, so a rerun does not leave two | O(w)
-        print(f"BLOCKED: {label} not sent ({getattr(e, 'message', '') or getattr(e, 'code', '') or e})")  # O(1)
+        print(f"BLOCKED: {w['id']} {label} not sent ({getattr(e, 'message', '') or getattr(e, 'code', '') or e})")  # O(1)
         return 3  # O(1)
     with fs.locked(sd):  # O(1) plus wait
         data = fs.load(sd)  # O(w)
@@ -1198,6 +1208,12 @@ def _stopped_line(name, secs, text=None):  # the one BLOCKED line of a stopped o
 
 
 
+def _bounds(a):  # the --max-workers and --min-swap-free-mb values as a dict, or None when neither is set | O(1)
+    if a.max_workers is None and a.min_swap_free_mb is None:  # O(1)
+        return None  # O(1)
+    return {"max_workers": a.max_workers, "min_swap_free_mb": a.min_swap_free_mb}  # O(1)
+
+
 def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `spawn`: its exit code | O(R * (spawn + send))
     forced = a.machine == "local"  # forces this machine: placement is not asked | O(1)
     if forced:  # O(1)
@@ -1238,11 +1254,12 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
                 print(f"fleet: warning: {warn}", file=sys.stderr)  # O(1)
         except Exception:  # noqa: BLE001 | O(1)
             pass  # O(1)
+    bkw = {"bounds": _bounds(a)} if _bounds(a) else {}  # only a set bound is passed on | O(1)
     if a.for_dispatch:  # O(1)
-        return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent, a.over_limit, a.machine_wait, a.machine, not forced)  # O(R * (spawn + send))
+        return for_dispatch(sd, a.plan, state.git_root(sd) or sd.parent, a.over_limit, a.machine_wait, a.machine, not forced, **bkw)  # O(R * (spawn + send))
     if a.for_review is not None or a.package:  # O(1)
         ids = [x for v in a.for_review or [] for x in re.split(r"[,\s]+", v) if x]  # O(len)
-        return for_review(sd, a.plan, state.git_root(sd) or sd.parent, ids, a.package, a.over_limit, a.machine_wait, note, a.machine)  # O(L + e + spawn + send)
+        return for_review(sd, a.plan, state.git_root(sd) or sd.parent, ids, a.package, a.over_limit, a.machine_wait, note, a.machine, **bkw)  # O(L + e + spawn + send)
     placed = False  # the machine came from placement, not from --machine | O(1)
     if a.brief and not a.machine and not forced:  # O(1)
         a.machine = _placed(sd, a.role, state.git_root(sd) or sd.parent)  # O(w + m)
@@ -1256,7 +1273,7 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
             buf = io.StringIO()  # O(1)
             try:  # O(1)
                 with contextlib.redirect_stdout(buf):  # O(1)
-                    w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=bool(a.brief), **mkw)  # O(w)
+                    w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=bool(a.brief), **bkw, **mkw)  # O(w)
             except (SystemExit, Exception) as e:  # noqa: BLE001 | O(1)
                 if isinstance(e, SystemExit) and e.code != 3:  # O(1)
                     sys.stdout.write(buf.getvalue())  # the held-back lines of a real exit are not lost | O(s)
@@ -1268,7 +1285,7 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
             else:  # O(1)
                 sys.stdout.write(buf.getvalue())  # O(s)
         if not placed:  # O(1)
-            w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=bool(a.brief), **mkw)  # O(w)
+            w = spawn(sd, a.plan or sd, a.tier, state.git_root(sd) or sd.parent, role=a.role, over=a.over_limit, machine_wait=a.machine_wait, output=output, brief=bool(a.brief), **bkw, **mkw)  # O(w)
     except ValueError as e:  # an unknown role or tier | O(1)
         print(f"error: {e}", file=sys.stderr)  # O(1)
         return 2  # O(1)
@@ -1349,6 +1366,8 @@ def main(argv=None):  # O(w) plus command cost
     s.add_argument("--wait", action="store_true")  # O(1) then waits for its report
     s.add_argument("--timeout", default=None)  # O(1) with --wait: ms, 580s, 9m
     s.add_argument("--over-limit", action="store_true")  # O(1) skip the machine gate (memory floor and count cap) for every spawn
+    s.add_argument("--max-workers", type=int, default=None)  # O(1) bound --over-limit: refuse when this run already has this many live workers
+    s.add_argument("--min-swap-free-mb", type=int, default=None)  # O(1) bound --over-limit: refuse when swap has less free than this
     s.add_argument("--machine-wait", type=float, default=100.0)  # O(1) seconds a spawn waits for room on the machine
     s.add_argument("--machine", default=None)  # O(1) a saved Herdr machine: the worker runs there (plain spawn only)
     s.add_argument("--for-dispatch", action="store_true")  # O(1) run dispatch, spawn per `fresh` line, send each line's tasks
@@ -1436,6 +1455,10 @@ def main(argv=None):  # O(w) plus command cost
             if w.get("state") in ("ready", "busy") and w.get("role") != "layer" and not w.get("machine") and agent_gone(fs.name_of(sd, wid, w)):  # O(1)
                 mark_dead(sd, wid)  # O(w)
                 newly.append(wid)  # O(1)
+        try:  # what a busy worker waits on; never stops the status | O(w + p)
+            waits = fleet_waits.suffixes(sd, fs.workers(sd))  # O(w + p)
+        except Exception:  # noqa: BLE001 | O(1)
+            waits = {}  # O(1)
         for wid, w in fs.workers(sd).items():  # O(w)
             if not a.all and wid not in newly and w.get("state") in ("stopped", "blocked"):  # O(1)
                 continue  # O(1)
@@ -1448,7 +1471,7 @@ def main(argv=None):  # O(w) plus command cost
             if shown == "busy" and _ended_stop(sd, wid, w) is not None:  # O(m + w)
                 shown = "reported"  # O(1)
                 ended.append(wid)  # O(1)
-            print(f"{wid} {shown} account={w.get('account')} pane={w.get('pane_id')} task={w.get('task') or '-'}" + (f" role={role}" if role and role != "implementer" else "") + tail)  # O(1)
+            print(f"{wid} {shown} account={w.get('account')} pane={w.get('pane_id')} task={w.get('task') or '-'}" + (f" role={role}" if role and role != "implementer" else "") + tail + (waits.get(wid, "") if shown == "busy" else ""))  # O(1)
         for wid in newly:  # O(w)
             print(f"dead: {wid} (its agent is gone); start a fresh one: {respawn_hint(sd, wid, str(sd))}")  # O(w)
         if newly:  # O(1)
@@ -1459,6 +1482,9 @@ def main(argv=None):  # O(w) plus command cost
         if hint:  # O(1)
             print(hint)  # O(1)
     elif a.cmd == "spawn":  # O(1)
+        if _bounds(a) and not a.over_limit:  # before any spawn path | O(1)
+            print("error: --max-workers and --min-swap-free-mb bound --over-limit; pass --over-limit too", file=sys.stderr)  # O(1)
+            return 2  # O(1)
         if not fs.is_on(sd):  # a worktree run keeps its own fleet.json: the main checkout's `fleet on` does not reach it (#355) | O(w)
             hint = "sl fleet on" + (f" --plan {a.plan}" if a.plan else "")  # O(1) the same --plan resolves the same state dir
             moved = fs.load(sd).get("moved_to")  # O(w)
