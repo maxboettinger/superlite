@@ -121,3 +121,11 @@ def test_gave_up_workers_cause_names_run_workers_not_agents():
     text = ml.gave_up(["workers"], 0, MX, {"max_workers": 6}, 6)
     assert text.endswith("room comes when workers of this run end (6 live, --max-workers 6)")
     assert "agents end" not in text
+
+
+def test_gave_up_review_cause_names_the_waiting_review_spawn():
+    text = ml.gave_up(["review"], 0, MX, None, None, "fleet spawn (package-reviewer)")
+    assert text.endswith("room comes when the waiting review spawn (fleet spawn (package-reviewer)) starts or gives up")
+    assert "agents end" not in text and "bigd" not in text
+    mixed = ml.gave_up(["review", "critical"], 0, MX, None, None, "fleet spawn (package-reviewer)")
+    assert "agents end (9 running)" in mixed

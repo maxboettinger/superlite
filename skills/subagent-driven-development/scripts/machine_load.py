@@ -354,7 +354,7 @@ PHRASES = {"count": "agent count at the limit", "critical": "pressure critical",
            "review": "a review spawn waits first"}  # O(1)
 
 
-def gave_up(causes: list, el: int, m: dict, bounds=None, run_workers=None) -> str:  # what the gate saw and what would change it (#902) | O(k)
+def gave_up(causes: list, el: int, m: dict, bounds=None, run_workers=None, waiter=None) -> str:  # what the gate saw and what would change it (#902) | O(k)
     k = len(causes)  # O(1)
     seen = list(dict.fromkeys(causes))  # first-seen order | O(k)
     ph = {**PHRASES, "swap": f"swap free under {(bounds or {}).get('min_swap_free_mb')} MB",
@@ -366,9 +366,11 @@ def gave_up(causes: list, el: int, m: dict, bounds=None, run_workers=None) -> st
     ways = []  # O(1)
     if seen == ["workers"]:  # O(1)
         ways.append(f"workers of this run end ({run_workers} live, --max-workers {(bounds or {}).get('max_workers')})")  # O(1)
+    elif seen == ["review"]:  # O(1)
+        ways.append(f"the waiting review spawn ({waiter}) starts or gives up")  # O(1)
     elif m["agents"] > 0:  # O(1)
         ways.append(f"agents end ({m['agents']} running)")  # O(1)
-    if m.get("other") and seen != ["workers"]:  # O(1)
+    if m.get("other") and seen not in (["workers"], ["review"]):  # O(1)
         ways.append(f"{m['other'][0]} ({m['other'][1] / 2**30:.1f} GB) ends")  # O(1)
     room_part = "room comes when " + (" or when ".join(ways) if ways else "memory frees up")  # O(1)
     return f"gave up after {k} check{'' if k == 1 else 's'} in {el} s: {what}; {room_part}"  # O(1)
@@ -423,7 +425,7 @@ def _gate(what, wait_s, over, poll_s, rank, bounds, run_workers, register):  # O
         causes.append(why)  # O(1)
         text = refusal(m, flo, lim, src, why, bounds, rw, waiter)  # O(1)
         if time.monotonic() - t0 >= wait_s:  # O(1)
-            return f"machine busy after {el} s: {text}; {gave_up(causes, el, m, bounds, rw)}"  # O(1)
+            return f"machine busy after {el} s: {text}; {gave_up(causes, el, m, bounds, rw, waiter)}"  # O(1)
         if not waited:  # O(1)
             print(f"machine busy: {text}; waiting up to {int(wait_s)} s for {what}", file=sys.stderr)  # O(1)
             waited = True  # O(1)
