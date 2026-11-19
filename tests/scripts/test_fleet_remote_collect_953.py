@@ -69,7 +69,7 @@ def test_no_stop_record_within_wait_blocked(env, monkeypatch):
     calls = syncing(monkeypatch)
     out = frc.collect(env.sd, "W2", report())
     assert out["status"] == "BLOCKED"
-    assert out["concerns"] == [f"remote worker W2 left no snapshot: no stop record of its task reached this machine within 45 s; its tree {HOST_TREE} stays on box (snapshot ref {REF})"]
+    assert out["concerns"] == [f"remote worker W2 left no snapshot: no stop record of its task reached this machine within 45 s; its tree {HOST_TREE} stays on box (snapshot ref {REF}); sl fleet collect W2 brings it home once its stop record lands"]
     assert 45 <= t[0] - 100 <= 47 and len(calls) >= 20
     assert collected(env) is None
 

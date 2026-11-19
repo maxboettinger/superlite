@@ -34,6 +34,7 @@ A lead's stop records written by its own child sessions (a transcript outside th
 A review brief has a `Red runs (task reports):` section for each task whose newest implementer report (`fleet/reports/*.json`) shows no red run (`red_gap`), so its reviewer proves each new test can fail (#606).
 A review brief has a `Plan contract outside Tn's Produces` section: the other plan lines (table rows, later tasks' lines) that name the task's types (`contract_mentions`), for the reviewer to hold the build against (#606).
 `review_hints` adds the hint `no red run` to a committed task whose report has a red-run gap.
+A worker's report lands in the run that spawned it (the `state_dir` of its record), not the run that waits on it (#986); a run folder that is gone keeps the report in the waiting run.
 """
 # Complexity notation:
 # n = tasks in the plan, k = tasks in a message, w = workers, m = lines of metrics.jsonl, T = transcript lines, s = screen bytes
@@ -943,19 +944,24 @@ def _tel_finish(sd, wid, w, rep, label):  # the `agent_stop` line of a worker's 
         pass  # O(1)
 
 
-def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follows an APPROVED that left packet lines unread; TAIL: the last pane lines of a turn that ended without a report; CUT: the stop record line of a transcript that stayed behind | O(len + w)
-    label = w.get("task") or wid  # O(1)
+def report_dir(sd, w):  # the report folder of worker record W: its own run's, else the waiting run's SD | O(1)
+    home = Path(sd) / "fleet" / "reports"  # O(1)
+    sdir = w.get("state_dir")  # O(1)
+    if not sdir:  # O(1)
+        return home  # O(1)
+    run = Path(sdir)  # O(1)
+    if w.get("machine") and run.parent.name == "remote":  # a remote record keeps <run>/remote/<wid> | O(1)
+        run = run.parent.parent  # O(1)
+    if not run.is_dir() or run.resolve() == Path(sd).resolve():  # O(1)
+        return home  # O(1)
+    return run / "fleet" / "reports"  # O(1)
+
+
+def _result(sd, wid, w, text, source, label, jp, mp, sync=False):  # parse TEXT, bring a remote write worker's snapshot home, write the .json; (report, not-run lines, partial) | O(len + w)
     rid = label.split(",")[0]  # O(1)
-    rdir = Path(sd) / "fleet" / "reports"  # O(1)
-    mp, jp = rdir / f"{rid}.md", rdir / f"{rid}.json"  # O(1)
-    if cut is not None:  # O(1)
-        body = f"UNKNOWN (transcript empty or behind its stop record after {READ_MS // 1000} s: {cut[0]})\n\n" + (text + "\n\n" if text.strip() else "") + "Stop record line (cut at 160 chars, not the report):\n" + cut[1] + "\n\nLast pane lines:\n" + (tail or "")  # O(len)
-    else:  # O(1)
-        body = text if tail is None else "UNKNOWN (turn ended without a report)\n\n" + text + "\n\nLast pane lines:\n" + tail  # O(len)
-    _write(mp, body)  # O(len)
     rep = fleet_report.parse(text, rid, allow_json=source == "transcript")  # a screen holds no trustworthy json block | O(len)
     if _write_remote(w) and rep["status"] in FINAL:  # its snapshot comes home first (a final turn only): the report holds the collected status and concerns | O(w)
-        rep = importlib.import_module("fleet_remote_collect").collect(sd, wid, rep)  # O(1) plus remote calls
+        rep = importlib.import_module("fleet_remote_collect").collect(sd, wid, rep, **({"sync": True} if sync else {}))  # O(1) plus remote calls
     role = w.get("role") or "implementer"  # O(1)
     unrun = [] if role in ("research", "writer") else fleet_report.not_run(text)  # O(len)
     extra = {}  # O(1)
@@ -966,12 +972,10 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follow
             rep = {**rep, "status": "DONE_WITH_CONCERNS"}  # O(1)
     part = rep["status"] == "APPROVED" and (fleet_report.partial(text) or bool(unrun))  # O(len)
     _write(jp, json.dumps({**rep, **extra, **({"partial": True} if part else {}), "id": wid, "label": label, "role": w.get("role") or "implementer", "source": source, "report": str(mp)}, indent=2) + "\n")  # O(len)
-    n = len(rep["findings"])  # O(1)
-    nc = len(rep.get("concerns") or [])  # O(1)
-    print(f"{wid} {label} {rep['status']} findings={n}" + (f" concerns={nc}" if nc else "") + (f" not_run={len(unrun)}" if unrun else "") + (" partial" if part else "") + f" {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
-    _tel_finish(sd, wid, w, rep, label)  # O(T + w)
-    _ready(sd, wid, label)  # O(w)
-    pane_label(sd, wid, pane_title(sd, wid, label, "reported, waiting for coordinator"))  # before the worker may be stopped | O(w)
+    return rep, unrun, part  # O(1)
+
+
+def _release(sd, wid, w, rep):  # stop the worker of a finished report: a one-turn worker, or a remote write worker once its snapshot is collected | O(w)
     if w.get("one_turn") and rep["status"] in FINAL and (not _write_remote(w) or rep.get("collected")):  # NEEDS_CONTEXT, UNKNOWN and BLOCKED-UI keep the worker; a remote write worker only once its snapshot is collected | O(1)
         _stop_worker(sd, wid)  # O(w)
     elif _write_remote(w) and rep["status"] in FINAL and rep.get("collected"):  # a remote write worker takes one task: stopped, its tree dropped, once its snapshot is collected | O(1)
@@ -979,7 +983,69 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follow
             _remote().stop(sd, wid)  # O(1) plus remote calls
         except Exception:  # O(1)
             pass  # O(1)
+
+
+def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follows an APPROVED that left packet lines unread; TAIL: the last pane lines of a turn that ended without a report; CUT: the stop record line of a transcript that stayed behind | O(len + w)
+    label = w.get("task") or wid  # O(1)
+    rid = label.split(",")[0]  # O(1)
+    rdir = report_dir(sd, w)  # O(1)
+    mp, jp = rdir / f"{rid}.md", rdir / f"{rid}.json"  # O(1)
+    if cut is not None:  # O(1)
+        body = f"UNKNOWN (transcript empty or behind its stop record after {READ_MS // 1000} s: {cut[0]})\n\n" + (text + "\n\n" if text.strip() else "") + "Stop record line (cut at 160 chars, not the report):\n" + cut[1] + "\n\nLast pane lines:\n" + (tail or "")  # O(len)
+    else:  # O(1)
+        body = text if tail is None else "UNKNOWN (turn ended without a report)\n\n" + text + "\n\nLast pane lines:\n" + tail  # O(len)
+    _write(mp, body)  # O(len)
+    rep, unrun, part = _result(sd, wid, w, text, source, label, jp, mp)  # O(len + w)
+    n = len(rep["findings"])  # O(1)
+    nc = len(rep.get("concerns") or [])  # O(1)
+    print(f"{wid} {label} {rep['status']} findings={n}" + (f" concerns={nc}" if nc else "") + (f" not_run={len(unrun)}" if unrun else "") + (" partial" if part else "") + f" {jp}" + (" (screen)" if source == "screen" else "") + (" (turn ended without a report)" if tail is not None else "") + (" (transcript unread)" if cut is not None else ""))  # O(1)
+    _tel_finish(sd, wid, w, rep, label)  # O(T + w)
+    _ready(sd, wid, label)  # O(w)
+    pane_label(sd, wid, pane_title(sd, wid, label, "reported, waiting for coordinator"))  # before the worker may be stopped | O(w)
+    _release(sd, wid, w, rep)  # O(w)
     return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n, "role": w.get("role") or "implementer", **({"partial": True} if part else {})}  # O(1)
+
+
+def _refuse(msg):  # O(1)
+    print(f"error: {msg}", file=sys.stderr)  # O(1)
+    return 2  # O(1)
+
+
+def recollect(sd, wid):  # bring a remote write worker's late snapshot home from its saved report: 0 collected, 2 refused, 3 still BLOCKED (#984) | O(len + w)
+    w = fs.workers(Path(sd)).get(wid)  # O(w)
+    if w is None:  # O(1)
+        return _refuse(f"unknown worker {wid}")  # O(1)
+    if not _write_remote(w):  # O(1)
+        return _refuse(f"{wid} is not a remote write worker: nothing to collect")  # O(1)
+    if w.get("state") == "busy":  # O(1)
+        return _refuse(f"{wid} is busy on {w.get('task') or w.get('last_task')}; run sl fleet wait {wid} first")  # O(1)
+    if w.get("state") == "stopped":  # O(1)
+        return _refuse(f"{wid} is stopped: its remote tree is gone")  # O(1)
+    label = w.get("last_task")  # O(1)
+    if not label:  # O(1)
+        return _refuse(f"{wid} has no collected report; run sl fleet wait {wid} first")  # O(1)
+    rid = label.split(",")[0]  # O(1)
+    rdir = report_dir(sd, w)  # O(1)
+    mp, jp = rdir / f"{rid}.md", rdir / f"{rid}.json"  # O(1)
+    if not mp.is_file():  # O(1)
+        return _refuse(f"{wid} {label}: no report file in {rdir}")  # O(1)
+    try:  # O(1)
+        old = json.loads(jp.read_text(encoding="utf-8"))  # O(len)
+    except (OSError, ValueError):  # O(1)
+        old = {}  # O(1)
+    if old.get("collected"):  # O(1)
+        print(f"{wid} {label} already collected: {jp}")  # O(1)
+        return 0  # O(1)
+    source = old.get("source") or "transcript"  # O(1)
+    text = mp.read_text(encoding="utf-8")  # O(len)
+    st = fleet_report.parse(text, rid, allow_json=source == "transcript")["status"]  # O(len)
+    if st not in FINAL:  # O(1)
+        return _refuse(f"{wid} {label} is {st}: nothing to collect")  # O(1)
+    rep, unrun, part = _result(sd, wid, w, text, source, label, jp, mp, sync=True)  # O(len + w)
+    nc = len(rep.get("concerns") or [])  # O(1)
+    print(f"{wid} {label} {rep['status']} findings={len(rep['findings'])}" + (f" concerns={nc}" if nc else "") + (f" not_run={len(unrun)}" if unrun else "") + (" partial" if part else "") + f" {jp}")  # O(1)
+    _release(sd, wid, w, rep)  # O(w)
+    return 0 if rep.get("collected") else 3  # O(1)
 
 
 def _pane_tail(sd, wid, w):  # the last pane lines, or the reason there are none | O(s)
@@ -992,7 +1058,7 @@ def _pane_tail(sd, wid, w):  # the last pane lines, or the reason there are none
 
 def _finish_layer(sd, wid, w, r):  # a finished layer worker: its result as json and two lines, then the worker is stopped | O(w)
     label = w.get("task") or wid  # O(1)
-    jp = Path(sd) / "fleet" / "reports" / f"{label.split(',')[0]}.json"  # O(1)
+    jp = report_dir(sd, w) / f"{label.split(',')[0]}.json"  # O(1)
     _write(jp, json.dumps({**r, "id": wid, "label": label, "role": "layer"}, indent=2) + "\n")  # O(1)
     print(f"{wid} {label} {r['status']} exit={r['exit']} {r['log']}")  # O(1)
     print(f"  {r['last']}")  # O(1)
@@ -1045,7 +1111,7 @@ def _collected(sd, wid, w):  # True (and a line) when another wait already took 
     if not gone:  # O(1)
         return False  # O(1)
     label = (w.get("task") or w.get("last_task") or wid).split(",")[0]  # O(1)
-    print(f"{wid} {w.get('task') or w.get('last_task')} already collected: {Path(sd) / 'fleet' / 'reports' / (label + '.json')}")  # O(1)
+    print(f"{wid} {w.get('task') or w.get('last_task')} already collected: {report_dir(sd, w) / (label + '.json')}")  # O(1)
     return True  # O(1)
 
 

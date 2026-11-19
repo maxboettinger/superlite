@@ -27,7 +27,7 @@ def test_help_lists_resume(monkeypatch, capsys):
     with pytest.raises(SystemExit):
         fleet.main(["--help"])
     out = capsys.readouterr().out
-    assert "{on,off,status,spawn,placement,stop,name,report,send,keys,wait,run,restore,resume}" in out
+    assert "{on,off,status,spawn,placement,stop,name,report,collect,send,keys,wait,run,restore,resume}" in out
     assert "continue a stopped one-turn worker's session" in out
 
 

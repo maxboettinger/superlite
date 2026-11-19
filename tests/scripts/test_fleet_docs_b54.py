@@ -21,7 +21,7 @@ def test_researcher_reach_and_plan():
 
 
 def test_commands_name_report_help_plan_and_accounts():
-    for s in ("`fleet report Wn [Wm ...]`", "`== <id> <path>`", "`fleet --help` lists every subcommand (on, off, status, spawn, placement, stop, name, report, send, keys, wait, run, restore, resume)",
+    for s in ("`fleet report Wn [Wm ...]`", "`== <id> <path>`", "`fleet --help` lists every subcommand (on, off, status, spawn, placement, stop, name, report, collect, send, keys, wait, run, restore, resume)",
               "`error: --plan P: not a plan file or folder; pass the plan file", "`sl accounts [--tier MODEL]`", "`claude1 ok 5h=12% weekly=40%`", "`claude2 skip 5-hour 95%`"):
         assert s in FLEET, s
 

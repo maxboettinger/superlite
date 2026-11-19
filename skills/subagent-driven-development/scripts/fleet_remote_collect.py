@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Bring a remote write worker's result home: fetch its snapshot and apply it to the local tree under the three-state rule.
 
-`collect(sd, wid, report)` waits (bounded, syncing the mirror) for the stop record of the worker's task turn (`<sd>/remote/<wid>/metrics.jsonl`, a
+`collect(sd, wid, report, sync=False)` waits (bounded, syncing the mirror) for the stop record of the worker's task turn (`<sd>/remote/<wid>/metrics.jsonl`, a
 record at or after the worker's `sent`), fetches its `snapshot`
 (`fleet_remote.fetch`) and applies start..snapshot (`remote_apply.apply`). The report gains `collected` {applied, skipped, sha}; skipped paths,
-conflicts, a missing snapshot and an unreachable host become concerns (the last three turn the status BLOCKED). A snapshot is applied once.
+conflicts, a missing snapshot and an unreachable host become concerns (the last three turn the status BLOCKED). A snapshot is applied once. `sync=True` mirrors once before the first read of the stop record (`sl fleet collect Wn`); the BLOCKED concerns a later
+collect can cure (no stop record, fetch, conflict) end with the hint `sl fleet collect Wn ...`.
 """
 # Complexity notation:
 # w = workers, m = lines of the mirrored metrics.jsonl, f = changed files
@@ -73,16 +74,18 @@ def _allowed(project, start, sha, owns):  # owns plus every changed path under t
     return [*owns, *(x for x in out.split("\0") if x.startswith("tests/regression/"))]  # O(f)
 
 
-def collect(sd, wid, report):  # O(m + f)
+def collect(sd, wid, report, sync=False):  # O(m + f)
     sd = Path(sd)  # O(1)
     rec = (fs.load(sd).get("workers") or {}).get(wid) or {}  # O(w)
     remote = rec.get("remote") or {}  # O(1)
     if not rec.get("machine") or not remote.get("write"):  # a local or read-only worker | O(1)
         return report  # O(1)
     tree, label = remote.get("tree"), remote.get("label")  # O(1)
+    if sync:  # one mirror before the first read | O(1)
+        _sync(sd, wid)  # O(objects)
     stop = _await_stop(sd, wid, int(rec.get("sent") or 0))  # O(WAIT_S / POLL_S * m)
     if stop is None:  # O(1)
-        return _blocked(report, f"remote worker {wid} left no snapshot: no stop record of its task reached this machine within {WAIT_S} s; its tree {tree} stays on {label} (snapshot ref {remote.get('snapshot_ref')})")  # O(1)
+        return _blocked(report, f"remote worker {wid} left no snapshot: no stop record of its task reached this machine within {WAIT_S} s; its tree {tree} stays on {label} (snapshot ref {remote.get('snapshot_ref')}); sl fleet collect {wid} brings it home once its stop record lands")  # O(1)
     snap = stop.get("snapshot")  # O(1)
     if not snap:  # O(1)
         return _blocked(report, f"remote worker {wid} left no snapshot: its stop hook took none (remote_apply snapshot failed or ran past 30 s); its tree {tree} stays on {label}")  # O(1)
@@ -93,7 +96,7 @@ def collect(sd, wid, report):  # O(m + f)
     try:  # O(1)
         sha = fr.fetch(remote["label"], project, remote["name"], ref)  # O(objects)
     except fr.RemoteError as e:  # O(1)
-        return _blocked(report, f"cannot fetch {wid}'s work: {e}")  # O(1)
+        return _blocked(report, f"cannot fetch {wid}'s work: {e}; sl fleet collect {wid} retries")  # O(1)
     if sha != snap:  # O(1)
         return _blocked(report, f"fetched {sha} but the stop record names {snap}")  # O(1)
     try:  # O(1)
@@ -102,7 +105,7 @@ def collect(sd, wid, report):  # O(m + f)
         return _blocked(report, f"cannot apply {wid}'s work: {e}")  # O(1)
     if res["conflicts"]:  # O(1)
         kept = f"refs/maxapp/{remote['label']}/{remote['name']}/{ref[len('refs/'):]}"  # O(1)
-        return _blocked(report, f"remote changes conflict with local edits: {', '.join(res['conflicts'])} (kept at {kept})")  # O(f)
+        return _blocked(report, f"remote changes conflict with local edits: {', '.join(res['conflicts'])} (kept at {kept}); sl fleet collect {wid} retries once those local edits are resolved")  # O(f)
     with fs.locked(sd):  # O(1)
         data = fs.load(sd)  # O(w)
         live = ((data.get("workers") or {}).get(wid) or {}).get("remote")  # O(1)
