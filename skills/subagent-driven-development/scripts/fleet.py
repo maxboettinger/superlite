@@ -33,6 +33,7 @@ A stalled prime waits up to STALL_WAIT_MS for a late start, then is resent once;
 A primed worker whose pane shows the folder trust dialog gets Down, Enter and the prime once more; one-turn roles and leads check the screen once after the start; a dialog that stays open is named in the BLOCKED line (#514).
 `spawn --for-dispatch|--for-review|--package` accept the run folder as `--plan`: it becomes the plan file stable.json, pool.json or plan.md names, else exit 2 (#508).
 While the run's fleet.json says off, `spawn` (both forms) starts nothing: `BLOCKED: fleet is off in <state dir>; run sl fleet on [--plan P] first ...`, exit 3 (#355).
+`stop` sends no `/exit` to a lean worker (its pane close ends it) and keeps `/exit` for a lead (#930); a plain `status` in a linked worktree adds a `worktree:` line when that worktree's own fleet disagrees on on/off with the folder it read (#904).
 `stop` drops the worker's tree `worker-<id>` unless a live process marks it busy (#614).
 While the budget is paused (spend above the cap), every `spawn` that names a `--plan` refuses: `BLOCKED: fleet spawn: budget: paused: ...`, exit 3, before any pane.
 `spawn` (not `--for-dispatch`, which dispatch gates itself) refuses on a nearly full disk: `BLOCKED: fleet spawn: disk: ...`, exit 3; below the warn level it warns on stderr (#614). A local spawn from a launchd session other than Aqua, in a project that drives a Mac app, prints one `fleet: warning: launchd session ...` stderr line (#798).
@@ -907,6 +908,28 @@ def _close_machine_workspace(sd, machine):  # the last live worker of `machine` 
         pass  # O(1)
 
 
+def slash_commands(w):  # O(a): whether the worker's agent takes slash commands (#930)
+    argv = (w.get("launch") or {}).get("argv")  # O(1)
+    if isinstance(argv, list):  # O(1)
+        return "--disable-slash-commands" not in argv  # O(a)
+    return w.get("role") == "lead"  # older records: only a lead keeps slash commands | O(1)
+
+
+def worktree_line(sd, on):  # O(1) plus a git call: names the cwd worktree's own fleet when it disagrees with the folder status read (#904)
+    try:  # O(1)
+        top = state.worktree_top(".")  # O(1)
+    except OSError:  # a status line must not fail the status | O(1)
+        return None  # O(1)
+    if top is None or not (Path(top) / ".superlite").is_dir():  # O(1)
+        return None  # O(1)
+    W, S = (Path(top) / ".superlite").resolve(), Path(sd).resolve()  # O(1)
+    if W == S or fs.is_on(W) == on:  # O(1)
+        return None  # O(1)
+    if on:  # the worktree is off  | O(1)
+        return f"worktree: fleet is off in {W}, the folder fleet spawn --plan {W} checks (this status read {S}); run sl fleet on --plan {W} first"  # O(1)
+    return f"worktree: fleet is on in {W}, the folder fleet spawn --plan {W} uses (this status read {S}); sl fleet status --plan {W} shows its workers"  # O(1)
+
+
 def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr calls
     sd = Path(sd)  # O(1)
     live = {k: v for k, v in fs.workers(sd).items() if v.get("state") != "stopped"}  # O(w)
@@ -927,7 +950,7 @@ def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr cal
             except Exception:  # noqa: BLE001 | O(1)
                 pass  # O(1)
         try:  # O(1)
-            hc.exit_agent(fs.name_of(sd, wid, live[wid]))  # O(1)
+            hc.exit_agent(fs.name_of(sd, wid, live[wid]), slash=slash_commands(live[wid]))  # a lean agent gets no /exit: close_pane ends it (#930) | O(1)
         except hc.HerdrError:  # O(1)
             pass  # O(1)
         try:  # O(1)
@@ -1395,11 +1418,17 @@ def main(argv=None):  # O(w) plus command cost
         if not fs.is_on(sd):  # O(w)
             moved = fs.load(sd).get("moved_to")  # O(w)
             print(f"fleet: off (moved to {moved})" if moved else "fleet: off")  # O(1)
+            wl = worktree_line(sd, False) if not a.plan else None  # O(1)
+            if wl:  # O(1)
+                print(wl)  # O(1)
             _machine_line()  # O(p)
             if hint:  # O(1)
                 print(hint)  # O(1)
             return 0  # O(1)
         print("fleet: on")  # O(1)
+        wl = worktree_line(sd, True) if not a.plan else None  # O(1)
+        if wl:  # O(1)
+            print(wl)  # O(1)
         import fleet_io as fio  # noqa: E402 | O(1) lazy
         pooled = {x["id"]: x for x in pool.load(sd / "pool.json").get("agents") or []}  # O(w)
         newly, ended = [], []  # O(1)

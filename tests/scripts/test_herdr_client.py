@@ -77,19 +77,19 @@ def test_missing_binary_is_herdr_error(monkeypatch):
     assert e.value.code == "missing"
 
 def test_exit_sends_no_bare_timeout(fake):
-    hc.exit_agent("sl-x-w1")
+    hc.exit_agent("sl-x-w1", slash=True)
     assert fake() == [["agent", "prompt", "sl-x-w1", "/exit"],
                       ["agent", "wait", "sl-x-w1", "--until", "unknown", "--timeout", "10000"]]
 
 def test_exit_wait_error_counts_as_gone(fake, monkeypatch):
     monkeypatch.setenv("FAKE_HERDR_FAIL", "agent wait")
-    hc.exit_agent("sl-x-w1")
+    hc.exit_agent("sl-x-w1", slash=True)
     assert [c[:2] for c in fake()] == [["agent", "prompt"], ["agent", "wait"]]
 
 def test_exit_prompt_error_raises(fake, monkeypatch):
     monkeypatch.setenv("FAKE_HERDR_FAIL", "agent prompt")
     with pytest.raises(hc.HerdrError):
-        hc.exit_agent("sl-x-w1")
+        hc.exit_agent("sl-x-w1", slash=True)
     assert [c[:2] for c in fake()] == [["agent", "prompt"]]
 
 def test_fake_herdr_rejects_bare_timeout(fake):

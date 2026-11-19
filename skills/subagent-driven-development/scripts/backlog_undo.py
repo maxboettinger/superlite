@@ -78,7 +78,7 @@ def _stop_lead(root: Path, b: dict):  # O(w) | None when stopped, else the BLOCK
     try:  # O(1)
         live = agent in fleet.hc.agent_states()  # O(a)
         if live:  # O(1)
-            for call, arg in ((fleet.hc.exit_agent, agent), (fleet.hc.close_pane, pane)):  # O(1)
+            for call, arg in ((lambda a: fleet.hc.exit_agent(a, slash=True), agent), (fleet.hc.close_pane, pane)):  # O(1)
                 try:  # O(1)
                     if arg:  # O(1)
                         call(arg)  # O(1)

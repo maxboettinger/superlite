@@ -1,0 +1,91 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-19T11:34:56",
+ "headline": {
+  "wall_min": {
+   "projected": 5.248,
+   "actual": 0.745
+  },
+  "cost_usd_agents": {
+   "projected": 0.194871,
+   "actual": 0.310205
+  },
+  "task_min": {
+   "projected": 9.924,
+   "actual": 1.153
+  },
+  "agents": {
+   "projected": 2,
+   "actual": 6
+  }
+ },
+ "cost_split": {
+  "agents_usd": 0.310205,
+  "rework_usd": 0,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 0.310205
+ },
+ "concurrency": {
+  "peak": 2,
+  "projected_peak": 2
+ },
+ "critical_path": {
+  "actual": [
+   "T2"
+  ],
+  "projected": [
+   "T2"
+  ],
+  "projected_min": 5.248
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 2,
+   "cost_usd": 0.310205
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 12207,
+   "failed": 0,
+   "skipped": 12,
+   "seconds": 347.4,
+   "recorded": false
+  },
+  "tests_newer": null,
+  "tests_from": "progress.md",
+  "first_time_pass": 1,
+  "first_time_n": 2,
+  "rework_dispatches": 0,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 5.248,
+   "actual_min": 0.745,
+   "delta": {
+    "abs": -4.503,
+    "pct": -85.8
+   },
+   "cost_usd": 0.19559,
+   "first_time_pass": false
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 4.676,
+   "actual_min": 0.408,
+   "delta": {
+    "abs": -4.2677,
+    "pct": -91.3
+   },
+   "cost_usd": 0.114615,
+   "first_time_pass": true
+  }
+ ]
+}

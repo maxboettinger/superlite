@@ -1,0 +1,12 @@
+- start 8c60fa5b8177e1f128fd6d497e888a5e543d250f
+- unblocked: dispatched T1 T2 at 11:35:08; waiting on fixes: none
+- Ruling: accept predicted 15.7 min - two independent small tasks, the critical path is one task - cost none
+- tests fast passed=0 failed=4 skipped=0 seconds=0.5
+- tests fast passed=7 failed=10 skipped=0 seconds=0.5
+- tests fast passed=51 failed=0 skipped=0 seconds=1.3
+- tests fast passed=99 failed=1 skipped=0 seconds=2.2
+- tests fast passed=74 failed=0 skipped=0 seconds=1.7
+- commit T1 61c003a30a exit_agent slash flag
+- commit T2 eed0197e94 fleet stop and status
+- tests fast passed=133 failed=0 skipped=0 seconds=2.8
+- tests full passed=12207 failed=0 skipped=12 seconds=347.4

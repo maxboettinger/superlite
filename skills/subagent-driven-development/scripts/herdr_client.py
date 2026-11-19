@@ -212,7 +212,9 @@ def wait_state(name, until, timeout_ms):  # O(k)
     return _pick(r, "agent", "agent_status")  # O(1)
 
 
-def exit_agent(name):  # a bare --timeout needs --wait in herdr 0.9.5, so send /exit plain, then wait for the agent to go | O(1)
+def exit_agent(name, slash=False):  # #930: a lean agent (--disable-slash-commands) answers /exit with "Unknown command", so slash=False sends nothing (the caller's pane close ends it); slash=True (a lead) sends /exit plain (a bare --timeout needs --wait in herdr 0.9.5), then waits for the agent to go | O(1)
+    if not slash:  # O(1)
+        return  # O(1)
     call(["agent", "prompt", name, "/exit"])  # only a failed prompt raises | O(1)
     try:  # O(1)
         wait_state(name, ["unknown"], 10000)  # O(1)

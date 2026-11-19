@@ -64,7 +64,7 @@ def env(tmp_path, monkeypatch):
             raise e.states
         return e.states[0] if len(e.states) == 1 else e.states.pop(0)
     monkeypatch.setattr(fleet.hc, "agent_states", states)
-    monkeypatch.setattr(fleet.hc, "exit_agent", lambda n: e.calls.append(("exit", n)))
+    monkeypatch.setattr(fleet.hc, "exit_agent", lambda n, slash=False: e.calls.append(("exit", n) if slash else ("exit-lean", n)))
     monkeypatch.setattr(fleet.hc, "close_pane", lambda pid: e.calls.append(("close", pid)))
     monkeypatch.setattr(ship_lock, "release", lambda lp, bid: e.released.append((lp, bid)))
     return e
