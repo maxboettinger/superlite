@@ -16,6 +16,7 @@ A red Swift (xcodebuild) run reports each failure at its file and line (`failure
 When a run prints no test count and exits 0, the stop names the runner's own "no tests" line (`; runner: <line>`).
 Every run keeps its full output (pytest with `-rP`, so a passing test's prints show) in `<summary stem>.output.log` beside the summary (newest 20 kept); the summary's `output` names it, a foreground run prints `run_tests: output <path>` and `--wait` prints `output: <path>` right before its summary line (#501).
 A no-result stop keeps its command, exit and output in `.superlite/no-result-*.log` (newest 20) and its incident carries them as `target`, `command`, `exit`, `log`.
+An isolated tree run writes `tree` (relative to the run root), `lacks` (changed files of the run root the tree lacks) and `drift` (files that changed while it ran) to the summary, and a run whose command or output names an `.xcresult` result bundle writes `result_bundles` (a tree run warns about one outside its tree, except a `maxapp` command); `--wait`, `fleet wait --tests` and one stderr line `run_tests: tested <tree; lacks; drift; bundle>` (`run_tests: result bundle <path>` without a tree) repeat them (#818).
 An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change except files owned by unfinished sibling tasks (kept at base, named on the line), a `--full` tree the task's own files.
 A fleet worker's `--fast` run without `--task` (package reviewer, fixer; not a lead) on an isolated stack runs in its own tree `.superlite/trees/worker-<Wn>`: every working-tree change except files of unfinished tasks and changed files another busy fixer's or reviewer's brief names (#479); `--full` runs stay in the run root.
 `--worker NAME` (1 to 64 of `[A-Za-z0-9_-]`, else exit 2) gives a fleet-off (in-process Agent) reviewer or fixer the same tree as `worker-NAME`; a fleet worker's own id wins (#826).
@@ -130,6 +131,8 @@ WARNING = ""  # the platform warning of this full run; write_summary records it,
 AFFECTED = None  # the --affected selection of this run (base, changed, selected, reasons, untested); write_summary records it, main clears it | O(1)
 DROPPED = ""  # the dropped-paths note of this fast run; write_summary records it, main clears it | O(1)
 OUTPUT = ""  # the full-output log of this run; write_summary records it, main clears it | O(1)
+TESTED = None  # the isolated tree of this run (tree, lacks, path, overlay); write_summary records it, main clears it | O(1)
+BUNDLES = []  # the .xcresult paths this run named; write_summary records them, main clears it | O(1)
 
 
 class LimitHit(Exception):  # O(1) a test command ran past --limit and its process tree was killed
@@ -669,7 +672,66 @@ def summary_line(data):  # the last line of --wait: counts, mode and error | O(1
         out += f"; failing: {', '.join(names)}" + (f" (+{len(fails) - 3} more)" if len(fails) > 3 else "")  # O(1)
     if data.get("error"):  # O(1)
         out += f"; error: {str(data['error'])[:150]}"  # O(1)
+    tail = tested_tail(data)  # O(1)
+    return f"{out}; {tail}" if tail else out  # O(1)
+
+
+BUNDLE_HEADS = ("Test session results, code coverage, and logs:", "Writing result bundle at path:")  # the xcodebuild lines before a bundle path | O(1)
+
+
+def result_bundles(commands, text, cwd):  # O(c * len + lines) the .xcresult paths a run's commands and output name: at most 5, in order, absolute
+    found = []  # O(1)
+    for cmd in commands:  # O(c)
+        try:  # an unparsable command is skipped | O(1)
+            words = shlex.split(cmd)  # O(len)
+        except ValueError:  # O(1)
+            continue  # O(1)
+        found += [words[i + 1] for i, w in enumerate(words[:-1]) if w == "-resultBundlePath"]  # O(len)
+    lines = text.splitlines()  # O(o)
+    for i, ln in enumerate(lines[:-1]):  # O(o)
+        nxt = lines[i + 1].strip()  # O(1)
+        if ln.strip() in BUNDLE_HEADS and nxt.endswith(".xcresult"):  # O(1)
+            found.append(nxt)  # O(1)
+    out = []  # O(1)
+    for f in found:  # O(f)
+        path = os.path.normpath(os.path.join(cwd, f))  # O(len)
+        if path not in out:  # O(5)
+            out.append(path)  # O(1)
+    return out[:5]  # O(1)
+
+
+def outside_bundles(bundles, tree, command):  # O(b + len) the bundles that lie outside the tree; none for a maxapp command (its own build pool)
+    try:  # O(1)
+        words = shlex.split(command)  # O(len)
+    except ValueError:  # O(1)
+        words = command.split()  # O(len)
+    words = [w for w in words if not re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w)] if words else []  # O(len)
+    if words and os.path.basename(words[0]) == "maxapp":  # O(1)
+        return []  # O(1)
+    base = Path(tree).resolve()  # O(1)
+    out = []  # O(1)
+    for b in bundles:  # O(b)
+        try:  # O(1)
+            Path(b).resolve().relative_to(base)  # O(len)
+        except ValueError:  # O(1)
+            out.append(b)  # O(1)
     return out  # O(1)
+
+
+def tested_tail(data):  # O(1) what a run tested: its tree, the changed files that tree lacks and those that changed while it ran, its result bundle; "" for none
+    def names(items, more=3):  # O(1)
+        return ", ".join(items[:more]) + (f" (+{len(items) - more} more)" if len(items) > more else "")  # O(1)
+    parts = []  # O(1)
+    if data.get("tree"):  # O(1)
+        parts.append(f"tree {data['tree']}")  # O(1)
+    lacks, drift, bundles = data.get("lacks") or [], data.get("drift") or [], data.get("result_bundles") or []  # O(1)
+    if lacks:  # O(1)
+        parts.append(f"lacks {len(lacks)} changed file{'' if len(lacks) == 1 else 's'} of the run root: {names(lacks)}")  # O(1)
+    if drift:  # O(1)
+        parts.append(f"{len(drift)} file{'' if len(drift) == 1 else 's'} changed while the tests ran: {names(drift)}")  # O(1)
+    if bundles:  # O(1)
+        parts.append(f"result bundle {bundles[0]}" + (f" (+{len(bundles) - 1} more)" if len(bundles) > 1 else ""))  # O(1)
+    return "; ".join(parts)  # O(1)
 
 
 def dropped_note(spec):  # why a fast run's paths were not passed (#708) | O(1)
@@ -930,6 +992,25 @@ def write_summary(path, mode, counts, failures, seconds, error=None, files=None,
         data["started"] = started  # O(1)
     if AFFECTED:  # what --affected selected for this run (#847) | O(1)
         data["affected"] = AFFECTED  # O(1)
+    if TESTED:  # the tree this run tested, what it lacks, what changed while it ran (#818) | O(f)
+        data["tree"] = TESTED["tree"]  # O(1)
+        if TESTED["lacks"]:  # O(1)
+            data["lacks"] = TESTED["lacks"]  # O(1)
+        try:  # O(1)
+            drift = tree_drift(".", TESTED["path"], TESTED["overlay"])  # O(f * size)
+        except (OSError, ValueError):  # O(1)
+            drift = []  # O(1)
+        if drift:  # O(1)
+            data["drift"] = drift  # O(1)
+    if BUNDLES:  # the result bundles this run named (#818) | O(b)
+        base = Path.cwd().resolve()  # O(1)
+        shown = []  # O(1)
+        for b in BUNDLES:  # O(b)
+            try:  # O(1)
+                shown.append(Path(b).resolve().relative_to(base).as_posix())  # O(len)
+            except ValueError:  # O(1)
+                shown.append(b)  # O(1)
+        data["result_bundles"] = shown  # O(1)
     p = Path(path)  # O(1)
     p.parent.mkdir(parents=True, exist_ok=True)  # O(1)
     tmp = p.with_name(p.name + ".tmp")  # O(1)
@@ -1545,8 +1626,10 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
         print("run_tests: pass-through args (after --) need a test run", file=sys.stderr)  # O(1)
         return 2  # O(1)
     WRITTEN.clear()  # O(1)
-    global CURRENT_TASK, OUTPUT, WARNING, STAMP, DROPPED, AFFECTED  # O(1)
+    global CURRENT_TASK, OUTPUT, WARNING, STAMP, DROPPED, AFFECTED, TESTED, BUNDLES  # O(1)
     OUTPUT = ""  # O(1)
+    TESTED = None  # O(1)
+    BUNDLES = []  # O(1)
     AFFECTED = None  # O(1)
     DROPPED = ""  # O(1)
     STAMP = None  # O(1)
@@ -1966,6 +2049,12 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
         rc0 = next((x.returncode for _, x in results if x.returncode), 0)  # the first non-zero exit | O(d)
         r = subprocess.CompletedProcess(runs[0][1], rc0, text, "")  # O(1)
         save_output(a, " ; ".join(c for _, c in runs), r.returncode, text)  # O(o)
+        global BUNDLES  # O(1)
+        BUNDLES = result_bundles([c for _, c in runs], strip_ansi(text), workdir or str(root))  # O(len + o)
+        for b in outside_bundles(BUNDLES, TESTED["path"], spec["command"]) if TESTED else []:  # a tree run read results from outside its tree | O(b)
+            note = f"result bundle {b} is outside the tree {TESTED['tree']}: it may hold another build's results"  # O(len)
+            WARNING = f"{WARNING}; {note}" if WARNING else note  # O(1)
+            print(f"run_tests: WARNING: {note}", file=sys.stderr)  # O(len)
         if alt and not literal.exists():  # O(1)
             literal = alt  # O(1)
         reports = [] if len(results) > 1 else junit_reports(xml_path, literal)  # the main report plus sidecars; several destinations are read from their output | O(n log n)
@@ -2399,7 +2488,7 @@ def run_affected(a, tspec):  # O(f + selection) turns --affected into a.fast pat
 
 
 def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
-    global DROPPED  # O(1)
+    global DROPPED, TESTED  # O(1)
     paths = [p for chunk in (a.fast or []) for p in split_fast(chunk)]  # O(p)
     label = "fast" if paths or a.marker or getattr(a, "passthrough", None) else "full"  # O(1)
     if a.worker is not None and not WORKER_NAME.fullmatch(a.worker):  # O(1)
@@ -2543,8 +2632,24 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
                     if warning:  # O(1)
                         warn_once(spec["command"], warning)  # O(warned)
                 spec = {**spec, "env": {"SUPERLITE_DERIVED_DATA_PATH": str(trees.derived_data_path(tree)), **(spec.get("env") or {})}}  # O(env)
+            if tree:  # the run names the tree it tests and the changed files that tree lacks (#818) | O(f log f)
+                try:  # O(1)
+                    lacks = outside_tree(".", overlay_now)  # O(f log f)
+                except (RuntimeError, OSError):  # O(1)
+                    lacks = []  # O(1)
+                try:  # O(1)
+                    shown = Path(tree).resolve().relative_to(Path.cwd().resolve()).as_posix()  # O(len)
+                except ValueError:  # O(1)
+                    shown = str(tree)  # O(1)
+                TESTED = {"tree": shown, "lacks": lacks, "path": str(tree), "overlay": overlay_now}  # O(1)
             with full_run_gate(a, "full" if whole else label, lock_toolchain(spec), spec.get("lock", True)) as gate:  # O(wait / LOCK_POLL)
                 rc = run_other(a, spec, paths, label, cwd=tree, gate=gate)  # O(X + o)
+            try:  # one line naming the tree and the result bundle of this run (#818) | O(summary size)
+                tail = tested_tail(json.loads(Path(a.summary).read_text(encoding="utf-8")))  # O(summary size)
+            except (OSError, ValueError):  # O(1)
+                tail = ""  # O(1)
+            if tail:  # O(1)
+                print(f"run_tests: {'tested ' if tree else ''}{tail}", file=sys.stderr)  # O(len)
             if tree and rc == 1:  # a red tree run names the changed files the tree lacks (#517) | O(f)
                 try:  # O(1)
                     out = outside_tree(".", overlay_now)  # O(f log f)
