@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# PreToolUse hook (Bash): holds the in-process researcher (payload agent_type superlite:researcher; a fleet
+# research worker started with --agent superlite:researcher too) to the read-only allowlist
+# fleet_roles.RESEARCH_BASH and RESEARCH_DENY (#987). Plugin agent frontmatter cannot set permissionMode or
+# hooks (#809), so this hook is the binding.
+#
+# Every other payload exits 0 before any process starts (one bash regex). A researcher's call is judged by
+# `sl fleet_roles research-bash` (Python 3.10+, guard_lex.split). Exit 2 blocks (message on stderr) only when
+# the judge exits 2 with its `Blocked: the researcher` message; anything else, including malformed input,
+# a failed helper and no Python 3.10+, exits 0 with no output (fail open). Bash 3.2 syntax.
+
+IFS= read -r -d '' input   # builtin; returns 1 at EOF, which is fine
+re_agent='"agent_type"[[:space:]]*:[[:space:]]*"superlite:researcher"'
+[[ $input =~ $re_agent ]] || exit 0
+
+sl="${BASH_SOURCE[0]%/*}/../skills/subagent-driven-development/scripts/sl"
+msg="$( { printf '%s' "$input" | bash "$sl" fleet_roles research-bash >/dev/null; } 2>&1 )"
+rc=$?
+[ "$rc" = 2 ] || exit 0
+case "$msg" in "Blocked: the researcher "*) ;; *) exit 0 ;; esac
+
+line1="${msg%%$'\n'*}"
+reason="${line1#*'#987): '}"; reason="${reason%.}"
+if . "${BASH_SOURCE[0]%/*}/telemetry.sh" 2>/dev/null; then
+  re_s='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"'
+  re_c='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
+  SL_TEL_SESSION=""; SL_TEL_CWD=""
+  [[ $input =~ $re_s ]] && SL_TEL_SESSION="${BASH_REMATCH[1]}"
+  [[ $input =~ $re_c ]] && SL_TEL_CWD="${BASH_REMATCH[1]}"
+  sl_tel_gate "researcher-bash" block research-bash Bash "$reason" 2>/dev/null
+fi
+printf '%s\n' "$msg" >&2
+exit 2

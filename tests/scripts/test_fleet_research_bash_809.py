@@ -9,7 +9,8 @@ import fleet_roles as fr  # noqa: E402
 ALLOW = ["Bash(git log *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git status *)", "Bash(git blame *)",
          "Bash(git ls-files *)", "Bash(git rev-parse *)", "Bash(git merge-base *)", "Bash(git cat-file *)",
          "Bash(git worktree list *)", "Bash(git apply --check *)", "Bash(ls *)", "Bash(xcrun simctl list *)"]
-DENY = ["Bash(git * --output*)", "Bash(git apply * --apply*)"]
+DENY = ["Bash(git * --output*)", "Bash(git apply * --apply*)", "Bash(git apply * --build-fake-ancestor*)",
+        "Bash(git apply * --no-check*)"]
 
 
 def test_research_bash_allowlist_exact():
