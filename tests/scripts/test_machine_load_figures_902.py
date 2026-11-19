@@ -97,3 +97,27 @@ def test_gate_final_line_says_why(monkeypatch):
 
 def test_describe_adds_swap_and_compressor_only_when_known():
     assert ml.describe(MX, 15) == "memory pressure warn, 14% free, floor 15%, swap 1.5 of 2.0 GB used (0.5 GB free), compressor 1.0 GB (9 agents, about 0.4 GB each)"
+
+
+def test_workers_cause_clears_when_callable_count_drops(monkeypatch):
+    monkeypatch.setattr(ml, "measure", lambda *a, **k: dict(MX))
+    counts = iter([6, 6, 5])
+    sleeps = []
+    monkeypatch.setattr(ml.time, "sleep", lambda s: sleeps.append(s))
+    assert ml.gate("w", 100, True, poll_s=1, bounds={"max_workers": 6}, run_workers=lambda: next(counts)) is None
+    assert len(sleeps) == 2
+
+
+def test_workers_callable_that_raises_counts_as_unknown(monkeypatch):
+    monkeypatch.setattr(ml, "measure", lambda *a, **k: dict(MX))
+
+    def boom():
+        raise OSError("gone")
+
+    assert ml.gate("w", 0, True, bounds={"max_workers": 6}, run_workers=boom) is None
+
+
+def test_gave_up_workers_cause_names_run_workers_not_agents():
+    text = ml.gave_up(["workers"], 0, MX, {"max_workers": 6}, 6)
+    assert text.endswith("room comes when workers of this run end (6 live, --max-workers 6)")
+    assert "agents end" not in text

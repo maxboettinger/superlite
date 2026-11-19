@@ -354,7 +354,7 @@ PHRASES = {"count": "agent count at the limit", "critical": "pressure critical",
            "review": "a review spawn waits first"}  # O(1)
 
 
-def gave_up(causes: list, el: int, m: dict, bounds=None) -> str:  # what the gate saw and what would change it (#902) | O(k)
+def gave_up(causes: list, el: int, m: dict, bounds=None, run_workers=None) -> str:  # what the gate saw and what would change it (#902) | O(k)
     k = len(causes)  # O(1)
     seen = list(dict.fromkeys(causes))  # first-seen order | O(k)
     ph = {**PHRASES, "swap": f"swap free under {(bounds or {}).get('min_swap_free_mb')} MB",
@@ -364,9 +364,11 @@ def gave_up(causes: list, el: int, m: dict, bounds=None) -> str:  # what the gat
     else:  # O(1)
         what = ", ".join(f"{ph[c]} at {causes.count(c)}" for c in seen)  # O(k)
     ways = []  # O(1)
-    if m["agents"] > 0:  # O(1)
+    if seen == ["workers"]:  # O(1)
+        ways.append(f"workers of this run end ({run_workers} live, --max-workers {(bounds or {}).get('max_workers')})")  # O(1)
+    elif m["agents"] > 0:  # O(1)
         ways.append(f"agents end ({m['agents']} running)")  # O(1)
-    if m.get("other"):  # O(1)
+    if m.get("other") and seen != ["workers"]:  # O(1)
         ways.append(f"{m['other'][0]} ({m['other'][1] / 2**30:.1f} GB) ends")  # O(1)
     room_part = "room comes when " + (" or when ".join(ways) if ways else "memory frees up")  # O(1)
     return f"gave up after {k} check{'' if k == 1 else 's'} in {el} s: {what}; {room_part}"  # O(1)
@@ -383,6 +385,15 @@ def gate(what: str, wait_s: float, over: bool = False, poll_s: float = 10.0, ran
             (_wait_dir() / f"{os.getpid()}.json").unlink(missing_ok=True)  # O(1)
 
 
+def _count(run_workers):  # the run's live workers now; a callable is read again, one that raises counts as None | O(w)
+    if not callable(run_workers):  # O(1)
+        return run_workers  # O(1)
+    try:  # O(1)
+        return run_workers()  # O(w)
+    except Exception:  # O(1)
+        return None  # O(1)
+
+
 def _gate(what, wait_s, over, poll_s, rank, bounds, run_workers, register):  # O(wait_s / poll_s * p)
     flo, _ = floor()  # O(1)
     lim, src = limit()  # O(1)
@@ -391,6 +402,7 @@ def _gate(what, wait_s, over, poll_s, rank, bounds, run_workers, register):  # O
     causes = []  # O(1)
     while True:  # O(wait_s / poll_s)
         m = measure()  # O(p)
+        rw = _count(run_workers)  # O(w)
         el = int(time.monotonic() - t0)  # O(1)
         plain = cause(m, flo, lim)  # O(1)
         waiter = None  # O(1)
@@ -398,7 +410,7 @@ def _gate(what, wait_s, over, poll_s, rank, bounds, run_workers, register):  # O
             if plain:  # O(1)
                 print(f"machine limit overridden (--over-limit): {_line(m, flo, lim, src)}", file=sys.stderr)  # O(1)
             return None  # O(1)
-        why = bounded_cause(m, bounds, run_workers) if over else plain  # O(1)
+        why = bounded_cause(m, bounds, rw) if over else plain  # O(1)
         if why is None and rank == 1:  # O(1)
             waiter = review_waiting(os.getpid())  # O(files)
             why = "review" if waiter else None  # O(1)
@@ -409,9 +421,9 @@ def _gate(what, wait_s, over, poll_s, rank, bounds, run_workers, register):  # O
                 print(f"machine has room after {el} s: {_line(m, flo, lim, src)}; starting {what}", file=sys.stderr)  # O(1)
             return None  # O(1)
         causes.append(why)  # O(1)
-        text = refusal(m, flo, lim, src, why, bounds, run_workers, waiter)  # O(1)
+        text = refusal(m, flo, lim, src, why, bounds, rw, waiter)  # O(1)
         if time.monotonic() - t0 >= wait_s:  # O(1)
-            return f"machine busy after {el} s: {text}; {gave_up(causes, el, m, bounds)}"  # O(1)
+            return f"machine busy after {el} s: {text}; {gave_up(causes, el, m, bounds, rw)}"  # O(1)
         if not waited:  # O(1)
             print(f"machine busy: {text}; waiting up to {int(wait_s)} s for {what}", file=sys.stderr)  # O(1)
             waited = True  # O(1)
