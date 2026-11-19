@@ -10,6 +10,7 @@ In `skills/subagent-driven-development/config/`:
 ## Permissions (Claude Code)
 
 - `Bash(*/skills/subagent-driven-development/scripts/sl commit_task *)` in `permissions.allow` of the user settings (`~/.claude/settings.json`): lets fixer agents run `sl commit_task` in auto mode, whose classifier otherwise denies the call from a subagent. Allow rules are checked before the classifier and apply to subagents; a plugin cannot ship permission rules, so `/superlite:setup` offers it. Without it a fixer reports `commit: denied` and the coordinator commits.
+- Remote shell writes (`ssh <host> git worktree add`, `systemctl restart` there) are denied by auto mode's classifier as remote shell writes until the user grants the exact command. Ask once for one self-cleaning script run as `ssh <host> bash -s < script` (it does the step and removes what it made), so one grant covers the step; a lead or worker writes such a step as `Left undone:` instead.
 
 ## Run config
 
@@ -49,7 +50,7 @@ Without a usable room command the cap falls back to `fixed cap 2: <why>` (for ex
 ## Environment
 
 - `CLAUDE_CODE_FORK_SUBAGENT=0` (settings `env`): turns off Claude Code's per-agent status summaries, which ask each background agent's model every 30 s for a status line, sending the agent's transcript, or a few hundred characters of notes when the server serves the short mode, and are invisible to `metrics.jsonl`. `/superlite:setup` offers it; `budget:` prints `SUMMARIES ON` without it. See the README's Configuration section.
-- `autoCompactWindow` (user settings, e.g. `400000`; `sl setup` offers it): the context size at which Claude Code compacts by itself. Models with a 1M window otherwise compact only near their limit (about 967k tokens). `/autocompact 400k` saves the same for the current model, `claude --autocompact 400k` sets it for one launch. Around each compaction superlite's hooks supply the summary instructions and the continuation text ([hooks](hooks.md)).
+- `autoCompactWindow` (user settings, e.g. `400000`; `/superlite:setup` offers it): the context size at which Claude Code compacts by itself. Models with a 1M window otherwise compact only near their limit (about 967k tokens). `/autocompact 400k` saves the same for the current model, `claude --autocompact 400k` sets it for one launch. Around each compaction superlite's hooks supply the summary instructions and the continuation text ([hooks](hooks.md)).
 - `SUPERLITE_NO_AUTOCOMPACT=1`: turns off superlite's part in compaction: the summary instructions (`pre-compact`), the continuation text after a compaction (`session-start`) and the hint to set a window (`compact-nudge`). Claude Code's own compaction is not affected.
 - `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h`: the implementer's cache TTL, also set by its frontmatter.
 - `SUPERLITE_HERDR_BIN`: the `herdr` binary for fleet mode; default `herdr` on PATH.

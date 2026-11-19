@@ -138,7 +138,7 @@ def test_next_tasks_cli_spaces_and_unstable(tmp_path):
     assert "unstable=" not in cp.err
     cp = run(NEXT_TASKS, "--plan", p, "--committed", "T1", cwd=tmp_path)
     assert cp.out.strip() == ""
-    assert "unstable=T2 T2: Owns has a placeholder; rerun sl lint --stable" in cp.err
+    assert "unstable=T2 T2: Owns has a placeholder; rerun sl plan_tools lint --stable" in cp.err
     cp = run(NEXT_TASKS, "--plan", p, "--committed", "T1,T7", cwd=tmp_path)
     assert "warning: --committed: T7 is not a task of the plan" in cp.err
     cp = run(NEXT_TASKS, "--plan", p, "--committed", "T0,T1", cwd=tmp_path)

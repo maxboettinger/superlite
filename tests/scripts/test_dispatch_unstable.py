@@ -4,7 +4,7 @@ from test_plan_tools import SCRIPTS, run
 from test_stable_lapse import cli_plan
 from test_stable_split import DISPATCH
 
-REASON = "unstable=T2 T2: Owns has a placeholder; rerun sl lint --stable"
+REASON = "unstable=T2 T2: Owns has a placeholder; rerun sl plan_tools lint --stable"
 
 
 def setup(tmp_path, ledger_text="", stable=True):

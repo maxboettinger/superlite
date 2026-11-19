@@ -14,7 +14,7 @@ def step(n):
 
 def test_step2_names_the_unstable_line_and_the_fix_task_lapse():
     s = step(2)
-    assert "`unstable=Tn <reason>; rerun sl lint --stable`" in s
+    assert "`unstable=Tn <reason>; rerun sl plan_tools lint --stable`" in s
     assert "`depends on unstable <ids>`" in s and "once those ids are committed" in s
 
 
