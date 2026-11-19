@@ -1,0 +1,38 @@
+- start d9c27461fee24f189d196dbbce226b57f3954cd8
+- unblocked: dispatched T1 T2 T3 at 17:58:13; waiting on fixes: none
+- tests fast passed=14 failed=26 skipped=0 seconds=0.8
+- tests fast passed=13 failed=25 skipped=0 seconds=0.6
+- tests fast passed=0 failed=4 skipped=0 seconds=0.6
+- tests fast passed=44 failed=1 skipped=0 seconds=1.2
+- tests fast passed=302 failed=8 skipped=1 seconds=15.0
+- tests fast passed=389 failed=4 skipped=0 seconds=20.1
+- tests fast passed=308 failed=2 skipped=1 seconds=12.9
+- tests fast passed=392 failed=1 skipped=0 seconds=16.6
+- tests fast passed=393 failed=0 skipped=0 seconds=17.2
+- commit T2 87db31e849 fleet.md sweep
+- Ruling: T2 also commits tests/scripts/test_fleet_docs_b54.py - T2 rewrote the docs/fleet.md lines these tests pin (--help list, RED line); no open batch lists them
+- Ruling: T2 also commits tests/scripts/test_docs_b72_backlog.py - T2 rewrote the docs/fleet.md lines these tests pin (--help list, RED line); no open batch lists them
+- commit T3 d9876b2229 tools.md sweep
+- Ruling: T3 also commits tests/scripts/test_docs_b67_tools.py - T3 rewrote the run_tests summary and accounts clauses this test pins; no open batch lists it
+- commit T1 5118ba704b fleet resume spelling
+- tests fast passed=17 failed=1 skipped=0 seconds=0.4
+- tests fast passed=18 failed=0 skipped=0 seconds=0.3
+- commit T1 3ab7e525e1 fleet resume spelling
+- Ruling: T1 also commits tests/scripts/test_fleet_cli_b54.py - the fleet --help pin gains resume; no open batch lists it
+- Ruling: T1 also commits tests/scripts/test_fleet_cli_b54.py (SUBS gains resume) - its --help pin lists every subcommand - cost if wrong: none
+- tests fast passed=135 failed=0 skipped=0 seconds=1.9
+- tests fast passed=4 failed=0 skipped=0 seconds=18.9
+- tests full passed=12924 failed=2 skipped=12 seconds=278.2
+- tests fast passed=13 failed=2 skipped=0 seconds=1.6
+- tests fast passed=13 failed=2 skipped=0 seconds=1.2
+- tests fast passed=15 failed=0 skipped=0 seconds=1.1
+- commit T1 5f17030065 fleet resume spelling
+- Ruling: T1 also commits tests/scripts/doc_contract_parsers.py - the doc-contract parser table gains the fleet resume route; no open batch lists it
+- Ruling: T1 also commits tests/scripts/doc_contract_parsers.py (fleet resume route) - full suite red on the unrouted placeholder - cost if wrong: none
+- tests full passed=12926 failed=0 skipped=12 seconds=305.4
+- tests fast passed=18 failed=0 skipped=0 seconds=0.5
+- commit T1 3c792b015c fleet resume spelling
+- tests full passed=12926 failed=0 skipped=12 seconds=287.1
+- Ruling: [scope] #988's sweep rewrites only doc text that contradicts the code; incomplete rows go to a follow-up - #988 asks for stale lines - cost if wrong: one more docs batch
+- Ruling: accept predicted 27.5 min - three parallel prose tasks, no chain to shorten - cost if wrong: none
+- Ruling: FR1 tier-1 finding (fleet.py restore help line lost its O(1) comment) fixed by T1's worker - one-line comment - cost if wrong: none
