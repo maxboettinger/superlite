@@ -31,5 +31,6 @@ def _isolated_superlite_home(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERLITE_MACHINE_FLOOR", "0")  # 0 = no memory floor: the gate measures nothing (#560, #643)
     monkeypatch.setenv("SUPERLITE_MCP_CHECK", "0")  # no test reaches a real MCP server (#576)
     monkeypatch.setenv("SUPERLITE_LEAD_CAP_LIVE", "0")  # no test reaches the real claude-profile or herdr through the lead cap (#748)
+    monkeypatch.setenv("SUPERLITE_IN_PROGRESS_LIVE", "0")  # no test reads the real git worktrees, branches or Jira status for the in-progress skip (#813)
     for var in HOST_VARS:
         monkeypatch.delenv(var, raising=False)

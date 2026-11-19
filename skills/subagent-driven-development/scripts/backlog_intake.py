@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Pure intake helpers for the backlog plan step: shipped issues, files an issue names, blocked-reason check (the `Pinned:` brief line is backlog_brief.pinned_line, #622)."""
+import os
 import re
 from collections import defaultdict
+from pathlib import Path
 
 import backlog_checks as bc
+import backlog_in_progress as bip
 
 TRAIL_RE = re.compile(r"\s*\(#(\d+)\)\s*$")
 GH_RE = re.compile(r"(?<![\w#&])#([1-9][0-9]*)(?![\w])")
@@ -58,10 +61,29 @@ def split_shipped(trusted: list[dict], batches: list[dict], merged: dict, pin: l
         if b.get("state") == "shipped":
             for n in b.get("issues") or []:  # O(issues)
                 shipped.setdefault(n, b)  # O(1)
+    own_br: set = set()
+    own_wt: set = set()
+    for b in batches:  # O(batches)
+        if isinstance(b.get("branch"), str) and b["branch"]:  # O(1)
+            own_br.add(b["branch"])  # O(1)
+        if isinstance(b.get("worktree"), str) and b["worktree"]:  # O(1)
+            own_wt.add(os.path.realpath(b["worktree"]))  # O(1)
     kept, dropped, lines = [], [], []
-    for it in trusted:  # O(trusted)
+    for raw in trusted:  # O(trusted * busy)
+        busy = [h for h in raw.get("busy") or [] if not (  # O(busy)
+            (h.get("kind") == "branch" and h.get("name") in own_br)
+            or (h.get("kind") == "worktree" and (os.path.realpath(h.get("name", "")) in own_wt or h.get("branch") in own_br)))]
+        it = {k: v for k, v in raw.items() if k != "busy"}  # O(1)
         n = it["number"]
         r, p = _ref(n), _plain(n)  # O(1)
+        gone = not it.get("reopened") and (n in shipped or (n in merged and n not in pin))  # O(pin)
+        if busy and not gone:  # O(1)
+            lab = _clean(bip.label(busy))  # O(1)
+            if n not in pin:  # O(pin)
+                dropped.append({"number": n, "title": _clean(it.get("title", "")), "reason": f"not planned (in progress: {lab})"})  # O(1)
+                lines.append(f"in progress: {r} ({lab}): not planned, another session builds it; sl backlog plan --issues {p} --add plans it anyway")  # O(1)
+                continue
+            lines.append(f"in progress?: {r} ({lab}): planned anyway (pinned); sl backlog skip {p} drops it")  # O(1)
         if it.get("reopened") and (n in shipped or n in merged):  # O(1)
             kept.append(it)
             if n in shipped:  # O(1)
@@ -109,6 +131,22 @@ def _gh_chunk(owner: str, name: str, nums: list, public: bool) -> dict:
 
 
 def with_comments(trusted: list[dict], repo: str, public: bool, jira: bool = False) -> tuple[list[dict], list[str]]:
+    """(items, lines): `_with_comments` plus `busy` (the hits of an issue another session builds, #813) on each such issue; the hits lines follow the comment lines."""
+    out, lines = _with_comments(trusted, repo, public, jira)
+    if not out:  # O(1)
+        return out, lines
+    import backlog
+    root = Path(".")  # O(1)
+    if os.environ.get(bip.LIVE_ENV) != "0":  # O(1)
+        try:  # O(1)
+            root = backlog._root()  # O(1)
+        except RuntimeError:  # O(1)
+            return out, lines + ["in progress: worktrees and branches not read (not in a git repository)"]  # O(1)
+    found, more = bip.hits(out, jira, root)  # O(network)
+    return [{**it, "busy": found[it["number"]]} if it["number"] in found else it for it in out], lines + more  # O(out)
+
+
+def _with_comments(trusted: list[dict], repo: str, public: bool, jira: bool = False) -> tuple[list[dict], list[str]]:
     """(items, lines): each trusted issue plus its latest comments (oldest first) and reopened=True when GitHub reports a reopen; lines name every read that failed."""
     if not trusted:  # O(1)
         return [], []
