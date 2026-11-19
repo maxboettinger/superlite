@@ -1,0 +1,9 @@
+- unblocked: dispatched T1 at 16:57:46; waiting on fixes: none
+- start 0524adcd26ce8ed490c5d33755e8d8f9f7042182
+- Ruling: W5 (mxn) finished T1 but its stop hook took no snapshot; its diff (scratchpad w5/t1.patch, git apply --check clean) goes to a local implementer to apply and verify on this Mac, placement local for the rest of the run - the coordinator may not apply code and the remote run was on Linux - cost if wrong: one more implementer turn
+- tests fast passed=1 failed=11 skipped=0 seconds=3.7
+- tests fast passed=114 failed=0 skipped=1 seconds=17.1
+- commit T1 9291cb7731 run names tree and bundle
+- tests fast passed=114 failed=0 skipped=1 seconds=17.0
+- tests fast passed=7 failed=5 skipped=0 seconds=4.7
+- tests full passed=12826 failed=0 skipped=12 seconds=274.9

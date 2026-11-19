@@ -42,7 +42,7 @@ ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(.*)$")  # a list item under a
 NONE_WORDS = ("none", "(none)", "-", "n/a")  # O(1)
 FULL = "Full review: the packet's FAST PATH line does not apply; review every section and the diff."  # O(1)
 WORK = ("End your reply with the line `Status: <DONE|DONE_WITH_CONCERNS|NEEDS_CONTEXT|BLOCKED>`, then one fenced json block: "
-        '{"status": "<that word>", "files": ["<path changed>"], "tests": "<test command and result line>", '
+        '{"status": "<that word>", "files": ["<path changed>"], "tests": "<test command and result line, with the tree and result bundle run_tests named>", '
         '"red": "<the summary line of the run that saw your new tests fail, or none - no test>", '
         '"findings": [{"file": "<path>", "line": <int>, "problem": "<text>", "fix": "<text>", "tier": <1|2|3>, "quote": "<the exact text of that source line>"}], '
         '"summary": "<one line>"}. `findings` lists only the findings still open; `tier` is the integer 1, 2 or 3 (fixing.md).')  # O(1)
