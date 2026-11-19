@@ -2367,18 +2367,16 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
 
     with tempfile.TemporaryDirectory() as tmp:  # O(1) mkdtemp
         xml_path = Path(tmp) / "junit.xml"  # O(1)
-        try:  # O(1)
-            base = pyrun.pytest_cmd()  # O(1) + at most one probe spawn
-        except pyrun.PytestUnavailable as e:  # O(1)
-            return usage_error(a, label, str(e))  # the summary is written too | O(summary size)
         marker = a.marker  # O(1)
         if not marker and paths:  # a file marked with a marker the addopts deselect runs its tests (#593) | O(p + files)
             honoured = honoured_marker(paths, ".")  # O(p + files)
             if honoured:  # O(1)
                 marker = honoured[0]  # O(1)
                 print(honoured[1], file=sys.stderr)  # O(1)
-        cmd = [*base, *(paths or testcmd.python_full_args(Path("."))), *(["-m", marker] if marker else []), "-q", "-rP", "-p", "no:cacheprovider",  # O(p) -rP: a passing test's prints reach the output log (#501)
-               "-o", "junit_family=xunit1", f"--junitxml={xml_path}", *(getattr(a, "passthrough", None) or [])]  # O(1)
+        try:  # O(1)
+            cmd = [*testcmd.python_command(Path("."), paths, marker, str(xml_path)), *(getattr(a, "passthrough", None) or [])]  # O(p) -rP: a passing test's prints reach the output log (#501) | + at most one probe spawn
+        except pyrun.PytestUnavailable as e:  # O(1)
+            return usage_error(a, label, str(e))  # the summary is written too | O(summary size)
         with full_run_gate(a, label, enabled=spec.get("lock", True) if spec else True) as gate:  # O(wait / LOCK_POLL)
             t0 = time.monotonic()  # O(1)
             r = gate.run(cmd, limit=a.limit, env=child_env(getattr(a, "cli_env", None)))  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)

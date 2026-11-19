@@ -78,7 +78,7 @@ def test_marker_detection_table(tmp_path):
     assert case("cargo", {"Cargo.toml": "[package]\n"})["command"] == "cargo test"
     assert case("dotnet", {"App.csproj": "<Project/>"})["command"] == "dotnet test"
     py = case("py", {"pyproject.toml": "[project]\n"})
-    assert py["python"] is True and py["command"] is None
+    assert py["python"] is True and py["default_command"] is True
 
 
 def test_fast_uses_test_file_and_full_uses_test(tmp_path):
