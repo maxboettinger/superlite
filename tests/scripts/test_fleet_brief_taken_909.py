@@ -30,7 +30,22 @@ def brief(world):
     return b
 
 
+def fake_clock(monkeypatch):
+    t = [1000]
+    monkeypatch.setattr(io, "now_ms", lambda: t[0])
+    monkeypatch.setattr(io, "sleep", lambda s: t.__setitem__(0, t[0] + int(s * 1000)))
+    return t
+
+
+def test_took_brief_late_stop_record_counts(world, monkeypatch):
+    t = fake_clock(monkeypatch)
+    monkeypatch.setattr(world.fh, "wait_state", lambda *a: "idle", raising=False)
+    monkeypatch.setattr(io, "latest_stop", lambda sd, wid, after, stops=None: {"t": 9} if t[0] >= 1000 + 3000 else None)
+    assert io.took_brief(world.sd, "W1", "sl-proj-w1", 5) is True
+
+
 def test_took_brief_examples(world, monkeypatch):
+    fake_clock(monkeypatch)
     calls = []
 
     def run(result, stop):

@@ -777,7 +777,13 @@ def took_brief(sd, wid, name, sent_ms):  # False when the pane went idle after t
         hc.wait_state(name, ["idle", "done"], TOOK_MS)  # O(1)
     except hc.HerdrError:  # a timeout means it is still working | O(1)
         return True  # O(1)
-    return latest_stop(sd, wid, sent_ms) is not None  # O(m + w)
+    end = now_ms() + SETTLE_MS  # a stop record can lag the state change by up to SETTLE_MS | O(1)
+    while True:  # O(SETTLE_MS / 0.5 * (m + w))
+        if latest_stop(sd, wid, sent_ms) is not None:  # O(m + w)
+            return True  # O(1)
+        if now_ms() >= end:  # O(1)
+            return False  # O(1)
+        sleep(0.5)  # O(1)
 
 
 def send_brief(sd, wid, brief, label="", full=False, preface=""):  # O(w + len brief path + pool bytes)
