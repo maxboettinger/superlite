@@ -16,9 +16,15 @@ LINES = [
 BULLET = '- `fleet: warning: launchd session <kind>, not Aqua: ...` (stderr, a spawn on this Mac; the spawn goes on): the test config launches or tests a Mac app and this session is not the desktop login session, so the new worker cannot launch or drive a Mac app window or run a macOS `xcodebuild test`; the line names the fallback (`swift test`, an iOS Simulator destination, or the logged-in desktop session). `SUPERLITE_GUI_CHECK=0` skips the check, and the run_tests GUI preflight with it (#798).'
 
 
-def test_tools_ends_with_the_lines():
+def _holds_block(lines, block):
+    n = len(block)
+    return any(lines[i:i + n] == block for i in range(len(lines) - n + 1))
+
+
+def test_tools_holds_the_lines():
     lines = TOOLS.splitlines()
-    assert lines[-len(LINES):] == LINES
+    assert _holds_block(lines, LINES)
+    assert not _holds_block(lines, LINES[:2] + LINES[3:])
 
 
 def test_fleet_troubleshooting_names_the_warning():
