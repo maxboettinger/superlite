@@ -35,7 +35,9 @@ def test_bounds_and_rank_reach_gate(world, monkeypatch):
     monkeypatch.setattr(fleet.ml, "gate", lambda what, wait, over=False, **k: calls.append((over, k)) or None)
     monkeypatch.setattr(fleet, "_spawn", lambda *a, **k: {"id": "W9"})
     fleet.main(["spawn", "--role", "research", "--over-limit", "--max-workers", "6", "--min-swap-free-mb", "1024", "--plan", str(world.sd)])
-    assert calls[-1] == (True, {"rank": 1, "bounds": {"max_workers": 6, "min_swap_free_mb": 1024}, "run_workers": fleet.live_workers(world.sd)})
+    rw = calls[-1][1].pop("run_workers")
+    assert calls[-1] == (True, {"rank": 1, "bounds": {"max_workers": 6, "min_swap_free_mb": 1024}})
+    assert callable(rw) and rw() == fleet.live_workers(world.sd)
     assert fleet.live_workers(world.sd) == 1
     for role in ("package-reviewer", "final-reviewer"):
         fleet.spawn(world.sd, world.plan, "sonnet", world.proj, role=role)

@@ -427,7 +427,7 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=
         rkw = {**({"task": task, "plan": str(plan)} if task else {}), **({"brief": remote_brief} if remote_brief else {})}  # a write worker's task or brief; a research worker passes none | O(1)
         return frw.spawn(sd, role, tier, project, machine, cfg, **rkw)  # O(w) plus remote calls
     rank = 0 if role in ("package-reviewer", "final-reviewer") else 1  # a waiting review goes before a waiting implementer (#902) | O(1)
-    busy = ml.gate(f"fleet spawn ({role})", machine_wait, over, rank=rank, bounds=bounds, run_workers=live_workers(sd) if bounds else None)  # the first attempt only; the retry below is the same spawn | O(wait)
+    busy = ml.gate(f"fleet spawn ({role})", machine_wait, over, rank=rank, bounds=bounds, run_workers=(lambda: live_workers(sd)) if bounds else None)  # the first attempt only; the retry below is the same spawn | O(wait)
     if busy:  # O(1)
         print(f"BLOCKED: {BUSY_HEAD}{busy}{BUSY_TAIL}")  # O(1)
         raise SystemExit(3)  # O(1) before any pane
