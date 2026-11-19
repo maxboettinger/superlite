@@ -1,0 +1,21 @@
+- unblocked: dispatched T1 T2 T3 at 12:10:59; waiting on fixes: none
+- start 9f33c8dea73aae2d0614917a281a7065481e9a47
+- tests fast passed=11 failed=4 skipped=0 seconds=0.6
+- tests fast passed=0 failed=1 skipped=0 seconds=0.3
+- tests fast passed=0 failed=7 skipped=0 seconds=1.0
+- tests fast passed=15 failed=0 skipped=0 seconds=0.4
+- tests fast passed=17 failed=0 skipped=0 seconds=10.8
+- tests fast passed=0 failed=1 skipped=0 seconds=0.0
+- tests fast passed=1 failed=0 skipped=0 seconds=0.0
+- tests fast passed=17 failed=0 skipped=0 seconds=0.5
+- commit T1 f774bbdf51 run_tests --worker NAME
+- commit T2 0c0621835b fixer brief names --worker
+- commit T3 dd0d298e98 agent prompts and fleet doc name --worker
+- tests fast passed=6 failed=1 skipped=0 seconds=2.1
+- tests fast passed=36 failed=0 skipped=0 seconds=2.4
+- commit T1 36374ba222 run_tests --worker NAME
+- tests full passed=12227 failed=1 skipped=12 seconds=816.5
+- tests fast passed=1 failed=0 skipped=0 seconds=0.0
+- tests fast passed=6 failed=0 skipped=0 seconds=1.0
+- commit T3 cb1e878492 agent prompts and fleet doc name --worker
+- tests full passed=12228 failed=0 skipped=12 seconds=621.0
