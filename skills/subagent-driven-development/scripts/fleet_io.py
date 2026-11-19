@@ -963,7 +963,7 @@ def _finish(sd, wid, w, text, source, tail=None, cut=None):  # " partial" follow
             _remote().stop(sd, wid)  # O(1) plus remote calls
         except Exception:  # O(1)
             pass  # O(1)
-    return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n, **({"partial": True} if part else {})}  # O(1)
+    return {"id": wid, "task": label, "status": rep["status"], "report": str(jp), "source": source, "findings": n, "role": w.get("role") or "implementer", **({"partial": True} if part else {})}  # O(1)
 
 
 def _pane_tail(sd, wid, w):  # the last pane lines, or the reason there are none | O(s)
@@ -1066,7 +1066,8 @@ WAVE_OK = ("DONE", "DONE_WITH_CONCERNS", "APPROVED", "GREEN")  # statuses that l
 
 
 def wave_failure(r):  # a result that ends a wave: a status outside WAVE_OK, findings, or a partial review | O(1)
-    return r.get("status") not in WAVE_OK or (r.get("findings") or 0) > 0 or bool(r.get("partial"))  # O(1)
+    found = (r.get("findings") or 0) > 0 and r.get("role") not in ("research", "writer")  # a research or writer report lists findings as its result | O(1)
+    return r.get("status") not in WAVE_OK or found or bool(r.get("partial"))  # O(1)
 
 
 def test_result(path):  # the finished background test run PATH as a wait result (and its line), else None while it runs | O(summary size)
