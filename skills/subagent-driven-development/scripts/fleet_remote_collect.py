@@ -6,10 +6,15 @@ record at or after the worker's `sent`), fetches its `snapshot`
 (`fleet_remote.fetch`) and applies start..snapshot (`remote_apply.apply`). The report gains `collected` {applied, skipped, sha}; skipped paths,
 conflicts, a missing snapshot and an unreachable host become concerns (the last three turn the status BLOCKED). A snapshot is applied once. `sync=True` mirrors once before the first read of the stop record (`sl fleet collect Wn`); the BLOCKED concerns a later
 collect can cure (no stop record, fetch, conflict) end with the hint `sl fleet collect Wn ...`.
+A stop record without a `snapshot` (the hook's snapshot failed or ran past 30 s) is retaken: `_retake` runs `sl remote_apply snapshot` in a Herdr shell pane
+in the worker's host tree, waits up to `RETAKE_S` for its output file and goes on with the sha; the report then carries `collected.retaken` and a concern.
+A failed retake ends BLOCKED.
 """
 # Complexity notation:
-# w = workers, m = lines of the mirrored metrics.jsonl, f = changed files
+# w = workers, m = lines of the mirrored metrics.jsonl, f = changed files, B = bytes of the retake's output file
 import json  # O(1)
+import re  # O(1)
+import shlex  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
 import time  # O(1)
@@ -17,12 +22,14 @@ from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import fleet_remote as fr  # noqa: E402 | O(1)
+import herdr_client as hc  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
 import remote_apply  # noqa: E402 | O(1)
 
 
 WAIT_S = 45  # the hook's 30 s snapshot bound plus the mirror read | O(1)
 POLL_S = 2  # O(1)
+RETAKE_S = 120  # remote_apply snapshot runs up to six git calls of 30 s each | O(1)
 now_s = time.monotonic  # tests patch these two | O(1)
 sleep = time.sleep  # O(1)
 
@@ -74,6 +81,54 @@ def _allowed(project, start, sha, owns):  # owns plus every changed path under t
     return [*owns, *(x for x in out.split("\0") if x.startswith("tests/regression/"))]  # O(f)
 
 
+def _result(text):  # (sha or None, reason) once the output ends in an `exit N` line, None while it is incomplete | O(B)
+    lines = [x for x in text.splitlines() if x.strip()]  # O(B)
+    if not lines or not re.fullmatch(r"exit \d+", lines[-1].strip()):  # O(1)
+        return None  # O(1)
+    body = lines[-2].strip() if len(lines) > 1 else ""  # O(1)
+    if lines[-1].strip() == "exit 0" and re.fullmatch(r"[0-9a-f]{40}", body):  # O(1)
+        return body, ""  # O(1)
+    return None, (body[:200] or lines[-1].strip())  # O(1)
+
+
+def _retake(remote, wid):  # (sha, "") or (None, reason): the snapshot retaken in a Herdr pane in the host tree | O(RETAKE_S / POLL_S * B)
+    tree, plugin, ref = remote.get("tree"), remote.get("plugin"), remote.get("snapshot_ref")  # O(1)
+    if not (tree and plugin and ref):  # O(1)
+        return None, "its record names no host tree or plugin tree"  # O(1)
+    label = remote["label"]  # O(1)
+    sd = remote.get("sd") or f"{tree}/.superlite"  # O(1)
+    out = f"{sd}/collect-{wid}-{time.time_ns()}.out"  # O(1)
+    q = shlex.quote  # O(1)
+    sl = f"{plugin}/skills/subagent-driven-development/scripts/sl"  # O(1)
+    script = f'mkdir -p {q(sd)}; {{ cd {q(tree)} && bash {q(sl)} remote_apply snapshot --ref {q(ref)}; }} > {q(out)}.tmp 2>&1; echo "exit $?" >> {q(out)}.tmp; mv {q(out)}.tmp {q(out)}'  # O(1)
+    ws = None  # O(1)
+    try:  # O(1)
+        with hc.on(label):  # O(1)
+            ws, pane = hc.create_workspace(f"sl:collect {wid}", tree, {})  # O(1)
+            hc.run_in_pane(pane, f"sh -c {q(script)}")  # O(1)
+        end = now_s() + RETAKE_S  # O(1)
+        while True:  # O(RETAKE_S / POLL_S)
+            try:  # O(1)
+                text = fr.read(label, out).decode("utf-8", errors="replace")  # O(B)
+            except fr.RemoteError as e:  # O(1)
+                return None, str(e)  # O(1)
+            res = _result(text)  # O(B)
+            if res is not None:  # O(1)
+                return res  # O(1)
+            if now_s() >= end:  # O(1)
+                return None, f"no result within {RETAKE_S} s"  # O(1)
+            sleep(POLL_S)  # O(1)
+    except hc.HerdrError as e:  # O(1)
+        return None, f"herdr {e}"  # O(1)
+    finally:  # O(1)
+        if ws is not None:  # O(1)
+            try:  # O(1)
+                with hc.on(label):  # O(1)
+                    hc.close_workspace(ws)  # O(1)
+            except hc.HerdrError:  # O(1)
+                pass  # O(1)
+
+
 def collect(sd, wid, report, sync=False):  # O(m + f)
     sd = Path(sd)  # O(1)
     rec = (fs.load(sd).get("workers") or {}).get(wid) or {}  # O(w)
@@ -87,8 +142,12 @@ def collect(sd, wid, report, sync=False):  # O(m + f)
     if stop is None:  # O(1)
         return _blocked(report, f"remote worker {wid} left no snapshot: no stop record of its task reached this machine within {WAIT_S} s; its tree {tree} stays on {label} (snapshot ref {remote.get('snapshot_ref')}); sl fleet collect {wid} brings it home once its stop record lands")  # O(1)
     snap = stop.get("snapshot")  # O(1)
+    retaken = False  # O(1)
     if not snap:  # O(1)
-        return _blocked(report, f"remote worker {wid} left no snapshot: its stop hook took none (remote_apply snapshot failed or ran past 30 s); its tree {tree} stays on {label}")  # O(1)
+        snap, why = _retake(remote, wid)  # O(RETAKE_S / POLL_S * B)
+        if not snap:  # O(1)
+            return _blocked(report, f"remote worker {wid} left no snapshot: its stop hook took none (remote_apply snapshot failed or ran past 30 s); its tree {tree} stays on {label}; retaking it there failed: {why}; sl fleet collect {wid} retries")  # O(1)
+        retaken = True  # O(1)
     if snap == remote.get("collected"):  # O(1)
         return report  # O(1)
     ref = remote.get("snapshot_ref") or ""  # O(1)
@@ -113,6 +172,9 @@ def collect(sd, wid, report, sync=False):  # O(m + f)
             live["collected"] = snap  # O(1)
             fs.save(sd, data)  # O(w)
     out = {**report, "collected": {"applied": res["applied"], "skipped": res["skipped"], "sha": snap}}  # O(f)
+    if retaken:  # O(1)
+        out["collected"]["retaken"] = True  # O(1)
+        out["concerns"] = [*(report.get("concerns") or []), f"remote worker {wid}'s stop hook took no snapshot (remote_apply snapshot failed or ran past 30 s); collect retook it on {label}: {snap}"]  # O(1)
     if res["skipped"]:  # O(1)
-        out["concerns"] = [*(report.get("concerns") or []), f"remote changes outside the task not applied: {', '.join(res['skipped'])}"]  # O(f)
+        out["concerns"] = [*(out.get("concerns") or []), f"remote changes outside the task not applied: {', '.join(res['skipped'])}"]  # O(f)
     return out  # O(1)

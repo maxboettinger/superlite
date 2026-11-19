@@ -63,9 +63,9 @@ def test_fetch_and_conflict_concerns_name_fleet_collect(env, monkeypatch):
     assert frc.collect(env.sd, "W2", report())["concerns"] == [f"remote changes conflict with local edits: a.py (kept at {kept}); sl fleet collect W2 retries once those local edits are resolved"]
 
 
-def test_hook_took_none_unchanged(env, monkeypatch):
+def test_hook_took_none_without_plugin_tree(env, monkeypatch):
     clock(monkeypatch)
     seed(env, 2000, [{"t": 2500}])
     syncing(monkeypatch)
     out = frc.collect(env.sd, "W2", report())
-    assert out["concerns"] == [f"remote worker W2 left no snapshot: its stop hook took none (remote_apply snapshot failed or ran past 30 s); its tree {HOST_TREE} stays on box"]
+    assert out["concerns"] == [f"remote worker W2 left no snapshot: its stop hook took none (remote_apply snapshot failed or ran past 30 s); its tree {HOST_TREE} stays on box; retaking it there failed: its record names no host tree or plugin tree; sl fleet collect W2 retries"]

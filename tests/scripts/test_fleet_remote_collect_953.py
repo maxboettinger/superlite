@@ -80,7 +80,7 @@ def test_stop_record_without_snapshot_blocked_at_once(env, monkeypatch):
     calls = syncing(monkeypatch)
     out = frc.collect(env.sd, "W2", report())
     assert out["status"] == "BLOCKED"
-    assert out["concerns"] == [f"remote worker W2 left no snapshot: its stop hook took none (remote_apply snapshot failed or ran past 30 s); its tree {HOST_TREE} stays on box"]
+    assert out["concerns"] == [f"remote worker W2 left no snapshot: its stop hook took none (remote_apply snapshot failed or ran past 30 s); its tree {HOST_TREE} stays on box; retaking it there failed: its record names no host tree or plugin tree; sl fleet collect W2 retries"]
     assert calls == [] and t[0] == 100
 
 

@@ -1,0 +1,11 @@
+- start bd8fd1e6054cd4c55beeb355a5e1c17ed4fcc9fe
+- unblocked: dispatched T1 at 20:03:27; waiting on fixes: none
+- tests fast passed=9 failed=12 skipped=0 seconds=5.4
+- tests fast passed=61 failed=0 skipped=0 seconds=8.3
+- commit T1 bfcd748c7c collect retakes snapshot
+- tests fast passed=61 failed=0 skipped=0 seconds=6.7
+- tests fast passed=10 failed=1 skipped=0 seconds=6.4
+- tests fast passed=10 failed=1 skipped=0 seconds=6.1
+- tests fast passed=11 failed=0 skipped=0 seconds=5.7
+- commit T1 834569492f collect retakes snapshot
+- tests full passed=13150 failed=0 skipped=12 seconds=332.4
