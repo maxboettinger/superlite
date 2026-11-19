@@ -1,0 +1,26 @@
+- start ee731ab85df86119394432c073e8175575f18866
+- unblocked: dispatched T1 T2 T3 T4 at 14:54:00; waiting on fixes: none
+- tests fast passed=1 failed=10 skipped=0 seconds=1.4
+- tests fast passed=1 failed=3 skipped=0 seconds=0.3
+- tests fast passed=0 failed=1 skipped=0 seconds=0.4
+- tests fast passed=22 failed=0 skipped=0 seconds=1.4
+- tests fast passed=1 failed=0 skipped=0 seconds=0.4
+- tests fast passed=34 failed=0 skipped=0 seconds=1.2
+- tests fast passed=9 failed=0 skipped=0 seconds=15.5
+- tests fast passed=371 failed=0 skipped=0 seconds=19.3
+- tests fast passed=488 failed=0 skipped=1 seconds=25.1
+- tests fast passed=8 failed=1 skipped=0 seconds=17.8
+- tests fast passed=9 failed=0 skipped=0 seconds=17.3
+- tests fast passed=9 failed=0 skipped=0 seconds=15.1
+- commit T1 5272f4ee0b seed docstring
+- commit T2 d1e9d0e646 sl -C and --root
+- commit T3 f21e9ec305 researcher allowlist
+- commit T4 aca3233b05 timeout test headroom
+- tests fast passed=66 failed=0 skipped=0 seconds=15.8
+- tests fast passed=4 failed=0 skipped=0 seconds=28.6
+- tests full passed=12632 failed=2 skipped=12 seconds=322.5
+- tests fast passed=3 failed=0 skipped=0 seconds=0.4
+- Ruling: T3 also commits tests/regression/test_fleet_roles_final_b.py - final-review fix outside every Owns
+- commit T3 b882815d6b researcher allowlist
+- tests full passed=12634 failed=0 skipped=12 seconds=359.3
+Ruling: skip evals - B256: no eval case loads agents/researcher.md or names the researcher or fleet_roles (grep over evals/ finds none); the change is the fleet research role's tool list and launch flags, pinned by unit tests
