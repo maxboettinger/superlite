@@ -26,7 +26,7 @@ def plan(tmp_path, owns, tests, steps="", notes=""):
 def test_verify_line_carries_named_destinations(tmp_path):
     p = plan(tmp_path, "src/a.py, tests/test_a.py", "fast", steps="Run on -destination 'platform=macOS' and -destination \"platform=iOS Simulator,name=iPhone 16\".")
     msg = fleet_io.task_message(p, ["T1"], "/sl/sl", "/sl")
-    assert ("Verify: `/sl/sl run_tests --fast tests/test_a.py --task T1 --destination platform=macOS --destination 'platform=iOS Simulator,name=iPhone 16' --background`" + TAIL) in msg
+    assert ("Verify: `/sl/sl run_tests --fast tests/test_a.py --task T1 --destination platform=macOS --destination 'platform=iOS Simulator,name=iPhone 16' --background` (or `/sl/sl run_tests --affected --task T1 --background`, which picks the tests your change touches)" + TAIL) in msg
 
 
 def test_cmd_task_line_unchanged(tmp_path):

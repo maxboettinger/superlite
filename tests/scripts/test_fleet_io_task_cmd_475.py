@@ -32,12 +32,12 @@ def test_batch_with_cmd_task_gets_line_per_task(tmp_path):
     p = plan(tmp_path, [("T1", "tests/hooks/test.sh", "fast cmd=bash tests/hooks/test.sh"), ("T2", "src/b.py, tests/test_b.py", "fast")])
     msg = fleet_io.task_message(p, ["T1", "T2"], "/sl/sl", "/sl")
     assert "Verify T1: `/sl/sl run_tests --task T1 --background` (runs its **Tests:** cmd=`bash tests/hooks/test.sh`)" in msg
-    assert ("Verify T2: `/sl/sl run_tests --fast tests/test_b.py --task T2 --background`" + TAIL) in msg
+    assert ("Verify T2: `/sl/sl run_tests --fast tests/test_b.py --task T2 --background` (or `/sl/sl run_tests --affected --task T2 --background`, which picks the tests your change touches)" + TAIL) in msg
     assert "\nVerify: " not in msg
 
 
 def test_no_cmd_lines_unchanged(tmp_path):
     p = plan(tmp_path, [("T1", "src/a.py, tests/test_a.py", "fast"), ("T2", "app/x.swift", "build"), ("T3", "docs/a.md", "fast")])
-    assert ("Verify: `/sl/sl run_tests --fast tests/test_a.py --task T1 --background`" + TAIL) in fleet_io.task_message(p, ["T1"], "/sl/sl", "/sl")
+    assert ("Verify: `/sl/sl run_tests --fast tests/test_a.py --task T1 --background` (or `/sl/sl run_tests --affected --task T1 --background`, which picks the tests your change touches)" + TAIL) in fleet_io.task_message(p, ["T1"], "/sl/sl", "/sl")
     assert ("Verify: `/sl/sl run_tests --full --task T2 --background` (Tests: build, a build check)" + TAIL) in fleet_io.task_message(p, ["T2"], "/sl/sl", "/sl")
     assert "Verify: no test command (no code file in Owns)" in fleet_io.task_message(p, ["T3"], "/sl/sl", "/sl")

@@ -120,6 +120,22 @@ def named_destinations(text):  # the destinations TEXT names after -destination 
     return list(dict.fromkeys(next(g for g in m.groups() if g is not None) for m in DEST_RE.finditer(text or "")))  # O(len)
 
 
+RUN_ITEM = re.compile(r"^\s*\d+\s+run\b:?\s*(.+)$", re.I)  # a Steps item that runs something | O(1)
+
+
+PATH_ITEM = re.compile(r"[\w./\\-]+\.\w+")  # a run item that is a file path, not a class or test name | O(1)
+
+
+def steps_runs(steps):  # what a task's Steps line runs beyond its FAIL/PASS runs, deduped in order | O(len)
+    out = []  # O(1)
+    for item in (steps or "").split(","):  # O(items) iterations
+        m = RUN_ITEM.match(item)  # O(len)
+        x = m.group(1).replace("`", "").strip() if m else ""  # O(len)
+        if x and not re.match(r"(?i)(fail|pass)", x) and x not in out:  # O(r)
+            out.append(x)  # O(1)
+    return out  # O(1)
+
+
 def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + k*s)
     plan = Path(plan).resolve()  # O(1)
     pl = pt.Plan.load(str(plan))  # O(L)
@@ -151,14 +167,20 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
             return f"`{sl_path} run_tests --full --task {tid}{dest} --background` (Tests: build, a build check)" + tail  # O(1)
         if not code:  # O(1)
             return None  # O(1)
-        return f"`{sl_path} run_tests --fast {' '.join(tests)} --task {tid}{dest} --background`" + tail  # O(o)
+        return f"`{sl_path} run_tests --fast {' '.join(tests)} --task {tid}{dest} --background` (or `{sl_path} run_tests --affected --task {tid} --background`, which picks the tests your change touches)" + tail  # O(o)
     if ext:  # O(1)
         out += [f"Verify: `{sl_path} plan_tools external {tasks[0]} --plan {plan} --test` (its **Repo test:** command in the task's tree), not run_tests."]  # O(1)
     else:  # O(1)
         for t in mine:  # O(k)
             tt = testcmd.verify_paths(t.owns)  # O(o)
-            ln = line(None, t.id, tt, t.features.get("tests") == "build", bool(tt))  # O(o)
+            runs = steps_runs(t.field_text("steps"))  # O(len)
+            fast = not cmds.get(t.id) and t.features.get("tests") != "build" and bool(tt)  # only the --fast form takes path items | O(1)
+            paths = [x for x in runs if PATH_ITEM.fullmatch(x) and testcmd.verify_paths([x]) == [x] and x not in tt] if fast else []  # O(r*depth)
+            ln = line(None, t.id, tt + paths, t.features.get("tests") == "build", bool(tt))  # O(o)
             out += [("Verify: " if len(mine) == 1 else f"Verify {t.id}: ") + (ln or "no test command (no code file in Owns); check that each owned file exists and says what the task asks.")]  # O(o)
+            rest = [x for x in runs if x not in paths and not (fast and x in tt)]  # O(r)
+            if rest:  # O(1)
+                out += [f"Steps also run{'' if len(mine) == 1 else ' ' + t.id}: {', '.join(rest)}; run each before you report DONE (the Verify line does not cover them)."]  # O(r)
         if len(mine) > 1:  # O(1)
             out += ["Batch: run each task's Verify command on its own (the red run too), never one run_tests for several tasks; a `--task Tn` run may use Tn's own tree, which holds Tn's files but not another member's unfinished ones, so each task's change must work without the other's. Report each task's red run on its own line, `Red run Tn: <summary line>`, and give the json block's `red` as an object keyed by task id."]  # O(1)
     out += ["", f"Reply in at most 200 words, starting with `{STATUS_LINE}` (pick one), then files changed, the test command and its result line, and open questions."]  # O(1)
