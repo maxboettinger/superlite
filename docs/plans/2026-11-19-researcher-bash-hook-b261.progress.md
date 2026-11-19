@@ -1,0 +1,34 @@
+- start d9c27461fee24f189d196dbbce226b57f3954cd8
+- unblocked: dispatched T1 at 17:57:43; waiting on fixes: none
+- tests fast passed=0 failed=61 skipped=0 seconds=0.8
+- tests fast passed=61 failed=0 skipped=0 seconds=0.6
+- tests fast passed=34 failed=0 skipped=0 seconds=0.9
+- commit T1 b35e6ab075 check and CLI
+- unblocked: dispatched T2 at 18:01:25; waiting on fixes: none
+- tests fast passed=61 failed=0 skipped=0 seconds=0.4
+- tests fast passed=34 failed=0 skipped=0 seconds=0.7
+- tests fast passed=0 failed=15 skipped=0 seconds=0.4
+- tests fast passed=1943 failed=0 skipped=0 seconds=102.6
+- tests fast passed=1956 failed=0 skipped=0 seconds=169.8
+- commit T2 e3102e26a1 hook, registration, docs
+- tests fast passed=1943 failed=0 skipped=0 seconds=83.3
+- tests full passed=12977 failed=0 skipped=12 seconds=332.3
+- tests fast passed=4 failed=0 skipped=0 seconds=19.3
+- tests fast passed=3 failed=0 skipped=0 seconds=161.1
+- tests fast passed=66 failed=4 skipped=0 seconds=0.7
+- tests fast passed=70 failed=0 skipped=0 seconds=0.4
+- Ruling: T1 also commits docs/hooks.md - coordinator ruling: the fix needs this file (findings route --also)
+- commit T1 986625b5df check and CLI
+- tests fast passed=71 failed=5 skipped=0 seconds=0.5
+- tests fast passed=121 failed=0 skipped=0 seconds=1.5
+- Ruling: T1 also commits docs/hooks.md - coordinator ruling: the fix needs this file (findings route --also)
+- Ruling: T1 also commits tests/scripts/test_fleet_research_bash_809.py - coordinator ruling: the fix needs this file (findings route --also)
+- commit T1 6af23bbd5f check and CLI
+- tests full passed=12986 failed=0 skipped=12 seconds=319.0
+- tests fast passed=74 failed=6 skipped=0 seconds=0.6
+- tests fast passed=129 failed=0 skipped=0 seconds=1.4
+- Ruling: T1 also commits docs/hooks.md - coordinator ruling: the fix needs this file (findings route --also)
+- Ruling: T1 also commits tests/scripts/test_fleet_research_bash_809.py - coordinator ruling: the fix needs this file (findings route --also)
+- commit T1 2e3f4b619f check and CLI
+- tests full passed=12988 failed=0 skipped=12 seconds=313.7
+- tests full passed=12996 failed=0 skipped=12 seconds=323.4

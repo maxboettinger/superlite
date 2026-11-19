@@ -6,6 +6,7 @@ Instructions drift. Scripts and hooks do not. These gates run on every build:
 |---|---|---|
 | **The coordinator cannot write code** | Every change goes to a fix-only or implementer agent, by tier; the block message says which | `block-coordinator-edits` hook |
 | **No unsafe kills** | No `pkill` or `taskkill /IM`; only PIDs the run started | `block-unsafe-kill` hook |
+| **The researcher stays read-only** | The in-process researcher's Bash runs only the read-only allowlist (git log, show, diff and the like, ls, xcrun simctl list); anything else is refused | `researcher-bash` hook |
 | **Tests never block the coordinator** | A raw `pytest`, `npm test`, `go test` and so on is rewritten into a background `sl run_tests` | `rewrite-test-runs` hook |
 | **A plan must lint before work starts** | Stable tasks dispatch at once; others wait with a reason. Size band, frozen interfaces, and chain rulings that must carry the id lint printed | `lint --stable` |
 | **Same plan, same agents** | Task features pick the agent tier from `routing.json`; Haiku only for mechanical tasks off the critical path, never for fixes | `routing.py` |
