@@ -445,7 +445,7 @@ if [ "$has_agent" = 1 ] || [ -n "$fleet_worker" ]; then
     current_task "$REPLY"; iso_task="$REPLY"
   fi
   own_cmd=""; own_task=""; wrote=0; wout=""
-  if [ "$tool" = Bash ]; then
+  if [ "$tool" = Bash ] && [ "$iso" = 1 ]; then   # only an isolate stack blocks the project command
     if [ "$has_agent" = 1 ]; then jstr agent_id; else REPLY="$fleet_worker"; fi
     current_task "$REPLY"; own_task="$REPLY"
     if [ -n "$own_task" ]; then task_tests_cmd "$own_task"; own_cmd="$REPLY"; fi

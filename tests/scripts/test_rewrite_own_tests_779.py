@@ -95,3 +95,11 @@ def test_no_plan_denied(proj):
     (proj / ".superlite" / "plan.md").unlink()
     r = run(proj, RAW, agent_id="a1")
     assert r.returncode == 2
+
+
+def test_non_isolate_own_cmd_untouched(tmp_path):
+    cmd = "pytest tests/test_a.py"
+    setup(tmp_path, {"language": "python", "test": "pytest {files}", "test_file": "pytest {file}"})
+    (tmp_path / ".superlite" / "plan.md").write_text("### T3 x\n**Tests:** fast cmd=" + cmd + "\n")
+    r = run(tmp_path, cmd, agent_id="a1")
+    assert r.returncode == 0 and r.stdout == ""
