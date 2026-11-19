@@ -62,9 +62,10 @@ def test_quotes_escaped(proj):
     cmd_in = 'Scripts/test.sh -only-testing:A "b"'
     (proj / ".superlite" / "plan.md").write_text("### T3 x\n**Tests:** fast cmd=`" + cmd_in + "`\n")
     r = run(proj, cmd_in, agent_id="a1")
-    assert r.returncode in (0, 2)
-    if r.stdout:
-        json.loads(r.stdout)
+    assert r.returncode == 0
+    assert "run_tests --fast --task T3 --background" in out(r)["updatedInput"]["command"]
+    row = rows(proj)[-1]
+    assert row["rule"] == "own-tests-cmd" and '"' in row["command"]
 
 
 def test_other_command_still_denied(proj):
