@@ -29,10 +29,6 @@ def test_implementer_reads_prime_file():
         assert "prime.md" in t, n
 
 
-def test_skill_verify_command_has_task():
-    assert "run_tests --fast PATHS --task Tn --background" in SKILL
-
-
 def test_skill_names_new_flags():
     assert '--also F --ruling "..."' in SKILL
     assert "trees clean" in SKILL

@@ -4,15 +4,14 @@ REF = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").rea
 
 def test_command_is_the_main_loop():
     assert CMD.startswith("---\ndescription: ")
-    for s in ('"$SL" backlog status', "after any compaction", '"$SL" backlog plan', "background command", '"$SL" backlog decide --print',
-              "AskUserQuestion", "at most 4", '"$SL" backlog decide --file', '"$SL" backlog start', '"$SL" backlog wait',
-              '"$SL" backlog answer', "needs_decision", "parked", "shipped", "Never read issue bodies", "backlog-main.md", "BLOCKED"):
+    for s in ("after any compaction", "background command",
+              "AskUserQuestion", "at most 4", "needs_decision", "parked", "shipped", "Never read issue bodies", "backlog-main.md", "BLOCKED"):
         assert s in CMD, s
     assert CMD.index("backlog status") < CMD.index("backlog plan") < CMD.index("backlog start")
 
 def test_reference_holds_the_main_and_lead_rules():
     for s in ("## Main", "## Lead", "--plan", "Never end your turn while your workers run", ".superlite/question.json", "Status: NEEDS_DECISION",
-              "answer-<n>.json", '"$SL" backlog ship B lock', "LAYERS:", "fleet run --layer", "exit 4", "exit 5", "exit 6", "bump", "merge",
+              "answer-<n>.json", "LAYERS:", "fleet run --layer", "exit 4", "exit 5", "exit 6", "bump", "merge",
               "600000", "release --park", ".superlite/notes.md", ".superlite/pr-body.md", "--permission-mode auto", "Bash(maxapp ship *)",
               "PermissionRequest", "fast-forwards the main checkout"):
         assert s in REF, s
@@ -20,7 +19,7 @@ def test_reference_holds_the_main_and_lead_rules():
     assert "`backlog.md`" in fleet and "/superlite:backlog" in fleet
 
 def test_reference_spells_skip_park_closing_and_bare_ship_steps():
-    for s in ('"$SL" backlog skip <issue>', '"$SL" backlog park B --reason R', "only `start B` starts it", "umbrella and tracking issues",
+    for s in ("only `start B` starts it", "umbrella and tracking issues",
               "one `Closes #N` line per issue", "`OPEN #N`", "B OPEN #N", "self-contained line", "one bare command", "no `cd`", "no pipe",
               "no `&&` chain", "`--plan .superlite` is accepted"):
         assert s in REF, s

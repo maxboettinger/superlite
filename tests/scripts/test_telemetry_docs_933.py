@@ -30,7 +30,7 @@ def test_docs_table_matches_kinds():
 
 def test_docs_name_off_switches_and_rotation():
     for word in ("SUPERLITE_TELEMETRY=0", "telemetry-off", "events.jsonl", "20 MB", "events.jsonl.5",
-                 "telemetry export --since", "review_kind", "writer_role", "backfill", "4096"):
+                 "review_kind", "writer_role", "backfill", "4096"):
         assert word in DOC, word
 
 

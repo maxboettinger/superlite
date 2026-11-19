@@ -46,7 +46,7 @@ Agents using superlite log its own friction with `sl feedback add` into `~/.supe
 
 | Layer | Runs | Required when a change touches |
 |---|---|---|
-| unit | `sl run_tests --full` | `skills/**/scripts/**`, `hooks/**`, `tests/scripts/**`, `tests/bench/**`, `bench/*.py`, `scripts/*.py` |
+| unit | `sl run_tests --full` | `skills/**/scripts/**`, `hooks/**`, `tests/scripts/**`, `tests/bench/**`, `bench/*.py`, `scripts/*.py`, `pyproject.toml`, `uv.lock` |
 | headless | `python3 scripts/test_layers.py run headless` | `hooks/**`, `skills/**` (not `scripts/`), `agents/**`, `commands/**`, `.claude-plugin/**`, `tests/e2e/harness.py`, `tests/e2e/test_headless.py` |
 | tui | `python3 scripts/test_layers.py run tui` | `hooks/session-start`, `hooks/hooks.json`, `tests/e2e/tui_driver.py`, `tests/e2e/test_tui.py`, and any file whose diff mentions `CLAUDE_CODE_FORK_SUBAGENT` or `agent_summary` |
 | evals | `python3 scripts/test_layers.py run evals` | `skills/*/SKILL.md`, `commands/**`, `agents/**`, `evals/**` |

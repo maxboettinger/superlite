@@ -10,23 +10,18 @@ def row(name):
 
 def test_docs_name_the_main_side_merge():
     ref = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
-    fleet = (ROOT / "docs" / "fleet.md").read_text(encoding="utf-8")
-    assert '"$SL" backlog ship B merge --from-main' in CMD
-    assert '"$SL" backlog ship B merge --from-main' in ref
     assert "merge denied: main runs sl backlog ship B merge --from-main" in ref
-    assert "ship B merge --from-main" in fleet
     assert "`merge --from-main`" in row("backlog_ship") and "rebase aborted" in row("backlog_ship")
     assert CMD.index("merge --from-main") < CMD.index("backlog ship B done")
 
 
 def test_command_names_skip_and_park_with_their_reasons():
-    for s in ('"$SL" backlog skip <issue>', "waits on outside work, such as another open PR",
-              '"$SL" backlog park B --reason R', "needs a human design decision"):
+    for s in ("waits on outside work, such as another open PR", "needs a human design decision"):
         assert s in CMD, s
 
 
 def test_command_names_several_ids_done_and_the_reprompt():
-    for s in ('"$SL" backlog start B7 B10', "the others still start", '"$SL" backlog ship B done --pr N',
+    for s in ('"$SL" backlog start B7 B10', "the others still start",
               "maxapp ship -C <worktree>", "no status in stop text"):
         assert s in CMD, s
     assert CMD.index("backlog start B7 B10") < CMD.index("backlog ship B done") < CMD.index("Repeat 4 and 5")

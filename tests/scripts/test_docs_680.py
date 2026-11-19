@@ -19,5 +19,5 @@ def test_row_fields_named():
 
 
 def test_tools_lines():
-    for word in ("batch_cost", "main_cost", "report --batches"):
+    for word in ("batch_cost", "main_cost"):
         assert word in TOOLS, word

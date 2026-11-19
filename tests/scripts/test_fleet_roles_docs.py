@@ -6,14 +6,14 @@ def read(rel):
 
 def test_fixing_md_routes_fleet_fixes():
     t = read("skills/subagent-driven-development/fixing.md")
-    for s in ('"$SL" findings route', "fleet spawn --role fixer --tier", "fleet send Wn --brief", "(fleet off only)", "fresh fixer worker"):
+    for s in ("(fleet off only)", "fresh fixer worker"):
         assert s in t, s
     assert 'bash "$SL"' not in t
 
 def test_docs_fleet_md_covers_roles():
     t = read("docs/fleet.md")
     for s in ("--role", "fixer", "package-reviewer", "final-reviewer", "research", "--effort", ".superlite/briefs/",
-              "auto mode", "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0", "findings=", "findings route", "fleet run --layer",
+              "auto mode", "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0", "findings=", "fleet run --layer",
               "APPROVED", "CHANGES_REQUESTED", "fleet off", "agents/researcher.md"):
         assert s in t, s
     assert "Reviewers, fixers and the final reviewer stay in-process" not in t

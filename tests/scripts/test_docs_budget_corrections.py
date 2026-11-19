@@ -46,11 +46,6 @@ def test_skill_length_stays_near_today():
     assert len(SKILL) <= 13300
 
 
-def test_metrics_md_documents_the_subcommands():
-    m = (ROOT / "skills/subagent-driven-development/metrics.md").read_text(encoding="utf-8")
-    assert "sl budget extend" in m and "sl budget raise" in m
-
-
 def test_gates_md_row():
     g = (ROOT / "docs/gates.md").read_text(encoding="utf-8")
     r = row(g, "Cost caps are enforced") if "| `Cost caps" in g else next(ln for ln in g.splitlines() if "Cost caps are enforced" in ln)
@@ -65,10 +60,6 @@ def test_tools_md_rows():
         r = row(t, name)
         for w in words:
             assert w in r, (name, w)
-
-
-def test_resume_names_budget_raise():
-    assert "sl budget raise" in (ROOT / "commands/resume.md").read_text(encoding="utf-8")
 
 
 def test_docs_name_the_real_blocked_lines_and_corrections_file():

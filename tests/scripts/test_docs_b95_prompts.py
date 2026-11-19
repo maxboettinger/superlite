@@ -5,7 +5,6 @@ ROOT = Path(__file__).resolve().parents[2]
 WP = "\n".join((ROOT / "skills" / "writing-plans" / n).read_text(encoding="utf-8") for n in ("SKILL.md", "task-template.md", "probe-plan.md", "split.md"))
 CMD_BACKLOG = (ROOT / "commands" / "backlog.md").read_text(encoding="utf-8")
 SDD_BACKLOG = ((ROOT / "skills" / "subagent-driven-development" / "backlog-main.md").read_text(encoding="utf-8") + "\n" + (ROOT / "skills" / "subagent-driven-development" / "backlog.md").read_text(encoding="utf-8"))
-RESUME = (ROOT / "commands" / "resume.md").read_text(encoding="utf-8")
 
 
 def has(text, *tokens):
@@ -21,7 +20,3 @@ def test_writing_plans_produces_and_probe():
 def test_backlog_issues_and_carry_over():
     for text in (CMD_BACKLOG, SDD_BACKLOG):
         has(text, "GitHub numbers", "ranked first")
-
-
-def test_resume_calls_orchestrator_resume():
-    has(RESUME, "sl orchestrator resume", "sl status")

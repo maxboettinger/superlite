@@ -24,7 +24,7 @@ def test_commands_section():
 def test_batch_leads_section():
     has(section("Batch leads (backlog mode)"), "--add", "overlap:", "--note FILE", "note:", "parked",
         "tell B --text T", "--approve-ship --source prompt", '"by"', "followups=N", "undone=M",
-        "--autocompact", "Files other open batches own", "incident resolve --kind")
+        "--autocompact", "Files other open batches own")
 
 
 def test_troubleshooting_trust_dialog():

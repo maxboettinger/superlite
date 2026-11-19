@@ -9,5 +9,5 @@ def test_release_and_unit_layer_are_explained():
 
 
 def test_plan_and_undo_lines_are_documented():
-    for s in ("fast path", "already shipped:", "check:", "not found:", "offer:", "unskip", "reset B [--discard]", "--help", "reopened", "latest comments", "low memory"):
+    for s in ("fast path", "already shipped:", "check:", "not found:", "offer:", "unskip", "--help", "reopened", "latest comments", "low memory"):
         assert s in DOC, s

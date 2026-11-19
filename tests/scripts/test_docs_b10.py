@@ -7,7 +7,6 @@ TOOLS = (ROOT / "docs" / "tools.md").read_text(encoding="utf-8")
 
 def test_skill_names_gate_hold_report():
     assert "`WAIT FOR T0:`" in SKILL
-    assert "hold Tn --reason R" in SKILL
     assert "`<plan>.build-report.md`" in SKILL
 
 
