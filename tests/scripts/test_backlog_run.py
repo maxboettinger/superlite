@@ -222,9 +222,9 @@ def fleet_of(bk, wt, **workers):
 
 def test_wait_flags_vanished_worker_panes_of_a_live_lead_once(bk, capsys, monkeypatch):
     wt = running(bk); bk.states.update({"sl-m-W1": "working", "sl-l-w3": "working"})
-    fleet_of(bk, wt, W2={"name": "sl-l-w2", "state": "busy"}, W3={"name": "sl-l-w3", "state": "busy"},
+    fleet_of(bk, wt, W2={"name": "sl-l-w2", "state": "busy", "task": "T2", "sent": 1}, W3={"name": "sl-l-w3", "state": "busy"},
              W4={"name": "sl-l-w4", "state": "stopped"}, W5={"name": "sl-l-w5", "state": "busy", "role": "layer"},
-             W6={"name": "sl-l-w6", "state": "starting"}, W7={"name": "sl-l-w7", "state": "ready"})
+             W6={"name": "sl-l-w6", "state": "starting"}, W7={"name": "sl-l-w7", "state": "blocked", "task": "T7", "sent": 1})
     assert run(capsys, "wait", "--timeout", "0") == (0, "TIMEOUT\n")
     assert get(bk, "B1")["gone_seen"] == {"W2": 5000, "W7": 5000} and not any(c[0] == "text" for c in bk.calls)
     monkeypatch.setattr(br, "_now_ms", lambda: 5000 + br.GONE_MS)
@@ -238,7 +238,7 @@ def test_wait_flags_vanished_worker_panes_of_a_live_lead_once(bk, capsys, monkey
 
 def test_wait_forgets_a_worker_pane_that_comes_back_and_skips_herdr_outages(bk, capsys, monkeypatch):
     wt = running(bk); bk.states["sl-m-W1"] = "working"
-    fleet_of(bk, wt, W2={"name": "sl-l-w2", "state": "busy"})
+    fleet_of(bk, wt, W2={"name": "sl-l-w2", "state": "busy", "task": "T2"})
     assert run(capsys, "wait", "--timeout", "0") == (0, "TIMEOUT\n") and get(bk, "B1")["gone_seen"] == {"W2": 5000}
     bk.states["sl-l-w2"] = "working"; monkeypatch.setattr(br, "_now_ms", lambda: 5000 + br.GONE_MS)
     assert run(capsys, "wait", "--timeout", "0") == (0, "TIMEOUT\n") and get(bk, "B1")["gone_seen"] == {}
@@ -247,7 +247,7 @@ def test_wait_forgets_a_worker_pane_that_comes_back_and_skips_herdr_outages(bk, 
 
 def test_wait_names_a_lead_it_could_not_tell(bk, capsys, monkeypatch):
     wt = running(bk, gone_seen={"W2": 0}); bk.states["sl-m-W1"] = "working"
-    fleet_of(bk, wt, W2={"name": "sl-l-w2", "state": "busy"})
+    fleet_of(bk, wt, W2={"name": "sl-l-w2", "state": "busy", "task": "T2"})
     monkeypatch.setattr(br, "_now_ms", lambda: br.GONE_MS); monkeypatch.setattr(sys.modules["fleet_io"], "main", lambda argv: 1)
     assert run(capsys, "wait", "--timeout", "0") == (0, "B1 worker panes gone: W2; lead W1 not told (send failed)\n")
     assert get(bk, "B1")["gone_workers"] == ["W2"]

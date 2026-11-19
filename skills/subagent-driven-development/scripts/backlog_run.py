@@ -16,7 +16,7 @@ description; each cut is reported as `shortened:`); one still invalid is sent ba
 without the status its `last` holds) is re-read for fleet_io.READ_MS, then parked "(transcript unread)".
 A lead whose brief Herdr refuses (after send_brief's one resend on a stall) is stopped and its batch keeps its state (BLOCKED line, exit 2).
 A resumed batch's lead brief ends with the worktree state (commits, uncommitted files, answers already given).
-`wait` tells a live lead once when the Herdr panes of its fleet workers stay gone for GONE_MS (a crash), and flags it.
+`wait` tells a live lead once when the Herdr panes of its fleet workers stay gone for GONE_MS (a crash), and flags it; a worker counts only while it holds an unreported task, and a remote worker is listed by its own machine, an unreachable one never gone (#996).
 `answer` takes one answer rule (backlog_answer, #586): a label, a label plus a note, or free text up to 2000 characters. `_shipped` also runs for a batch without lead or worktree (`ship B done` on a planned batch, #585).
 `remove_worktree` is the git-only worktree and branch removal (a PR head gets `-D`, #589); `_shipped(push=False)` uses it, never maxapp. A failed cleanup line carries git's error and the core.bare cause and is stored as the batch's `cleanup_owed`. `start` blocks a batch whose worktree.ensure raises or gives the main checkout.
 `sync_main` fast-forwards the main checkout to origin's default branch when it is on that branch, clean and behind (cmd_plan calls it, #590); every other state prints one `sync:` line and leaves HEAD alone.
@@ -189,6 +189,13 @@ def _resume_state(batch: dict, wt: Path, branch: str) -> list:
     return out  # O(1)
 
 
+def _holds_task(w: dict) -> bool:  # O(1)
+    if not w.get("task") or w.get("state") not in ("busy", "blocked"):  # O(1)
+        return False  # O(1)
+    sent = w.get("sent")  # O(1)
+    return not (sent and int(w.get("collected") or 0) == int(sent))  # a taken report holds no task | O(1)
+
+
 def _gone(p, sd, b: dict, states: dict) -> list:
     import fleet_io
     import fleet_state
@@ -197,10 +204,14 @@ def _gone(p, sd, b: dict, states: dict) -> list:
     done = list(b.get("gone_workers") or [])  # O(1)
     now = _now_ms()  # O(1)
     seen = {}  # O(1)
-    for wid, w in fleet_state.load(lsd).get("workers", {}).items():  # O(w)
-        if w.get("state") in ("stopped", "starting") or w.get("role") == "layer" or wid in done:  # O(1)
-            continue  # O(1)
-        if fleet_state.name_of(lsd, wid, w) not in states:  # O(1)
+    cands = {wid: w for wid, w in fleet_state.load(lsd).get("workers", {}).items() if _holds_task(w) and w.get("role") != "layer" and wid not in done}  # O(w)
+    remote = None  # O(1)
+    if any(w.get("machine") for w in cands.values()):  # one listing per call, asked of the workers' own machines, no sync | O(1)
+        import fleet_remote_worker
+        remote = fleet_remote_worker.states(lsd, sync=False)  # O(w + a)
+    for wid, w in cands.items():  # O(w)
+        listed = states if not w.get("machine") else remote  # O(1)
+        if fleet_state.name_of(lsd, wid, w) not in listed:  # O(1)
             seen[wid] = old.get(wid, now)  # O(1)
     due = [wid for wid, t in seen.items() if now - t >= GONE_MS]  # O(w)
     keep = {wid: t for wid, t in seen.items() if wid not in due}  # O(w)
