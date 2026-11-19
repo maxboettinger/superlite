@@ -1063,6 +1063,9 @@ def _refusal(sd, wid):  # why a send or keys to WID is refused (a stopped or dea
         return None  # O(1)
     last = w.get("last_task") or w.get("task") or "none"  # O(1)
     why = f"dead (its agent is gone; last task {last})" if w.get("dead") else f"stopped ({w.get('role') or 'implementer'}, last task {last})"  # O(1)
+    if w.get("one_turn") and w.get("launch") and not w.get("machine") and w.get("role") not in ("lead", "layer"):  # a local one-turn worker continues in its session (#808) | O(1)
+        import fleet_resume  # noqa: E402 | O(1) lazy
+        return f'error: {wid} is {why}; continue its session: {fleet_resume.CMD} {wid} --text "..." --plan {sd}; or start a fresh one: {_fleet().respawn_hint(sd, wid)}'  # O(w)
     return f"error: {wid} is {why}; start a fresh one: {_fleet().respawn_hint(sd, wid)}"  # O(w)
 
 
