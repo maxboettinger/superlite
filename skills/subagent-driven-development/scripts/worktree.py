@@ -3,6 +3,7 @@
 
     worktree.py ensure TOPIC [--repo DIR] [--branch NAME] [--dir NAME]     print the absolute path of the run folder
     worktree.py inplace --reason TEXT         opt the marked inline flow out of the main-checkout write refusal
+    worktree.py scratch [--rev REV] [--repo DIR] -- COMMAND...     run COMMAND in a scratch tree at the run's start SHA, then remove the tree
     --plan P (anywhere): accepted and ignored (every lead brief passes it to every sl call, #336)
 
 From a linked worktree the tool returns that worktree. Otherwise it returns (or creates)
@@ -14,6 +15,7 @@ top-level entries of the main checkout it lacks (`.env`, `.venv/`; names only, n
 `inplace` sets `inplace` to the reason in the marker `<state folder>/inline-flow.json` that hooks/mark-inline-flow wrote
 (hooks/inline-worktree-guard then lets edits in the main checkout pass) and appends `Ruling: in place - TEXT` to the
 state folder's progress.md; no marker: nothing changes, exit 0 (#148).
+`scratch` (#816) builds the run's start SHA (checkpoints.json `base`, else the merge-base with the default branch; `--rev REV` overrides) in a detached tree `.superlite/trees/scratch-<pid>`, runs COMMAND there (the arguments after `--`, through `sh`) with xcodebuild pointed at the tree's `.build/DerivedData` and the run root's shared `.build/SourcePackages` (also in SUPERLITE_SCRATCH_TREE, SUPERLITE_RUN_ROOT, SUPERLITE_SCRATCH_SHA, SUPERLITE_DERIVED_DATA_PATH, SUPERLITE_SOURCE_PACKAGES), and removes the tree on every path (exit, error, SIGTERM, SIGHUP, Ctrl-C); idle leftover scratch trees are dropped first. Stderr lines name the tree, its SHA and the removal. Exit: the command's (128 + signal when killed), 2 refused (no command, no repository or commit, unknown revision), 1 tree not prepared.
 Other open runs of the repository (#493): `ensure` prints stderr lines only. With a plan in the run folder, one `WARNING: OVERLAP:` line per other run whose files the plan's Owns share; without one, one line per other run naming its files. Warn only.
 Stdlib only; another run's plan is read through plan_tools.
 """
@@ -22,9 +24,13 @@ Stdlib only; another run's plan is read through plan_tools.
 import argparse  # O(1)
 import fnmatch  # O(1)
 import json  # O(1)
+import os  # O(1)
 import re  # O(1)
+import shlex  # O(1)
+import signal  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
+import time  # O(1)
 from pathlib import Path  # O(1)
 
 PARENT = ".claude/worktrees"  # O(1)
@@ -314,9 +320,134 @@ def inplace(reason, sd):  # O(f + r)
     return True  # O(1)
 
 
+SCRATCH_USAGE = "usage: worktree scratch [--rev REV] [--repo DIR] -- COMMAND..."  # O(1)
+
+
+def scratch_command(command, tree, packages):  # O(len command) + xcodebuild segments
+    """-> `command` with -clonedSourcePackagesDirPath (segments naming -scheme) and -derivedDataPath (the tree's) added to its xcodebuild calls."""
+    import run_tests  # noqa: E402  # O(1) lazy module load
+    flag = f"-clonedSourcePackagesDirPath {shlex.quote(str(packages))}"  # O(len packages)
+    for m in reversed(list(run_tests.XCODEBUILD.finditer(command))):  # last to first keeps earlier offsets valid | O(len)
+        rest = command[m.end():]  # O(len)
+        end = run_tests.SEGMENT_END.search(rest)  # O(len)
+        words = rest[:end.start() if end else len(rest)].split()  # O(len)
+        if "-scheme" in words and "-clonedSourcePackagesDirPath" not in words:  # O(w)
+            command = command[:m.end()] + " " + flag + command[m.end():]  # O(len)
+    return run_tests.with_derived_data(command, tree)  # O(len)
+
+
+def scratch_rev(root, rev=None):  # O(1) + spawns
+    """-> (sha, label): the commit `rev` names, else the run's start SHA; ('', reason) when none."""
+    import run_tests  # noqa: E402  # O(1) lazy module load
+    if rev is None:  # O(1)
+        sha, reason = run_tests.base_commit_of(root)  # O(1) + spawns
+        return (sha, "start SHA") if sha else ("", reason)  # O(1)
+    rc, out, _ = git(root, "rev-parse", "--verify", "-q", f"{rev}^{{commit}}")  # O(1) + spawn
+    return (out, f"--rev {rev}") if not rc and out else ("", f"unknown revision {rev}")  # O(1)
+
+
+def _stop_group(proc):  # O(1) + up to 10 s wait
+    """End the command's whole process group (SIGTERM, then SIGKILL after 10 s); later SIGTERM/SIGHUP/SIGINT are ignored meanwhile."""
+    posix = os.name == "posix"  # O(1)
+    for name in ("SIGTERM", "SIGHUP", "SIGINT"):  # the scratch finally restores them | O(1)
+        if hasattr(signal, name):  # O(1)
+            signal.signal(getattr(signal, name), signal.SIG_IGN)  # O(1)
+    try:  # O(1)
+        if posix:  # O(1)
+            os.killpg(proc.pid, signal.SIGTERM)  # O(1)
+        else:  # O(1)
+            proc.terminate()  # O(1)
+    except OSError:  # O(1) already gone
+        pass  # O(1)
+    end = time.monotonic() + 10  # O(1)
+    while time.monotonic() < end:  # O(1) bounded by 10 s
+        proc.poll()  # reap the leader: a zombie still counts in its group | O(1)
+        if posix:  # O(1)
+            try:  # O(1)
+                os.killpg(proc.pid, 0)  # members alive? | O(1)
+            except OSError:  # O(1) group empty
+                break  # O(1)
+        elif proc.poll() is not None:  # O(1)
+            break  # O(1)
+        time.sleep(0.05)  # O(1)
+    else:  # O(1) still alive after 10 s
+        try:  # O(1)
+            os.killpg(proc.pid, signal.SIGKILL) if posix else proc.kill()  # O(1)
+        except OSError:  # O(1)
+            pass  # O(1)
+    proc.wait()  # O(1)
+
+
+def _on_signal(signum, frame):  # O(1)
+    raise SystemExit(128 + signum)  # O(1)
+
+
+def scratch(root, command, rev=None):  # O(files) + the command
+    """Run `command` in a scratch tree at the start SHA, remove the tree afterwards -> the exit code."""
+    import trees  # noqa: E402  # O(1) lazy module load
+    top = git(root, "rev-parse", "--show-toplevel")[1] if not no_repo_reason(root) else ""  # O(1) + spawns
+    if not top:  # O(1)
+        print("worktree: scratch needs a git repository with a commit", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    root = str(Path(top).resolve())  # O(1)
+    sha, label = scratch_rev(root, rev)  # O(1) + spawns
+    if not sha:  # O(1)
+        print(f"worktree: scratch: {label}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    try:  # O(1)
+        stale = sorted(d.name for d in (Path(root) / trees.TREES).glob("scratch-*") if d.is_dir())  # O(T log T)
+    except OSError:  # O(1)
+        stale = []  # O(1)
+    for name in stale:  # O(T)
+        if not trees.is_busy(root, name) and trees.drop(root, name):  # O(tree size)
+            print(f"worktree: removed stale scratch tree {name}", file=sys.stderr)  # O(1)
+    key = f"scratch-{os.getpid()}"  # O(1)
+    old = {}  # O(1)
+    for name in ("SIGTERM", "SIGHUP", "SIGINT"):  # O(1)
+        if hasattr(signal, name):  # O(1)
+            old[getattr(signal, name)] = signal.signal(getattr(signal, name), _on_signal)  # O(1)
+    proc = None  # O(1)
+    try:  # O(1)
+        with trees.busy(root, key):  # O(1)
+            try:  # O(1)
+                try:  # O(1)
+                    tree = trees.prepare_at(root, key, sha)  # O(files)
+                except (RuntimeError, OSError) as ex:  # O(1)
+                    print(f"worktree: scratch tree at {sha[:12]} not prepared: {ex}", file=sys.stderr)  # O(1)
+                    return 1  # O(1)
+                packages = Path(root) / ".build" / "SourcePackages"  # O(1)
+                packages.mkdir(parents=True, exist_ok=True)  # O(1)
+                add_exclude(root, ".build", ".build/x")  # O(e) + spawns
+                print(f"worktree: scratch tree {tree} at {sha[:12]} ({label}); shared packages {packages}", file=sys.stderr)  # O(1)
+                trees.derived_data_path(tree).mkdir(parents=True, exist_ok=True)  # the tree's own .build: never listed as missing | O(1)
+                line = missing_line(missing_ignored(root, tree))  # O(i) + spawn
+                if line:  # O(1)
+                    print(line, file=sys.stderr)  # O(1)
+                env = dict(os.environ, SUPERLITE_SCRATCH_TREE=str(tree), SUPERLITE_RUN_ROOT=root, SUPERLITE_SCRATCH_SHA=sha,  # O(1)
+                           SUPERLITE_DERIVED_DATA_PATH=str(trees.derived_data_path(tree)), SUPERLITE_SOURCE_PACKAGES=str(packages))  # O(len env)
+                proc = subprocess.Popen(scratch_command(command, tree, packages), shell=True, cwd=str(tree), env=env, start_new_session=os.name == "posix")  # O(1) + spawn
+                code = proc.wait()  # the command's runtime
+                return 128 - code if code < 0 else code  # O(1)
+            finally:  # O(1)
+                if proc is not None:  # O(1) every path: normal exit, error, signal; background members end too
+                    _stop_group(proc)  # O(1)
+                if trees.drop(root, key):  # O(tree size)
+                    print("worktree: scratch tree removed", file=sys.stderr)  # O(1)
+                else:  # O(1)
+                    print(f"worktree: scratch tree {trees.tree_path(root, key)} not removed; sl trees clean removes it", file=sys.stderr)  # O(1)
+    finally:  # O(1)
+        for num, handler in old.items():  # O(1)
+            signal.signal(num, handler)  # O(1)
+
+
 def main(argv=None):  # O(w) + spawns
     import autocommit  # O(1) lazy, as trees.main
-    argv, plan = autocommit.split_plan(list(sys.argv[1:] if argv is None else argv))  # --plan P / --plan=P removed, value ignored | O(len argv)
+    argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
+    command = None  # the argv after `--` of scratch, kept out of --plan stripping and argparse | O(1)
+    if "--" in argv and "scratch" in argv[:argv.index("--")]:  # O(len argv)
+        cut = argv.index("--")  # O(len argv)
+        argv, command = argv[:cut], argv[cut + 1:]  # O(len argv)
+    argv, plan = autocommit.split_plan(argv)  # --plan P / --plan=P removed, value ignored | O(len argv)
     if plan == "":  # O(1) --plan without a value
         print("usage: worktree ensure TOPIC [--repo DIR] [--branch NAME] [--dir NAME] | inplace --reason TEXT [--plan P]", file=sys.stderr)  # O(1)
         return 2  # O(1)
@@ -329,7 +460,15 @@ def main(argv=None):  # O(w) + spawns
     e.add_argument("--dir", metavar="NAME", default=None, dest="folder")  # O(1)
     i = sub.add_parser("inplace")  # O(1)
     i.add_argument("--reason", required=True)  # O(1)
+    sc = sub.add_parser("scratch")  # O(1)
+    sc.add_argument("--rev", default=None)  # O(1)
+    sc.add_argument("--repo", default=".")  # O(1)
     a = ap.parse_args(argv)  # O(args)
+    if a.cmd == "scratch":  # O(1)
+        if not command:  # O(1)
+            print(SCRATCH_USAGE, file=sys.stderr)  # O(1)
+            return 2  # O(1)
+        return scratch(a.repo, command[0] if len(command) == 1 else shlex.join(command), a.rev)  # O(files) + the command
     if a.cmd == "inplace":  # O(1)
         import state  # noqa: E402  # O(1) module load, only for this subcommand
         reason = " ".join(a.reason.split())  # one ledger line | O(r)

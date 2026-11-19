@@ -1,0 +1,36 @@
+- start 78e9fcddace3cb55c626ae32b31493a6b98e6742
+- unblocked: dispatched T1 at 18:31:16; waiting on fixes: none
+- tests fast passed=0 failed=13 skipped=0 seconds=1.6
+- tests fast passed=74 failed=2 skipped=0 seconds=16.3
+- tests fast passed=12 failed=1 skipped=0 seconds=3.6
+- tests fast passed=76 failed=0 skipped=0 seconds=21.4
+- commit T1 e7b962d126 worktree scratch
+- unblocked: dispatched T2 at 18:34:08; waiting on fixes: none
+- tests fast passed=25 failed=2 skipped=0 seconds=0.5
+- tests fast passed=26 failed=1 skipped=0 seconds=0.5
+- tests fast passed=27 failed=0 skipped=0 seconds=0.4
+- tests fast passed=76 failed=0 skipped=0 seconds=16.0
+- commit T2 9c60fd879a scratch docs
+- Ruling: T2 split the fleet.md span into `"$SL"` and `worktree scratch -- ...` because the plan's verbatim text and its pinned test disagreed (plan defect) - accept, meaning unchanged - cost if wrong: one doc span reads oddly
+- tests fast passed=27 failed=0 skipped=0 seconds=0.4
+- tests full passed=12942 failed=1 skipped=12 seconds=312.8
+- Ruling: fleet placement local for the rest of the run - remote fixer W6 left no snapshot (B257 follow-up), its fix stayed on the remote host - cost if wrong: slower spawns on this machine
+- tests fast passed=5 failed=0 skipped=0 seconds=0.6
+- Ruling: T2 also commits tests/scripts/test_docs_checker_600.py - final-review fix outside every Owns
+- commit T2 a17f2abfce scratch docs
+- tests full passed=12943 failed=0 skipped=12 seconds=344.7
+- tests fast passed=13 failed=2 skipped=0 seconds=15.9
+- tests fast passed=15 failed=0 skipped=0 seconds=15.1
+- commit T1 7f0b344ad1 worktree scratch
+- tests full passed=12945 failed=0 skipped=12 seconds=281.0
+- tests fast passed=16 failed=1 skipped=0 seconds=23.1
+- tests fast passed=17 failed=0 skipped=0 seconds=26.9
+- commit T1 5a522b46ae worktree scratch
+- Ruling: F-T1-4's regression test (SIGTERM stop under 5 s) cannot run red on macOS, where killpg on a zombie-only group already fails; kept as a guard for Linux - cost if wrong: one test that never fails here
+- tests full passed=12947 failed=0 skipped=12 seconds=286.8
+- tests fast passed=17 failed=1 skipped=0 seconds=25.8
+- tests fast passed=18 failed=0 skipped=0 seconds=26.1
+- commit T1 f52344f1de worktree scratch
+- Ruling: no FR4 - FR3 confirmed every earlier fix and its one finding was a missing # O(1) comment on a continuation line (comment-only fix) - cost if wrong: an unreviewed comment line
+- tests full passed=12948 failed=0 skipped=12 seconds=290.4
+- tests fast passed=4 failed=0 skipped=0 seconds=28.8
