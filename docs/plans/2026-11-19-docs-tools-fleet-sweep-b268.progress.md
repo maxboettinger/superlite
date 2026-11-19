@@ -1,0 +1,17 @@
+- unblocked: dispatched T1 T2 at 20:06:13; waiting on fixes: none
+- start bd8fd1e6054cd4c55beeb355a5e1c17ed4fcc9fe
+- tests fast passed=20 failed=23 skipped=0 seconds=0.9
+- tests fast passed=6 failed=6 skipped=0 seconds=0.3
+- tests fast passed=335 failed=0 skipped=1 seconds=14.5
+- tests fast passed=433 failed=5 skipped=0 seconds=17.0
+- tests fast passed=438 failed=0 skipped=0 seconds=18.8
+- commit T2 b7357ba711 fleet.md lines
+- commit T1 690cd4fcd5 tools.md rows
+- Ruling: T1 also commits tests/scripts/test_docs_b67_tools.py - T1's appended row clauses broke endswith pins of the run_tests, pt_review, plan_tools and fleet_io rows and the b245 backlog plan paragraph pin; T1 updates them keeping the same pinned text (no open batch lists these tests)
+- Ruling: T1 also commits tests/scripts/test_docs_b72_tools.py - T1's appended row clauses broke endswith pins of the run_tests, pt_review, plan_tools and fleet_io rows and the b245 backlog plan paragraph pin; T1 updates them keeping the same pinned text (no open batch lists these tests)
+- Ruling: T1 also commits tests/scripts/test_docs_b245.py - T1's appended row clauses broke endswith pins of the run_tests, pt_review, plan_tools and fleet_io rows and the b245 backlog plan paragraph pin; T1 updates them keeping the same pinned text (no open batch lists these tests)
+- tests fast passed=55 failed=0 skipped=0 seconds=0.5
+- tests fast passed=790 failed=0 skipped=1 seconds=27.5
+- tests full passed=13195 failed=0 skipped=12 seconds=336.8
+- commit T1 cff146f2fa tools.md rows
+- tests full passed=13195 failed=0 skipped=12 seconds=343.4
