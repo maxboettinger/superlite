@@ -8,10 +8,10 @@ RULE = ("- Checks your brief names (a running-app check on a simulator or the Ma
         "`fleet wait` shows such a report with ` not_run=N`.")
 NOT_RUN = ("- ` not_run=N` (after `findings=` and ` concerns=`): the report names N checks it did not run "
            "(`Not run: <check> - <why>` lines); `fleet wait` turns its DONE into DONE_WITH_CONCERNS and its APPROVED "
-           "into ` partial` (#807). Send the worker back with `\"$SL\" fleet_resume Wn --text \"run <check>\" --plan $PLAN`, "
+           "into ` partial` (#807). Send the worker back with `\"$SL\" fleet resume Wn --text \"run <check>\" --plan $PLAN`, "
            "or rule the check out.")
 RESUME = (" A stopped one-turn worker (a reviewer, fixer, research, writer or checker on this machine) continues its own session instead: "
-          "`\"$SL\" fleet_resume Wn --text \"...\" --plan $PLAN` opens a fresh pane, starts its agent with "
+          "`\"$SL\" fleet resume Wn --text \"...\" --plan $PLAN` opens a fresh pane, starts its agent with "
           "`--resume <session>` and sends the text with its report contract; wait for it as for a send, and "
           "`fleet wait` stops it again after its report (#808).")
 SEND = "`fleet send` to a stopped or dead worker exits 2 with that spawn line."

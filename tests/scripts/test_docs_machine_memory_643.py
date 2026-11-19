@@ -15,7 +15,7 @@ def test_fleet_row_names_memory_gate():
     row = _row("| `fleet` |")  # O(n)
     for s in ["SUPERLITE_MACHINE_FLOOR", "default 15", "1 GB", "SUPERLITE_MACHINE_LIMIT",
               "unset or 0 = no cap", "`xcodebuild` processes are not counted",
-              "`--over-limit` skips both checks", "--machine-wait S",
+              "plain `--over-limit` skips every check", "--machine-wait S",
               "machine busy after N s: memory"]:  # O(k)
         assert s in row, s  # O(1)
     assert "leads, fixers and xcodebuild" not in row  # O(1)

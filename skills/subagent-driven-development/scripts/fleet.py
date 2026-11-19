@@ -9,6 +9,7 @@
     fleet.py send | keys | wait     (delegated to fleet_io)
     fleet.py run --layer headless|tui|evals     (delegated to fleet_layer)
     fleet.py restore [--plan P]     (after a Herdr restart: delegated to fleet_restore)
+    fleet.py resume WID --text T [--plan P]     (continue a stopped one-turn worker's session: delegated to fleet_resume)
 
 Roles: implementer (default), fixer, package-reviewer, final-reviewer, research, checker, writer (see fleet_roles). Exit 2 with
 `error: ...` on stderr for an unknown role or tier.
@@ -1350,6 +1351,8 @@ def main(argv=None):  # O(w) plus command cost
         return importlib.import_module("fleet_layer").main(argv[1:])  # O(1) delegated
     if argv and argv[0] == "restore":  # after a Herdr restart: every pane again | O(1)
         return importlib.import_module("fleet_restore").main(argv[1:])  # O(1) delegated
+    if argv and argv[0] == "resume":  # continue a stopped one-turn worker's session | O(1)
+        return importlib.import_module("fleet_resume").main(argv[1:])  # O(1) delegated
     p = argparse.ArgumentParser(prog="fleet.py")  # O(1)
     sub = p.add_subparsers(dest="cmd", required=True)  # O(1)
     s = sub.add_parser("on", help="turn fleet mode on")  # O(1)
@@ -1392,7 +1395,8 @@ def main(argv=None):  # O(w) plus command cost
     s.add_argument("--plan")  # O(1)
     for n, h in (("send", "send tasks, a brief or text to a worker"), ("keys", "send keys to a worker's pane"),  # O(1) delegated before parsing: these feed --help only
                  ("wait", "wait for busy workers to report"), ("run", "run a test layer in a shell pane"),  # O(1)
-                 ("restore", "re-launch every worker after a Herdr restart")):  # O(1)
+                 ("restore", "re-launch every worker after a Herdr restart"),  # O(1)
+                 ("resume", "continue a stopped one-turn worker's session")):  # O(1)
         sub.add_parser(n, help=h)  # O(1)
     a = p.parse_args(argv)  # O(n)
     sd = _sd(a)  # O(d)
