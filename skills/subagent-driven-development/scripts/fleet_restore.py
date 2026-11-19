@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import fleet  # noqa: E402 | O(1)
 import fleet_io as fio  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
+import accounts as ac  # noqa: E402 | O(1)
 import herdr_client  # noqa: E402 | O(1)
 import state  # noqa: E402 | O(1)
 
@@ -32,6 +33,7 @@ LEAD_CONTINUE = ("Herdr restarted and ended your last turn; sl fleet restore res
                  "Your waits died with the restart: re-arm them in the foreground first:")  # O(1)
 LEAD_TAIL = "Then continue your brief where you stopped."  # O(1)
 WAIT_MS = 540000  # O(1)
+SL_CMD = "sl fleet restore"  # O(1)
 
 
 def _pause(s):  # tests swap it | O(s)
@@ -135,7 +137,7 @@ def _new_pane(c, sd, old, launch):  # a fresh pane: split off OLD, else a tab of
     return pane  # O(1)
 
 
-def _start(c, name, pane, argv):  # start the agent, one retry after a pause on a pane that is no shell yet; a trust dialog is accepted | O(1)
+def _start(c, name, pane, argv):  # start the agent, one retry after a pause on a pane that is no shell yet; a trust dialog is accepted; returns the last screen | O(1)
     for attempt in (0, 1):  # O(1)
         try:  # O(1)
             c.start_agent(name, pane, argv)  # O(n)
@@ -154,6 +156,18 @@ def _start(c, name, pane, argv):  # start the agent, one retry after a pause on 
     if fleet._trust_open(screen):  # O(s)
         c.send_keys(name, ["Down", "Enter"])  # O(1)
         c.wait_state(name, ["idle"], 60000)  # O(1)
+    return screen  # O(s)
+
+
+def _signed_out(sd, wid, w, who, dead, c, pane):  # (line, True) for a relaunch on the sign-in screen: the new pane is closed | O(w)
+    _try(c.close_pane, pane)  # O(1)
+    account, cdir = w.get("account") or "", (w.get("launch") or {}).get("env", {}).get("CLAUDE_CONFIG_DIR")  # O(1)
+    if not w.get("machine"):  # a remote account is a host account; fleet.json's list is this machine's | O(1)
+        fleet.mark_signed_out(sd, account)  # O(w)
+    if not dead:  # a dead worker keeps its record, so a rerun tries it again | O(1)
+        _update(sd, wid, state="blocked")  # O(w)
+    var = f"CLAUDE_CONFIG_DIR={cdir} " if cdir else ""  # O(1)
+    return f"BLOCKED: {who} not restored (account {account} signed out: Claude Code sign-in screen; sign in once ({var}claude, then /login), then rerun {SL_CMD})", True  # O(1)
 
 
 def _find(c, name, w):  # (the live agent dict or None, its session or None) | O(a)
@@ -212,12 +226,16 @@ def _one(sd, c, wid, w, rearm_of_lead, prefix):  # (line, blocked) for one worke
     if old and old != pane:  # O(1)
         _try(c.close_pane, old)  # O(1)
     try:  # O(1)
-        _start(c, name, pane, _argv(launch, sid))  # O(n)
+        screen = _start(c, name, pane, _argv(launch, sid))  # O(n)
     except Exception as e:  # noqa: BLE001 | O(1)
+        if ac.sign_in_screen(_try(c.read_screen, name, fleet.SCREEN_ROWS) or ""):  # O(s)
+            return _signed_out(sd, wid, w, who, dead, c, pane)  # O(w)
         _try(c.close_pane, pane)  # O(1)
         if not dead:  # a dead worker keeps its record, so a rerun tries it again | O(1)
             _update(sd, wid, state="blocked")  # O(w)
         return f"BLOCKED: {who} not restored (startup: {_msg(e)})", True  # O(1)
+    if ac.sign_in_screen(screen):  # the account is signed out (#880) | O(s)
+        return _signed_out(sd, wid, w, who, dead, c, pane)  # O(w)
     role = w.get("role") or "implementer"  # O(1)
     sent = int(w.get("sent") or 0)  # O(1)
     _update(sd, wid, pane_id=pane, session=sid)  # O(w)

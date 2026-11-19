@@ -142,7 +142,7 @@ def test_remote_prompt_login_line_fails_without_resend(world, monkeypatch):
     world.fh.screen = "❯ Read the brief\n⏺ Login reached its time limit · Please run /login\n✻ Cooked for 0s\n"
     with pytest.raises(world.fh.HerdrError) as ei:
         rw.send_brief(world.sd, "W1", str(b), "Q1")
-    assert ei.value.code == rw.SIGNED_OUT and "signed out" in ei.value.message and len(sent) == 1
+    assert ei.value.code == rw.SIGNED_OUT and ei.value.message == "account claude1 is not signed in on box; run /login for it there" and len(sent) == 1
 
 
 def test_remote_prompt_stall_without_login_line_resends(world, monkeypatch):

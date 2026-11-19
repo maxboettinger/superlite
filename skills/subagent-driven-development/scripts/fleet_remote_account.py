@@ -6,6 +6,7 @@
 """
 # Complexity notation:
 # l = length of a text, a = accounts, w = workers
+import re  # O(1)
 import sys  # O(1)
 from pathlib import Path  # O(1)
 
@@ -13,11 +14,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import accounts as ac  # noqa: E402 | O(1)
 
 LOGIN_MARKS = ("Select login method:", "Please run /login", "Invalid API key")  # O(1) screens that mean the account is signed out on the host
+SIGNED_OUT = re.compile(r"account (\S+) is not signed in on ")  # O(1) the one reason phrase of a remote sign-in failure
+
+
+def signed_out_account(why):  # O(l): the account name a sign-in failure reason names, else None
+    m = SIGNED_OUT.search(why or "")  # O(l)
+    return m.group(1) if m else None  # O(1)
 
 
 def pick(sd, label, model, env, remote_home, local_home=None):  # O(a * e + w) plus herdr and usage calls
     import fleet  # noqa: PLC0415 | O(1) fleet imports this module's callers
-    account, cdir, _ = fleet.choose_account(sd, model, env)  # O(a * e + w)
+    import fleet_placement  # noqa: PLC0415 | O(1)
+    out = fleet_placement.signed_out_pairs(sd, label)  # O(k)
+    orig = fleet.signed_out_accounts  # O(1)
+    if out:  # choose_account reads fleet.signed_out_accounts: wrap it for this one call | O(1)
+        fleet.signed_out_accounts = lambda *a, **k: orig(*a, **k) | out  # O(w)
+    try:  # O(1)
+        account, cdir, _ = fleet.choose_account(sd, model, env)  # O(a * e + w)
+    finally:  # O(1)
+        fleet.signed_out_accounts = orig  # O(1)
     name = f"{account}@{label}"  # O(1)
     if ac.is_default_dir(cdir, env):  # the host's own default dir: leave CLAUDE_CONFIG_DIR unset | O(1)
         return name, None  # O(1)
