@@ -50,6 +50,7 @@ import subprocess  # O(1)
 import sys  # O(1)
 import tempfile  # O(1)
 import time  # O(1)
+import types  # O(1)
 from dataclasses import dataclass, field  # O(1)
 from pathlib import Path  # O(1)
 
@@ -1184,9 +1185,78 @@ def call_in_contract(call: Call, contract: list[ContractLine]) -> bool:  # O(C*s
     return False  # O(s)
 
 
-_SERVE_SNIPPET = r'''
+_SERVE_SHAPES = r'''
+import ast as _sv_ast
+
+
+_sv_lit = _sv_ast.literal_eval
+
+
+def _sv_is_lit(n):
+    try:
+        _sv_lit(n)
+        return True
+    except Exception:
+        return False
+
+
+def _sv_chain(f, h):
+    if isinstance(f, _sv_ast.Name):
+        h.name(f)
+        return h.get_name(f.id), f.id
+    if isinstance(f, _sv_ast.Attribute):
+        h.attr(f)
+        base, label = _sv_chain(f.value, h)
+        return h.get_attr(base, f.attr), label + "." + f.attr
+    return h.bad("callee %s" % type(f).__name__)
+
+
+def _sv_args(call, h):
+    for a in call.args:
+        _sv_check(a.value if isinstance(a, _sv_ast.Starred) else a, h)
+    for k in call.keywords:
+        _sv_check(k.value, h)
+
+
+def _sv_check(n, h):
+    if _sv_is_lit(n):
+        return
+    if isinstance(n, (_sv_ast.List, _sv_ast.Tuple, _sv_ast.Set)):
+        for e in n.elts:
+            _sv_check(e, h)
+    elif isinstance(n, _sv_ast.Dict):
+        for k, v in zip(n.keys, n.values):
+            if k is None:
+                h.bad("dict ** entry")
+            _sv_check(k, h)
+            _sv_check(v, h)
+    elif isinstance(n, _sv_ast.Name):
+        h.name(n)
+    elif isinstance(n, _sv_ast.Attribute):
+        h.attr(n)
+        _sv_check(n.value, h)
+    elif isinstance(n, _sv_ast.Call):
+        callee, label = _sv_chain(n.func, h)
+        h.own(callee, label)
+        _sv_args(n, h)
+    else:
+        h.bad(type(n).__name__)
+
+
+def _sv_parse(args_src, h):
+    try:
+        tree = _sv_ast.parse("_cap(%s)" % args_src, mode="eval").body
+    except SyntaxError as e:
+        h.syntax(e.msg)
+    if not (isinstance(tree, _sv_ast.Call) and isinstance(tree.func, _sv_ast.Name) and tree.func.id == "_cap"):
+        h.bad("not one argument list")
+    _sv_args(tree, h)
+    return tree
+'''  # O(1)
+
+_SERVE_SNIPPET = _SERVE_SHAPES + r'''
 def _make_server(target, args_src):
-    import ast, importlib, inspect, os, site, sysconfig
+    import ast, importlib, inspect, os, site, sysconfig, types
     mod_name, _, fn_name = target.rpartition(".")
     mod = importlib.import_module(mod_name)
     fn = getattr(mod, fn_name)
@@ -1195,69 +1265,28 @@ def _make_server(target, args_src):
     def _bad(why):
         raise SyntaxError("serve arguments unparsable: %s; write literals, names of %s and calls of the project's own code"
                           % (why, mod_name))
-    def _is_lit(n):
-        try:
-            _lit(n)
-            return True
-        except Exception:
-            return False
+    def _syntax(msg):
+        raise SyntaxError("serve arguments unparsable: " + str(msg))
     def _roots():
         found = [v for k, v in sysconfig.get_paths().items() if k in ("stdlib", "platstdlib", "purelib", "platlib")]
         found += site.getsitepackages() if hasattr(site, "getsitepackages") else []
         found += [site.getusersitepackages()] if hasattr(site, "getusersitepackages") else []
         return [os.path.realpath(r) for r in found if r]
-    def _own(callee):
+    def _own(callee, label):
         f = getattr(inspect.getmodule(callee), "__file__", None)
-        if not f:
-            return False
-        rp = os.path.realpath(f)
-        return not any(rp == r or rp.startswith(r + os.sep) for r in _roots())
+        rp = os.path.realpath(f) if f else None
+        if rp is None or any(rp == r or rp.startswith(r + os.sep) for r in _roots()):
+            _bad("%s is not the project's own code" % label)
     def _name(n):
         if n.id.startswith("__") or n.id not in ns:
             _bad("name %r" % n.id)
     def _attr(n):
         if n.attr.startswith("__"):
             _bad("attribute %r" % n.attr)
-    def _chain(f):
-        if isinstance(f, ast.Name):
-            _name(f)
-            return ns[f.id], f.id
-        if isinstance(f, ast.Attribute):
-            _attr(f)
-            base, label = _chain(f.value)
-            return getattr(base, f.attr), label + "." + f.attr
-        return _bad("callee %s" % type(f).__name__)
-    def _check_args(call):
-        for a in call.args:
-            _check(a.value if isinstance(a, ast.Starred) else a)
-        for k in call.keywords:
-            _check(k.value)
-    def _check(n):
-        if _is_lit(n):
-            return
-        if isinstance(n, (ast.List, ast.Tuple, ast.Set)):
-            for e in n.elts:
-                _check(e)
-        elif isinstance(n, ast.Dict):
-            for k, v in zip(n.keys, n.values):
-                if k is None:
-                    _bad("dict ** entry")
-                _check(k)
-                _check(v)
-        elif isinstance(n, ast.Name):
-            _name(n)
-        elif isinstance(n, ast.Attribute):
-            _attr(n)
-            _check(n.value)
-        elif isinstance(n, ast.Call):
-            callee, label = _chain(n.func)
-            if not _own(callee):
-                _bad("%s is not the project's own code" % label)
-            _check_args(n)
-        else:
-            _bad(type(n).__name__)
+    hooks = types.SimpleNamespace(bad=_bad, syntax=_syntax, name=_name, attr=_attr, own=_own,
+                                  get_name=lambda i: ns[i], get_attr=getattr)
     def _ev(n):
-        if _is_lit(n):
+        if _sv_is_lit(n):
             return _lit(n)
         if isinstance(n, ast.List):
             return [_ev(e) for e in n.elts]
@@ -1289,13 +1318,7 @@ def _make_server(target, args_src):
     if args_src is None:
         pos, kw = (), {}
     else:
-        try:
-            tree = ast.parse("_cap(%s)" % args_src, mode="eval").body
-        except SyntaxError as e:
-            raise SyntaxError("serve arguments unparsable: " + str(e.msg))
-        if not (isinstance(tree, ast.Call) and isinstance(tree.func, ast.Name) and tree.func.id == "_cap"):
-            _bad("not one argument list")
-        _check_args(tree)
+        tree = _sv_parse(args_src, hooks)
         p, kw = _call_args(tree)
         pos = tuple(p)
     sig = inspect.signature(fn)
@@ -1309,6 +1332,74 @@ def _make_server(target, args_src):
                                % (need, target))
     return fn(*pos, **kw), fn
 '''  # O(1)
+
+_SV_NS: dict = {}  # the shared shape walker, exec'd once | O(1)
+
+
+def _module_names(module_file: Path | None) -> tuple[set[str] | None, dict[str, str]]:  # O(file size) total
+    """(names the module binds or None when unknown, name -> standard-library top module it imports under that name)."""
+    try:  # O(1)
+        tree = ast.parse(module_file.read_text(encoding="utf-8")) if module_file is not None else None  # O(file size)
+    except (OSError, SyntaxError, ValueError):  # O(1)
+        return None, {}  # O(1)
+    if tree is None:  # O(1)
+        return None, {}  # O(1)
+    names: set[str] = set()  # O(1)
+    std: dict[str, str] = {}  # O(1)
+    for n in ast.walk(tree):  # O(nodes)
+        if isinstance(n, ast.Import):  # O(1)
+            for al in n.names:  # O(a)
+                bound, top = (al.asname or al.name.split(".")[0]), al.name.split(".")[0]  # O(m)
+                names.add(bound)  # O(1)
+                if top in sys.stdlib_module_names:  # O(1)
+                    std[bound] = top  # O(1)
+        elif isinstance(n, ast.ImportFrom):  # O(1)
+            for al in n.names:  # O(a)
+                if al.name == "*":  # O(1)
+                    return None, {}  # a star import binds unknown names | O(1)
+                names.add(al.asname or al.name)  # O(1)
+                if not n.level and n.module and n.module.split(".")[0] in sys.stdlib_module_names:  # O(1)
+                    std[al.asname or al.name] = n.module.split(".")[0]  # O(1)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):  # O(1)
+            names.add(n.name)  # O(1)
+        elif isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):  # O(1)
+            names.add(n.id)  # O(1)
+    return names, std  # O(1)
+
+
+def serve_args_problem(target: str, args_src: str, module_file: Path | None = None) -> str | None:  # O(m + file size) total
+    """Why the runtime serve check is certain to refuse these `serve=` arguments, or None. Imports nothing; with the serve
+    module's file, a name the module does not bind and a callee imported from the standard library are refused too."""
+    if not _SV_NS:  # O(1)
+        exec(_SERVE_SHAPES, _SV_NS)  # O(1)
+    names, std = _module_names(module_file)  # O(file size)
+
+    class Refused(Exception):  # O(1)
+        pass  # O(1)
+
+    def bad(why: str):  # O(1)
+        raise Refused(why)  # O(1)
+
+    def name(n: ast.Name) -> None:  # O(1)
+        if n.id.startswith("__") or (names is not None and n.id not in names):  # O(1)
+            bad("name %r" % n.id)  # O(1)
+
+    def attr(n: ast.Attribute) -> None:  # O(1)
+        if n.attr.startswith("__"):  # O(1)
+            bad("attribute %r" % n.attr)  # O(1)
+
+    def own(_callee, label: str) -> None:  # O(1)
+        root = label.split(".")[0]  # O(m)
+        if root in std:  # O(1)
+            bad(f"{root} is imported from the standard library ({std[root]}), not the project's own code")  # O(1)
+
+    h = types.SimpleNamespace(bad=bad, syntax=bad, name=name, attr=attr, own=own, get_name=lambda _i: None, get_attr=lambda _b, _a: None)  # O(1)
+    try:  # O(1)
+        _SV_NS["_sv_parse"](args_src, h)  # O(m)
+    except Refused as e:  # O(1)
+        return str(e) or "unparsable"  # O(1)
+    return None  # O(1)
+
 
 _SERVER_RUNNER = _SERVE_SNIPPET + r'''
 import sys, json, inspect
@@ -2683,10 +2774,25 @@ def newest_summary_path(path: Path) -> Path:  # O(1) total
     return path  # O(1)
 
 
+BASE_SKIPS_FILE = "test-summary-base.json"  # O(1)
+
+
+def base_skipped(summary_path: Path, base: str | None) -> set[str] | None:  # O(file size) total
+    """The test ids the run's base commit skips too (`run_tests --base-skips` writes the file beside the summary), or None
+    when the file is missing, not a base file, or was made for another base (prefix match either way; no `base`: any)."""
+    d = load_summary(summary_path.parent / BASE_SKIPS_FILE)  # O(file size)
+    if d is None or d.get("mode") != "base" or not isinstance(d.get("skipped_tests"), list):  # O(1)
+        return None  # O(1)
+    have = str(d.get("base") or "")  # O(1)
+    if base and have and not (have.startswith(base) or base.startswith(have)):  # O(1)
+        return None  # O(1)
+    return {str(t) for t in d["skipped_tests"]}  # O(S)
+
+
 def run_summaries(path: Path) -> list[dict]:  # O(S log S + S*file size) total
     """Every readable test summary of the run, newest first: the one the packet reads, then `path` and `test-summary-*.json` by mtime."""
     first = newest_summary_path(path)  # O(1)
-    rest = [path] + list(path.parent.glob("test-summary-*.json"))  # O(S)
+    rest = [path] + [p for p in path.parent.glob("test-summary-*.json") if p.name != BASE_SKIPS_FILE]  # the base-skips file is no run (#886) | O(S)
 
     def mtime(p: Path) -> float:  # O(1)
         try:  # O(1)
@@ -2855,7 +2961,7 @@ def warning_rows(value: object) -> list[str]:  # O(w) total
     return warning_rows(text)  # O(w)
 
 
-def _summary_rows(d: dict, root: Path | None, changed: set[str] | None) -> tuple[list[str], int]:  # O(F*(B + d)) total
+def _summary_rows(d: dict, root: Path | None, changed: set[str] | None, base_skips: set[str] | None = None) -> tuple[list[str], int]:  # O(F*(B + d)) total
     failed = d.get("failures") or d.get("failed_tests") or []  # O(1)
     skipped = d.get("skipped_tests") or []  # O(1)
     started = _num(d.get("started"))  # a summary without a start time is never outdated | O(1)
@@ -2880,7 +2986,7 @@ def _summary_rows(d: dict, root: Path | None, changed: set[str] | None) -> tuple
         rows.insert(0, f"- recorded {d.get('scope') or 'external'} run outside run_tests (`{d.get('recorded') or '?'}`), not the full suite:")  # O(1)
     rows += [f"- OUTDATED: {t} ({f} changed after this run; the full suite decides)" for t, f in old[:OUTDATED_LINES]]  # O(min(30, old))
     rows += [f"- FAILING: {t}" for t in cur[:30]]  # O(min(30, cur))
-    rows += [f"- SKIPPED: {t}" for t in skipped[:30]]  # O(min(30, skipped))
+    rows += [f"- SKIPPED: {t}{' (base skips too)' if base_skips and t in base_skips else ''}" for t in skipped[:30]]  # O(min(30, skipped))
     rows += warning_rows(d.get("warning"))  # O(w)
     return rows, nfail  # O(1)
 
@@ -2935,7 +3041,7 @@ def _run_counts(r: dict) -> str:  # O(1)
 
 
 def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | None = None,  # O(file size + F*(B + d)) total
-                      runs: list[dict] | None = None, ledger: Path | None = None) -> tuple[str, int]:  # O(1)
+                      runs: list[dict] | None = None, ledger: Path | None = None, base_skips: set[str] | None = None) -> tuple[str, int]:  # O(1)
     full, newer = full_and_newer(runs or [])  # the full run is the result, whatever ran later (#593) | O(S log S)
     if full is None and not path.is_file():  # O(1)
         return "- no test summary recorded (`run_tests.py --full` runs alongside this review)", 0  # O(1)
@@ -2943,11 +3049,11 @@ def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | 
     if d is not None and root is not None:  # O(1)
         d = norm_summary(d, root)  # O(F*m)
     if full is not None and not (d is not None and d.get("error")):  # O(1)
-        return _full_run_text(full, newer, root, changed, ledger)  # O(F*(B + d))
+        return _full_run_text(full, newer, root, changed, ledger, base_skips)  # O(F*(B + d))
     if d is None:  # O(1)
         return "- test summary unreadable", 0  # O(1)
     if not d.get("error"):  # a summary without `error` reads as before | O(1)
-        rows, nfail = _summary_rows(d, root, changed)  # O(F*(B + d))
+        rows, nfail = _summary_rows(d, root, changed, base_skips)  # O(F*(B + d))
         return "\n".join(rows), nfail  # O(1)
     err = str(d["error"])[:200]  # O(1)
     if killed(d):  # O(1)
@@ -2957,7 +3063,7 @@ def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | 
     rows += warning_rows(d.get("warning"))  # the behind-main hint rides on the errored run too | O(w)
     best = full if full is not None else next((r for r in (runs or []) if isinstance(r, dict) and _has_result(r)), None)  # O(S)
     if best is not None:  # O(1)
-        more, n2 = _summary_rows(norm_summary(best, root) if root is not None and best is full else best, root, changed)  # O(F*(B + d))
+        more, n2 = _summary_rows(norm_summary(best, root) if root is not None and best is full else best, root, changed, base_skips)  # O(F*(B + d))
         rows += ["- newest run with a result:"] + more  # O(F)
         nfail += n2  # O(1)
         if full is not None:  # O(1)
@@ -2981,8 +3087,9 @@ def _newer_and_after(full: dict, newer: list[dict], ledger: Path | None) -> list
     return rows  # O(1)
 
 
-def _full_run_text(full: dict, newer: list[dict], root: Path | None, changed: set[str] | None, ledger: Path | None) -> tuple[str, int]:  # O(F*(B + d))
-    rows, nfail = _summary_rows(norm_summary(full, root) if root is not None else full, root, changed)  # O(F*(B + d))
+def _full_run_text(full: dict, newer: list[dict], root: Path | None, changed: set[str] | None, ledger: Path | None,  # O(F*(B + d))
+                   base_skips: set[str] | None = None) -> tuple[str, int]:  # O(1)
+    rows, nfail = _summary_rows(norm_summary(full, root) if root is not None else full, root, changed, base_skips)  # O(F*(B + d))
     rows += _newer_and_after(full, newer, ledger)  # O(S + C)
     return "\n".join(rows), nfail  # O(1)
 
@@ -3238,7 +3345,10 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
                           f"- {m.msg}", m.file, m.line, "pt_review contract check (tool)", True))  # O(1)
     items.sort(key=lambda i: i.rank)  # O(I log I)
     counts = {s: sum(1 for i in items if i.section == s) for s in ("incidents", "probes", "uncovered", "contract", "claimed")}  # O(5*I)
-    tests_text, nfail = read_test_summary(tests, root, changed, runs, Path(a.ledger) if getattr(a, "ledger", None) else sl / "progress.md")  # O(F*(B + d))
+    skips_at_base = base_skipped(Path(a.tests) if a.tests else sl / "test-summary.json", a.base)  # O(file size)
+    tests_text, nfail = read_test_summary(tests, root, changed, runs, Path(a.ledger) if getattr(a, "ledger", None) else sl / "progress.md", skips_at_base)  # O(F*(B + d))
+    if skips_at_base is None and "- SKIPPED: " in tests_text:  # O(len)
+        print(f"note: skipped tests not compared with the base; run {Path(__file__).resolve().parent / 'sl'} run_tests --base-skips, then rebuild the packet")  # O(1)
     shown_old = tests_text.count("\n- OUTDATED: ") + tests_text.startswith("- OUTDATED: ")  # O(len)
     seen_loc: set[tuple] = set()  # O(1)
     for e, why in gone:  # O(K) iterations

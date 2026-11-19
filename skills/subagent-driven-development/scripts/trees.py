@@ -169,6 +169,19 @@ def prepare(root, task, owns):  # O(f * o) + git checkout of the tree
         return _prepare(root, task, owns)  # O(f * o)
 
 
+def prepare_at(root, key, rev):  # a detached tree at rev with no overlay; its path | O(files) + git checkout
+    root = Path(root).resolve()  # O(1)
+    with lock(root, key):  # O(1)
+        tree = tree_path(root, key)  # O(1)
+        tree.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+        if (tree / ".git").exists():  # O(1) reuse: keeps untracked build output
+            git(tree, "checkout", "--force", "--detach", rev)  # O(changed files)
+        else:  # O(1)
+            git(root, "worktree", "prune")  # O(T)
+            git(root, "worktree", "add", "--force", "--detach", str(tree), rev)  # O(files)
+        return tree  # O(1)
+
+
 def _prepare(root, task, owns):  # O(f * o) + git checkout of the tree
     tree = tree_path(root, task)  # O(1)
     base = base_commit(root)  # O(1) + spawn

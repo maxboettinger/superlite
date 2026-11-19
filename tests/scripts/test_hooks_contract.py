@@ -22,7 +22,7 @@ BASH = _GIT_BASH if os.name == "nt" and os.path.exists(_GIT_BASH) else shutil.wh
 needs_bash = pytest.mark.skipif(not BASH, reason="bash not available")
 
 CLAUDE_EVENTS = {"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-                 "PostToolUseFailure", "PermissionRequest", "Notification", "Stop", "SubagentStart",
+                 "PostToolUseFailure", "PermissionRequest", "Notification", "Stop", "StopFailure", "SubagentStart",
                  "SubagentStop", "PreCompact"}
 TOOLS = {"Bash", "PowerShell", "Monitor", "Edit", "Write", "NotebookEdit", "MultiEdit", "Agent", "Task",
          "Skill", "Read", "Grep", "Glob", "WebFetch", "WebSearch", "TodoWrite", "AskUserQuestion",

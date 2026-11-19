@@ -1407,6 +1407,28 @@ def run_entry_warnings(plan: Plan) -> list[str]:  # O(L*s) #711: a `run=` entry 
     return out  # O(entries)
 
 
+def serve_args_issue(plan: Plan, holder: str | None, entry: str) -> str:  # O(s + file size)
+    """`PROBE: serve=<entry> arguments: <reason>; ...` when pt_review's runtime check is certain to refuse the arguments, else ''."""
+    m = re.match(r"^\s*([\w.]+)\s*\((.*)\)\s*$", entry, re.S)  # O(s)
+    if not m:  # no arguments, or not a serve shape: nothing to check | O(1)
+        return ""  # O(1)
+    mod = m.group(1).rpartition(".")[0]  # O(s)
+    file = None  # O(1)
+    if plan.path and holder in plan.by_id:  # O(1)
+        try:  # O(1)
+            root = stable_root(str(plan.path))  # O(d)
+        except (OSError, ValueError):  # O(1)
+            root = None  # O(1)
+        for o in plan.by_id[holder].owns:  # O(k) iterations
+            dotted = o.removeprefix("./")[:-3].replace("/", ".") if o.endswith(".py") else ""  # O(s)
+            if root and dotted and (dotted == mod or dotted.endswith("." + mod)) and (root / o).is_file():  # O(1) stat
+                file = root / o  # O(1)
+                break  # O(1)
+    import pt_review  # lazy | O(1)
+    why = pt_review.serve_args_problem(m.group(1), m.group(2), file)  # O(s + file size)
+    return f"PROBE: serve={entry} arguments: {why}; write literals, names of {mod} and calls of the project's own code" if why else ""  # O(s)
+
+
 def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
     """PROBE: a `call=` Probe entry must name a Produces of this plan that takes exactly one required parameter (probes pass
     one text argument). The entry's task is a fix task; an entry outside every task block (plan header, a section) is plan-scoped."""
@@ -1438,6 +1460,11 @@ def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
                     seen.add((holder, msg))  # O(1)
                     issues.append(Issue(msg, [holder] if holder else (), scope="task" if holder else "plan"))  # O(1)
                 continue  # O(1)
+            if kind == "serve":  # #891 arguments the runtime serve check is certain to refuse | O(s + file size)
+                msg = serve_args_issue(plan, holder, target)  # O(s + file size)
+                if msg and (holder, msg) not in seen:  # O(1)
+                    seen.add((holder, msg))  # O(1)
+                    issues.append(Issue(msg, [holder] if holder else (), scope="task" if holder else "plan"))  # O(1)
             if kind != "call":  # O(1)
                 continue  # O(1)
             cands = [c for _, c in cands]  # O(q)
