@@ -485,6 +485,23 @@ def drop_trees(sd):  # best effort: drop the run's idle test trees and orphaned 
         pass  # O(1)
 
 
+def _anchor(value):  # O(d)
+    """A relative path valid at the checkout's top but not at the cwd becomes absolute; other values stay (#1006)."""
+    if not value or os.path.isabs(value):  # O(1)
+        return value  # O(1)
+    import plan_tools  # lazy: every gated tool imports orchestrator | O(1)
+    return plan_tools.anchor_plan(value)  # O(d)
+
+
+def unanchored(value):  # O(d)
+    """The checkout top when a relative value names nothing at the cwd or the top from a subfolder; else None (#1006)."""
+    if not value or os.path.isabs(value) or Path(value).exists() or Path(os.path.normpath(value)).name == ".superlite":  # O(1)
+        return None  # O(1)
+    cwd = state._abs(".")  # O(d)
+    top = state.git_root(cwd)  # O(d)
+    return top if top is not None and Path(top) != Path(cwd) else None  # O(1)
+
+
 def main(argv=None):  # O(1)
     ap = argparse.ArgumentParser(description=__doc__.split(chr(10))[0])  # O(1)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
@@ -503,10 +520,22 @@ def main(argv=None):  # O(1)
     t_ = sub.add_parser("takeover")  # O(1)
     r_ = sub.add_parser("resume")  # O(1)
     for p in (s, a_, st, b_, e_, t_, r_):  # O(1)
-        p.add_argument("--plan", help="plan path (locates .superlite at its git toplevel); default: the session's binding, else ./.superlite")  # O(1)
+        p.add_argument("--plan", help="plan path (locates .superlite at its git toplevel; from a subfolder a relative path is also tried at the checkout top); default: the session's binding, else ./.superlite")  # O(1)
     b_.add_argument("--force", action="store_true", help="take over a folder another live session owns")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    a.plan = _anchor(a.plan)  # O(d)
+    if getattr(a, "review", None):  # O(d)
+        a.review = _anchor(a.review)  # O(d)
     review = getattr(a, "review", None)  # O(1)
+    word = {"set": "set", "bind": "bound", "approve": "approved"}.get(a.cmd)  # O(1)
+    top = unanchored(a.plan) if word and a.plan else None  # O(d)
+    if top:  # O(1)
+        print(f"orchestrator: plan not found: {a.plan} (neither at the cwd nor at {top}); not {word}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    top = unanchored(review) if a.cmd == "approve" and review and not a.plan else None  # O(d)
+    if top:  # O(1)
+        print(f"orchestrator: review plan not found: {review} (neither at the cwd nor at {top}); not approved", file=sys.stderr)  # O(1)
+        return 2  # O(1)
     if a.cmd == "bind" and not a.plan:  # bind without a plan targets the launch directory, never resolves | O(d)
         sd = state.launch_dir() / ".superlite"  # O(d)
     elif a.cmd in ("end", "set", "takeover") and not a.plan:  # the #199 check below words the refusal | O(d)
