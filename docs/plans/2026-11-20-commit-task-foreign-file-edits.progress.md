@@ -1,0 +1,11 @@
+- unblocked: dispatched T1 at 11:41:12; waiting on fixes: none
+- start de791d8b0ec4c16c5aa91b8c8e17f4e297768c13
+- tests fast passed=12 failed=8 skipped=0 seconds=8.9
+- tests fast passed=74 failed=1 skipped=0 seconds=42.5
+- tests fast passed=416 failed=0 skipped=0 seconds=220.4
+- commit T1 efe553c0f1 foreign edit check
+- tests fast passed=75 failed=0 skipped=0 seconds=25.6
+- tests full passed=13307 failed=0 skipped=12 seconds=318.5
+- tests fast passed=12939 failed=1 skipped=3 seconds=1289.2
+- tests fast passed=6 failed=1 skipped=0 seconds=1.7
+- Ruling: FR1's only finding (tests/scripts/test_run_tests_no_result_trace.py:47) is outside B274's files and #907: it fails only in run_tests --task tree runs and passes in the full run; follow-up, no fixer - cost if wrong: one flaky unit test stays open
