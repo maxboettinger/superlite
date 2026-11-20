@@ -3,7 +3,7 @@ name: using-superlite
 description: Use when starting
 ---
 
-First message, no mode, not trivial: `/superlite:start`.
+No mode, non-trivial build: `/superlite:start` before any tool.
 
 **Size.** Trivial: do it (human mode: after an approved review plan). A new app is never trivial. Bounded (existing flow): chat design, build. Architectural: one AskUserQuestion (≤4), one design+plan.
 
@@ -13,7 +13,7 @@ First message, no mode, not trivial: `/superlite:start`.
 
 **2+ tasks: `subagent-driven-development`,** loaded before the plan; no `general-purpose` agents; inline only if small (one task, few files; say so). Non-trivial: end with fresh `superlite:final-reviewer`. Fleet: `sl fleet on` before the first dispatch; taskgraph implementers only; inline starts no worker.
 
-**Tools.** `<skill-dir>/../subagent-driven-development/scripts/sl <tool>`, never `python`. Graphify only if `sl graphify_gate` allows.
+**Tools.** `<skill-dir>/../subagent-driven-development/scripts/sl <tool>`, never `python`. Graphify only via `sl graphify_gate`.
 
 **Superlite broke/unclear?** `sl feedback add --kind bug|slow|unclear|repeat|idea "<what, where, expected>"`; don't fix mid-task.
 
