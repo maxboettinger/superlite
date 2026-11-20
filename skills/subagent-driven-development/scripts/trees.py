@@ -86,7 +86,11 @@ def _build_moved(root, base, newest, head):  # the moved-base dict for one memo 
     try:  # O(1)
         changes = _tree_changes(root, base, newest)  # O(changes)
         info["files"] = sorted(changes)  # O(c log c)
-        moved = set(split_z(git(root, "diff", "--name-only", "--no-renames", "-z", base, head)))  # O(f)
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE")}  # O(env)
+        if subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", newest, head], capture_output=True, env=clean_env).returncode == 0:  # O(1) + spawn: HEAD already holds the checkpoints
+            info["sha"] = head  # O(1)
+            return info  # O(1)
+        moved =set(split_z(git(root, "diff", "--name-only", "--no-renames", "-z", base, head)))  # O(f)
         info["overlap"] = sorted(moved & set(changes))  # O(f)
         stamp = git(root, "show", "-s", "--format=%ct", newest).strip()  # O(1)
         idx.parent.mkdir(parents=True, exist_ok=True)  # O(1)

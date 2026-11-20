@@ -200,3 +200,32 @@ def test_signing_config_ignored(repo):
     git(repo, "-c", "commit.gpgsign=false", "commit", "-qm", "main", "--", "src/c.py")
     mb = trees.moved_base(repo)
     assert mb["sha"] and mb["error"] == ""
+
+
+def _checkpoint_is_commit(repo, b0, sha):
+    st = repo / ".superlite" / "checkpoints.json"
+    st.parent.mkdir(exist_ok=True)
+    st.write_text(json.dumps({"base": b0, "entries": [{"sha": sha, "task": "T1", "files": ["src/a.py"]}]}))
+
+
+def test_checkpoint_is_head(repo):
+    b0 = head(repo)
+    (repo / "src" / "a.py").write_text("A = 2\n")
+    git(repo, "commit", "-qam", "cp")
+    _checkpoint_is_commit(repo, b0, head(repo))
+    assert trees.base_commit(repo) == head(repo)
+    mb = trees.moved_base(repo)
+    assert mb["sha"] == head(repo) and mb["overlap"] == [] and mb["files"] == ["src/a.py"]
+
+
+def test_checkpoint_ancestor_of_head(repo):
+    b0 = head(repo)
+    (repo / "src" / "a.py").write_text("A = 2\n")
+    git(repo, "commit", "-qam", "cp")
+    cp = head(repo)
+    (repo / "src" / "a.py").write_text("A = 3\n")
+    git(repo, "commit", "-qam", "later")
+    _checkpoint_is_commit(repo, b0, cp)
+    assert trees.base_commit(repo) == head(repo)
+    tree = trees.prepare(repo, "T2", ["src/b.py"])
+    assert (tree / "src" / "a.py").read_text() == "A = 3\n"
