@@ -57,8 +57,13 @@ def test_state_dir_outside_the_project_is_added(world, tmp_path):
 
 def test_unknown_role_is_exit_2(world, capsys):
     fleet.main(["on"])
+    assert fleet.main(["spawn", "--role", "bogus"]) == 2
+    assert "unknown role bogus" in capsys.readouterr().err and not world.fh.calls
+
+def test_lead_role_without_plan_is_exit_2(world, capsys):
+    fleet.main(["on"])
     assert fleet.main(["spawn", "--role", "lead"]) == 2
-    assert "unknown role lead" in capsys.readouterr().err and not world.fh.calls
+    assert "--role lead needs --plan P" in capsys.readouterr().err and not world.fh.calls
 
 def test_choose_account_and_open_pane_examples(world):
     fleet.main(["on"])
