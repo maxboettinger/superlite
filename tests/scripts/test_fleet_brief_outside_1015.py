@@ -163,3 +163,36 @@ def test_fenced_code_blocks_are_skipped(roots, fence):
 
 def test_inline_code_spans_still_count(roots):
     assert fleet.outside_paths(f"Read `{roots.other}/spec.md`.\n", roots.proj, roots.sd) == [f"{roots.other}/spec.md"]
+
+
+def test_spawn_calls_fleet_io_brief_refusal(world, capsys, monkeypatch):
+    fleet.main(["on"])
+    import fleet_io
+    seen = []
+    def stub(sd, brief, role="", plan=None):
+        seen.append((str(sd), str(brief), role, plan))
+        return "error: stub refusal (#1027)"
+    monkeypatch.setattr(fleet_io, "brief_refusal", stub)
+    brief = _brief(world, "Answer the question.\n")
+    n = len(world.fh.calls)
+    assert fleet.main(["spawn", "--role", "research", "--brief", str(brief), "--plan", str(world.plan)]) == 2
+    assert "error: stub refusal (#1027)" in capsys.readouterr().err
+    assert len(world.fh.calls) == n
+    assert len(seen) == 1 and seen[0][1:3] == (str(brief), "research")
+    assert seen[0][3] is not None and str(seen[0][3]) == str(world.plan)
+
+
+def test_location_message_lives_only_in_fleet_io():
+    lit = "is outside the project, the run folder and the plugin skills folder; a worker cannot read it"
+    assert lit not in (SCRIPTS / "fleet.py").read_text(encoding="utf-8")
+    assert (SCRIPTS / "fleet_io.py").read_text(encoding="utf-8").count(lit) == 1
+
+
+def test_brief_and_constraint_paths_share_one_line(world, capsys, tmp_path):
+    fleet.main(["on"])
+    other = _other(tmp_path); (other / "notes.md").write_text("n")
+    plan = make_plan(world.proj, [{"id": "T1", "owns": "src/a.py"}], header=f"\nGlobal constraints:\n- The spec is {other}/spec.md.\n")
+    brief = _brief(world, f"Read {other}/notes.md.\n")
+    assert fleet.main(["spawn", "--role", "research", "--brief", str(brief), "--plan", str(plan)]) == 2
+    assert f"the plugin skills folder: {other}/notes.md, {other}/spec.md; {TAIL}" in capsys.readouterr().err
+    assert brief.read_text() == f"Read {other}/notes.md.\n"
