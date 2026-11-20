@@ -92,7 +92,7 @@ def test_xcode_kept_adds_deny_and_note(world, monkeypatch):
     argv = _argv(world)
     for n in fleet_mcp.XCODE_DENY:
         assert n in argv[argv.index("--disallowedTools"):]
-    assert argv[argv.index("--append-system-prompt") + 1] == fleet_mcp.XCODE_NOTE
+    assert argv[argv.index("--append-system-prompt") + 1] == fleet_mcp.usage_note(["xcode"], world.proj)
 
 
 def test_lean_project_argv_unchanged(world, capsys):

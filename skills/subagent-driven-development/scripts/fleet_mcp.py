@@ -21,12 +21,13 @@ XCODE = {"type": "stdio", "command": "xcrun", "args": ["mcpbridge"]}  # O(1)
 BUILTIN = {"xcode": XCODE}  # O(1)
 XCODE_DENY = ("mcp__xcode__XcodeOpenWorkspace", "mcp__xcode__XcodeCloseWorkspace")  # O(1)
 BAD_MCP = 'test-cmd.json "mcp" must be a list of server names; ignored'  # O(1)
-XCODE_NOTE = ("Xcode MCP tools (mcp__xcode__...) are connected. After each edit of a Swift file run XcodeRefreshCodeIssuesInFile on it "
-              "and fix what it reports. Render every Preview you add or change with RenderPreview before you report DONE, "
-              "unless your checkout is a linked git worktree (its .git is a file): RenderPreview renders the workspace Xcode has open, "
-              "the main checkout, so there skip it and never report a preview as unrendered. "
-              "Look up Apple APIs with DocumentationSearch. Only the coordinator opens or closes an Xcode workspace; "
+XCODE_HEAD = "Xcode MCP tools (mcp__xcode__...) are connected. After each edit of a Swift file run XcodeRefreshCodeIssuesInFile on it and fix what it reports. "  # O(1)
+XCODE_RENDER = "Render every Preview you add or change with RenderPreview before you report DONE. "  # O(1)
+XCODE_TAIL = ("Look up Apple APIs with DocumentationSearch. Only the coordinator opens or closes an Xcode workspace; "
               "if none is open for this project, say so in your report instead of opening one.")  # O(1)
+XCODE_NOTE = (XCODE_HEAD + "Render every Preview you add or change with RenderPreview before you report DONE, "
+              "unless your checkout is a linked git worktree (its .git is a file): RenderPreview renders the workspace Xcode has open, "
+              "the main checkout, so there skip it and never report a preview as unrendered. " + XCODE_TAIL)  # O(1)
 
 
 def _load(path) -> dict:  # a JSON object from path, {} when missing, unreadable or not an object | O(f)
@@ -135,5 +136,14 @@ def deny(names: list[str]) -> list[str]:  # tools the worker must not call | O(n
     return list(XCODE_DENY) if "xcode" in names else []  # O(n)
 
 
-def usage_note(names: list[str]) -> str:  # the usage rules for --append-system-prompt | O(n)
-    return XCODE_NOTE if "xcode" in names else ""  # O(n)
+def usage_note(names: list[str], project: str | Path | None = None) -> str:  # the usage rules for --append-system-prompt; no render rule in a linked worktree (#1021) | O(n)
+    if "xcode" not in names:  # O(n)
+        return ""  # O(1)
+    if project is None:  # O(1)
+        return XCODE_NOTE  # O(1)
+    try:  # O(1)
+        import state  # noqa: PLC0415 | O(1)
+        linked = state.linked_worktree(Path(project))  # O(1)
+    except Exception:  # noqa: BLE001 | O(1)
+        return XCODE_NOTE  # O(1)
+    return XCODE_HEAD + XCODE_TAIL if linked else XCODE_HEAD + XCODE_RENDER + XCODE_TAIL  # O(1)

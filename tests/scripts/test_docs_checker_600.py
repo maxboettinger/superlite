@@ -15,7 +15,7 @@ FLEET_CHECKER = ("- Checker: `--role checker` (`superlite:checker`; fleet off: A
                  "`.build/SourcePackages` and is removed afterwards, and the command writes its shots to "
                  "`$SUPERLITE_RUN_ROOT/.superlite/render/before-<name>.png`; never swap files in the run's worktree for them (#816). "
                  "Also, in a linked-worktree run the checks whose reach is a preview or snapshot render run per package (#910), by a checker with only those `C<n>` lines (brief `.superlite/briefs/check-<package>.md`) once that package's tasks are committed, so the first look at new views comes before the final checks.")
-SDD_CHECKER = "A plan's `## Running-app checks` run here once, by a checker (fleet.md); FAIL lines are findings."
+SDD_CHECKER = "A plan's `## Running-app checks` run here once, by a checker (fleet.md; a worktree run also checks previews per package); FAIL lines are findings."
 WP_RULE = ("- **Running-app checks.** A check that needs the running artifact (a simulator, the built macOS app, a widget, an app "
            "extension, a browser page) is never a plan task or a task step: an implementer skips it or cannot reach it. List each "
            "in a `## Running-app checks` section, one `- C<n>: <target>; reach: <state>; see: <what must show>` line per check. "
@@ -79,3 +79,12 @@ def test_simulator_limits_gain_two_entries():
 def test_agents_doc_lists_the_checker_after_fixer_opus():
     ls = lines(ROOT / "docs" / "skills-and-agents.md")
     assert ls.count(AGENTS_LINE) == 1 and ls[ls.index(AGENTS_LINE) - 1].startswith("- `fixer-opus` (opus, high)")
+
+
+def test_sdd_names_worktree_preview_checks_1021():
+    sdd = (SDD / "SKILL.md").read_text(encoding="utf-8")
+    assert "by a checker (fleet.md; a worktree run also checks previews per package); FAIL lines are findings." in sdd
+    assert "same text per tier" not in sdd and "(20 tasks, 80k, 50m)" not in sdd and "never paste the prime" in sdd
+    assert len(sdd) <= 13300
+    tools = (ROOT / "docs" / "tools.md").read_text(encoding="utf-8")
+    assert "`deny` and `usage_note(names, project)` give the denied tools and the `--append-system-prompt` text, whose RenderPreview sentence a linked worktree leaves out (#1021)" in tools
