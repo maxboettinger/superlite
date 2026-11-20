@@ -88,11 +88,11 @@ def test_finish_recorded_and_fast_only_keep_their_labels(tmp_path):
 def test_checkpoint_note_names_the_trailer_flag(tmp_path, monkeypatch):
     import autocommit
     p = ledger(tmp_path)
-    (p.parent / "checkpoints.json").write_text(json.dumps({"run": "r1", "entries": [{"title": "T1 x", "files": ["a.py"]}]}), encoding="utf-8")
+    (p.parent / "checkpoints.json").write_text(json.dumps({"run": "r1", "entries": [{"task": "T1", "title": "T1 x", "files": ["a.py"], "sha": "s"}]}), encoding="utf-8")
     monkeypatch.setattr(autocommit, "is_on", lambda *a, **k: False)
     text = "\n".join(finish.checkpoint_note(p))
     assert "no trailer" not in text
-    assert ('`sl autocommit apply` (one commit per task, same titles; add `--trailer "Key: value"`, repeatable, '
+    assert ('`sl autocommit apply` (one commit per task, subjects below; add `--trailer "Key: value"`, repeatable, '
             "for each attribution line your harness requires)") in text
 
 

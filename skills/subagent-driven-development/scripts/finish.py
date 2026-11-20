@@ -558,9 +558,19 @@ def checkpoint_note(ledger):  # O(files) + git spawns; [] unless this run took h
     if autocommit.is_on() or not st.get("entries"):  # O(1)
         return []  # O(1)
     files = sorted({f for e in st["entries"] for f in e["files"]})  # O(files)
+    try:  # O(1)
+        groups = autocommit.squash_entries(st["entries"])  # O(E + files)
+        subj = autocommit.entry_subjects(groups, st.get("plan"), root=str(sl.parent))  # O(E)
+    except (KeyError, TypeError, ValueError, OSError):  # O(1)
+        subj = [str(e.get("title", "")) for e in st["entries"]]  # O(E)
+    shown = [f"- {x}" for x in subj[:5]]  # O(1)
+    if len(subj) > 5:  # O(1)
+        shown.append(f"- ... +{len(subj) - 5} more")  # O(1)
     return ["", "NOTHING WAS COMMITTED: your branch is untouched and the work is uncommitted in the tree.",  # O(1)
             f"changed files: {len(files)}; hidden checkpoint refs: refs/superlite/{st['run']}/* ({len(st['entries'])})",
-            "to commit: `sl autocommit apply` (one commit per task, same titles; add `--trailer \"Key: value\"`, repeatable, for each attribution line your harness requires) or `git add -A && git commit`",
+            "to commit: `sl autocommit apply` (one commit per task, subjects below; add `--trailer \"Key: value\"`, repeatable, for each attribution line your harness requires) or `git add -A && git commit`",
+            "subjects (apply rebuilds them from the plan: edit its **Ticket:** fields or subject template before apply to change them):",
+            *shown,
             "to discard the checkpoints: `sl autocommit clean`"]
 
 
