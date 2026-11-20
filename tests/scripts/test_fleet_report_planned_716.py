@@ -41,19 +41,19 @@ def test_plan_phase_lead_gets_planned(tmp_path, text):
 @pytest.mark.parametrize("phase", [None, "build"])
 def test_single_and_build_lead_keep_work(tmp_path, phase):
     p = brief(tmp_path, phase)
-    assert fr.brief_message("lead", p) == f"Read {p} and do what it says. {fr.WORK}"
+    assert fr.brief_message("lead", p) == f"Read {p} and do what it says. {fr.LEAD_WORK}"
 
 
 def test_marker_counts_only_at_line_start(tmp_path):
     p = tmp_path / "lead.md"
     p.write_text("Note: a planning lead ends End: Status: DONE planned: x\n    End: Status: DONE planned: y\n"
                  "End: Status: DONE once merge printed shipped\n", encoding="utf-8")
-    assert fr.brief_message("lead", str(p)).endswith(fr.WORK)
+    assert fr.brief_message("lead", str(p)).endswith(fr.LEAD_WORK)
 
 
 def test_unreadable_brief_keeps_work(tmp_path):
-    assert fr.brief_message("lead", str(tmp_path / "gone.md")) == f"Read {tmp_path / 'gone.md'} and do what it says. {fr.WORK}"
-    assert fr.brief_message("lead", str(tmp_path)).endswith(fr.WORK)
+    assert fr.brief_message("lead", str(tmp_path / "gone.md")) == f"Read {tmp_path / 'gone.md'} and do what it says. {fr.LEAD_WORK}"
+    assert fr.brief_message("lead", str(tmp_path)).endswith(fr.LEAD_WORK)
 
 
 @pytest.mark.parametrize("role", ["implementer", "fixer", "research"])

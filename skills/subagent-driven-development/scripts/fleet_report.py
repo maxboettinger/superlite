@@ -22,7 +22,7 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import metrics as mx  # noqa: E402 | O(1)
 
-STATUSES = ("APPROVED", "CHANGES_REQUESTED", "DONE_WITH_CONCERNS", "DONE", "NEEDS_CONTEXT", "BLOCKED")  # O(1)
+STATUSES = ("APPROVED", "CHANGES_REQUESTED", "DONE_WITH_CONCERNS", "DONE", "NEEDS_CONTEXT", "NEEDS_DECISION", "BLOCKED")  # O(1)
 BLOCK = re.compile(r"^[ \t]*```json[^\n]*\n(.*?)\n?^[ \t]*```[ \t]*$", re.DOTALL | re.M)  # a fenced json block; only a fence line closes it, so a fence inside a string does not | O(s) per opener
 VERDICT = re.compile(r"^\s*\**Verdict:\**\s*(APPROVED|CHANGES_REQUESTED)\b", re.M)  # O(1)
 PARTIAL = re.compile(r"^\s*\**Verdict:\**\s*APPROVED\s*\(partial\b", re.M | re.I)  # O(1)
@@ -51,6 +51,7 @@ RED_MANY = '"red": {"<task id>": "<the summary line of the run that saw that tas
 WORK_BATCH = WORK.replace(RED_ONE, RED_MANY, 1)  # a batch worker's red is an object keyed by task id | O(1)
 PLANNED = WORK.replace("`Status: <DONE|", "`Status: <DONE planned: <plan path>|DONE|", 1)  # O(1)
 PLANNED_END = "End: Status: DONE planned:"  # O(1)
+LEAD_WORK = WORK.replace("NEEDS_CONTEXT|BLOCKED>", "NEEDS_CONTEXT|NEEDS_DECISION|BLOCKED>", 1)  # a lead may stop to ask main | O(1)
 REVIEW = ("After the `Checked:` lines (outside the 300-word cap), end with one fenced json block: "
           '{"status": "<APPROVED|CHANGES_REQUESTED>", "files": [], "tests": "", '
           '"findings": [{"file": "<path>", "line": <int>, "problem": "<text>", "fix": "<text>", "tier": <1|2|3>, "quote": "<the exact text of that source line>"}], '
@@ -294,6 +295,8 @@ def _brief_line(role: str, path: str, full: bool = False) -> str:  # O(size of t
         return f"Review the packet {path} as your instructions say. {FULL + ' ' if full else ''}{REVIEW}"  # O(1)
     if role == "lead" and _planning(path):  # O(size of the brief)
         return f"Read {path} and do what it says. {PLANNED}"  # O(1)
+    if role == "lead":  # O(1)
+        return f"Read {path} and do what it says. {LEAD_WORK}"  # O(1)
     if role == "package-reviewer":  # O(1)
         return f"Read {path} and do what it says. {WORK} {NOT_RUN}"  # O(1)
     return f"Read {path} and do what it says. {WORK}"  # O(1)

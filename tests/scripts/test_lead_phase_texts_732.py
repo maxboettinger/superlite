@@ -55,14 +55,14 @@ def test_lead_brief_and_contract_follow_the_phase(tmp_path):
     build.write_text(BUILD_BRIEF, encoding="utf-8")
     lsd = str(tmp_path / ".superlite")
     assert io.lead_brief({"role": "lead", "lead_sd": lsd, "brief": str(build)}) == build
-    assert io.report_contract({"role": "lead", "lead_sd": lsd, "brief": str(build)}) == fleet_report.WORK
+    assert io.report_contract({"role": "lead", "lead_sd": lsd, "brief": str(build)}) == fleet_report.LEAD_WORK
     assert io.report_contract({"role": "lead", "lead_sd": lsd, "brief": str(plan)}) == fleet_report.PLANNED
     assert io.lead_brief({"role": "lead", "lead_sd": lsd}) == plan
     assert io.lead_brief({"role": "lead", "lead_sd": lsd, "brief": str(briefs / "gone.md")}) == plan
     assert io.report_contract({"role": "lead", "lead_sd": lsd}) == fleet_report.PLANNED
     assert io.lead_brief({"role": "lead"}) is None
     assert io.lead_brief({"role": "lead", "lead_sd": "", "brief": str(tmp_path / "gone.md")}) is None
-    assert io.report_contract({"role": "lead"}) == fleet_report.WORK
+    assert io.report_contract({"role": "lead"}) == fleet_report.LEAD_WORK
 
 
 def test_send_text_to_planning_lead_names_done_planned(world):
@@ -77,14 +77,14 @@ def test_send_text_to_build_lead_keeps_work(world):
     as_lead(world, "Status: DONE", "lead-build.md", BUILD_BRIEF)
     records = script(world, "ok")
     io.send_text(world.sd, "W1", "go on")
-    assert records == ["go on\n\n" + fleet_report.WORK]
+    assert records == ["go on\n\n" + fleet_report.LEAD_WORK]
 
 
 def test_ready_resend_sends_the_build_brief(world, capsys):
     p = as_lead(world, "READY", "lead-build.md", BUILD_BRIEF)
     records = script(world, "ok")
     io.send_text(world.sd, "W1", "go on")
-    assert records == [f"Read {p} and do what it says. {fleet_report.WORK}"]
+    assert records == [f"Read {p} and do what it says. {fleet_report.LEAD_WORK}"]
     assert "W1 brief resent (its last stop said only READY)" in capsys.readouterr().out
     assert rec(world)["brief"] == str(p) and rec(world)["state"] == "busy"
 
@@ -103,7 +103,7 @@ def test_ready_resend_without_a_recorded_brief_uses_lead_md(world):
     assert records == [f"Read {p} and do what it says. {fleet_report.PLANNED}"]
 
 
-@pytest.mark.parametrize("name,text,want", [("lead.md", PLAN_BRIEF, "PLANNED"), ("lead-build.md", BUILD_BRIEF, "WORK")])
+@pytest.mark.parametrize("name,text,want", [("lead.md", PLAN_BRIEF, "PLANNED"), ("lead-build.md", BUILD_BRIEF, "LEAD_WORK")])
 def test_restore_continue_names_the_lead_phase_contract(w, name, text, want):
     lsd = w.sd.parent / "wt" / ".superlite"
     (lsd / "briefs").mkdir(parents=True)
