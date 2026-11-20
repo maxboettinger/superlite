@@ -1,0 +1,22 @@
+- start de791d8b0ec4c16c5aa91b8c8e17f4e297768c13
+- unblocked: dispatched T1 at 11:42:44; waiting on fixes: none
+- Ruling: accept predicted 45.2 min - T1 and T2 both edit trees.py, so they run in order - a few minutes of wall time
+- tests fast passed=0 failed=11 skipped=0 seconds=1.5
+- tests fast passed=72 failed=1 skipped=0 seconds=48.2
+- tests fast passed=11 failed=0 skipped=0 seconds=7.5
+- commit T1 55989eb451 moved tree base
+- tests fast passed=59 failed=0 skipped=0 seconds=20.2
+- tests fast passed=2 failed=10 skipped=0 seconds=4.5
+- tests fast passed=25 failed=0 skipped=0 seconds=13.4
+- commit T2 74472af0b8 trees refresh
+- tests fast passed=101 failed=0 skipped=0 seconds=70.6
+- tests full passed=13310 failed=1 skipped=12 seconds=304.9
+- tests fast passed=11 failed=2 skipped=0 seconds=6.5
+- tests fast passed=60 failed=0 skipped=0 seconds=21.9
+- commit T1 55a2f2996b moved tree base
+- tests full passed=13313 failed=0 skipped=12 seconds=304.5
+- tests fast passed=25 failed=2 skipped=0 seconds=14.6
+- tests fast passed=63 failed=0 skipped=0 seconds=15.1
+- commit T1 6af817ca53 moved tree base
+- commit T2 dbfe39ca1d trees refresh
+- tests full passed=13315 failed=0 skipped=12 seconds=338.0
