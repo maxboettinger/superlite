@@ -14,7 +14,7 @@ import state  # noqa: E402
 import trees  # noqa: E402
 
 SL = SCRIPTS / "sl"
-USAGE = "usage: trees.py clean | path Tn [--plan P]"
+USAGE = "usage: trees.py clean | path Tn | refresh [--onto REV] [--plan P]"
 
 
 def git(root, *args):

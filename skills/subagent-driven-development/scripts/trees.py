@@ -6,6 +6,9 @@
                                 Xcode DerivedData folders of trees that no longer exist; with the option, also
                                 the ModuleCache.noindex entries untouched for H hours
     trees.py path Tn [--plan P] print the tree path of task Tn (without creating it)
+    trees.py refresh [--onto REV] [--plan P]
+                                report how the trees follow a run moved off its base; with --onto, first move
+                                the run onto REV (fast-forward or rebase) unless REV changes files of the run (#908)
 
 `--plan P` (anywhere in the arguments) works in the git checkout holding P, else in the current folder.
 
@@ -703,12 +706,120 @@ def present_simulators(sims):  # -> the entries a device still matches, or None 
     return [s for s in sims if _matches(s, devices)]  # O(entries x devices)
 
 
+def _tree_count(root):  # task trees (folders holding .git) under .superlite/trees | O(T)
+    base = Path(root) / TREES  # O(1)
+    return sum(1 for d in base.iterdir() if (d / ".git").exists()) if base.is_dir() else 0  # O(T)
+
+
+def _some(paths):  # the first 8 paths, comma-separated, " ..." when more | O(1)
+    return ", ".join(paths[:8]) + (" ..." if len(paths) > 8 else "")  # O(1)
+
+
+def _report(root):  # print what the moved base means for the trees; the exit code | O(changes) + spawns
+    try:  # O(1)
+        head = git(root, "rev-parse", "--verify", "-q", "HEAD").strip()  # O(1) + spawn
+    except RuntimeError:  # O(1)
+        print("trees refresh: no HEAD to move", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    try:  # O(1)
+        entries = json.loads((root / STATE).read_text(encoding="utf-8")).get("entries") or []  # O(file)
+    except (OSError, ValueError, AttributeError):  # O(1)
+        entries = []  # O(1)
+    if not entries:  # O(1)
+        print(f"trees refresh: no checkpoints; trees follow HEAD {head[:7]}")  # O(1)
+        return 0  # O(1)
+    mb = moved_base(root)  # O(changes)
+    if mb is None:  # O(1)
+        print(f"trees refresh: HEAD {head[:7]} is the run's base; trees are current")  # O(1)
+        return 0  # O(1)
+    if not mb["sha"]:  # O(1)
+        print(f"trees refresh: base not rebuilt on HEAD {head[:7]}: {mb['error']}", file=sys.stderr)  # O(1)
+        return 3  # O(1)
+    print(f"trees refresh: base {mb['base'][:7]} -> HEAD {head[:7]}; {_tree_count(root)} task trees rebuild on {mb['sha'][:7]} "  # O(1)
+          f"(HEAD plus {len(mb['files'])} checkpointed files) at their next run")  # O(1)
+    if mb["overlap"]:  # O(1)
+        print(f"trees refresh: checkpointed files the move also changed: {_some(mb['overlap'])}; "  # O(1)
+              "the trees keep the checkpoint's version: re-checkpoint their tasks with sl commit_task")  # O(1)
+        return 1  # O(1)
+    return 0  # O(1)
+
+
+def _run_files(root, mb_rev, head, onto_has_head):  # paths the run touches: working changes, untracked, checkpoints, own commits | O(f) + spawns
+    files = split_z(git(root, "diff", "--name-only", "--no-renames", "-z", "HEAD"))  # O(f)
+    files += split_z(git(root, "ls-files", "-o", "--exclude-standard", "-z"))  # O(f)
+    try:  # O(1)
+        st = json.loads((root / STATE).read_text(encoding="utf-8"))  # O(file)
+        base, newest = st.get("base") or st.get("head") or "", (st.get("entries") or [])[-1].get("sha") or ""  # O(1)
+        if base and newest:  # O(1)
+            files += list(_tree_changes(root, base, newest))  # O(changes)
+    except (OSError, ValueError, AttributeError, IndexError, RuntimeError):  # O(1)
+        pass  # O(1)
+    if not onto_has_head:  # O(1) HEAD is not an ancestor of REV: the run has commits of its own
+        files += split_z(git(root, "diff", "--name-only", "-z", "--no-renames", mb_rev, head))  # O(f)
+    return {p for p in files if not p.startswith(".superlite/")}  # O(f)
+
+
+def _try(root, args):  # (returncode, last stderr line) of one git call | O(output) + spawn
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, encoding="utf-8", errors="replace")  # O(output)
+    return r.returncode, (r.stderr.strip().splitlines() or [""])[-1]  # O(1)
+
+
+def refresh(root, onto):  # move the run onto REV when safe, then report the trees; the exit code | O(f) + spawns
+    root = Path(root).resolve()  # O(1)
+    try:  # O(1)
+        head = git(root, "rev-parse", "--verify", "-q", "HEAD").strip()  # O(1) + spawn
+    except RuntimeError:  # O(1)
+        print("trees refresh: no HEAD to move", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    if onto is None:  # O(1)
+        return _report(root)  # O(changes)
+    try:  # O(1)
+        rev = git(root, "rev-parse", "--verify", "-q", f"{onto}^{{commit}}").strip()  # O(1) + spawn
+    except RuntimeError:  # O(1)
+        print(f"trees refresh: unknown revision {onto}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    if _try(root, ["merge-base", "--is-ancestor", rev, head])[0] == 0:  # O(1)
+        print(f"trees refresh: HEAD already contains {onto}")  # O(1)
+        return _report(root)  # O(changes)
+    try:  # O(1)
+        mb = git(root, "merge-base", head, rev).strip()  # O(history)
+        incoming = set(split_z(git(root, "diff", "--name-only", "-z", "--no-renames", mb, rev)))  # O(f)
+        ff = _try(root, ["merge-base", "--is-ancestor", head, rev])[0] == 0  # O(1)
+        common = sorted(incoming & _run_files(root, mb, head, ff))  # O(f)
+    except RuntimeError as e:  # O(1)
+        print(f"trees refresh: cannot compare with {onto}: {e}; nothing moved", file=sys.stderr)  # O(1)
+        return 3  # O(1)
+    if common:  # O(1)
+        print(f"trees refresh: refused, {onto} changes files of the run: {_some(common)}; move the run by hand", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    branch = _try(root, ["symbolic-ref", "--short", "-q", "HEAD"])  # O(1)
+    name = git(root, "symbolic-ref", "--short", "-q", "HEAD").strip() if branch[0] == 0 else "HEAD"  # O(1)
+    if ff:  # O(1)
+        rc, err = _try(root, ["merge", "--ff-only", rev])  # O(changed files)
+        kind = "fast-forward"  # O(1)
+    else:  # O(1)
+        n = git(root, "rev-list", "--count", f"{rev}..{head}").strip()  # O(history)
+        rc, err = _try(root, ["rebase", "--autostash", rev])  # O(commits)
+        kind = "rebase"  # O(1)
+        if rc:  # O(1)
+            _try(root, ["rebase", "--abort"])  # O(1) result ignored
+    if rc:  # O(1)
+        print(f"trees refresh: {kind} onto {onto} failed: {err}; nothing moved", file=sys.stderr)  # O(1)
+        return 3  # O(1)
+    new = git(root, "rev-parse", "HEAD").strip()  # O(1)
+    if ff:  # O(1)
+        print(f"trees refresh: fast-forwarded {name} {head[:7]} -> {new[:7]}")  # O(1)
+    else:  # O(1)
+        print(f"trees refresh: rebased {name} ({n} commits) onto {rev[:7]}")  # O(1)
+    return _report(root)  # O(changes)
+
+
 def main(argv=None):  # O(T) + spawns
     import autocommit  # O(1) lazy: run_tests imports this module
     import state  # O(1) lazy
     argv = list(sys.argv[1:] if argv is None else argv)  # O(len argv)
     rest, plan = autocommit.split_plan(argv)  # O(len argv)
-    usage = "usage: trees.py clean | path Tn [--plan P]"  # O(1)
+    usage = "usage: trees.py clean | path Tn | refresh [--onto REV] [--plan P]"  # O(1)
     if plan == "":  # O(1) --plan without a value
         print(usage, file=sys.stderr)  # O(1)
         return 2  # O(1)
@@ -734,6 +845,8 @@ def main(argv=None):  # O(T) + spawns
     if len(rest) == 2 and rest[0] == "path":  # O(1)
         print(tree_path(root, rest[1]).resolve())  # O(1)
         return 0  # O(1)
+    if rest[:1] == ["refresh"] and (len(rest) == 1 or (len(rest) == 3 and rest[1] == "--onto" and not rest[2].startswith("-"))):  # O(1)
+        return refresh(root, rest[2] if len(rest) == 3 else None)  # O(f)
     print(usage, file=sys.stderr)  # O(1)
     return 2  # O(1)
 
