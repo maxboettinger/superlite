@@ -42,6 +42,14 @@ def test_lead_brief_lists_keys_and_acli():
         assert s not in t
 
 
+def test_jira_brief_names_task_ticket():
+    t = bb.lead_brief(JB, CTX)
+    want = ("Jira: give each task the key of the issue it builds as its own **Ticket:** (a key for the whole plan: "
+            "**Ticket:** PIX-1272 in the plan header); commit subjects then start with it, "
+            'pass merge --title "<keys>: <summary>", (main moves the issues).')
+    assert want in t
+
+
 def test_lead_brief_jira_not_approved():
     t = bb.lead_brief(JB, {**CTX, "approved": None})
     assert "Ship: NOT approved. Do not rebase, bump or ship;" in t
