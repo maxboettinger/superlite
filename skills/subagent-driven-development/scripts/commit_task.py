@@ -22,7 +22,7 @@ agents) for the updated ledger, with the run's batch setting (`--batch`, else th
 `--also FILE` (several tasks: the first gets the files; needs `--ruling TEXT`) commits FILE with that task though
 another task owns it or nobody does, and writes `- Ruling: Tn also commits FILE - TEXT` to
 the ledger, after which that task owns FILE for the rest of the run; a FILE with no change is noted on stderr and ignored. The commit message is
-`autocommit.message()`: `KEY Tn: title` when the plan has a `**Ticket:** KEY` header.
+`autocommit.message()`: `KEY Tn: title` with a `**Ticket:** KEY` (the task's own, else the plan header's), or the plan's subject template.
 
 Default is checkpoint mode: instead of committing, a shadow commit (never on HEAD, the
 branch or the user's index) is stored under refs/superlite/<run>/<Tn> and its SHA is what

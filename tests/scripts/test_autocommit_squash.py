@@ -13,7 +13,7 @@ def cp(repo, monkeypatch, tid, files, **contents):
     monkeypatch.chdir(repo)
     for rel, text in contents.items():
         write(repo, rel.replace("__", "/").replace("_py", ".py"), text)
-    return autocommit.checkpoint(tid, "p" if tid == "T1" else "l", files, "plan.md")
+    return autocommit.checkpoint(tid, "parser" if tid == "T1" else "lexer", files, "plan.md")
 
 
 def repeated(repo, monkeypatch):
@@ -33,7 +33,7 @@ def test_apply_squashes_repeated_task(tmp_path, monkeypatch):
     last_tree = git(repo, "rev-parse", f"{autocommit.load_state()['entries'][-1]['sha']}^{{tree}}")
     r = run("autocommit", "apply", cwd=repo)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert subjects(repo, base) == ["T2: l", "T1: p"]
+    assert subjects(repo, base) == ["T2: lexer", "T1: parser"]
     assert git(repo, "show", "HEAD:a.py") == "v2" and git(repo, "show", "HEAD:c.py") == "c"
     assert git(repo, "show", "HEAD:b.py") == "b"
     assert git(repo, "rev-parse", "HEAD^{tree}") == last_tree
@@ -46,7 +46,7 @@ def test_no_squash_keeps_each_checkpoint(tmp_path, monkeypatch):
     repeated(repo, monkeypatch)
     r = run("autocommit", "apply", "--no-squash", cwd=repo)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert subjects(repo, base) == ["T1: p", "T2: l", "T1: p"]
+    assert subjects(repo, base) == ["T1: parser", "T2: lexer", "T1: parser"]
 
 
 def test_squash_falls_back_on_interleave(tmp_path, monkeypatch):
@@ -71,7 +71,7 @@ def test_squash_falls_back_on_plan_interleave(tmp_path, monkeypatch):
     r = run("autocommit", "apply", cwd=repo)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "squash skipped: tasks interleave on s.py" in r.stdout
-    assert subjects(repo, base) == ["T1: p", "T2: l", "T1: p"]
+    assert subjects(repo, base) == ["T1: parser", "T2: lexer", "T1: parser"]
 
 
 def test_squash_without_overlap(tmp_path, monkeypatch):
@@ -83,7 +83,7 @@ def test_squash_without_overlap(tmp_path, monkeypatch):
     r = run("autocommit", "apply", cwd=repo)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "squash skipped" not in r.stdout
-    assert subjects(repo, base) == ["T2: l", "T1: p"]
+    assert subjects(repo, base) == ["T2: lexer", "T1: parser"]
 
 
 def test_squash_on_moved_head(tmp_path, monkeypatch):
@@ -95,17 +95,17 @@ def test_squash_on_moved_head(tmp_path, monkeypatch):
     git(repo, "commit", "-q", "-m", "manual readme")
     r = run("autocommit", "apply", cwd=repo)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert subjects(repo, base) == ["T2: l", "T1: p", "manual readme"]
+    assert subjects(repo, base) == ["T2: lexer", "T1: parser", "manual readme"]
     assert git(repo, "show", "HEAD:a.py") == "v2" and git(repo, "show", "HEAD:README.md") == "moved"
 
 
 def test_squash_entries_cases():
-    es = [{"task": "T1", "sha": "a", "title": "T1: p", "files": ["x"]},
-          {"task": "T2", "sha": "b", "title": "T2: l", "files": ["y"]},
-          {"task": "T1", "sha": "c", "title": "T1: p", "files": ["x", "z"]}]
+    es = [{"task": "T1", "sha": "a", "title": "T1: parser", "files": ["x"]},
+          {"task": "T2", "sha": "b", "title": "T2: lexer", "files": ["y"]},
+          {"task": "T1", "sha": "c", "title": "T1: parser", "files": ["x", "z"]}]
     assert autocommit.squash_entries(es) == [
-        {"task": "T1", "sha": "c", "title": "T1: p", "files": ["x", "z"]},
-        {"task": "T2", "sha": "b", "title": "T2: l", "files": ["y"]}]
+        {"task": "T1", "sha": "c", "title": "T1: parser", "files": ["x", "z"]},
+        {"task": "T2", "sha": "b", "title": "T2: lexer", "files": ["y"]}]
     assert autocommit.squash_entries([]) == []
     assert autocommit.squash_entries(es[:2]) == es[:2]
 
@@ -127,7 +127,7 @@ def test_squash_keeps_later_deletion(tmp_path, monkeypatch):
     cp(repo, monkeypatch, "T1", ["a.py", "d.py"], a_py="2\n")
     r = run("autocommit", "apply", cwd=repo)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert subjects(repo, base) == ["T2: l", "T1: p"]
+    assert subjects(repo, base) == ["T2: lexer", "T1: parser"]
     assert git(repo, "show", "HEAD:a.py") == "2"
     assert "d.py" not in git(repo, "ls-tree", "-r", "--name-only", "HEAD").split()
 

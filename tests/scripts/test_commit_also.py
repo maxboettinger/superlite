@@ -124,11 +124,11 @@ def test_also_dot_slash_path_normalised(tmp_path):
     assert files_of(repo) == ["Tests/Fake.txt", "src/a.py"]
 
 
-def test_ticket_only_from_header_block(tmp_path):
+def test_ticket_header_and_task_block(tmp_path):
     p = tmp_path / "plan.md"
     p.write_text("# P\n\n## Section\n\n### T1 x\n**Ticket:** BODY-1\n", encoding="utf-8")
     assert autocommit.ticket(str(p)) is None
-    assert autocommit.message("T1", "x", str(p)) == "T1: x"
+    assert autocommit.message("T1", "x", str(p)) == "BODY-1 T1: x"
 
 
 def test_also_directory_with_untracked_files(tmp_path):
