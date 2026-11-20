@@ -1,0 +1,8 @@
+- start de791d8b0ec4c16c5aa91b8c8e17f4e297768c13
+- unblocked: dispatched T1 at 11:38:30; waiting on fixes: none
+- Ruling: fleet placement local for the build - a remote implementer would hit #1012 itself (its stop-hook snapshot fails on the host's unfixed plugin) - cost if wrong: the build runs on this Mac only
+- tests fast passed=12 failed=4 skipped=0 seconds=5.7
+- tests fast passed=72 failed=0 skipped=0 seconds=28.1
+- commit T1 27ce4f8a60 snapshot ignored superlite
+- tests fast passed=72 failed=0 skipped=0 seconds=25.0
+- tests full passed=13290 failed=0 skipped=12 seconds=292.2
