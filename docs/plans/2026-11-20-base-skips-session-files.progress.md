@@ -1,0 +1,13 @@
+- start 72e3d86c91dd587ec84be6a593ebf4dcd71ee9e0
+- unblocked: dispatched T1 at 09:11:21; waiting on fixes: none
+- Ruling: accept predicted 11.8 min - one task - none
+- tests fast passed=26 failed=4 skipped=0 seconds=40.0
+- tests fast passed=56 failed=0 skipped=0 seconds=45.4
+- commit T1 4300cf7598 base run collects session files
+- tests fast passed=56 failed=0 skipped=0 seconds=42.2
+- tests full passed=13241 failed=0 skipped=12 seconds=625.5
+- tests fast passed=3 failed=1 skipped=0 seconds=1.4
+- tests fast passed=30 failed=0 skipped=0 seconds=56.0
+- commit T1 5ab9a75fce base run collects session files
+- tests full passed=13241 failed=0 skipped=12 seconds=309.9
+- Ruling: FR1's one tier-2 finding fixed by the reviewer's exact fix with a regression case; no second review round - a one-tuple change - a missed regression in that tuple

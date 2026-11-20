@@ -15,13 +15,17 @@ import pytest
 from test_block_coordinator_edits import BASH, HOOK, bash, proj, run  # noqa: F401
 
 HERE = Path(__file__).resolve().parent
-PARITY = ("test_block_coordinator_edits.py", "test_human_gate.py", "test_session_state.py", "test_fleet_hooks.py",
-          "test_hooks_bash32.py")
+# #1007: run_tests --base-skips reads this tuple (by ast) to collect the same files at the base
+SESSION_FILES = ("test_block_coordinator_edits.py", "test_human_gate.py", "test_session_state.py", "test_fleet_hooks.py",
+                 "test_hooks_bash32.py", "test_guard_*.py")
 
 
 def parity_files():
     own = Path(__file__).name
-    return [HERE / n for n in PARITY] + sorted(p for p in HERE.glob("test_guard_*.py") if p.name != own)
+    out = []
+    for pattern in SESSION_FILES:
+        out += [p for p in sorted(HERE.glob(pattern)) if p.name != own and p not in out]
+    return out
 
 
 def _has_xdist():
