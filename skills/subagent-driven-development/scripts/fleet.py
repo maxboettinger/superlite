@@ -511,6 +511,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=Fa
         kept, names, path = {}, [], None  # O(1)
         print(f"{wid} mcp: none: {e}", file=sys.stderr)  # O(1)
     argv = lean_argv(with_model(launch["argv"], pin) if pin else launch["argv"], path, fleet_mcp.deny(names) if names else ())  # O(n)
+    argv = fleet_roles.skills_read(argv, project=project)  # O(n) the plugin skill files are readable (#905)
     if names and fleet_mcp.usage_note(names):  # O(k)
         argv += ["--append-system-prompt", fleet_mcp.usage_note(names)]  # O(1)
     try:  # a state dir outside the project (a worktree run) is not readable by default | O(1)
