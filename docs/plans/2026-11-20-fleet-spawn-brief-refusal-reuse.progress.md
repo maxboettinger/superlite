@@ -1,0 +1,5 @@
+- start fbd55ae9a319a06d9f41104811fb100556d23056
+- unblocked: dispatched T1 at 16:27:04; waiting on fixes: none
+- commit T1 93e55b924e spawn reuses brief_refusal
+- tests fast passed=93 failed=0 skipped=0 seconds=1.1
+- tests full passed=13531 failed=0 skipped=12 seconds=295.5
