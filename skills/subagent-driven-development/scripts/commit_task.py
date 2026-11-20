@@ -35,7 +35,7 @@ Steps: scope check (a change outside every task's Owns blocks the commit and is 
 before the run (stable.json `baseline_dirty`) or the run recorded no baseline; with a baseline, any other such file is
 unrelated to the task: it is left uncommitted and listed as `left uncommitted (outside every Owns): F`; files another
 task owns are left uncommitted; when its owner is committed and not running and the file changed after the newest
-checkpoint, `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` says so. A file another task claims (`--also` or `--claim` ruling) prints nothing when its claimer is in this call or the file equals the newest checkpoint, else `left uncommitted (claimed by T2, changed after its checkpoint; run commit_task T2): F` (claimer committed, not running) or `left uncommitted (claimed by T2; commit_task T2 commits it once T2 is done): F`. Each stderr note
+checkpoint, `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` says so. A changed file another task owns that Tn's fresh fleet report lists (or that nothing but Tn can have written) fails `Tn FAILED: edits F owned by Tm` with a `next: ... --also F --ruling` line (#907). A file another task claims (`--also` or `--claim` ruling) prints nothing when its claimer is in this call or the file equals the newest checkpoint, else `left uncommitted (claimed by T2, changed after its checkpoint; run commit_task T2): F` (claimer committed, not running) or `left uncommitted (claimed by T2; commit_task T2 commits it once T2 is done): F`. Each stderr note
 prints once per call, not once per task). A file this task owns that a running sibling (busy in pool.json, outside this call) also owns and that
 differs from the newest checkpoint is held out: one `left uncommitted (shared with running T2; commit_task T1 again once it is done): F` note per task;
 a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held, py_compile plus an import check on each touched .py file (a file under a `fixtures/` folder is a data script and is skipped, noted `import check skipped (fixture): F`; a `__main__.py` is compiled but not imported, noted `import check skipped (__main__ runs the program): F`; an import that blocks fails `import F:0 TimeoutExpired: import did not finish in N s ...` naming the file, `SUPERLITE_IMPORT_TIMEOUT` (seconds) overrides the 120 s limit; a ModuleNotFoundError for a package found in the repo outside the import roots names the `"pythonpath"` fix), commit
@@ -695,6 +695,42 @@ def report_files(sd, tid):  # O(r*B); the `files` of tid's newest fleet report (
     return [_rel(x) for x in files if isinstance(x, str)] if isinstance(files, list) else []  # O(files)
 
 
+def fresh_report_files(sd, tid, since):  # O(r*B); the `files` of tid's newest fleet report when it is newer than `since` (epoch seconds; None = always), else []
+    best = None  # (mtime, files) | O(1)
+    for p in (Path(sd) / "fleet" / "reports").glob("*.json") if sd else []:  # O(r) iterations
+        try:  # O(1)
+            rep = json.loads(p.read_text(encoding="utf-8"))  # O(B)
+            when = p.stat().st_mtime  # O(1)
+        except (OSError, ValueError):  # O(1)
+            continue  # O(1)
+        if not isinstance(rep, dict) or tid not in [x.strip() for x in str(rep.get("label") or "").split(",")]:  # O(k)
+            continue  # O(1)
+        if best is None or when > best[0]:  # O(1)
+            best = (when, rep.get("files"))  # O(1)
+    if best is None or not isinstance(best[1], list) or (since is not None and best[0] <= since):  # O(1)
+        return []  # O(1)
+    return [_rel(x) for x in best[1] if isinstance(x, str)]  # O(files)
+
+
+def last_checkpoint(ledger, tid):  # O(c); the sha of the newest `commit tid sha` ledger line, None when there is none or no ledger
+    p = Path(ledger)  # O(1)
+    if not p.exists():  # O(1)
+        return None  # O(1)
+    found = None  # O(1)
+    for ln in p.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n").split("\n"):  # O(c) iterations
+        m = COMMIT_LINE.match(ln)  # O(1) regex
+        if m and m.group(1) == tid:  # O(1)
+            found = re.search(r"commit\s+\S+\s+([0-9a-f]{7,40})", ln).group(1)  # O(len)
+    return found  # O(1)
+
+
+def pool_readable(path):  # O(pool bytes); True when the pool file parses as a JSON object
+    try:  # O(1)
+        return isinstance(json.loads(Path(path).read_text(encoding="utf-8")), dict)  # O(pool bytes)
+    except (OSError, ValueError):  # O(1)
+        return False  # O(1)
+
+
 def sent_before(sd, me, f):  # O(w); True when the calling fleet worker was sent its task no later than f's mtime
     if not me:  # O(1)
         return False  # O(1)
@@ -863,6 +899,46 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         log_incidents(a.log, tid, [(f, 0, f"change outside Owns{why[f]} blocked by commit_task; "  # O(m) one append
                                     "nothing committed") for f in out_of_scope])
         return fail(1, "out-of-scope " + ", ".join(out_of_scope[:5]) + (" ..." if len(out_of_scope) > 5 else ""))  # O(m)
+    cands = []  # changed files another task owns, no owner in this call: maybe this task's edit (#907) | O(1)
+    if theirs:  # O(1)
+        owners_of = {f: [t for t, i in info.items() if t != tid and nt.owns_match(f, i["owns"])] for f in theirs}  # O(m*n*f)
+        cands = [f for f in theirs if not any(t in call for t in owners_of[f])]  # O(m*call)
+        cands = changed_vs_parent(cands) if cands else []  # O(m) + process spawns
+    if cands:  # O(1)
+        sd_ = getattr(a, "sd", None)  # O(1)
+        ck = last_checkpoint(a.ledger, tid)  # O(c)
+        since = None  # O(1)
+        if ck:  # O(1)
+            cp = git("show", "-s", "--format=%ct", ck, check=False)  # O(1) + process spawn
+            since = float(cp.stdout.strip()) if cp.returncode == 0 and cp.stdout.strip().isdigit() else None  # O(1)
+        reported = set(fresh_report_files(sd_, tid, since))  # O(r*B)
+        edits = [f for f in cands if f in reported]  # O(m)
+        rest = [f for f in cands if f not in reported]  # O(m)
+        if rest and call == [tid]:  # no report names it: only Tn can have written it | O(1)
+            me = os.environ.get("SUPERLITE_FLEET_WORKER")  # O(1)
+            base = baseline_dirty(a.plan)  # O(b)
+            if pool_readable(pool_path) and not others_running(pool_path, call) and base is not None \
+                    and not (sd_ and busy_editors(sd_, me, tid)):  # O(pool bytes + w)
+                edits += [f for f in rest if f not in base  # O(m*n)
+                          and not any(t in done or t in running for t in owners_of[f])]
+        edits = sorted(edits)  # O(m log m)
+    else:  # O(1)
+        edits = []  # O(1)
+    if edits:  # nothing staged: the hunk would ride in with its owner later (#907) | O(1)
+        if getattr(a, "owned_notes", None):  # the failure says it already | O(m)
+            for f in edits:  # O(m) iterations
+                a.owned_notes.pop(f, None)  # O(1)
+        reason = "; ".join(f"edits {f} owned by {', '.join(owners_of[f])}" for f in edits)  # O(m*n)
+        run_owners = [t for t in info if any(t in running and t in owners_of[f] for f in edits)]  # plan order | O(n*m)
+        every_run = all(any(t in running for t in owners_of[f]) for f in edits)  # O(m*n)
+        plan_arg = getattr(a, "plan_arg", a.plan)  # O(1)
+        also_call = f"commit_task {tid} --also {' '.join(edits)} --ruling TEXT --plan {plan_arg}"  # O(m)
+        if every_run:  # O(1)
+            who = f"{run_owners[0]} is" if len(run_owners) == 1 else f"{', '.join(run_owners)} are"  # O(n)
+            note_once(a, f"next: once {who} done: commit_task {' '.join(run_owners)} {tid} --plan {plan_arg}, or {also_call}")  # O(1)
+        else:  # O(1)
+            note_once(a, f"next: {also_call}")  # O(1)
+        return fail(1, reason)  # O(m)
     held = {}  # file -> running siblings that also own it (#399) | O(1)
     if running and mine and not (w0 and tid == w0[0]):  # Wave 0 stubs commit while their owner runs; a running sibling's edits in a shared file stay out of this checkpoint | O(1)
         cand_hold = [f for f in mine if not any(hit(f, e) for e in also)  # --also entries and files this task is ruled to commit are never held | O(m*k)
@@ -968,6 +1044,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     plan_arg = a.plan or nt.DEFAULT_PLAN  # the --plan value as passed, for the dismiss hint | O(1)
     sd = state.for_plan(a.plan) if a.plan else state.resolve()  # the run folder: --plan's own once started (#178), else the session's | O(d)
     a.sd = sd  # O(1)
+    a.plan_arg = plan_arg  # O(1)
     if a.plan and os.path.isdir(a.plan):  # a run folder as --plan: its plan file (#456) | O(1) stat
         import orchestrator  # O(1) lazy
         found = orchestrator.plan_file(state.plan_dir(a.plan))  # O(file)
