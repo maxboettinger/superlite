@@ -7,7 +7,7 @@ Subcommands adapter, packet and contract live in pt_review.py (lazy import).
 Exit codes: 0 ok, 1 findings (stubs import failure, lint issues), 2 bad plan or usage.
 Stdlib only.
 
-Lint also warns (REACH:) on a Running-app check with no way in, (OWNS:) on a symlinked Owns entry and (ALSO-TOUCHES:) on a doubtful Also-touches entry.
+Lint also warns (REACH:) on a Running-app check with no way in, (OWNS:) on a symlinked Owns entry and (ALSO-TOUCHES:) on a doubtful Also-touches entry, (TICKET:) on some tasks keyed and others not and (COMMIT:) on a commit subject template field a task leaves unset.
 
 A relative `--plan` that names nothing at the cwd resolves against the enclosing checkout's top, a bare `.superlite` against the nearest run (anchor_plan, #998).
 
@@ -2690,6 +2690,40 @@ def owns_link_warnings(plan: Plan, root: Path | None) -> list[str]:  # O(n*o) #5
     return out  # O(w)
 
 
+def subject_warnings(plan: Plan, root: Path | None) -> list[str]:  # O(n*f) #911: mixed per-task tracker keys, unset commit subject template fields
+    try:  # O(1)
+        import autocommit  # lazy | O(1)
+        tasks = [t.id for t in plan.tasks if t.status != "draft" and t.id != "T0"]  # O(n)
+        tpl = autocommit.subject_template(str(plan.path) if plan.path else None, str(root) if root else str(plan.path.parent if plan.path else Path.cwd()))  # O(f)
+        names = ["ticket"] + [n for n in autocommit.template_fields(tpl) if n not in ("tid", "title", "ticket")]  # O(f)
+        head, tv = autocommit.field_values(str(plan.path) if plan.path else None, names)  # O(n*f)
+    except Exception:  # O(1)
+        return []  # O(1)
+
+    def ids(lst: list[str]) -> str:  # O(1)
+        return ", ".join(lst[:5]) + (f" +{len(lst) - 5} more" if len(lst) > 5 else "")  # O(1)
+
+    out: list[str] = []  # O(1)
+    if "ticket" not in head:  # O(1)
+        has = [i for i in tasks if tv.get(i, {}).get("ticket")]  # O(n)
+        bare = [i for i in tasks if i not in has]  # O(n)
+        if has and bare:  # O(1)
+            one = len(bare) == 1  # O(1)
+            out.append(f"WARNING: TICKET: {ids(bare)} {'has' if one else 'have'} no **Ticket:** while {ids(has)} "  # O(1)
+                       f"{'has' if len(has) == 1 else 'have'} one and the plan header has none; "  # O(1)
+                       "give each task its key, or put one **Ticket:** in the plan header")  # O(1)
+    for n in names[1:]:  # O(f)
+        if n in head:  # O(1)
+            continue  # O(1)
+        miss = [i for i in tasks if not tv.get(i, {}).get(n)]  # O(n)
+        if miss:  # O(1)
+            one = len(miss) == 1  # O(1)
+            out.append(f"WARNING: COMMIT: {ids(miss)} {'has' if one else 'have'} no **{n[0].upper() + n[1:]}:** for {{{n}}} "  # O(1)
+                       f"in the commit subject template; {'its subject leaves' if one else 'their subjects leave'} it out "  # O(1)
+                       "(set it on the task or in the plan header)")  # O(1)
+    return out  # O(w)
+
+
 def pythonpath_warnings(plan: Plan, root: Path | None) -> list[str]:  # O(n*o*d) #712: owned package files commit_task cannot import by their package name
     if root is None:  # O(1)
         return []  # O(1)
@@ -2939,6 +2973,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
         warnings.extend(owns_link_warnings(plan, root_))  # O(n*o)
         warnings.extend(pythonpath_warnings(plan, root_))  # O(n*o*d)
         warnings.extend(also_touches_warnings(plan))  # O(n^2*o)
+        warnings.extend(subject_warnings(plan, root_))  # O(n*f)
     except (OSError, ValueError):  # O(1)
         pass  # O(1)
     import shape  # lazy: shape imports this module | O(1)

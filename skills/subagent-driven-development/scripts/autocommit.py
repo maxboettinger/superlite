@@ -199,10 +199,143 @@ def ticket(plan):
     return None
 
 
+DEFAULT_SUBJECT = "{ticket} {tid}: {title}"
+PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_-]*)\}")
+TESTCMD = ".superlite/test-cmd.json"
+
+
+def clean_value(text):
+    """A field value: stripped, one enclosing pair of backticks removed, whitespace runs collapsed."""
+    v = text.strip()
+    if len(v) >= 2 and v[0] == "`" and v[-1] == "`":
+        v = v[1:-1]
+    return re.sub(r"\s+", " ", v).strip()
+
+
+def header_fields(plan):
+    """{lowercased name: value} of the `**Name:** value` lines before the plan's first `##+ ` heading; {} when unreadable."""
+    out = {}
+    try:
+        for ln in Path(plan).read_text(encoding="utf-8").splitlines():
+            if re.match(r"##+\s", ln):
+                break
+            m = re.match(r"\s*\*\*([A-Za-z][A-Za-z0-9_ -]*):\*\*[ \t]*(.*?)\s*$", ln)
+            if m and m.group(2):
+                out.setdefault(m.group(1).lower(), m.group(2))
+    except (OSError, TypeError, ValueError):
+        pass
+    return out
+
+
+def plan_tasks(plan):
+    """{task id: info} of the plan (next_tasks.parse_plan), or None when the plan is missing or unreadable."""
+    try:
+        if not plan or not Path(plan).is_file():
+            return None
+        import next_tasks  # the scripts folder is on sys.path when this runs
+        return next_tasks.parse_plan(str(plan))
+    except (OSError, ValueError, SystemExit, ImportError):
+        return None
+
+
+def task_value(info, name):
+    """The task block's own unfenced `**Name:**` value (cleaned), or ""."""
+    import next_tasks
+    return clean_value(next_tasks._field(info["body"], f"(?i:{re.escape(name)})"))
+
+
+def subject_template(plan, root=None):
+    """The commit subject template: the plan header's **Commit:**, else test-cmd.json `commit_subject`, else DEFAULT_SUBJECT."""
+    val = clean_value(header_fields(plan).get("commit", "")) if plan else ""
+    if val:
+        return val
+    base = Path(root) if root else Path.cwd()
+    paths = [base / TESTCMD]
+    if not paths[0].exists():
+        try:
+            import testcmd
+            main = testcmd._main_checkout_root(base)
+            if main:
+                paths.append(Path(main) / TESTCMD)
+        except Exception:
+            pass
+    for path in paths[-1:]:
+        try:
+            v = json.loads(path.read_text(encoding="utf-8")).get("commit_subject")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return DEFAULT_SUBJECT
+
+
+def template_fields(template):
+    """The placeholder names of a template, lowercased, first-seen order, no repeats."""
+    out = []
+    for m in PLACEHOLDER.finditer(template):
+        n = m.group(1).lower()
+        if n not in out:
+            out.append(n)
+    return out
+
+
+def field_values(plan, names):
+    """(header values, {task id: {"title": t, name: value}}) for the non-empty fields `names` of the plan; ({}, {}) without one."""
+    tasks = plan_tasks(plan)
+    if tasks is None:
+        return {}, {}
+    head = header_fields(plan)
+    hv = {n: v for n in names if (v := clean_value(head.get(n.lower(), "")))}
+    tv = {}
+    for tid, info in tasks.items():
+        d = {"title": info["title"]}
+        for n in names:
+            v = task_value(info, n)
+            if v:
+                d[n] = v
+        tv[tid] = d
+    return hv, tv
+
+
+def render_subject(template, tid, title, head, info):
+    """Fill `template` for one task; `head` is header_fields(plan), `info` the task's parse_plan entry or None."""
+    def value(m):
+        n = m.group(1).lower()
+        if n == "tid":
+            return tid
+        if n == "title":
+            return title
+        v = task_value(info, n) if info else ""
+        return v or clean_value(head.get(n, ""))
+    # empty placeholders go from the template text first, so title text is never collapsed
+    out = PLACEHOLDER.sub(lambda m: "" if not value(m) else m.group(0), template)
+    out = re.sub(r"\(\s*\)", "", out)
+    out = re.sub(r"\s+", " ", out).strip()
+    out = PLACEHOLDER.sub(value, out)
+    return out or f"{tid}: {title}"
+
+
+def subject(tid, title, plan, root=None):
+    """Commit subject of a task, shaped by the subject template; the default is `KEY Tn: title` / `Tn: title`."""
+    if not plan:
+        return f"{tid}: {title}"
+    tasks = plan_tasks(plan)
+    return render_subject(subject_template(plan, root), tid, title, header_fields(plan), (tasks or {}).get(tid))
+
+
+def entry_subjects(entries, plan, root=None):
+    """The subject of each checkpoint entry rebuilt from the plan; the stored title for an entry the plan does not name."""
+    tasks = plan_tasks(plan)
+    if tasks is None:
+        return [e["title"] for e in entries]
+    head, tpl = header_fields(plan), subject_template(plan, root)
+    return [render_subject(tpl, e["task"], tasks[e["task"]]["title"], head, tasks[e["task"]])
+            if e.get("task") in tasks else e["title"] for e in entries]
+
+
 def message(tid, title, plan):
-    """Commit message of a task: `KEY Tn: title` with a plan ticket, else `Tn: title`."""
-    key = ticket(plan) if plan else None
-    return f"{key} {tid}: {title}" if key else f"{tid}: {title}"
+    """Commit message of a task: `subject(tid, title, plan)`."""
+    return subject(tid, title, plan)
 
 
 def plan_key(plan):
@@ -465,6 +598,8 @@ def apply(squash=True, trailers=()):
                  + ", ".join(edited[:8]) + (" ..." if len(edited) > 8 else "")
                  + "; checkpoint them again with `sl commit_task`, or commit the files yourself with `git add -A && git commit`")
     ptree = git("rev-parse", f"{start}^{{tree}}").stdout.strip() if start else EMPTY_TREE  # O(1)
+    titles = entry_subjects([e for e, _ in chain], st.get("plan"))
+    chain = [({**e, "title": t}, tree) for (e, tree), t in zip(chain, titles)]
     todo, skipped = [], []
     for e, tree in chain:
         if tree == ptree:

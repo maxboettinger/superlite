@@ -240,7 +240,8 @@ def lead_brief(batch, ctx):  # O(i + f + a)
                "evidence (a duplicate's link, a measurement) when your issue or a standing note asks for one.")  # O(1)
     if jira:  # O(1)
         first = clean(next(n for n in batch["issues"] if isinstance(n, str)))  # O(i)
-        out.append(f"Jira: set **Ticket:** {first} in your plan header (commit subjects then start with it), "
+        out.append("Jira: give each task the key of the issue it builds as its own **Ticket:** "  # O(1)
+                   f"(a key for the whole plan: **Ticket:** {first} in the plan header); commit subjects then start with it, "
                    'pass merge --title "<keys>: <summary>", (main moves the issues).')  # O(1)
     answers = batch.get("answers") or {}  # O(1)
     by = batch.get("answered_by") or {}  # O(1)
