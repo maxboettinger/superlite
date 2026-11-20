@@ -10,7 +10,8 @@
 `--plan P` (anywhere in the arguments) works in the git checkout holding P, else in the current folder.
 
 A tree is a detached git worktree at `.superlite/trees/<task>` on the base commit (the newest
-checkpoint, else HEAD). `prepare` resets it to the base and overlays only the task's own files
+checkpoint, else HEAD; after the run moved onto a newer HEAD (fast-forward or rebase), HEAD plus the newest
+checkpoint's changes since the run's base, `moved_base`, #908). `prepare` resets it to the base and overlays only the task's own files
 (modified, new or deleted in the main tree). Untracked build output in the tree is never removed by `prepare`.
 Cleanup (GitHub #574): `busy` marks a tree in use (`<key>.busy.<pid>`), `reap` drops the trees of committed tasks and
 stopped workers that are not busy, `clean_idle` drops every tree nothing runs in, `sweep_scratch_builds` removes Xcode
@@ -52,8 +53,91 @@ def git(root, *args):  # O(output) + process spawn
     return r.stdout  # O(1)
 
 
-def base_commit(root):  # O(checkpoints) + one spawn when no checkpoint
+_MOVED = {}  # O(1) (resolved root, base, newest, head) -> moved_base result, per process
+_WARNED = set()  # O(1) memo keys whose fallback line was printed
+
+
+def _git_env(root, args, env=None, stdin=None):  # git with extra environment and optional stdin; stdout | O(output) + spawn
+    full = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE")}  # O(env)
+    full.update(env or {})  # O(env)
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", env=full, input=stdin)  # O(output)
+    if r.returncode:  # O(1)
+        raise RuntimeError(f"git {' '.join(args)} failed: {r.stderr.strip()}")  # O(1)
+    return r.stdout  # O(1)
+
+
+def _tree_changes(root, a, b):  # {path: (mode, sha)} of a..b; mode "0" marks a deletion | O(changes) + spawn
+    parts = git(root, "diff-tree", "-r", "-z", "--no-renames", a, b).split("\0")  # O(output)
+    out, i = {}, 0  # O(1)
+    while i < len(parts) and parts[i].startswith(":"):  # O(changes) iterations
+        meta = parts[i][1:].split()  # O(1) oldmode newmode oldsha newsha status
+        path = parts[i + 1] if i + 1 < len(parts) else ""  # O(1)
+        out[path] = ("0", "0" * 40) if meta[4].startswith("D") else (meta[1], meta[3])  # O(1)
+        i += 2  # O(1)
+    return out  # O(1)
+
+
+def _build_moved(root, base, newest, head):  # the moved-base dict for one memo key | O(changes) + spawns
+    info = {"base": base, "head": head, "checkpoint": newest, "sha": "", "files": [], "overlap": [], "error": ""}  # O(1)
+    idx = Path(root) / ".superlite" / "trees" / f"base-{os.getpid()}.index"  # O(1)
+    try:  # O(1)
+        changes = _tree_changes(root, base, newest)  # O(changes)
+        info["files"] = sorted(changes)  # O(c log c)
+        moved = set(split_z(git(root, "diff", "--name-only", "--no-renames", "-z", base, head)))  # O(f)
+        info["overlap"] = sorted(moved & set(changes))  # O(f)
+        stamp = git(root, "show", "-s", "--format=%ct", newest).strip()  # O(1)
+        idx.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+        idx.unlink(missing_ok=True)  # O(1)
+        env = {"GIT_INDEX_FILE": str(idx)}  # O(1)
+        _git_env(root, ["read-tree", head], env)  # O(files)
+        lines = "".join(f"{m} {sha}\t{p}\0" for p, (m, sha) in changes.items())  # O(changes)
+        if lines:  # O(1)
+            _git_env(root, ["update-index", "-z", "--index-info"], env, lines)  # O(changes)
+        tree = _git_env(root, ["write-tree"], env).strip()  # O(files)
+        ident = {"GIT_AUTHOR_NAME": "superlite", "GIT_AUTHOR_EMAIL": "superlite@localhost", "GIT_COMMITTER_NAME": "superlite",  # O(1)
+                 "GIT_COMMITTER_EMAIL": "superlite@localhost", "GIT_AUTHOR_DATE": f"{stamp} +0000", "GIT_COMMITTER_DATE": f"{stamp} +0000"}  # O(1)
+        msg = f"superlite tree base: checkpoint {newest[:7]} on HEAD {head[:7]}"  # O(1)
+        info["sha"] = _git_env(root, ["commit-tree", tree, "-p", head, "--no-gpg-sign", "-m", msg], ident).strip()  # O(1)
+    except (RuntimeError, OSError) as e:  # O(1)
+        info.update(sha="", error=(str(e).splitlines() or ["git failed"])[0])  # O(1)
+    finally:  # O(1)
+        idx.unlink(missing_ok=True)  # O(1)
+    return info  # O(1)
+
+
+def moved_base(root):  # None, or the base rebuilt on a HEAD that moved off checkpoints.json's base; memoized | O(changes) + spawns
+    root = Path(root).resolve()  # O(1)
+    try:  # O(1)
+        st = json.loads((root / STATE).read_text(encoding="utf-8"))  # O(file)
+        base = st.get("base") or st.get("head") or ""  # O(1)
+        newest = (st.get("entries") or [])[-1].get("sha") or ""  # O(1)
+    except (OSError, ValueError, AttributeError, IndexError):  # O(1)
+        return None  # O(1)
+    if not base or not newest:  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        head = git(root, "rev-parse", "--verify", "-q", "HEAD").strip()  # O(1) + spawn
+    except RuntimeError:  # O(1)
+        return None  # O(1)
+    if not head or head == base:  # O(1)
+        return None  # O(1)
+    key = (str(root), base, newest, head)  # O(1)
+    if key not in _MOVED:  # O(1)
+        _MOVED[key] = _build_moved(root, base, newest, head)  # O(changes)
+    return dict(_MOVED[key])  # O(1)
+
+
+def base_commit(root):  # O(checkpoints) + spawns when HEAD moved off the base, or no checkpoint
     root = Path(root)  # O(1)
+    mb = moved_base(root)  # O(1) memoized
+    if mb and mb["sha"]:  # O(1)
+        return mb["sha"]  # O(1)
+    if mb:  # O(1) the rebuild failed: today's behaviour, said once
+        key = (str(root.resolve()), mb["base"], mb["checkpoint"], mb["head"])  # O(1)
+        if key not in _WARNED:  # O(1)
+            _WARNED.add(key)  # O(1)
+            print(f"trees: base not rebuilt on HEAD {mb['head'][:7]}: {mb['error']}; trees use the newest checkpoint {mb['checkpoint'][:7]}", file=sys.stderr)  # O(1)
+        return mb["checkpoint"]  # O(1)
     try:  # O(1)
         entries = json.loads((root / STATE).read_text(encoding="utf-8")).get("entries") or []  # O(file)
         if entries and entries[-1].get("sha"):  # O(1)
@@ -207,6 +291,13 @@ def _prepare(root, task, owns):  # O(f * o) + git checkout of the tree
         dst = tree / p  # O(1)
         dst.parent.mkdir(parents=True, exist_ok=True)  # O(1)
         shutil.copy2(root / p, dst)  # O(file size)
+    mb = moved_base(root)  # O(1) memoized
+    if mb and mb["sha"]:  # O(1)
+        note = f"trees: {task} tree on HEAD {mb['head'][:7]} plus the run's checkpoints (the run moved off its base {mb['base'][:7]})"  # O(1)
+        if mb["overlap"]:  # O(1)
+            shown = ", ".join(mb["overlap"][:8]) + (" ..." if len(mb["overlap"]) > 8 else "")  # O(1)
+            note += f"; checkpointed files the move also changed keep the checkpoint's version: {shown} (re-checkpoint their tasks with sl commit_task)"  # O(1)
+        print(note, file=sys.stderr)  # O(1)
     err = stage(tree, copy, delete)  # O(f) + spawns
     if err:  # O(1)
         print(f"trees: {task} tree index not updated: {err}; git-index checks in the tree see the base", file=sys.stderr)  # O(1)
