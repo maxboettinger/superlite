@@ -199,3 +199,16 @@ def test_refresh_with_plan_flag(repo, tmp_path_factory, monkeypatch, capsys):
 def test_usage(repo, capsys, argv):
     rc, _, err = call(capsys, *argv)
     assert rc == 2 and "usage: trees.py clean | path Tn | refresh [--onto REV] [--plan P]" in err
+
+
+def test_onto_rebase_refuses_staged_changes(repo, capsys):
+    checkpoint(repo)
+    r = own_commit(repo)
+    advance_main(repo, {"src/c.py": "C = 2\n"})
+    (repo / "src" / "b.py").write_text("B = 2\n")
+    git(repo, "add", "src/b.py")
+    rc, _, err = call(capsys, "refresh", "--onto", "main")
+    assert rc == 2
+    assert err == "trees refresh: refused, staged changes would come back unstaged after the rebase: commit or unstage them, then rerun\n"
+    assert head(repo) == r
+    assert git(repo, "diff", "--cached", "--name-only").split() == ["src/b.py"]
