@@ -52,9 +52,11 @@ def main_window(env, model):  # O(k) main's auto-compact window: env variable, u
     return DEFAULT_WINDOW  # O(1)
 
 
-def lead_argv(sl_path, model, window=None, effort=None, deny=None, mcp_config=None):  # O(d)
+def lead_argv(sl_path, model, window=None, effort=None, deny=None, mcp_config=None, ship=True):  # O(d)
     argv = ["--model", model] + (["--effort", effort] if effort else [])  # O(1)
-    argv += ["--permission-mode", "auto", "--allowedTools", "Bash(maxapp ship *)", f"Bash({sl_path} backlog ship *)"]  # O(1)
+    argv += ["--permission-mode", "auto"]  # O(1)
+    if ship:  # a plan lead never ships: main decides the integration (#906) | O(1)
+        argv += ["--allowedTools", "Bash(maxapp ship *)", f"Bash({sl_path} backlog ship *)"]  # O(1)
     if deny is not None or mcp_config:  # a lean start: only the servers named, no browser bridge | O(1)
         argv += ["--strict-mcp-config"] + (["--mcp-config", str(mcp_config)] if mcp_config else []) + ["--no-chrome"]  # O(1)
     argv += ["--disallowedTools", "AskUserQuestion", *dict.fromkeys(d for d in (deny or []) if d != "AskUserQuestion")]  # O(d)
@@ -119,17 +121,17 @@ def _record_session(main_sd, wid, session):  # O(w)
             fleet.fs.save(main_sd, data)  # O(w)
 
 
-def spawn_lead(main_sd, worktree, model=None, env=None, rc=None):  # O(a * e + w) plus herdr calls
+def spawn_lead(main_sd, worktree, model=None, env=None, rc=None, plan=None, ship=True):  # O(a * e + w) plus herdr calls
     base = dict(os.environ) if env is None else env  # O(env)
     rc = rc or run_config.resolve()  # O(f)
     model = model or rc["lead"]["model"]  # O(1)
     try:  # O(1)
-        return _spawn_lead(main_sd, worktree, model, base, None, rc)  # O(a * e + w)
+        return _spawn_lead(main_sd, worktree, model, base, None, rc, plan, ship)  # O(a * e + w)
     except (fleet._Slow, NoShell) as first:  # O(1)
-        return _spawn_lead(main_sd, worktree, model, base, first, rc)  # O(a * e + w)
+        return _spawn_lead(main_sd, worktree, model, base, first, rc, plan, ship)  # O(a * e + w)
 
 
-def _spawn_lead(main_sd, worktree, model, base, after, rc):  # O(a * e + w) plus herdr calls
+def _spawn_lead(main_sd, worktree, model, base, after, rc, plan=None, ship=True):  # O(a * e + w) plus herdr calls
     fs, hc = fleet.fs, fleet.hc  # O(1)
     main_sd, worktree = Path(main_sd), Path(worktree)  # O(1)
     fresh = isinstance(after, NoShell)  # O(1)
@@ -149,10 +151,12 @@ def _spawn_lead(main_sd, worktree, model, base, after, rc):  # O(a * e + w) plus
     wenv = lead_env(main_sd, lsd, wid, cdir, base, fs.load(main_sd).get("accounts") or [], (rc.get("cache_ttl") or {}).get("lead"))  # O(w)
     sl = str(Path(__file__).resolve().parent / "sl")  # O(1)
     mcp = _lead_mcp(rc, wid, worktree, lsd, cdir, base)  # O(n + f)
-    argv = lead_argv(sl, model, lead.get("autocompact") or main_window(base, model), lead.get("effort"), list(lead.get("deny") or []), mcp)  # O(k)
+    argv = lead_argv(sl, model, lead.get("autocompact") or main_window(base, model), lead.get("effort"), list(lead.get("deny") or []), mcp, ship)  # O(k)
     run_config.write_active(lsd, rc)  # the run's config snapshot, read by the lead's workers | O(f)
     record = {"name": name, "account": account, "agent": "lead", "tier": model, "state": "starting", "task": None, "role": "lead",  # O(1)
               "one_turn": False, "lead_sd": lsd_s, "worktree": wt, "run_config": rc.get("id"), "launch": {"argv": argv, "env": wenv, "cwd": wt}}
+    if plan:  # the plan this lead builds (#906) | O(1)
+        record["plan"] = str(Path(plan).resolve())  # O(1)
     try:  # O(1)
         pane = fleet.open_pane(main_sd, wid, wt, wenv, record)  # O(w + p)
         try:  # O(1)
@@ -224,6 +228,93 @@ def _spawn_lead(main_sd, worktree, model, base, after, rc):  # O(a * e + w) plus
     fleet._launch_line(main_sd, wid, "lead", model, account, pane)  # O(1)
     print(f"{wid} account={account} pane={pane} agent=lead role=lead")  # O(1)
     return {"id": wid, "name": name, "account": account, "pane_id": pane, "agent": "lead", "model": model, "role": "lead", "lead_sd": lsd_s, "config": rc.get("id")}  # O(1)
+
+
+def plan_brief(plan, worktree, sl):  # O(1) the first message of a lead started for a plan (#906)
+    import backlog_brief as bb  # noqa: PLC0415 | O(1)
+    return "\n".join([  # O(1)
+        f"# Lead brief: plan {plan}",
+        f"You are a lead started by `sl fleet spawn --role lead`: build the plan {plan} in the worktree {worktree} with your own fleet, review it and run its test layers. Main reads your progress with `sl fleet status` and waits for your Status line; it never reads your transcript.",
+        "Your run: the worktree you start in, state in .superlite/; pass --plan .superlite to every sl call.",
+        f"First: `{sl} orchestrator set ai --plan .superlite`, then `{sl} fleet on --plan .superlite`.",
+        bb.CODE_RULE.format(sl=sl),
+        f"Build: run the plan {plan} (a file without a `%% taskgraph` line is no superlite plan: write the plan from it with superlite:writing-plans first, in docs/plans/ of this worktree) with " + bb.BUILD_TAIL,
+        f"Simulators: append the UDID of each simulator you or a worker creates (`xcrun simctl create` or `clone`; a checker's `Simulators:` line marks its created ones) as one line to {worktree}/.superlite/simulators.txt; never list one you did not create; shut down and delete each listed one before you end your turn with DONE; copy this sentence into every worker brief.",
+        bb.WAVE_WAIT.format(sl=sl),
+        'Never ask the user (AskUserQuestion is off): a major decision or an uncertainty goes to .superlite/question.json ({"questions": [...]}, the AskUserQuestion shape, 1 to 4 questions, your recommended option first and labelled "(Recommended)"); let running workers finish, then end your turn with Status: NEEDS_DECISION. Main answers with a message; continue from it. Rule minor and medium choices yourself and write each as one `Ruling: ...` line in .superlite/notes.md.',
+        "Commit every task with commit_task on this worktree's branch. Never push, merge, open a pull request, bump a version or ship: main decides the integration after your DONE.",
+        "End: Status: DONE once every plan task is committed, the final review approved and every test layer the changed paths require ran green; Status: DONE_WITH_CONCERNS with one `Not run: <check> - <why>` line per check you could not run; Status: NEEDS_DECISION as above; otherwise Status: BLOCKED with the reason. Then the JSON block.",
+    ]) + "\n"
+
+
+def _err(msg):  # O(1)
+    print(f"error: {msg}", file=sys.stderr)  # O(1)
+    return 2, None  # O(1)
+
+
+def start_plan_lead(sd, plan, brief=None, label="", over=False, machine_wait=100.0):  # O(w) plus spawn: (exit code, worker id or None)
+    """`fleet spawn --role lead --plan P`: a lead for plan P in P's own worktree, with its own fleet (#906)."""
+    import fleet_io  # noqa: PLC0415 | O(1)
+    import machine_load  # noqa: PLC0415 | O(1)
+    import plan_tools  # noqa: PLC0415 | O(1)
+    import state  # noqa: PLC0415 | O(1)
+    import trees  # noqa: PLC0415 | O(1)
+    pre = f"--role lead --plan {plan}"  # O(1)
+    P = Path(plan)  # O(1)
+    if not P.exists():  # O(1)
+        return _err(f"{pre}: not found")  # O(1)
+    wt = state.git_root(P)  # O(d)
+    if wt is None:  # O(1)
+        return _err(f"{pre}: not inside a git checkout")  # O(1)
+    wt = Path(wt).resolve()  # O(1)
+    lsd = wt / ".superlite"  # O(1)
+    if lsd.resolve() == Path(sd).resolve():  # O(1)
+        return _err(f"{pre}: the plan lies in this run's own worktree {wt}; a lead runs a plan in another worktree")  # O(1)
+    for wid, w in fleet.fs.workers(sd).items():  # O(w)
+        if w.get("role") == "lead" and w.get("state") not in ("stopped", "blocked") and w.get("lead_sd") and Path(w["lead_sd"]).resolve() == lsd.resolve():  # O(1)
+            return _err(f"{wid} already leads {wt}; stop it first: sl fleet stop {wid}")  # O(1)
+    planf = None  # O(1)
+    if brief:  # O(1)
+        bf = Path(brief).resolve()  # O(1)
+        if not bf.is_file():  # O(1)
+            return _err(f"brief not found: {bf}")  # O(1)
+    else:  # O(1)
+        try:  # O(1)
+            planf = plan_tools.resolve_plan(plan)  # O(d)
+        except plan_tools.PlanError as e:  # O(1)
+            return _err(f"{pre}: {e}; pass a plan file, or --brief F")  # O(1)
+    level, dline = trees.disk_gate(wt)  # O(1)
+    if level == "refuse":  # O(1)
+        print(f"BLOCKED: lead for {wt} not started: {dline.removeprefix('disk: ')}")  # O(1)
+        return 3, None  # O(1)
+    if level == "warn":  # O(1)
+        print(dline)  # O(1)
+    busy = machine_load.gate("fleet spawn (lead)", machine_wait, over)  # O(wait)
+    if busy:  # O(1)
+        print(f"BLOCKED: lead for {wt} not started: {busy}; rerun, or --over-limit")  # O(1)
+        return 3, None  # O(1)
+    if brief:  # O(1)
+        bpath = bf  # O(1)
+    else:  # O(1)
+        planf = Path(planf).resolve()  # O(1)
+        bpath = lsd / "briefs" / "lead.md"  # O(1)
+        bpath.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+        bpath.write_text(plan_brief(planf, wt, str(Path(__file__).resolve().parent / "sl")), encoding="utf-8")  # O(len)
+    rc = run_config.resolve(None, wt)  # O(f)
+    try:  # O(1)
+        rec = spawn_lead(sd, wt, rc=rc, plan=planf or P.resolve(), ship=False)  # O(a * e + w)
+    except SystemExit as e:  # O(1)
+        return (e.code if isinstance(e.code, int) else 3), None  # O(1)
+    label = label or f"lead-{wt.name}"  # O(1)
+    try:  # O(1)
+        fleet_io.send_brief(sd, rec["id"], str(bpath), label)  # O(w)
+    except (fleet.hc.HerdrError, OSError, KeyError) as e:  # O(1)
+        fleet.stop(sd, [rec["id"]])  # O(w)
+        print(f"BLOCKED: {rec['id']} {label} not sent ({getattr(e, 'message', '') or e}); lead stopped")  # O(1)
+        return 3, None  # O(1)
+    wid = rec["id"]  # O(1)
+    print(f"{wid} lead {wt}: progress: sl fleet status; run state: sl status --plan {wt}/.superlite; wait: sl fleet wait {wid} (returns at DONE, NEEDS_DECISION or BLOCKED); answer: sl fleet send {wid} --text T")  # O(1)
+    return 0, wid  # O(1)
 
 
 def backlog_hint(sd, cwd):  # O(b)

@@ -38,9 +38,9 @@ def id_re(known=None) -> "re.Pattern":  # O(k log k)
 
 
 TID = id_re()  # O(1)
-STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b", re.I)  # O(1)
+STATUS = re.compile(r"\bStatus:\s*\**\s*(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|NEEDS_DECISION|BLOCKED)\b", re.I)  # O(1)
 RED = re.compile(r"\b(?:tests?|suite)\b[^\n]{0,40}\b(?:red|failing|failed)\b|\b\d+\s+failed\b", re.I)  # O(1)
-LEAD = re.compile(r"\A\s*[^\n]{0,80}?\b(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b")  # unlabelled first line: `T4 gallery: DONE` | O(1)
+LEAD = re.compile(r"\A\s*[^\n]{0,80}?\b(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|NEEDS_DECISION|BLOCKED)\b")  # unlabelled first line: `T4 gallery: DONE` | O(1)
 HANDBACK = "SubagentHandback"  # Claude Code delivers a subagent's report as this tool call's input.message, not as text | O(1)
 CHARS_PER_TOKEN = 3.5  # output_tokens in a transcript is an early snapshot of a streamed message; text length bounds it below
 CUE = re.compile(r"(?:^[\s#>*_-]*|[.!?;]\s+)(?:(tasks|batch)|task|next)\b", re.I)  # at a line or sentence start; group 1: a batch | O(1)
@@ -97,7 +97,7 @@ def is_reviewer(agent_type, desc) -> bool:  # O(len)
     (`Final review fixes T1` is rework)."""
     return bool(REVIEWER_TYPE.search(agent_type or "")  # O(len)
                 or (REVIEWER_DESC.search(desc or "") and not FIXER.search(f"{agent_type} {desc}")))
-TASK_STATUS = r"\b{}\b(?:(?!\bT\d)[^\n]){{0,80}}?\b(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b"  # `T4: DONE. T5: …` | O(1)
+TASK_STATUS = r"\b{}\b(?:(?!\bT\d)[^\n]){{0,80}}?\b(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|NEEDS_DECISION|BLOCKED)\b"  # `T4: DONE. T5: …` | O(1)
 
 
 def own_status(tid, report) -> str:  # O(len)

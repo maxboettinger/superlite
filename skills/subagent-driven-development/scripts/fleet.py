@@ -4,6 +4,7 @@
     fleet.py on [--accounts A,B] [--plan P] | off | status [--all]
     fleet.py spawn [--role R] [--tier T] --plan P | stop [IDS...] [--all]
     fleet.py spawn --for-dispatch --plan P    (one dispatch round: dispatch, spawn, send)
+    fleet.py spawn --role lead --plan P [--brief F] [--label L] [--wait]: a lead for the plan P in P's own worktree, its own session, fleet and run (#906); --plan names the lead's plan, the spawning fleet is the current directory's run
     fleet.py spawn --for-review Tn [Tm ...] | --package X --plan P    (write the review brief, start a package-reviewer, send it)
     fleet.py report IDS... [--plan P]    (print a worker's last report, or a report by label; read-only)
     fleet.py collect WID [--plan P]    (collect a remote write worker's late snapshot from its saved report again; exit 0 collected, 3 still BLOCKED, 2 refused: #984)
@@ -1056,6 +1057,16 @@ def _plan_arg(argv):  # the value of the last --plan P or --plan=P (argparse's p
     return found  # O(1)
 
 
+def _role_arg(argv):  # the value of the last --role X or --role=X, else None | O(n)
+    found = None  # O(1)
+    for i, x in enumerate(argv):  # O(n)
+        if x == "--role" and i + 1 < len(argv):  # O(1)
+            found = argv[i + 1]  # O(1)
+        elif x.startswith("--role="):  # O(1)
+            found = x[len("--role="):]  # O(1)
+    return found  # O(1)
+
+
 def _plan_problem(plan):  # why a --plan value cannot hold a run, or "" | O(d)
     pp = Path(plan)  # O(1)
     if pp.exists() and not (pp.is_file() or pp.is_dir()):  # O(1) e.g. /dev/null
@@ -1227,6 +1238,13 @@ def _bounds(a):  # the --max-workers and --min-swap-free-mb values as a dict, or
 
 
 def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `spawn`: its exit code | O(R * (spawn + send))
+    if a.role == "lead":  # a lead for a plan in its own worktree (#906) | O(start)
+        import fleet_lead  # noqa: E402 | O(1) lazy
+        code, wid = fleet_lead.start_plan_lead(sd, a.plan, brief=a.brief, label=a.label, over=a.over_limit, machine_wait=a.machine_wait)  # O(start)
+        if code == 0 and a.wait:  # O(1)
+            restore()  # the signal handlers end with the start phase | O(1)
+            importlib.import_module("fleet_io").wait(sd, [wid], tmo)  # O(wait)
+        return code  # O(1)
     forced = a.machine == "local"  # forces this machine: placement is not asked | O(1)
     if forced:  # O(1)
         a.machine = None  # O(1)
@@ -1333,6 +1351,9 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
 def main(argv=None):  # O(w) plus command cost
     argv = list(sys.argv[1:] if argv is None else argv)  # O(n)
     plan = _plan_arg(argv)  # O(n)
+    lead = bool(argv) and argv[0] == "spawn" and _role_arg(argv) == "lead"  # --plan names the lead's plan, not this run (#906) | O(n)
+    if lead:  # O(1)
+        plan = None  # O(1)
     why = _plan_problem(plan) if plan is not None else ""  # O(d)
     if why:  # O(1)
         print(f"error: --plan {plan}: {why}; pass the plan file or the run's .superlite folder, or leave --plan out to use the current directory's run", file=sys.stderr)  # O(1)
@@ -1407,7 +1428,7 @@ def main(argv=None):  # O(w) plus command cost
                  ("resume", "continue a stopped one-turn worker's session")):  # O(1)
         sub.add_parser(n, help=h)  # O(1)
     a = p.parse_args(argv)  # O(n)
-    sd = _sd(a)  # O(d)
+    sd = Path(state.resolve(None)).resolve() if a.cmd == "spawn" and a.role == "lead" else _sd(a)  # a lead's spawning fleet is the current directory's run (#906) | O(d)
     if a.cmd == "name":  # O(1) before any herdr call; fleet mode may be off
         print(fs.full_name(sd, a.ident))  # O(1)
         return 0  # O(1)
@@ -1490,6 +1511,13 @@ def main(argv=None):  # O(w) plus command cost
                 shown = "reported"  # O(1)
                 ended.append(wid)  # O(1)
             print(f"{wid} {shown} account={w.get('account')} pane={w.get('pane_id')} task={w.get('task') or '-'}" + (f" role={role}" if role and role != "implementer" else "") + tail + (waits.get(wid, "") if shown == "busy" else ""))  # O(1)
+        import status as _status  # noqa: E402 | O(1) lazy
+        for wid, w in fs.workers(sd).items():  # a lead's own progress line (#906) | O(w)
+            if not a.all and wid not in newly and w.get("state") in ("stopped", "blocked"):  # O(1)
+                continue  # O(1)
+            pl = _status.lead_progress(wid, w)  # O(file)
+            if pl is not None:  # O(1)
+                print(pl)  # O(1)
         for wid in newly:  # O(w)
             print(f"dead: {wid} (its agent is gone); start a fresh one: {respawn_hint(sd, wid, str(sd))}")  # O(w)
         if newly:  # O(1)
@@ -1504,12 +1532,20 @@ def main(argv=None):  # O(w) plus command cost
             print("error: --max-workers and --min-swap-free-mb bound --over-limit; pass --over-limit too", file=sys.stderr)  # O(1)
             return 2  # O(1)
         if not fs.is_on(sd):  # a worktree run keeps its own fleet.json: the main checkout's `fleet on` does not reach it (#355) | O(w)
-            hint = "sl fleet on" + (f" --plan {a.plan}" if a.plan else "")  # O(1) the same --plan resolves the same state dir
+            hint = "sl fleet on" + (f" --plan {a.plan}" if a.plan and a.role != "lead" else "")  # O(1) the same --plan resolves the same state dir
             moved = fs.load(sd).get("moved_to")  # O(w)
             tail = f"this fleet moved to {moved}: pass --plan {moved}" if moved else "a worktree run keeps its own fleet.json"  # O(1)
             print(f"BLOCKED: fleet is off in {sd}; run {hint} first" + (f"; {tail}" if moved else f" ({tail})"))  # O(1)
             return 3  # O(1) before dispatch: no task marked, no pane, no worker id
-        if a.cmd == "spawn" and a.wait and not a.brief:  # before any pane | O(1)
+        is_lead = a.role == "lead"  # O(1)
+        if is_lead:  # O(1)
+            if a.tier or a.machine or a.for_dispatch or a.for_review is not None or a.package or a.note is not None:  # O(1)
+                print("error: --role lead takes no --tier, --machine, --for-dispatch, --for-review, --package or --note", file=sys.stderr)  # O(1)
+                return 2  # O(1)
+            if not a.plan:  # O(1)
+                print("error: --role lead needs --plan P (the lead's plan; with --brief F any path inside its worktree)", file=sys.stderr)  # O(1)
+                return 2  # O(1)
+        if a.cmd == "spawn" and a.wait and not a.brief and not is_lead:  # before any pane | O(1)
             print("error: --wait needs --brief", file=sys.stderr)  # O(1)
             return 2  # O(1)
         if a.timeout is not None and not a.wait:  # O(1)
@@ -1538,8 +1574,8 @@ def main(argv=None):  # O(w) plus command cost
                 print(f"error: {e}", file=sys.stderr)  # O(1)
                 return 2  # O(1) before any pane
         tmo = 540000  # O(1)
-        if a.brief:  # before any pane: a missing brief or a bad timeout spawns nothing | O(1)
-            if not Path(a.brief).is_file():  # O(1)
+        if a.brief or (is_lead and a.wait):  # before any pane: a missing brief or a bad timeout spawns nothing | O(1)
+            if a.brief and not Path(a.brief).is_file():  # O(1)
                 print(f"error: brief not found: {Path(a.brief).resolve()}", file=sys.stderr)  # O(1)
                 return 2  # O(1)
             try:  # O(1)
