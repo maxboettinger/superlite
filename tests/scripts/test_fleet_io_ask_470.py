@@ -137,7 +137,7 @@ def test_concerns_in_wait_line(world, tmp_path, capsys, monkeypatch):
 def test_send_brief_full(world, tmp_path, capsys, monkeypatch):
     setw(world, "W2", role="final-reviewer", one_turn=True)
     monkeypatch.setattr(io.fleet_report, "brief_message", lambda role, path, full=False: f"{role}|{path}|{full}")
-    p = tmp_path / "packet.md"; p.write_text("x\n"); P = str(world.plan)
+    p = world.sd / "packet.md"; p.write_text("x\n"); P = str(world.plan)
     assert io.main(["send", "W2", "--brief", str(p), "--full", "--plan", P]) == 0
     assert prompts(world)[-1][2] == f"final-reviewer|{p.resolve()}|True"
     assert io.main(["send", "W2", "--brief", str(p), "--plan", P]) == 0
