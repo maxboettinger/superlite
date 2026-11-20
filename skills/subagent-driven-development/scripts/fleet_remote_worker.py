@@ -95,7 +95,7 @@ def spawn(sd, role, tier, project, label, cfg=None, task=None, plan=None, brief=
         _drop(label, project, sd, wid)  # O(1)
         _blocked(label, str(e) if not isinstance(e, KeyError) else f"no task {e} in the plan")  # O(1)
     name = fs.agent_name(sd, wid)  # O(1)
-    argv = ["--plugin-dir", plugin] + fleet.lean_argv(launch["argv"])  # O(n)
+    argv = ["--plugin-dir", plugin] + fleet_roles.skills_read(fleet.lean_argv(launch["argv"]), plugin.rstrip("/") + "/skills")  # O(n)
     env = {**fleet.worker_env(sd, wid, launch["agent"], "", {}), **fleet_roles.env(role)}  # O(1)
     env.pop("CLAUDE_CONFIG_DIR", None)  # the host's default account unless `pick` names a folder | O(1)
     if cdir:  # O(1)

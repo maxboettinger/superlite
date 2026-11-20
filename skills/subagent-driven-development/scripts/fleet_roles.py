@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import routing  # noqa: E402 | O(1)
 
 AGENTS = Path(__file__).resolve().parents[3] / "agents"  # O(1)
+SKILLS = Path(__file__).resolve().parents[2]  # O(1) the plugin's skills folder (scripts -> subagent-driven-development -> skills)
 ROLES = ("implementer", "fixer", "package-reviewer", "final-reviewer", "research", "checker", "writer")  # O(1)
 FIXER_AGENTS = {"1": "superlite:fixer-sonnet", "sonnet": "superlite:fixer-sonnet",  # O(1) tiers of fixing.md
                 "2": "superlite:fixer-sonnet-high", "sonnet-high": "superlite:fixer-sonnet-high",
@@ -104,6 +105,32 @@ def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS, ou
     one_turn = role != "implementer" or solo  # O(1)
     return {"role": role, "agent": agent, "model": pin or fm.get("model") or None, "effort": effort, "argv": argv,  # O(1)
             "prime": role == "implementer" and not solo, "pool": role == "implementer" and not solo, "one_turn": one_turn}
+
+
+def skills_read(argv: list[str], skills: str | Path | None = None, project: str | Path | None = None) -> list[str]:  # O(n) a copy of argv with the read-only plugin skills rule in its one --allowedTools list (#905)
+    folder = (SKILLS if skills is None else Path(skills) if not isinstance(skills, str) else skills)  # O(1)
+    base = folder.as_posix() if isinstance(folder, Path) else folder  # O(1)
+    rule = "Read(/" + base.rstrip("/") + "/**)"  # O(1)
+    out = list(argv)  # O(n)
+    if rule in out:  # O(n)
+        return out  # O(1)
+    if project is not None:  # the project is readable already  # O(len)
+        try:  # O(1)
+            Path(folder).resolve().relative_to(Path(project).resolve())  # O(len)
+            return out  # O(1)
+        except ValueError:  # O(1)
+            pass  # O(1)
+    if "--allowedTools" in out:  # the list ends at the next argument that starts with -- | O(n)
+        i = out.index("--allowedTools") + 1  # O(n)
+        while i < len(out) and not out[i].startswith("--"):  # O(n)
+            i += 1  # O(1)
+        out.insert(i, rule)  # O(n)
+    elif "--disallowedTools" in out:  # O(n)
+        i = out.index("--disallowedTools")  # O(n)
+        out[i:i] = ["--allowedTools", rule]  # O(n)
+    else:  # O(1)
+        out += ["--allowedTools", rule]  # O(1)
+    return out  # O(1)
 
 
 def env(role: str) -> dict:  # O(1)

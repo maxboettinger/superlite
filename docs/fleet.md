@@ -30,6 +30,7 @@ Research worker limits: the researcher has Read, Grep, Glob and the read-only Ba
 
 - Every worker gets `--effort` from its agent file (frontmatter effort is ignored in a main-thread session), `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0` and `SUPERLITE_FLEET_ROLE=<role>`.
 - Briefs live in `.superlite/briefs/` (inside the worker's cwd; spawn adds `--add-dir` when the state dir is outside it). A brief is a file the worker reads, never pasted text.
+- Every worker may read the plugin's own skill files: spawn adds `Read(//<plugin root>/skills/**)` to its `--allowedTools` list (fleet_roles.skills_read; a remote worker gets its machine's plugin path), unless that folder sits inside the worker's project. It is read-only: no `--add-dir`, so an edit there still asks and is refused. Any other file outside the project and the run folder (a spec in another repository) still asks: copy it into `.superlite/briefs/` first (#905).
 - A one-turn worker (everything except the implementer) ends with a status line and one JSON block; `fleet wait` stops it once its status is final. Its JSON `tests` field asks for `"<test command and result line, with the tree and result bundle run_tests named>"`.
 - Fleet relies on accounts in auto mode. A non-auto account stops reads outside the cwd at a permission dialog, which `wait` reports as `BLOCKED-UI`.
 
