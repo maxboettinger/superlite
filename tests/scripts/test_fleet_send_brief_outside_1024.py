@@ -94,3 +94,22 @@ def test_docs_name_the_send_check():
     doc = (SCRIPTS.parents[2] / "docs" / "fleet.md").read_text(encoding="utf-8")
     assert "`fleet send Wn --brief F` runs the same check before any prompt" in doc and "#1024" in doc
     assert "(#1024)" in io.__doc__
+
+
+def test_brief_refusal_reads_the_plan_constraints_when_given(world, tmp_path):
+    other = _other(tmp_path)
+    plan = make_plan(world.proj, [{"id": "T1", "owns": "src/a.py"}], header=f"\nGlobal constraints:\n- The spec is {other}/spec.md.\n", name="cplan.md")
+    b = _brief(world, "Answer the question.\n")
+    assert io.brief_refusal(world.sd, b, "research") is None
+    why = io.brief_refusal(world.sd, b, "research", plan=plan)
+    assert why is not None and f"{other}/spec.md; {TAIL}" in why
+    assert io.brief_refusal(world.sd, b, "lead", plan=plan) is None
+    assert b.read_text() == "Answer the question.\n"
+
+
+def test_brief_refusal_ignores_a_broken_plan(world, tmp_path, monkeypatch):
+    b = _brief(world, "Answer the question.\n")
+    def boom(*a, **k):
+        raise ValueError("bad plan")
+    monkeypatch.setattr(fleet, "with_constraints", boom)
+    assert io.brief_refusal(world.sd, b, "research", plan=tmp_path / "p.md") is None

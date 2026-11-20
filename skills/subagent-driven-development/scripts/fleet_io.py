@@ -1128,7 +1128,7 @@ def _fleet():  # the fleet module, loaded on demand | O(1)
     return importlib.import_module("fleet")  # O(1)
 
 
-def brief_refusal(sd, brief, role=""):  # the #1015 error line when a worker of ROLE could not read BRIEF in full (file outside, or a named outside path), else None; a lead is never checked (#1024) | O(file)
+def brief_refusal(sd, brief, role="", plan=None):  # the #1015 error line when a worker of ROLE could not read BRIEF in full (file outside, or a named outside path), else None; a lead is never checked (#1024); PLAN: the plan whose Global constraints spawn adds before it sends (#635, #1027) | O(file)
     if role == "lead":  # O(1)
         return None  # O(1)
     import fleet_roles  # noqa: E402 | O(1)
@@ -1138,7 +1138,13 @@ def brief_refusal(sd, brief, role=""):  # the #1015 error line when a worker of 
     real = Path(brief).resolve()  # O(1)
     if not any(real == b.resolve() or b.resolve() in real.parents for b in (Path(proj), sd, Path(fleet_roles.SKILLS))):  # O(1)
         return f"error: brief {real} is outside the project, the run folder and the plugin skills folder; a worker cannot read it: move it into {sd.resolve()}/briefs/ (#1015)"  # O(1)
-    bad = fl.outside_paths(real.read_text(encoding="utf-8"), proj, sd)  # O(len)
+    text = real.read_text(encoding="utf-8")  # O(file)
+    if plan is not None:  # O(1)
+        try:  # O(1)
+            text = fl.with_constraints(text, plan)  # O(L + len)
+        except Exception:  # noqa: BLE001 | a constraints error leaves the brief text alone | O(1)
+            pass  # O(1)
+    bad = fl.outside_paths(text, proj, sd)  # O(len)
     return fl.outside_error("brief", real, bad, sd.resolve()) if bad else None  # O(1)
 
 
