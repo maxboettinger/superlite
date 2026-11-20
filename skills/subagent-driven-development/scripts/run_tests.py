@@ -123,6 +123,8 @@ LOCK_ENV = "SUPERLITE_FULL_SUITE_LOCK"  # O(1) exported to the test processes: t
 LOCK_POLL = 0.5  # O(1)
 QUEUE_SEEN = 30.0  # seconds between a waiter's refreshes of its queue entry | O(1)
 DEFAULT_LOCK_WAIT = 3600.0  # O(1) seconds a full run waits for the lock; 0 = no limit
+TARGET_COMMAND_CHARS = 200  # O(1) characters of its command a no-result target names
+INCIDENT_COMMAND_CHARS = 300  # O(1) characters of its command a no-result incident keeps
 CURRENT_TASK = None  # --task of this run; write_summary records it | O(1)
 WRITTEN = set()  # resolved summary paths this process wrote; main clears it | O(1)
 XCODE_OUT = re.compile(r"^\W*✘ Test |: error: -\[|^Test case '.*' failed on |\*\* TEST (?:FAILED|SUCCEEDED) \*\*", re.M)  # xcodebuild test output | O(1)
@@ -1074,7 +1076,7 @@ def command_junit(command):  # O(len command) the JUnit path a test command line
 
 
 def no_result_target(command, rc, log, cause=None, kind=None):  # O(1) the feedback target of a no-result stop: the kind (why there was no result) leads
-    return (f"nothing collected: {cause}; " if cause else f"{kind}; " if kind else "") + f"exit {rc} from `{command[:200]}`; log {log or 'not written'}"  # O(1)
+    return (f"nothing collected: {cause}; " if cause else f"{kind}; " if kind else "") + f"exit {rc} from `{command[:TARGET_COMMAND_CHARS]}`; log {log or 'not written'}"  # O(1)
 
 
 def signal_name(rc):  # O(1) the signal a return code means (-9 or 128+9 -> SIGKILL), None for an ordinary exit code
@@ -1098,7 +1100,7 @@ def killed_reason(sig, rc):  # O(1) the summary error of a run whose test proces
 def record_no_result(a, reason, command, rc, lines, tree=None, cause=None, sig=None, kind=None):  # O(L + c) log the stop's trace, print its path, log the incident
     log = no_result_log(a.summary, command, str(tree) if tree else str(Path.cwd()), rc, lines)  # O(L)
     print(f"run_tests: no-result log {log}", file=sys.stderr)  # O(1)
-    extra = {"target": no_result_target(command, rc, log, cause, kind), "command": command[:300], "exit": rc, "log": log}  # O(1)
+    extra = {"target": no_result_target(command, rc, log, cause, kind), "command": command[:INCIDENT_COMMAND_CHARS], "exit": rc, "log": log}  # O(1)
     if tree:  # O(1)
         extra["cwd"] = str(tree)  # O(1)
     if sig:  # O(1)

@@ -13,9 +13,10 @@ import finish  # noqa: E402
 import run_tests  # noqa: E402
 
 
-def swift_zero(tmp_path):
+def swift_zero(tmp_path, pad=0):
     zero = "Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds"
-    cmd = f'{sys.executable} -c "print(\'{zero}\'); print(\'nothing here\')"'
+    tail = f"  # {'x' * pad}" if pad else ""
+    cmd = f'{sys.executable} -c "print(\'{zero}\'); print(\'nothing here\'){tail}"'
     spec = {"language": "swift", "test": cmd, "test_file": cmd}
     (tmp_path / ".superlite").mkdir(exist_ok=True)
     (tmp_path / ".superlite" / "test-cmd.json").write_text(json.dumps(spec), encoding="utf-8")
@@ -39,13 +40,26 @@ def test_zero_count_stop_names_command_exit_and_log(tmp_path):
     assert cp.returncode == 1, cp.both
     (inc,) = incidents(tmp_path)
     assert inc["exit"] == 0
-    assert inc["command"] == cmd
+    assert inc["command"] == cmd[:run_tests.INCIDENT_COMMAND_CHARS]
     log = inc["log"]
     assert os.path.isfile(log) and os.path.dirname(log).endswith(".superlite")
     text = open(log, encoding="utf-8").read()
     assert "command: " in text and "exit: 0" in text and "nothing here" in text
-    assert inc["target"] == f"no test count; exit 0 from `{cmd}`; log {log}"
+    assert inc["target"] == f"no test count; exit 0 from `{cmd[:run_tests.TARGET_COMMAND_CHARS]}`; log {log}"
     assert f"run_tests: no-result log {log}" in cp.err
+
+
+def test_long_command_is_cut_in_target_and_incident(tmp_path):
+    cmd = swift_zero(tmp_path, pad=400)
+    cp = run(RUN_TESTS, "--full", cwd=tmp_path)
+    assert cp.returncode == 1, cp.both
+    assert (run_tests.TARGET_COMMAND_CHARS, run_tests.INCIDENT_COMMAND_CHARS) == (200, 300)
+    assert len(cmd) > 400
+    (inc,) = incidents(tmp_path)
+    assert inc["command"] == cmd[:300]
+    log = inc["log"]
+    assert inc["target"] == f"no test count; exit 0 from `{cmd[:200]}`; log {log}"
+    assert f"command: {cmd}\n" in open(log, encoding="utf-8").read()
 
 
 def test_pytest_no_result_names_the_exit(tmp_path):
