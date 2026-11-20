@@ -297,12 +297,26 @@ def verdict_line(root):  # O(file)
             "A product build, simulator or device run stays on this machine and is no proof unless your task names it.")  # O(1)
 
 
+def preview_line(root):  # O(file)
+    """The `- Previews:` rule for a linked worktree whose workers get the xcode server; "" otherwise or on any error."""
+    try:  # fail open | O(1)
+        import fleet_mcp  # O(1)
+        main = fleet_mcp.worktree_previews(root)  # O(file)
+    except Exception:  # O(1)
+        return ""  # O(1)
+    if not main:  # O(1)
+        return ""  # O(1)
+    return (f"- Previews: RenderPreview cannot show this run's views: it renders the workspace Xcode has open, the main checkout {Path(main).as_posix()}, "
+            "not this linked worktree. Never list or run it as a step and never report a preview as unrendered; "
+            "the checker renders this run's previews into .superlite/render/ (plan section Running-app checks, reach: preview).")  # O(1)
+
+
 def with_root(preamble, plan):  # O(n + d)
     """The preamble with one `Root: <abs run root>` line before its `Rules:` paragraph (the plan's toplevel, POSIX)."""
     import plan_tools as pt  # O(1)
     root = pt.stable_root(str(plan)).resolve().as_posix()  # O(d)
     text = normalize(preamble).replace("\n\nRules:", f"\n\nRoot: {root}\n\nRules:", 1)  # O(n)
-    line = verdict_line(root)  # O(file)
+    line = "\n".join(x for x in (verdict_line(root), preview_line(root)) if x)  # O(file)
     return text.replace(FG + "\n", FG + "\n" + line + "\n", 1) if line else text  # O(n)
 
 

@@ -33,7 +33,7 @@ Seen: superlite 1.5.123, in fleet package reviews ([#600](https://github.com/max
 
 Xcode renders `#Preview` blocks only inside Xcode: the Xcode MCP `RenderPreview` tool needs a running Xcode, and a fleet worker starts with no MCP server except an implementer, fixer or package-reviewer of a project that needs one (the servers its test-cmd.json `"mcp"` list names, else `xcode` for a Swift or Xcode project on macOS). Two reviewers rendered PNGs with throwaway hosted tests instead and left them in the tree.
 
-What to do: a checker renders a view no running state reaches with a throwaway `ImageRenderer` snapshot test, recorded with `sl render_edit start <file>` and undone with `sl render_edit restore` (`agents/checker.md`).
+What to do: a checker renders a view no running state reaches with a throwaway `ImageRenderer` snapshot test, recorded with `sl render_edit start <file>` and undone with `sl render_edit restore` (`agents/checker.md`). RenderPreview renders the workspace Xcode has open, so in a linked worktree it shows the main checkout, never the run's edits (#910); the checker's snapshot render is the path there.
 
 ## macOS: no simulator for a render check
 

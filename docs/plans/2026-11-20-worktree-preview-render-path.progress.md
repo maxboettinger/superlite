@@ -1,0 +1,21 @@
+- start 6f3e4fcbe3dcb4f5de9d5322c3660b5cafdf6ed7
+- unblocked: dispatched T1 at 12:53:30; waiting on fixes: none
+- tests fast passed=0 failed=7 skipped=0 seconds=1.0
+- tests fast passed=34 failed=0 skipped=0 seconds=1.0
+- commit T1 e80484ec51 worktree previews detector
+- tests fast passed=34 failed=0 skipped=0 seconds=0.9
+- tests fast passed=0 failed=5 skipped=0 seconds=0.3
+- tests fast passed=0 failed=11 skipped=0 seconds=0.5
+- tests fast passed=41 failed=0 skipped=0 seconds=3.1
+- tests fast passed=32 failed=0 skipped=0 seconds=1.0
+- commit T2 a0a85b7aad prime previews line
+- commit T3 9633406758 lint PREVIEW warning
+- tests fast passed=0 failed=2 skipped=0 seconds=0.2
+- tests fast passed=61 failed=0 skipped=0 seconds=3.7
+- tests fast passed=294 failed=2 skipped=0 seconds=1.8
+- Ruling: T4 also commits tests/scripts/test_docs_checker_600.py - T4 updates the FLEET_CHECKER and LIMITS_TAIL pins its added #910 sentences change (plan global constraint: a task updates a pin of text it changes; no open batch lists the file)
+- tests fast passed=296 failed=0 skipped=0 seconds=1.6
+- commit T4 73e1df0e57 docs preview path
+- tests fast passed=296 failed=0 skipped=0 seconds=1.9
+- tests full passed=13382 failed=0 skipped=12 seconds=312.6
+- tests fast passed=4 failed=0 skipped=0 seconds=43.9

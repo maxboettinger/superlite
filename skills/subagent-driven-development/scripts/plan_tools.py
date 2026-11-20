@@ -2580,6 +2580,46 @@ def ui_file(path: str) -> bool:  # O(s) | a non-test file that draws a screen (#
     return False  # O(1)
 
 
+PREVIEW_STEP_RE = re.compile(r"\bRenderPreview\b", re.I)  # O(1)
+PREVIEW_RENDER_RE = re.compile(r"\brender(?:s|ed|ing)?\b", re.I)  # O(1)
+PREVIEW_WORD_RE = re.compile(r"\bpreviews?\b|#Preview\b", re.I)  # O(1)
+PREVIEW_POINTER_RE = re.compile(r"\bchecker\b|running-app checks?", re.I)  # O(1)
+PREVIEW_SKIP_RE = re.compile(r"^\s*\*\*(?:Owns|Also-touches):\*\*", re.I)  # O(1)
+
+
+def preview_warnings(plan: Plan, root: Path | None) -> list[str]:  # O(L*s) #910: a task step renders a preview in a linked worktree run
+    if root is None:  # O(1)
+        return []  # O(1)
+    try:  # O(1)
+        if str(SCRIPT_DIR) not in sys.path:  # O(1)
+            sys.path.insert(0, str(SCRIPT_DIR))  # O(1)
+        import fleet_mcp  # lazy | O(1)
+        main = fleet_mcp.worktree_previews(root)  # O(n + f)
+    except Exception:  # noqa: BLE001 | O(1)
+        return []  # O(1)
+    if main is None:  # O(1)
+        return []  # O(1)
+    out: list[str] = []  # O(1)
+    for t in plan.tasks:  # O(n)
+        if t.status == "draft":  # O(k*s)
+            continue  # O(1)
+        for i in range(t.line + 1, t.line + len(t.text.split("\n"))):  # O(block)
+            if i >= len(plan.lines) or plan.fenced[i] or PREVIEW_SKIP_RE.match(plan.lines[i]):  # O(s)
+                continue  # O(1)
+            ln = plan.lines[i]  # O(1)
+            hit = PREVIEW_STEP_RE.search(ln) or (PREVIEW_RENDER_RE.search(ln) and PREVIEW_WORD_RE.search(ln))  # O(s)
+            if not hit or PREVIEW_POINTER_RE.search(ln):  # O(s)
+                continue  # O(1)
+            snip = " ".join(ln.split())  # O(s)
+            snip = snip if len(snip) <= 60 else snip[:57] + "..."  # O(1)
+            out.append(f'WARNING: PREVIEW: {t.id} names a preview render as a step ("{snip}"), but this run is a linked worktree: '  # O(s)
+                       f"RenderPreview renders the workspace Xcode has open, the main checkout {main}; drop the step and list the view "
+                       "under ## Running-app checks as - C<n>: <view>; reach: preview <name>; see: <what must show>, which the checker "
+                       "renders into .superlite/render/")  # O(s)
+            break  # O(1)
+    return out  # O(n)
+
+
 def reach_warnings(plan: Plan, root: Path | None) -> list[str]:  # O(L*s + n*o) #601: a Running-app check names no way in
     if not any(t.status != "draft" and any(ui_file(e) for e in t.owns) for t in plan.tasks):  # O(n*o*s)
         return []  # O(1)
@@ -2895,6 +2935,7 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
     try:  # #601/#596 Running-app checks without a way in, symlinked Owns, Also-touches entries | O(1)
         root_ = stable_root(str(plan.path)) if plan.path else None  # O(d)
         warnings.extend(reach_warnings(plan, root_))  # O(L*s + n*o)
+        warnings.extend(preview_warnings(plan, root_))  # O(L*s)
         warnings.extend(owns_link_warnings(plan, root_))  # O(n*o)
         warnings.extend(pythonpath_warnings(plan, root_))  # O(n*o*d)
         warnings.extend(also_touches_warnings(plan))  # O(n^2*o)
