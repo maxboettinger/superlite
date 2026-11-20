@@ -1,0 +1,129 @@
+{
+ "projection_note": "projection: fixed forecast saved at lint 2026-11-20T12:38:50",
+ "headline": {
+  "wall_min": {
+   "projected": 13.289,
+   "actual": 3.86
+  },
+  "cost_usd_agents": {
+   "projected": 0.503115,
+   "actual": 1.112934
+  },
+  "task_min": {
+   "projected": 33.237,
+   "actual": 6.695
+  },
+  "agents": {
+   "projected": 5,
+   "actual": 11
+  }
+ },
+ "cost_split": {
+  "agents_usd": 1.112934,
+  "rework_usd": 0,
+  "coordinator_usd": null,
+  "coordinator_session_usd": null,
+  "coordinator": null,
+  "total_usd": 1.112934
+ },
+ "concurrency": {
+  "peak": 4,
+  "projected_peak": 4
+ },
+ "critical_path": {
+  "actual": [
+   "T1",
+   "T5"
+  ],
+  "projected": [
+   "T1",
+   "T5"
+  ],
+  "projected_min": 13.289
+ },
+ "model_mix": {
+  "sonnet": {
+   "tasks": 5,
+   "cost_usd": 1.1129339999999999
+  }
+ },
+ "coordinator_cost_by_model": null,
+ "quality": {
+  "tests": {
+   "mode": "full",
+   "passed": 13385,
+   "failed": 0,
+   "skipped": 12,
+   "seconds": 303.5,
+   "recorded": false
+  },
+  "tests_newer": null,
+  "tests_from": "progress.md",
+  "first_time_pass": 5,
+  "first_time_n": 5,
+  "rework_dispatches": 0,
+  "open_incidents": 0
+ },
+ "tasks": [
+  {
+   "task": "T5",
+   "model": "sonnet",
+   "pred_min": 6.138,
+   "actual_min": 0.527,
+   "delta": {
+    "abs": -5.6113,
+    "pct": -91.4
+   },
+   "cost_usd": 0.076004,
+   "first_time_pass": true
+  },
+  {
+   "task": "T2",
+   "model": "sonnet",
+   "pred_min": 6.924,
+   "actual_min": 1.335,
+   "delta": {
+    "abs": -5.589,
+    "pct": -80.7
+   },
+   "cost_usd": 0.301355,
+   "first_time_pass": true
+  },
+  {
+   "task": "T4",
+   "model": "sonnet",
+   "pred_min": 6.731,
+   "actual_min": 1.178,
+   "delta": {
+    "abs": -5.5527,
+    "pct": -82.5
+   },
+   "cost_usd": 0.257748,
+   "first_time_pass": true
+  },
+  {
+   "task": "T3",
+   "model": "sonnet",
+   "pred_min": 6.293,
+   "actual_min": 0.885,
+   "delta": {
+    "abs": -5.408,
+    "pct": -85.9
+   },
+   "cost_usd": 0.166439,
+   "first_time_pass": true
+  },
+  {
+   "task": "T1",
+   "model": "sonnet",
+   "pred_min": 7.151,
+   "actual_min": 2.77,
+   "delta": {
+    "abs": -4.381,
+    "pct": -61.3
+   },
+   "cost_usd": 0.311388,
+   "first_time_pass": true
+  }
+ ]
+}

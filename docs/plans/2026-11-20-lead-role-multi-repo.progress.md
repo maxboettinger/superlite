@@ -1,0 +1,31 @@
+- start 22d7f6a04dec5f33fb9bf6b6cd4be0139ba4a2ff
+- unblocked: dispatched T1 T2 T3 T4 at 12:39:10; waiting on fixes: none
+Ruling: fleet placement local for write workers (because B233-B270 saw remote write workers' fixes never reach the run root) - cost if wrong: slower local build
+- tests fast passed=0 failed=15 skipped=0 seconds=0.5
+- tests fast passed=3 failed=6 skipped=0 seconds=20.3
+- tests fast passed=0 failed=13 skipped=0 seconds=0.6
+- tests fast passed=0 failed=8 skipped=0 seconds=0.3
+- tests fast passed=15 failed=0 skipped=0 seconds=0.4
+- tests fast passed=413 failed=8 skipped=1 seconds=10.6
+- tests fast passed=13 failed=0 skipped=0 seconds=0.5
+- tests fast passed=31 failed=0 skipped=0 seconds=0.7
+- tests fast passed=63 failed=0 skipped=0 seconds=1.0
+- tests fast passed=36 failed=0 skipped=0 seconds=1.7
+- tests fast passed=417 failed=4 skipped=1 seconds=10.6
+- tests fast passed=421 failed=0 skipped=1 seconds=11.1
+- commit T1 fa85c5a683 lead decision status
+- commit T2 4cca39eeee plan lead start
+- commit T3 e1b0893fbe lead progress line
+- commit T4 86149e8953 fleet spawn lead route
+- tests fast passed=1 failed=1 skipped=0 seconds=0.3
+- tests fast passed=105 failed=0 skipped=0 seconds=1.0
+- tests fast passed=39 failed=0 skipped=0 seconds=0.7
+- tests fast passed=31 failed=0 skipped=0 seconds=0.4
+- commit T5 a9fecc8b76 fleet docs
+- tests full passed=13382 failed=2 skipped=12 seconds=311.0
+- tests fast passed=33 failed=0 skipped=0 seconds=2.0
+- Ruling: T1 also commits tests/scripts/test_fleet_restore_577.py - pin follows LEAD_WORK (#906)
+- Ruling: T4 also commits tests/scripts/test_fleet_roles_spawn.py - pin follows the lead route (#906)
+- commit T1 2eed54c584 lead decision status
+- commit T4 c1a989fe63 fleet spawn lead route
+- tests full passed=13385 failed=0 skipped=12 seconds=303.5
