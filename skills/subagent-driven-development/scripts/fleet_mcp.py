@@ -3,7 +3,7 @@
 
 A fleet worker starts lean (`--strict-mcp-config`); implementers, fixers and package reviewers get the servers their project names
 (test-cmd.json "mcp"), else the stack default (an Xcode project gets `xcode`), through a generated `--mcp-config` file.
-Library: servers, write_config, deny, usage_note. Stdlib only.
+Library: servers, write_config, deny, usage_note, worktree_previews. Stdlib only.
 """
 # Complexity notation:
 #   n = server names, f = size of the config files read, k = servers written
@@ -22,7 +22,9 @@ BUILTIN = {"xcode": XCODE}  # O(1)
 XCODE_DENY = ("mcp__xcode__XcodeOpenWorkspace", "mcp__xcode__XcodeCloseWorkspace")  # O(1)
 BAD_MCP = 'test-cmd.json "mcp" must be a list of server names; ignored'  # O(1)
 XCODE_NOTE = ("Xcode MCP tools (mcp__xcode__...) are connected. After each edit of a Swift file run XcodeRefreshCodeIssuesInFile on it "
-              "and fix what it reports. Render every Preview you add or change with RenderPreview before you report DONE. "
+              "and fix what it reports. Render every Preview you add or change with RenderPreview before you report DONE, "
+              "unless your checkout is a linked git worktree (its .git is a file): RenderPreview renders the workspace Xcode has open, "
+              "the main checkout, so there skip it and never report a preview as unrendered. "
               "Look up Apple APIs with DocumentationSearch. Only the coordinator opens or closes an Xcode workspace; "
               "if none is open for this project, say so in your report instead of opening one.")  # O(1)
 
@@ -35,7 +37,7 @@ def _load(path) -> dict:  # a JSON object from path, {} when missing, unreadable
     return d if isinstance(d, dict) else {}  # O(1)
 
 
-def _names(project: Path) -> list:  # server names from test-cmd.json "mcp", else the stack default | O(n + f)
+def _names(project: Path, quiet: bool = False) -> list:  # server names from test-cmd.json "mcp", else the stack default | O(n + f)
     cfg, _, _ = testcmd.config_source(project)  # O(f)
     if isinstance(cfg, dict) and "mcp" in cfg:  # O(1)
         v = cfg["mcp"]  # O(1)
@@ -45,7 +47,8 @@ def _names(project: Path) -> list:  # server names from test-cmd.json "mcp", els
                 if x and x not in out:  # O(n)
                     out.append(x)  # O(1)
             return out  # O(1)
-        print(BAD_MCP, file=sys.stderr)  # O(1)
+        if not quiet:  # O(1)
+            print(BAD_MCP, file=sys.stderr)  # O(1)
     if sys.platform != "darwin":  # O(1)
         return []  # O(1)
     swift = isinstance(cfg, dict) and cfg.get("language") == "swift"  # O(1)
@@ -67,6 +70,17 @@ def _main_key(project: Path):  # the main checkout's path when project is a link
     except (OSError, ValueError, subprocess.SubprocessError):  # O(1)
         return None  # O(1)
     return None if main == project else main  # O(1)
+
+
+def worktree_previews(project) -> Path | None:  # the main checkout when project is a linked worktree whose workers get xcode, else None | O(n + f)
+    try:  # O(1)
+        import state  # O(1)
+        p = Path(project)  # O(1)
+        if not state.linked_worktree(p) or "xcode" not in _names(p, quiet=True):  # O(n + f)
+            return None  # O(1)
+        return _main_key(p)  # O(1)
+    except Exception:  # any failure means no preview rule | O(1)
+        return None  # O(1)
 
 
 def _scope(cj: dict, key) -> dict:  # the mcpServers of one project entry in .claude.json | O(1)

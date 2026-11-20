@@ -13,7 +13,8 @@ FLEET_CHECKER = ("- Checker: `--role checker` (`superlite:checker`; fleet off: A
                  "simulators its `Simulators:` line names. Before-screenshots of the run's start: `\"$SL\"` "
                  "`worktree scratch -- '<build and capture command>'` builds the start SHA in a scratch tree that shares "
                  "`.build/SourcePackages` and is removed afterwards, and the command writes its shots to "
-                 "`$SUPERLITE_RUN_ROOT/.superlite/render/before-<name>.png`; never swap files in the run's worktree for them (#816).")
+                 "`$SUPERLITE_RUN_ROOT/.superlite/render/before-<name>.png`; never swap files in the run's worktree for them (#816). "
+                 "Also, in a linked-worktree run the checks whose reach is a preview or snapshot render run per package (#910), by a checker with only those `C<n>` lines (brief `.superlite/briefs/check-<package>.md`) once that package's tasks are committed, so the first look at new views comes before the final checks.")
 SDD_CHECKER = "A plan's `## Running-app checks` run here once, by a checker (fleet.md); FAIL lines are findings."
 WP_RULE = ("- **Running-app checks.** A check that needs the running artifact (a simulator, the built macOS app, a widget, an app "
            "extension, a browser page) is never a plan task or a task step: an implementer skips it or cannot reach it. List each "
@@ -29,7 +30,8 @@ LIMITS_TAIL = (
     "Xcode renders `#Preview` blocks only inside Xcode: the Xcode MCP `RenderPreview` tool needs a running Xcode, and "
     "a fleet worker starts with no MCP server except an implementer, fixer or package-reviewer of a project that needs one (the servers its test-cmd.json `\"mcp\"` list names, else `xcode` for a Swift or Xcode project on macOS). Two reviewers rendered PNGs with throwaway hosted tests instead and left them in the tree.\n\n"
     "What to do: a checker renders a view no running state reaches with a throwaway `ImageRenderer` snapshot test, recorded "
-    "with `sl render_edit start <file>` and undone with `sl render_edit restore` (`agents/checker.md`).\n\n"
+    "with `sl render_edit start <file>` and undone with `sl render_edit restore` (`agents/checker.md`). "
+    "RenderPreview renders the workspace Xcode has open, so in a linked worktree it shows the main checkout, never the run's edits (#910); the checker's snapshot render is the path there.\n\n"
     "## macOS: no simulator for a render check\n\n"
     "Seen: superlite 1.5.109 ([#600](https://github.com/maxboettinger/superlite/issues/600)). With no macOS render check, "
     "every macOS UI batch ended with a live check left for the user; 36 piled up after about 60 batches.\n\n"
