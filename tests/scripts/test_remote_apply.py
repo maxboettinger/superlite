@@ -63,6 +63,65 @@ def test_snapshot_excludes_superlite(repo):
     assert git(repo, "rev-parse", "refs/superlite/remote/p/W2/stop") == sha
 
 
+def _ignore(repo, *lines):
+    ex = repo / git(repo, "rev-parse", "--git-path", "info/exclude")
+    ex.parent.mkdir(parents=True, exist_ok=True)
+    with open(ex, "a") as f:
+        f.write("".join(line + "\n" for line in lines))
+
+
+def _paths(repo, sha):
+    return git(repo, "ls-tree", "-r", "--name-only", sha).splitlines()
+
+
+def test_snapshot_superlite_ignored(repo):
+    _ignore(repo, ".superlite/", "*.log")
+    put(repo, ".superlite/x", "no\n"); put(repo, "build.log", "log\n")
+    put(repo, "a.py", "edited\n"); put(repo, "b.py", "new\n"); (repo / "c.py").unlink()
+    before = git(repo, "status", "--porcelain")
+    ref = "refs/superlite/remote/p/W4/stop"
+    sha = ra.snapshot(str(repo), ref)
+    assert len(sha) == 40 and sha == git(repo, "rev-parse", ref)
+    assert git(repo, "rev-parse", sha + "^") == git(repo, "rev-parse", "HEAD")
+    assert show(repo, sha, "a.py") == "edited" and show(repo, sha, "b.py") == "new"
+    names = _paths(repo, sha)
+    assert not any(n.startswith(".superlite") for n in names)
+    assert "build.log" not in names and "c.py" not in names
+    assert git(repo, "status", "--porcelain") == before
+
+
+def test_snapshot_ignored_superlite_keeps_tracked_head(repo):
+    put(repo, ".superlite/t", "head\n")
+    git(repo, "add", "-f", ".superlite/t"); git(repo, "commit", "-qm", "t")
+    _ignore(repo, ".superlite/")
+    put(repo, ".superlite/t", "edited\n"); put(repo, ".superlite/u", "new\n")
+    put(repo, "a.py", "edited\n")
+    sha = ra.snapshot(str(repo), "refs/superlite/remote/p/W4/stop")
+    assert show(repo, sha, ".superlite/t") == "head"
+    assert ".superlite/u" not in _paths(repo, sha)
+    assert show(repo, sha, "a.py") == "edited"
+
+
+def test_snapshot_from_subfolder_takes_whole_tree(repo):
+    put(repo, ".superlite/x", "no\n")
+    put(repo, "a.py", "edited\n"); put(repo, "src/b.py", "edited\n")
+    sha = ra.snapshot(str(repo / "src"), "refs/superlite/remote/p/W4/stop")
+    assert show(repo, sha, "a.py") == "edited" and show(repo, sha, "src/b.py") == "edited"
+    assert not any(n.startswith(".superlite") for n in _paths(repo, sha))
+
+
+def test_main_snapshot_superlite_ignored(repo, capsys, monkeypatch):
+    _ignore(repo, ".superlite/")
+    put(repo, ".superlite/collect-W4-1.out.tmp", "exit\n")
+    put(repo, "a.py", "edited\n")
+    monkeypatch.chdir(repo)
+    assert ra.main(["snapshot", "--ref", "refs/superlite/remote/p/W4/stop"]) == 0
+    cap = capsys.readouterr()
+    sha = cap.out.strip()
+    assert len(sha) == 40 and show(repo, sha, "a.py") == "edited"
+    assert cap.err == ""
+
+
 def _stop(repo):
     start = git(repo, "rev-parse", "HEAD")
     put(repo, "src/a.py", "stop-a\n"); put(repo, "src/b.py", "stop-b\n"); put(repo, "docs/n.md", "stop-n\n")

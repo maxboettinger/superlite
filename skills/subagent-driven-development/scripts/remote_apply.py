@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Git plumbing for remote write workers: a start commit for a worker's tree, a snapshot of its result, and the three-state apply of that result into the local tree.
 
-`start_commit` records base + the listed files as on disk + extra blobs under a ref; `snapshot` records a tree's working state (never `.superlite/`)
+`start_commit` records base + the listed files as on disk + extra blobs under a ref; `snapshot` records the whole tree's working state (run at the tree's top; never `.superlite/`, which git's ignore rules keep out when it is ignored and an exclude pathspec keeps out otherwise)
 as a commit on HEAD; `apply` copies the paths stop changed over start into the local tree when the local file still equals start (or already equals stop),
 and writes nothing when any path conflicts. Every git call uses a temporary index and `timeout=30`; a failure is `RuntimeError(one line)`.
 CLI: `remote_apply.py snapshot --ref R` prints the sha (exit 0) or one stderr line (exit 1).
@@ -71,13 +71,18 @@ def start_commit(root, base, files, blobs, ref):  # O(f + b)
 
 
 def snapshot(tree, ref):  # O(f + b)
+    top, head = _out(tree, ["rev-parse", "--show-toplevel", "HEAD"]).splitlines()  # O(1)
     with tempfile.TemporaryDirectory() as td:  # O(1)
         idx = str(Path(td) / "index")  # O(1)
         env = {"GIT_INDEX_FILE": idx}  # O(1)
-        head = _out(tree, ["rev-parse", "HEAD"])  # O(1)
-        _git(tree, ["read-tree", head], env_extra=env)  # O(tree)
-        _git(tree, ["add", "-A", "--", ".", ":(exclude).superlite"], env_extra=env)  # O(f + b)
-        return _commit(tree, idx, head, ref, "superlite remote stop")  # O(f)
+        ignored = _git(top, ["check-ignore", "--no-index", "-q", "--", ".superlite"], env_extra=env, check=False).returncode == 0  # O(1)
+        _git(top, ["read-tree", head], env_extra=env)  # O(tree)
+        if ignored:  # O(1)
+            _git(top, ["add", "-A", "--", "."], env_extra=env)  # O(f + b)
+            _git(top, ["reset", "-q", head, "--", ".superlite"], env_extra=env)  # O(1)
+        else:  # O(1)
+            _git(top, ["add", "-A", "--", ".", ":(exclude).superlite"], env_extra=env)  # O(f + b)
+        return _commit(top, idx, head, ref, "superlite remote stop")  # O(f)
 
 
 def _blob(root, rev, path):  # O(b) | content of path at rev, None if absent
