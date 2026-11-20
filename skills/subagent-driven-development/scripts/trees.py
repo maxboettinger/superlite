@@ -37,6 +37,7 @@ import time  # O(1)
 import shutil  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
+import threading  # O(1)
 from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(path list)
@@ -57,6 +58,7 @@ def git(root, *args):  # O(output) + process spawn
 
 
 _MOVED = {}  # O(1) (resolved root, base, newest, head) -> moved_base result, per process
+_MOVED_LOCK = threading.Lock()  # O(1) guards the check-and-fill of _MOVED
 _WARNED = set()  # O(1) memo keys whose fallback line was printed
 
 
@@ -82,7 +84,7 @@ def _tree_changes(root, a, b):  # {path: (mode, sha)} of a..b; mode "0" marks a 
 
 def _build_moved(root, base, newest, head):  # the moved-base dict for one memo key | O(changes) + spawns
     info = {"base": base, "head": head, "checkpoint": newest, "sha": "", "files": [], "overlap": [], "error": ""}  # O(1)
-    idx = Path(root) / ".superlite" / "trees" / f"base-{os.getpid()}.index"  # O(1)
+    idx = Path(root) / ".superlite" / "trees" / f"base-{os.getpid()}-{threading.get_ident()}.index"  # O(1)
     try:  # O(1)
         changes = _tree_changes(root, base, newest)  # O(changes)
         info["files"] = sorted(changes)  # O(c log c)
@@ -129,9 +131,10 @@ def moved_base(root):  # None, or the base rebuilt on a HEAD that moved off chec
     if not head or head == base:  # O(1)
         return None  # O(1)
     key = (str(root), base, newest, head)  # O(1)
-    if key not in _MOVED:  # O(1)
-        _MOVED[key] = _build_moved(root, base, newest, head)  # O(changes)
-    return dict(_MOVED[key])  # O(1)
+    with _MOVED_LOCK:  # O(1) one thread builds a key, the others wait for it
+        if key not in _MOVED:  # O(1)
+            _MOVED[key] = _build_moved(root, base, newest, head)  # O(changes)
+        return dict(_MOVED[key])  # O(1)
 
 
 def base_commit(root):  # O(checkpoints) + spawns when HEAD moved off the base, or no checkpoint
@@ -802,6 +805,9 @@ def refresh(root, onto):  # move the run onto REV when safe, then report the tre
         rc, err = _try(root, ["merge", "--ff-only", rev])  # O(changed files)
         kind = "fast-forward"  # O(1)
     else:  # O(1)
+        if _try(root, ["diff", "--cached", "--quiet"])[0]:  # O(files) staged changes would come back unstaged
+            print("trees refresh: refused, staged changes would come back unstaged after the rebase: commit or unstage them, then rerun", file=sys.stderr)  # O(1)
+            return 2  # O(1)
         n = git(root, "rev-list", "--count", f"{rev}..{head}").strip()  # O(history)
         rc, err = _try(root, ["rebase", "--autostash", rev])  # O(commits)
         kind = "rebase"  # O(1)

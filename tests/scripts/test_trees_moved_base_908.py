@@ -229,3 +229,14 @@ def test_checkpoint_ancestor_of_head(repo):
     assert trees.base_commit(repo) == head(repo)
     tree = trees.prepare(repo, "T2", ["src/b.py"])
     assert (tree / "src" / "a.py").read_text() == "A = 3\n"
+
+
+def test_moved_base_threads(repo):
+    from concurrent.futures import ThreadPoolExecutor
+    checkpoint(repo)
+    move(repo)
+    trees._MOVED.clear()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        shas = list(pool.map(lambda _: trees.base_commit(repo), range(8)))
+    assert len(set(shas)) == 1
+    assert show(repo, shas[0], "src/a.py") == "A = 2\n"
