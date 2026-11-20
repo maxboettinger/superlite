@@ -12,7 +12,7 @@ Start a superlite session. Arguments: $ARGUMENTS
    If AskUserQuestion is unavailable (tool error, headless, or the user said they are away), do not ask: mode Regular unless the arguments name one, orchestrator AI (`sl orchestrator set ai`, one `Ruling:` line), then step 4 at once, loading `superlite:brainstorming`. A new app or project is architectural, never trivial: no direct build.
    A project with a branch rule: `sl worktree ensure <topic> --branch <name>` (for example `feat/KEY-1-slug`); `--dir <name>` names the folder.
 3. If there is no request text yet, ask for it in one line.
-4. Load the skill for the mode and follow it:
+4. Load the skill for the mode before you read code or ask anything, and follow it. Its one question batch holds at most 4 questions, with or without a question tool: in plain text at most 4 numbered questions in one message and nothing asked after them; rule the rest as `Ruling:` lines or ask them after the reply.
    - Regular: `superlite:using-superlite` sizing, then `superlite:brainstorming`.
    - MVP: same as `/superlite:mvp`.
    - Feature: same as `/superlite:feature`.
