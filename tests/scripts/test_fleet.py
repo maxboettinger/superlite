@@ -70,6 +70,7 @@ class FakeHerdr:
 def world(tmp_path, monkeypatch):
     proj = tmp_path / "proj"; (proj / ".superlite").mkdir(parents=True); sd = proj / ".superlite"
     monkeypatch.delenv("SUPERLITE_STATE_DIR", raising=False)
+    monkeypatch.delenv("GH_CONFIG_DIR", raising=False)
     (sd / "prime.md").write_text("rules\nReply READY\n"); (sd / "prime-haiku.md").write_text("mini\nReply READY\n")
     plan = make_plan(proj, [{"id": "T1", "owns": "src/a.py"}])
     fh = FakeHerdr()

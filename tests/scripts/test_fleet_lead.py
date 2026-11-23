@@ -137,10 +137,56 @@ def test_unsealed_lead_loads_the_installed_plugin(world, tmp_path, monkeypatch):
 
 def test_sealed_lead_without_a_plugin_manifest_loads_the_installed_plugin(world, tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
-    monkeypatch.setattr(fl, "PLUGIN_ROOT", tmp_path / "bare")
+    monkeypatch.setattr(fleet, "PLUGIN_ROOT", tmp_path / "bare")
     wt, gh = tmp_path / "wt", tmp_path / "gh"
     wt.mkdir(); gh.mkdir()
     fleet.main(["on", "--accounts", "claude1,claude3"])
     r = fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u", "GH_CONFIG_DIR": str(gh)}, rc=fl.run_config.resolve())
     argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent" and c[1] == r["name"])
+    assert "--settings" in argv and "--plugin-dir" not in argv
+
+
+# (#1049)
+def test_gh_seal_lives_in_fleet_beside_pass_through():
+    assert fl.gh_seal_env is fleet.gh_seal_env and fl.write_gh_seal is fleet.write_gh_seal and fl.plugin_dir is fleet.plugin_dir
+    assert (fl.GH_TOKENS, fl.GH_SEAL_FILE, fl.PLUGIN_ROOT) == (fleet.GH_TOKENS, fleet.GH_SEAL_FILE, fleet.PLUGIN_ROOT)
+    assert fleet.gh_seal_env({"GH_CONFIG_DIR": "/e", "GH_TOKEN": "t"}, gh_dir="/r/gh") == {
+        "GITHUB_TOKEN": "", "GH_ENTERPRISE_TOKEN": "", "GITHUB_ENTERPRISE_TOKEN": "", "GH_CONFIG_DIR": "/r/gh"}
+    assert fleet.gh_seal_env({"HOME": "/u"}, gh_dir="/r/gh") == {}
+
+
+def test_sealed_lead_worker_starts_with_the_gh_seal_settings(world, tmp_path):
+    gh = tmp_path / "gh"; gh.mkdir()
+    fleet.main(["on", "--accounts", "claude1,claude3"])
+    r = fleet.spawn(world.sd, world.plan, "sonnet", world.proj, env={"HOME": "/u", "GH_CONFIG_DIR": str(gh), **SEALED})
+    argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent")
+    f = world.sd.resolve() / fleet.GH_SEAL_FILE
+    assert argv[argv.index("--settings") + 1] == str(f)
+    assert json.loads(f.read_text(encoding="utf-8")) == {"env": {**SEALED, "GH_CONFIG_DIR": str(gh)}}
+    assert not list(world.sd.glob(fleet.GH_SEAL_FILE + ".*"))
+    assert json.loads((world.sd / "fleet.json").read_text())["workers"][r["id"]]["launch"]["argv"] == argv
+
+
+def test_sealed_lead_worker_loads_the_plugin_of_its_scripts_checkout(world, tmp_path):
+    gh = tmp_path / "gh"; gh.mkdir()
+    fleet.main(["on", "--accounts", "claude1,claude3"])
+    fleet.spawn(world.sd, world.plan, "sonnet", world.proj, env={"HOME": "/u", "GH_CONFIG_DIR": str(gh)})
+    argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent")
+    assert argv.count("--plugin-dir") == 1 and argv[argv.index("--plugin-dir") + 1] == str(fleet.PLUGIN_ROOT)
+    assert argv.index("--plugin-dir") == argv.index("--settings") + 2
+
+
+def test_unsealed_worker_starts_without_settings_or_plugin_dir(world):
+    fleet.main(["on", "--accounts", "claude1,claude3"])
+    fleet.spawn(world.sd, world.plan, "sonnet", world.proj, env={"HOME": "/u", "GH_TOKEN": "t"})
+    argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent")
+    assert "--settings" not in argv and "--plugin-dir" not in argv and not (world.sd / fleet.GH_SEAL_FILE).exists()
+
+
+def test_sealed_worker_without_a_plugin_manifest_loads_the_installed_plugin(world, tmp_path, monkeypatch):
+    monkeypatch.setattr(fleet, "PLUGIN_ROOT", tmp_path / "bare")
+    gh = tmp_path / "gh"; gh.mkdir()
+    fleet.main(["on", "--accounts", "claude1,claude3"])
+    fleet.spawn(world.sd, world.plan, "sonnet", world.proj, env={"HOME": "/u", "GH_CONFIG_DIR": str(gh)})
+    argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent")
     assert "--settings" in argv and "--plugin-dir" not in argv

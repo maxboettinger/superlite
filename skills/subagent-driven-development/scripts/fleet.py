@@ -43,6 +43,7 @@ While the budget is paused (spend above the cap), every `spawn` that names a `--
 `sl fleet restore` re-launches every worker and lead of the run after a Herdr restart, each resuming its own Claude session; `status` names it after a worker found dead (#577).
 `spawn --for-review|--package ... --note FILE` appends FILE to the generated review brief under `## Coordinator notes` (#604).
 `spawn --role writer --brief F` needs an `Output: <file>` line in F: the writer may write only that file, inside the project or the run folder (#604).
+A worker whose spawner pins GH_CONFIG_DIR (a sealed golden lead) starts with the lead's `--settings <state>/gh-seal-settings.json` and `--plugin-dir <this checkout>` (#1049).
 `spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F lies outside the project, the run folder and the plugin skills folder, or when F (with the plan's Global constraints) or a review spawn's `--note` names an existing path outside the project, the run folder and the plugin skills folder outside fenced code blocks; system folders such as /dev and /usr do not count (#1015).
 """
 
@@ -76,6 +77,31 @@ TRUST = "Yes, I trust this folder"  # O(1)
 SHELL_PAUSE_S = 3.0  # O(1)
 SHELL_MSG = "not an available shell"  # O(1)
 PASS_THROUGH = ("CLAUDE_CODE_PLUGIN_CACHE_DIR", "GH_CONFIG_DIR")  # O(1) GH_CONFIG_DIR: a sealed golden run's empty gh folder reaches the lead and its workers
+GH_TOKENS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")  # O(1)
+GH_SEAL_FILE = "gh-seal-settings.json"  # O(1)
+PLUGIN_ROOT = Path(__file__).resolve().parents[3]  # O(1) the checkout these scripts belong to
+
+
+def gh_seal_env(base_env, gh_dir=None):  # O(1) the settings env of a sealed spawner: {} unless it pins GH_CONFIG_DIR; a token it carries is left out
+    if not base_env.get("GH_CONFIG_DIR"):  # O(1)
+        return {}  # O(1)
+    return {**{k: "" for k in GH_TOKENS if not base_env.get(k)}, "GH_CONFIG_DIR": gh_dir or base_env["GH_CONFIG_DIR"]}  # O(1)
+
+
+def write_gh_seal(sd, base_env):  # O(1) writes the seal settings file through a temp file; None when the spawner is not sealed
+    env = gh_seal_env(base_env)  # O(1)
+    if not env:  # O(1)
+        return None  # O(1)
+    p = Path(sd) / GH_SEAL_FILE  # O(1)
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")  # O(1)
+    tmp.write_text(json.dumps({"env": env}, indent=2) + "\n", encoding="utf-8")  # O(1)
+    os.replace(tmp, p)  # O(1) a lead and its workers share the file: never torn
+    return p  # O(1)
+
+
+def plugin_dir(root=None):  # O(1) the plugin checkout a sealed spawner loads: root or PLUGIN_ROOT when it holds .claude-plugin/plugin.json, else None
+    p = Path(root) if root is not None else PLUGIN_ROOT  # O(1)
+    return p if (p / ".claude-plugin" / "plugin.json").is_file() else None  # O(1)
 SLOW_MSG = "timed out waiting for app response"  # O(1)
 STALL_WAIT_MS = 30000  # O(1) herdr's own prompt window is a fixed 5 s; a slow start gets this long to show working or blocked
 LEAN_FLAGS = ("--strict-mcp-config", "--no-chrome", "--disable-slash-commands")  # O(1)
@@ -564,6 +590,11 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=Fa
         print(f"{wid} mcp: none: {e}", file=sys.stderr)  # O(1)
     argv = lean_argv(with_model(launch["argv"], pin) if pin else launch["argv"], path, fleet_mcp.deny(names) if names else ())  # O(n)
     argv = fleet_roles.skills_read(argv, project=project)  # O(n) the plugin skill files are readable (#905)
+    seal = write_gh_seal(sd.resolve(), base)  # O(1)
+    if seal is not None:  # O(1)
+        argv += ["--settings", str(seal)]  # O(1)
+        if plugin_dir() is not None:  # O(1)
+            argv += ["--plugin-dir", str(plugin_dir())]  # O(1)
     note = fleet_mcp.usage_note(names, project) if names else ""  # O(1)
     if note:  # O(1)
         argv += ["--append-system-prompt", note]  # O(1)

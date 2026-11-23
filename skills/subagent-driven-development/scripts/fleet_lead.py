@@ -22,29 +22,12 @@ NoShell = fleet.NoShell  # moved to fleet.py: workers retry in a fresh pane too 
 
 
 DEFAULT_WINDOW = 400000  # O(1) the window /superlite:setup offers
-GH_TOKENS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")  # O(1)
-GH_SEAL_FILE = "gh-seal-settings.json"  # O(1)
-PLUGIN_ROOT = Path(__file__).resolve().parents[3]  # O(1) the checkout these scripts belong to
-
-
-def gh_seal_env(base_env):  # O(1) the settings env of a sealed lead: {} unless the spawner pins GH_CONFIG_DIR; a token it carries is left out
-    if not base_env.get("GH_CONFIG_DIR"):  # O(1)
-        return {}  # O(1)
-    return {**{k: "" for k in GH_TOKENS if not base_env.get(k)}, "GH_CONFIG_DIR": base_env["GH_CONFIG_DIR"]}  # O(1)
-
-
-def write_gh_seal(lead_sd, base_env):  # O(1) writes the lead's seal settings file; None when the lead is not sealed
-    env = gh_seal_env(base_env)  # O(1)
-    if not env:  # O(1)
-        return None  # O(1)
-    p = Path(lead_sd) / GH_SEAL_FILE  # O(1)
-    p.write_text(json.dumps({"env": env}, indent=2) + "\n", encoding="utf-8")  # O(1)
-    return p  # O(1)
-
-
-def plugin_dir(root=None):  # O(1) the plugin checkout a sealed lead loads: root or PLUGIN_ROOT when it holds .claude-plugin/plugin.json, else None
-    p = Path(root) if root is not None else PLUGIN_ROOT  # O(1)
-    return p if (p / ".claude-plugin" / "plugin.json").is_file() else None  # O(1)
+GH_TOKENS = fleet.GH_TOKENS  # O(1) the seal helpers live in fleet.py beside PASS_THROUGH (#1049)
+GH_SEAL_FILE = fleet.GH_SEAL_FILE  # O(1)
+PLUGIN_ROOT = fleet.PLUGIN_ROOT  # O(1)
+gh_seal_env = fleet.gh_seal_env  # O(1)
+write_gh_seal = fleet.write_gh_seal  # O(1)
+plugin_dir = fleet.plugin_dir  # O(1)
 
 
 def _pos(v):  # O(1)
