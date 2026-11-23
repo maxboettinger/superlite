@@ -132,6 +132,8 @@ A lead is a fleet worker of main's run with role `lead`, started in its batch wo
 
 Taking a run over: a session that continues another session's run (a resumed lead, or a coordinator whose session ran out of usage) runs `sl orchestrator takeover --plan .superlite` first (a plan path works too). `sl orchestrator end`, `set`, `approve` and `bind` refuse a run folder another live session owns and name that command, and `sl finish` prints it as a hint; `takeover` binds the run to this session and prints `orchestrator: run <dir> taken over from session <id>; this session owns it now`.
 
+A run whose owner session still runs (its Claude pid, line 2 of the session binding, answers) is never taken over by a second session (#1047): `takeover` exits 2 and names the pid, the `set`, `bind`, `approve` and `end` refusals and `pool prune` say the owner still runs, and a batch lead that meets one ends with `Status: BLOCKED second lead`; `sl backlog start` starts no lead for a batch whose worktree run has such an owner. `takeover --force` takes a live run over anyway.
+
 Ship lock: leads ship one at a time. `sl backlog ship B lock` takes the machine-wide ship lock `~/.superlite/locks/ship-<repo>.lock` (`{batch, lead, agent, repo, time}`); `merge` or `release` frees it. A lock is stale when its lead's agent is no longer live; the next `lock` takes it over. After `merge` the lead's PR is merged and `sl backlog ship` fast-forwards the main checkout, so the next lead builds on it.
 
 Main's bulk close of incidents uses `sl incident resolve --kind K --reason R`, which closes every open incident of that kind.
