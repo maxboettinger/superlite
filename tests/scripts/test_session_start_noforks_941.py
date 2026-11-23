@@ -8,8 +8,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 BASH = shutil.which("bash")
 INPUT = '{"session_id":"s941","source":"startup"}'
-DROP = ("SUPERLITE_FLEET_WORKER", "SUPERLITE_FLEET_ROLE", "SUPERLITE_FLEET_AGENT", "CURSOR_PLUGIN_ROOT",
-        "COPILOT_CLI", "MUSE_PLUGIN_ROOT", "CLAUDE_ENV_FILE", "SUPERLITE_HOME", "CLAUDE_PID")
+DROP = ("SUPERLITE_FLEET_WORKER", "SUPERLITE_FLEET_ROLE", "SUPERLITE_FLEET_AGENT",
+        "CLAUDE_ENV_FILE", "SUPERLITE_HOME", "CLAUDE_PID")
 
 
 def _env(tmp_path, path=None, **extra):

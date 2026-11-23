@@ -1,0 +1,13 @@
+- start 828ebb61c894b1c95554198268b723aa7a56b10a
+- unblocked: dispatched T1 T2 at 19:27:24; waiting on fixes: none
+- tests fast passed=2 failed=9 skipped=0 seconds=0.8
+- tests fast passed=0 failed=6 skipped=0 seconds=0.4
+- tests fast passed=25 failed=0 skipped=0 seconds=3.4
+- tests fast passed=916 failed=0 skipped=0 seconds=113.2
+- tests fast passed=842 failed=0 skipped=0 seconds=108.5
+- commit T1 4319c450f2 hooks and harness detection
+- commit T2 5d9ab31c86 manifests references and docs
+- tests fast passed=941 failed=0 skipped=0 seconds=119.6
+- tests fast passed=4 failed=0 skipped=0 seconds=23.5
+- tests fast passed=3 failed=0 skipped=0 seconds=163.5
+- tests full passed=13636 failed=0 skipped=12 seconds=394.4

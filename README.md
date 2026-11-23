@@ -81,7 +81,7 @@ You need Claude Code, git, Python 3.10 or newer (the tools are Python; the proje
 
 Or load a local checkout for one session: `claude --plugin-dir <path-to-superlite>`
 
-Open a fresh session and send `Let's make a react todo list`. A working install starts `brainstorming` before any code is written. Installs for Pi, Gemini CLI and the other harnesses are in [Installation](#installation) below.
+Open a fresh session and send `Let's make a react todo list`. A working install starts `brainstorming` before any code is written. The Pi install is in [Installation](#installation) below.
 
 ## Use it
 
@@ -101,7 +101,7 @@ flowchart LR
 
 ## More
 
-How it works, in [docs/](docs/): [how a run works](docs/how-a-run-works.md) · [skills and agents](docs/skills-and-agents.md) · [hooks](docs/hooks.md) · [testing](docs/testing.md) · [tools](docs/tools.md) · [config](docs/config.md) · [language support](docs/language.md) · [how the rules are enforced](docs/gates.md) · [an example review plan](docs/example-review-plan.md). Installation for other harnesses, the benchmark harness and the task list follow below.
+How it works, in [docs/](docs/): [how a run works](docs/how-a-run-works.md) · [skills and agents](docs/skills-and-agents.md) · [hooks](docs/hooks.md) · [testing](docs/testing.md) · [tools](docs/tools.md) · [config](docs/config.md) · [language support](docs/language.md) · [how the rules are enforced](docs/gates.md) · [an example review plan](docs/example-review-plan.md). Installation for Pi, the benchmark harness and the task list follow below.
 
 ---
 
@@ -116,9 +116,9 @@ How it works, in [docs/](docs/): [how a run works](docs/how-a-run-works.md) · [
 
 ## Installation
 
-Installation differs by harness. If you use more than one, install superlite separately for each one. Every integration loads `using-superlite` at session start; to verify, open a fresh session and send `Let's make a react todo list`. A working install triggers `brainstorming` before any code is written.
+superlite runs on Claude Code and Pi. If you use both, install superlite separately for each one. Every integration loads `using-superlite` at session start; to verify, open a fresh session and send `Let's make a react todo list`. A working install triggers `brainstorming` before any code is written.
 
-Each harness has a tool-mapping file in `skills/using-superlite/references/` (Antigravity, Codex, Gemini, Hermes, Muse, Pi, plus Claude Code notes). Where a harness has no plugin agents, each agent in `agents/` (`implementer`, `implementer-haiku`, `package-reviewer`, `final-reviewer` and the three fixers) runs as that harness's generic subagent with `agents/<name>.md` as its instructions.
+Each harness has a tool-mapping file in `skills/using-superlite/references/` (Pi, plus Claude Code notes). Where a harness has no plugin agents, each agent in `agents/` (`implementer`, `implementer-haiku`, `package-reviewer`, `final-reviewer` and the three fixers) runs as that harness's generic subagent with `agents/<name>.md` as its instructions.
 
 ### Claude Code
 
@@ -136,80 +136,6 @@ Or install from GitHub:
     /plugin marketplace add maxboettinger/superlite
     /plugin install superlite@superlite-dev
 
-### Antigravity
-
-Install superlite as a plugin from this repository:
-
-```bash
-agy plugin install https://github.com/iha2/superlite
-```
-
-Antigravity has no session-start hook event, so superlite is not injected at session start there (#942). Reinstall with the same command to update.
-
-### Factory Droid
-
-- Register the marketplace:
-
-  ```bash
-  droid plugin marketplace add https://github.com/iha2/superlite
-  ```
-
-- Install the plugin:
-
-  ```bash
-  droid plugin install superlite@superlite-dev
-  ```
-
-### Gemini CLI
-
-- Install the extension:
-
-  ```bash
-  gemini extensions install https://github.com/iha2/superlite
-  ```
-
-- Update later:
-
-  ```bash
-  gemini extensions update superlite
-  ```
-
-### GitHub Copilot CLI
-
-- Register the marketplace:
-
-  ```bash
-  copilot plugin marketplace add iha2/superlite
-  ```
-
-- Install the plugin:
-
-  ```bash
-  copilot plugin install superlite@superlite-dev
-  ```
-
-### Grok Build CLI
-
-> Unverified: superpowers ships on Grok through the official xAI marketplace, which superlite isn't listed in. The commands below haven't been tested yet.
-
-- Register this repository as a marketplace:
-
-  ```bash
-  grok plugin marketplace add iha2/superlite
-  ```
-
-- Install the plugin:
-
-  ```bash
-  grok plugin install superlite@superlite-dev --trust
-  ```
-
-- Or open the marketplace in the TUI, search for Superlite, and install it:
-
-  ```text
-  /marketplace
-  ```
-
 ### Pi
 
 Install superlite as a Pi package from this repository:
@@ -225,49 +151,6 @@ pi -e /path/to/superlite
 ```
 
 The Pi package loads the superlite skills and a small extension that injects the `using-superlite` bootstrap into every request; the first message stays the same, so the prompt cache holds. Subagent and task-list tools remain optional Pi companion packages.
-
-### Qwen Code
-
-Qwen Code installs plugins from Claude Code marketplaces directly.
-
-- Install the plugin from this repository:
-
-  ```bash
-  qwen extensions install iha2/superlite
-  ```
-
-- Update later:
-
-  ```bash
-  qwen extensions update superlite
-  ```
-
-### Muse
-
-Superlite is a native Muse plugin. The `using-superlite` bootstrap is injected via the native `SessionStart` hook, with no per-session opt-in.
-
-- Install from a local checkout:
-
-  ```bash
-  muse plugins install ./
-  muse plugins approve superlite
-  ```
-
-  Or clone and install:
-
-  ```bash
-  git clone https://github.com/iha2/superlite.git
-  muse plugins install ./superlite
-  muse plugins approve superlite
-  ```
-
-- Update later:
-
-  ```bash
-  muse plugins update superlite
-  ```
-
-Restart any active Muse sessions after installing so the `SessionStart` hook takes effect; hooks require approval on first install.
 
 ### Keeping versions in sync
 

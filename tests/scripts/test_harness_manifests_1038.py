@@ -24,8 +24,7 @@ def test_version_bump_lists_only_existing_files():
     files = json.loads(_read(".version-bump.json"))["files"]
     assert [f["path"] for f in files if not (ROOT / f["path"]).is_file()] == []
     assert [f["path"] for f in files] == [
-        "package.json", ".claude-plugin/plugin.json", ".muse-plugin/plugin.json",
-        ".claude-plugin/marketplace.json", ".muse-plugin/marketplace.json", "gemini-extension.json",
+        "package.json", ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json",
     ]
 
 
@@ -49,11 +48,11 @@ def test_readme_drops_removed_harness_sections():
     readme = _read("README.md")
     headings = re.findall(r"^### (.+)$", readme, re.M)
     assert [h for h in headings if h in GONE_SECTIONS] == []
-    for kept in ("Claude Code", "Antigravity", "Factory Droid", "Gemini CLI", "Pi", "Muse"):
+    for kept in ("Claude Code", "Pi"):
         assert kept in headings, kept
     for ref in (".agents/plugins", ".cursor-plugin", ".opencode", "README.kimi.md", "README.opencode.md"):
         assert ref not in readme, ref
-    assert "Installs for Pi, Gemini CLI and the other harnesses are in [Installation](#installation) below." in readme
+    assert "The Pi install is in [Installation](#installation) below." in readme
 
 
 def test_agents_md_names_no_removed_harness_file():

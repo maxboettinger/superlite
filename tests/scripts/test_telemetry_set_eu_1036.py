@@ -14,7 +14,7 @@ SID = "sess-1036"
 DROP = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "SUPERLITE_TELEMETRY", "CLAUDE_ENV_FILE", "CLAUDE_PID",
         "CLAUDE_CODE_SESSION_ID", "SUPERLITE_SESSION_ID", "SUPERLITE_STATE_DIR", "SL_SD", "SL_TEL_SESSION",
         "SL_TEL_CWD", "SUPERLITE_FLEET_WORKER", "SUPERLITE_FLEET_ROLE", "SUPERLITE_FLEET_AGENT",
-        "SUPERLITE_FLEET_PARENT_DIR", "CURSOR_PLUGIN_ROOT", "COPILOT_CLI", "MUSE_PLUGIN_ROOT", "PYTEST_CURRENT_TEST")
+        "SUPERLITE_FLEET_PARENT_DIR", "PYTEST_CURRENT_TEST")
 # Every public call at the top level of a strict shell: bash 3.2 applies errexit inside a sourced file even where
 # the caller's `{ ...; } || true` suppresses it in bash 5, so a top-level `set -e` is the portable stand-in.
 CALLS = (r'SL_TEL_SESSION=s1; _sl_tel_on; sl_tel_session_file s1 start; sl_tel_json v ""; '

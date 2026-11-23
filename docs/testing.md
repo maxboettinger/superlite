@@ -26,7 +26,7 @@ This repository's `.superlite/test-cmd.json` is untracked, so each machine sets 
 
 A layer is stale when its hash is not among the green hashes stored for it. The hash is a SHA-256 over the sorted `path` and per-file digest pairs of all files the layer maps to. Two rules keep it stable:
 
-- A manifest (`.claude-plugin/*.json`, any `.<name>-plugin/*.json`, and `package.json` and `gemini-extension.json` at the root) is digested with every `"version": "<value>"` replaced by `"version": ""`, so a version bump alone moves no layer. Any other manifest change does.
+- A manifest (`.claude-plugin/*.json`, any `.<name>-plugin/*.json`, and `package.json` at the root) is digested with every `"version": "<value>"` replaced by `"version": ""`, so a version bump alone moves no layer. Any other manifest change does.
 - A file that enters the tui layer only through the keyword scan (`CLAUDE_CODE_FORK_SUBAGENT`, `agent_summary`) contributes its path and the lines that contain a keyword, not its whole content. `docs/plans/` and `tests/scripts/` are never scanned.
 
 The green hashes (the newest 200 per layer) and each checkout's last green file list live in one store per repository: `<git common dir>/superlite/test-layers.json`. Every checkout and linked worktree of the repository reads and writes the same file, so a layer stamped green in any of them counts in all of them that hold the same layer content. Outside a git repository the store is `.superlite/test-layers.json`. `--state PATH` overrides the store path on every command.
