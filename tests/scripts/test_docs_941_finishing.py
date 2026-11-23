@@ -21,6 +21,3 @@ def test_finishing_rules_941():
 
 def test_template_and_readme_941():
     _has_once(_read("skills/writing-plans/task-template.md"), "could write only one reasonable thing from it")
-    r = _read("README.md")
-    _has_once(r, "Antigravity has no session-start hook event")
-    assert "Antigravity runs the plugin's session-start hook" not in r

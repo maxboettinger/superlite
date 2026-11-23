@@ -31,9 +31,7 @@ Agents using superlite log its own friction with `sl feedback add` into `~/.supe
 
 | Harness | Files |
 |---|---|
-| Claude Code, Factory Droid, Copilot CLI, Qwen Code | `.claude-plugin/`, `hooks/hooks.json` |
-| Gemini CLI | `gemini-extension.json`, `GEMINI.md` |
-| Muse | `.muse-plugin/` |
+| Claude Code | `.claude-plugin/`, `hooks/hooks.json` |
 | Pi | `.pi/extensions/superlite.ts`, `package.json` |
 
 ## Testing layers

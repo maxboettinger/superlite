@@ -10,7 +10,7 @@
 #   bump-version.sh --audit                   Check + grep repo for old version strings
 #
 # JSON manifests are read and edited with node (or jq when node is missing);
-# the Hermes plugin.yaml is a plain `version:` line handled with sed.
+# a .yaml file's plain `version:` line is handled with sed.
 #
 set -euo pipefail
 
