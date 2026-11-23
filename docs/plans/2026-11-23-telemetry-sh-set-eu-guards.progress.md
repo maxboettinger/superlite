@@ -1,0 +1,7 @@
+- start 93ae9b4aa8958bcd296645ddba2bee0e18d28b78
+- unblocked: dispatched T1 at 08:12:11; waiting on fixes: none
+- tests fast passed=0 failed=7 skipped=0 seconds=0.5
+- tests fast passed=1172 failed=0 skipped=0 seconds=2.1
+- commit T1 13f91e0116 telemetry.sh survives set -euo callers
+- tests fast passed=1172 failed=0 skipped=0 seconds=3.6
+- tests full passed=13563 failed=0 skipped=12 seconds=298.7

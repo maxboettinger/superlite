@@ -8,14 +8,14 @@
 #   sl_tel_emit KIND FRAGMENT                    # FRAGMENT: the kind's own fields as JSON members
 #   sl_tel_session_file SID EXT                  # sets SL_TEL_FILE=<home>/telemetry/sessions/SID.EXT (prints nothing); empty and 1 for a bad id
 #
-# Fail open: every function returns 0 and prints nothing (errors go to /dev/null). A line holds no free text.
+# Fail open: every function returns 0 and prints nothing (errors go to /dev/null), also under a caller's set -euo pipefail. A line holds no free text.
 # Note: the run id lookup uses [[ =~ ]], so BASH_REMATCH changes; read your own match first.
 
 _SL_TEL_LIB_DIR="${BASH_SOURCE[0]%/*}"
 _SL_TEL_VERSION=
 _sl_tel_re_ver='"version"[[:space:]]*:[[:space:]]*"([^"]+)"'
-{ IFS= read -r -d '' _sl_tel_pkg <"$_SL_TEL_LIB_DIR/../package.json"; } 2>/dev/null
-[[ $_sl_tel_pkg =~ $_sl_tel_re_ver ]] && _SL_TEL_VERSION=${BASH_REMATCH[1]}
+{ IFS= read -r -d '' _sl_tel_pkg <"$_SL_TEL_LIB_DIR/../package.json"; } 2>/dev/null || :
+[[ ${_sl_tel_pkg-} =~ $_sl_tel_re_ver ]] && _SL_TEL_VERSION=${BASH_REMATCH[1]}
 unset _sl_tel_pkg _sl_tel_re_ver
 
 # sl_tel_json VAR VALUE [MAX]
@@ -86,13 +86,13 @@ _sl_tel_now() {
 sl_tel_emit() {
   _sl_tel_on || return 0
   local kind="$1" frag="$2" sess cwd d sd run harn ver w r cfg root line
-  local re='"run_id"[[:space:]]*:[[:space:]]*"([^"]+)"' j
+  local re='"run_id"[[:space:]]*:[[:space:]]*"([^"]+)"' j=
   sess="${SL_TEL_SESSION:-${CLAUDE_CODE_SESSION_ID:-${SUPERLITE_SESSION_ID:-}}}"
   cwd="${SL_TEL_CWD:-$PWD}"
   sd="${SL_SD:-${SUPERLITE_STATE_DIR:-}}"
   run=
   if [[ -n $sd ]]; then
-    { IFS= read -r -d '' j <"$sd/stable.json"; } 2>/dev/null
+    { IFS= read -r -d '' j <"$sd/stable.json"; } 2>/dev/null || :
     [[ $j =~ $re ]] && run=${BASH_REMATCH[1]}
   fi
   root=
@@ -120,8 +120,8 @@ sl_tel_emit() {
   local LC_ALL=C
   ((${#line} > 4095)) && return 0
   _sl_tel_home
-  [[ -d $_SL_TEL_HOME ]] || mkdir -p "$_SL_TEL_HOME" 2>/dev/null
-  { printf '%s\n' "$line" >>"$_SL_TEL_HOME/events.jsonl"; } 2>/dev/null
+  [[ -d $_SL_TEL_HOME ]] || mkdir -p "$_SL_TEL_HOME" 2>/dev/null || :
+  { printf '%s\n' "$line" >>"$_SL_TEL_HOME/events.jsonl"; } 2>/dev/null || :
   return 0
 }
 
