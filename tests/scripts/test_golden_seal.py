@@ -391,3 +391,16 @@ def test_suite_finds_archived_run_summary(tmp_path):
     g.write_text(json.dumps({"mode": "full", "passed": 8, "failed": 2}))
     os.utime(g, (2000, 2000))
     assert gs.suite(clone) == {"passed": 8, "failed": 2}
+
+
+# (#1049)
+def test_seal_leaves_the_gh_keychain_login_readable(monkeypatch, tmp_path):
+    """Max's decision on #1049: a sealed golden run keeps the macOS keychain login readable to `gh auth token`.
+    The seal is an empty GH_CONFIG_DIR plus empty token variables (gh treats "" as unset), never an invalid token."""
+    import fleet
+    for k in fleet.GH_TOKENS:
+        monkeypatch.delenv(k, raising=False)
+    env = gs._env()
+    assert not any(k in env for k in fleet.GH_TOKENS) and Path(env["GH_CONFIG_DIR"]).is_dir()
+    assert fleet.gh_seal_env(env) == {**{k: "" for k in fleet.GH_TOKENS}, "GH_CONFIG_DIR": env["GH_CONFIG_DIR"]}
+    gs.cleanup(tmp_path / "none")

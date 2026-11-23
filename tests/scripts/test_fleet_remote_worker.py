@@ -46,6 +46,7 @@ def world(tmp_path, monkeypatch):
     proj = tmp_path / "proj"; sd = proj / ".superlite"; (sd / "briefs").mkdir(parents=True)
     monkeypatch.setenv("SUPERLITE_HOME", str(home)); monkeypatch.setenv("FAKE_TREE_HOME", str(th / "proj")); monkeypatch.setenv("FAKE_TREE_LOG", str(tmp_path / "log"))
     monkeypatch.delenv("SUPERLITE_STATE_DIR", raising=False)
+    for k in ("GH_CONFIG_DIR", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"): monkeypatch.delenv(k, raising=False)
     (home / "machine.json").write_text(json.dumps({"remote_tree": [TREE]}))
     fh = Routed()
     for m in (fleet, rw, fio): monkeypatch.setattr(m, "hc", fh)
@@ -367,3 +368,25 @@ def test_tree_path_uses_the_repository_name_of_the_project(world, capsys, monkey
     with pytest.raises(SystemExit):  # the fake pushes beside the `proj` trees, so the check reports the prediction
         rw.spawn(plain / ".superlite", "research", None, plain, "box")
     assert "expected " + str(world.trees.parent / "my-app") + "/" in capsys.readouterr().out
+
+
+# (#1049)
+def test_sealed_spawner_seals_the_remote_worker(world, monkeypatch):
+    monkeypatch.setenv("GH_CONFIG_DIR", str(world.tmp / "gh"))
+    started(world)
+    tree = str(world.trees / fr.tree_name(world.sd, "W1"))
+    s = f"{tree}/.superlite/{fleet.GH_SEAL_FILE}"
+    argv = next(c for c in world.fh.calls if c[0] == "start_agent")[2]
+    assert argv[0] == "--plugin-dir" and argv[2:4] == ["--settings", s] and argv.count("--settings") == 1
+    names, ref = start_files(world)
+    assert f".superlite/{fleet.GH_SEAL_FILE}" in names
+    want = {"env": {**{k: "" for k in fleet.GH_TOKENS}, "GH_CONFIG_DIR": f"{tree}/.superlite/gh-config"}}
+    assert json.loads(show(world, ref, f".superlite/{fleet.GH_SEAL_FILE}")) == want
+    assert "GH_CONFIG_DIR" not in world.panes[0]["env"] and record(world)["launch"]["argv"] == argv
+
+
+def test_unsealed_spawner_starts_the_remote_worker_without_settings(world):
+    started(world)
+    argv = next(c for c in world.fh.calls if c[0] == "start_agent")[2]
+    names, _ = start_files(world)
+    assert "--settings" not in argv and f".superlite/{fleet.GH_SEAL_FILE}" not in names
