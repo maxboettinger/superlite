@@ -3,7 +3,6 @@
   "version": "1.5.311",
   "description": "Superlite skills and runtime bootstrap for coding agents",
   "type": "module",
-  "main": ".opencode/plugins/superlite.js",
   "author": "CWogu",
   "license": "MIT",
   "homepage": "https://github.com/maxboettinger/superlite",

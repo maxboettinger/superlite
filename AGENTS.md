@@ -32,14 +32,8 @@ Agents using superlite log its own friction with `sl feedback add` into `~/.supe
 | Harness | Files |
 |---|---|
 | Claude Code, Factory Droid, Copilot CLI, Qwen Code | `.claude-plugin/`, `hooks/hooks.json` |
-| Codex | `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json` |
-| Cursor | `.cursor-plugin/plugin.json`, `hooks/hooks-cursor.json` |
-| Devin | `.devin-plugin/plugin.json` |
 | Gemini CLI | `gemini-extension.json`, `GEMINI.md` |
-| Kimi Code | `.kimi-plugin/plugin.json`, `docs/README.kimi.md` |
 | Muse | `.muse-plugin/` |
-| Hermes Agent | `.hermes-plugin/` |
-| OpenCode | `.opencode/`, `index.js`, `package.json` |
 | Pi | `.pi/extensions/superlite.ts`, `package.json` |
 
 ## Testing layers

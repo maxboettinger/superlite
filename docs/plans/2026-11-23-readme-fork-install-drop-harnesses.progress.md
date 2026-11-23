@@ -1,0 +1,7 @@
+- start e9e7a44e76c8bdd617435c7f617bec07ec33e3b8
+- unblocked: dispatched T1 at 08:33:58; waiting on fixes: none
+- tests fast passed=0 failed=6 skipped=0 seconds=0.5
+- tests fast passed=6 failed=0 skipped=0 seconds=0.4
+- commit T1 032bf5d6bb fork install lines and harness removal
+- tests fast passed=6 failed=0 skipped=0 seconds=0.4
+- tests full passed=13578 failed=0 skipped=12 seconds=336.8
