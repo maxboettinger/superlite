@@ -111,13 +111,21 @@ def _current_version(root: Path) -> str:  # O(1)
     return str(node)  # O(1)
 
 
-def _notes_start(tags: list, new: str) -> str | None:  # O(tags)
-    best = None  # O(1)
+def _notes_start(root: Path, tags: list, new: str) -> str | None:  # O(tags)
+    """Tag the generated notes start at (#1042): the newest tag below `new` that `sl release` made
+    (its commit subject is `Release vX.Y.0`), else the newest vX.Y.Z tag below `new`, else None."""
+    below = []  # O(1)
     for t in tags:  # O(tags)
-        m = re.fullmatch(r"v(\d+\.\d+\.0)", t)  # O(1)
-        if m and _ver(m.group(1)) < _ver(new) and (best is None or _ver(m.group(1)) > _ver(best)):  # O(1)
-            best = m.group(1)  # O(1)
-    return f"v{best}" if best else None  # O(1)
+        m = re.fullmatch(r"v(\d+\.\d+\.\d+)", t)  # O(1)
+        if m and _ver(m.group(1)) < _ver(new):  # O(1)
+            below.append(m.group(1))  # O(1)
+    below.sort(key=_ver, reverse=True)  # O(tags log tags)
+    for x in below:  # O(tags) one git call per X.Y.0 candidate, newest first
+        if _ver(x)[2] == 0:  # O(1)
+            rc, subj = _run(["git", "log", "-1", "--format=%s", f"refs/tags/v{x}"], cwd=root)  # O(1)
+            if rc == 0 and subj.strip() == f"Release v{x}":  # O(1)
+                return f"v{x}"  # O(1)
+    return f"v{below[0]}" if below else None  # O(1)
 
 
 def _err(msg: str) -> None:  # O(1)
@@ -271,7 +279,7 @@ def main(argv: list) -> int:  # O(release)
         rc = _golden(root, a.level)  # O(cases * run)
         if rc:  # O(1)
             return rc  # O(1)
-    notes = _notes_start(tags, new)  # O(tags)
+    notes = _notes_start(root, tags, new)  # O(tags)
     if a.dry_run:  # O(1)
         why = _moved(root, b)  # O(1)
         if why:  # O(1)

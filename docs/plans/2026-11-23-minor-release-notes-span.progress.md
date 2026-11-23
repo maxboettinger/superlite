@@ -1,0 +1,7 @@
+- unblocked: dispatched T1 at 08:30:49; waiting on fixes: none
+- start a021bb1eafa815752b2330d7d0151efaa0df9485
+- tests fast passed=22 failed=2 skipped=0 seconds=4.4
+- tests fast passed=24 failed=0 skipped=0 seconds=4.2
+- commit T1 501a5c6778 notes start at the last sl release tag
+- tests fast passed=246 failed=0 skipped=0 seconds=10.8
+- tests full passed=13564 failed=0 skipped=12 seconds=280.6

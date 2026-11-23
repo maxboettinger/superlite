@@ -36,7 +36,7 @@ def fx(repo, tmp_path, monkeypatch):
     monkeypatch.delenv("SUPERLITE_FLEET_WORKER", raising=False)
     for k in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"):
         monkeypatch.delenv(k, raising=False)
-    s = {"cmds": [], "tags": "", "fail": None, "tagcalls": [], "golden": [], "flags": [], "pass": True, "claude": 0, "count": "0\t0\n"}
+    s = {"cmds": [], "tags": "", "fail": None, "tagcalls": [], "golden": [], "flags": [], "pass": True, "claude": 0, "count": "0\t0\n", "subjects": {}}
 
     def fake_run(cmd, cwd=None, timeout=None):
         s["cmds"].append(cmd)
@@ -45,6 +45,8 @@ def fx(repo, tmp_path, monkeypatch):
             return 1, "boom"
         if cmd[:3] == ["git", "tag", "-l"]:
             return 0, s["tags"]
+        if cmd[:3] == ["git", "log", "-1"]:
+            return 0, s["subjects"].get(cmd[-1], "")
         if cmd[:2] == ["git", "rev-parse"]:
             return 0, "abc1234\n"
         if cmd[:2] == ["git", "rev-list"]:
@@ -156,13 +158,46 @@ def test_step_order(fx):
     assert ["git", "rev-parse", "HEAD"] in fx["cmds"][i:]
 
 
-def test_notes_start_tag(fx):
+def test_notes_start_tag(fx, capsys):
+    """#1042: notes start at the newest tag `sl release` made (commit `Release vX.Y.0`), else at the newest v* tag."""
     fx["tags"] = "v1.5.0\nv1.5.3\n"
+    fx["subjects"] = {"refs/tags/v1.5.0": "Release v1.5.0\n"}
     assert go(fx, "minor") == 0
     assert kinds(fx, "gh")[0][-2:] == ["--notes-start-tag", "v1.5.0"]
-    fx["tags"] = ""; fx["cmds"].clear()
+    fx["tags"] = "v1.1.0\nv1.5.248\nv1.5.309\n"
+    fx["subjects"] = {"refs/tags/v1.1.0": "Bump version to 1.1.0\n"}
+    fx["cmds"].clear()
+    assert go(fx, "minor") == 0
+    assert kinds(fx, "gh")[0][-2:] == ["--notes-start-tag", "v1.5.309"]
+    capsys.readouterr()
+    assert go(fx, "minor", "--dry-run") == 0
+    assert "release notes start at v1.5.309" in capsys.readouterr().out
+    fx["tags"] = "v1.4.0\nv1.5.0\nv1.5.7\n"
+    fx["subjects"] = {"refs/tags/v1.4.0": "Release v1.4.0", "refs/tags/v1.5.0": "Release v1.5.0"}
+    fx["cmds"].clear()
+    assert go(fx, "minor") == 0
+    assert kinds(fx, "gh")[0][-2:] == ["--notes-start-tag", "v1.5.0"]
+    fx["tags"] = "v1.5.3\nv1.6.0-rc1\nv2.0.0\n"
+    fx["subjects"] = {}
+    fx["cmds"].clear()
+    assert go(fx, "minor") == 0
+    assert kinds(fx, "gh")[0][-2:] == ["--notes-start-tag", "v1.5.3"]
+    fx["tags"] = ""
+    fx["cmds"].clear()
     assert go(fx, "minor") == 0
     assert "--notes-start-tag" not in kinds(fx, "gh")[0]
+
+
+def test_notes_start_real_git(repo):
+    """#1042: the commit subject is read through the annotated tag, as release_tag makes it."""
+    git(repo, "tag", "-a", "v1.1.0", "-m", "superlite 1.1.0")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Release v1.5.0")
+    git(repo, "tag", "-a", "v1.5.0", "-m", "Version 1.5.0")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "fix: a patch; 1.5.3 (B1) (#7)")
+    git(repo, "tag", "-a", "v1.5.3", "-m", "Version 1.5.3")
+    assert release._notes_start(repo, ["v1.1.0", "v1.5.0", "v1.5.3"], "1.6.0") == "v1.5.0"
+    assert release._notes_start(repo, ["v1.1.0", "v1.5.3"], "1.6.0") == "v1.5.3"
+    assert release._notes_start(repo, [], "1.6.0") is None
 
 
 def test_dry_run(fx, capsys):
