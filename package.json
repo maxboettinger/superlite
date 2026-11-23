@@ -6,10 +6,10 @@
   "main": ".opencode/plugins/superlite.js",
   "author": "CWogu",
   "license": "MIT",
-  "homepage": "https://github.com/iha2/superlite",
+  "homepage": "https://github.com/maxboettinger/superlite",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/iha2/superlite.git"
+    "url": "git+https://github.com/maxboettinger/superlite.git"
   },
   "keywords": [
     "pi-package",
