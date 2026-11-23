@@ -5,6 +5,7 @@ A lead starts with `--autocompact` set to main's window (`main_window`, #464). A
 A pane still no shell after that retry is closed and the lead starts once more in a fresh pane (#551).
 A folder trust dialog still open after a successful start is accepted (#514).
 The lead's fleet.json record carries `launch` ({argv, env, cwd}: the exact start, #577) and `session` (its Claude session id, when herdr reports one) so `fleet restore` can resume it.
+A lead whose spawner pins GH_CONFIG_DIR (a sealed golden run) starts with `--settings <lead state>/gh-seal-settings.json`, whose env clears each GitHub token variable the spawner lacks and pins GH_CONFIG_DIR, since a pane's shell profile or a Claude settings env would beat the herdr --env value (#1041).
 """
 import json  # O(1)
 import os  # O(1)
@@ -20,6 +21,23 @@ NoShell = fleet.NoShell  # moved to fleet.py: workers retry in a fresh pane too 
 
 
 DEFAULT_WINDOW = 400000  # O(1) the window /superlite:setup offers
+GH_TOKENS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")  # O(1)
+GH_SEAL_FILE = "gh-seal-settings.json"  # O(1)
+
+
+def gh_seal_env(base_env):  # O(1) the settings env of a sealed lead: {} unless the spawner pins GH_CONFIG_DIR; a token it carries is left out
+    if not base_env.get("GH_CONFIG_DIR"):  # O(1)
+        return {}  # O(1)
+    return {**{k: "" for k in GH_TOKENS if not base_env.get(k)}, "GH_CONFIG_DIR": base_env["GH_CONFIG_DIR"]}  # O(1)
+
+
+def write_gh_seal(lead_sd, base_env):  # O(1) writes the lead's seal settings file; None when the lead is not sealed
+    env = gh_seal_env(base_env)  # O(1)
+    if not env:  # O(1)
+        return None  # O(1)
+    p = Path(lead_sd) / GH_SEAL_FILE  # O(1)
+    p.write_text(json.dumps({"env": env}, indent=2) + "\n", encoding="utf-8")  # O(1)
+    return p  # O(1)
 
 
 def _pos(v):  # O(1)
@@ -52,9 +70,11 @@ def main_window(env, model):  # O(k) main's auto-compact window: env variable, u
     return DEFAULT_WINDOW  # O(1)
 
 
-def lead_argv(sl_path, model, window=None, effort=None, deny=None, mcp_config=None, ship=True):  # O(d)
+def lead_argv(sl_path, model, window=None, effort=None, deny=None, mcp_config=None, ship=True, settings=None):  # O(d)
     argv = ["--model", model] + (["--effort", effort] if effort else [])  # O(1)
     argv += ["--permission-mode", "auto"]  # O(1)
+    if settings:  # a sealed lead's gh seal file (#1041) | O(1)
+        argv += ["--settings", str(settings)]  # O(1)
     if ship:  # a plan lead never ships: main decides the integration (#906) | O(1)
         argv += ["--allowedTools", "Bash(maxapp ship *)", f"Bash({sl_path} backlog ship *)"]  # O(1)
     if deny is not None or mcp_config:  # a lean start: only the servers named, no browser bridge | O(1)
@@ -148,10 +168,11 @@ def _spawn_lead(main_sd, worktree, model, base, after, rc, plan=None, ship=True)
     lsd.mkdir(parents=True, exist_ok=True)  # O(1)
     wt, lsd_s = str(worktree.resolve()), str(lsd.resolve())  # O(1)
     lead = rc["lead"]  # O(1)
+    seal = write_gh_seal(Path(lsd_s), base)  # O(1)
     wenv = lead_env(main_sd, lsd, wid, cdir, base, fs.load(main_sd).get("accounts") or [], (rc.get("cache_ttl") or {}).get("lead"))  # O(w)
     sl = str(Path(__file__).resolve().parent / "sl")  # O(1)
     mcp = _lead_mcp(rc, wid, worktree, lsd, cdir, base)  # O(n + f)
-    argv = lead_argv(sl, model, lead.get("autocompact") or main_window(base, model), lead.get("effort"), list(lead.get("deny") or []), mcp, ship)  # O(k)
+    argv = lead_argv(sl, model, lead.get("autocompact") or main_window(base, model), lead.get("effort"), list(lead.get("deny") or []), mcp, ship, settings=seal)  # O(k)
     run_config.write_active(lsd, rc)  # the run's config snapshot, read by the lead's workers | O(f)
     record = {"name": name, "account": account, "agent": "lead", "tier": model, "state": "starting", "task": None, "role": "lead",  # O(1)
               "one_turn": False, "lead_sd": lsd_s, "worktree": wt, "run_config": rc.get("id"), "launch": {"argv": argv, "env": wenv, "cwd": wt}}

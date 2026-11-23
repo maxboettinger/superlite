@@ -46,3 +46,53 @@ def test_trust_dialog_and_stopping_a_lead_stops_its_fleet_first(world, tmp_path,
     fleet.stop(world.sd, ["W1"])
     assert [c[1] for c in world.fh.calls if c[0] == "exit_agent"] == ["sl-wt-ab12-w1", name]
     assert fleet.fs.load(lsd)["workers"]["W1"]["state"] == "stopped"
+
+
+# (#1041)
+SEALED = {"GH_TOKEN": "", "GITHUB_TOKEN": "", "GH_ENTERPRISE_TOKEN": "", "GITHUB_ENTERPRISE_TOKEN": ""}
+
+
+def test_gh_seal_env_clears_the_tokens_the_spawner_lacks():
+    assert fl.GH_TOKENS == ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+    assert fl.gh_seal_env({"HOME": "/u"}) == {} and fl.gh_seal_env({"GH_CONFIG_DIR": "", "GH_TOKEN": ""}) == {}
+    assert fl.gh_seal_env({"HOME": "/u", "GH_CONFIG_DIR": "/e"}) == {**SEALED, "GH_CONFIG_DIR": "/e"}
+    kept = fl.gh_seal_env({"GH_CONFIG_DIR": "/e", "GH_TOKEN": "t", "GITHUB_TOKEN": ""})
+    assert kept == {"GITHUB_TOKEN": "", "GH_ENTERPRISE_TOKEN": "", "GITHUB_ENTERPRISE_TOKEN": "", "GH_CONFIG_DIR": "/e"}
+    assert "t" not in kept.values()
+
+
+def test_write_gh_seal_writes_the_settings_file_only_when_sealed(tmp_path):
+    assert fl.write_gh_seal(tmp_path, {"HOME": "/u"}) is None and not (tmp_path / fl.GH_SEAL_FILE).exists()
+    p = fl.write_gh_seal(tmp_path, {"GH_CONFIG_DIR": "/e"})
+    assert p == tmp_path / fl.GH_SEAL_FILE == tmp_path / "gh-seal-settings.json"
+    assert json.loads(p.read_text(encoding="utf-8")) == {"env": {**SEALED, "GH_CONFIG_DIR": "/e"}}
+
+
+def test_lead_argv_puts_settings_after_the_permission_mode():
+    base = fl.lead_argv("/p/sl", "opus")
+    assert fl.lead_argv("/p/sl", "opus", settings=None) == base and "--settings" not in base
+    assert fl.lead_argv("/p/sl", "opus", settings="/w/s.json") == base[:4] + ["--settings", "/w/s.json"] + base[4:]
+
+
+def test_sealed_lead_starts_with_the_gh_seal_settings(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
+    wt, gh = tmp_path / "wt", tmp_path / "gh"
+    wt.mkdir(); gh.mkdir()
+    fleet.main(["on", "--accounts", "claude1,claude3"])
+    r = fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u", "GH_CONFIG_DIR": str(gh)}, rc=fl.run_config.resolve())
+    argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent" and c[1] == r["name"])
+    f = (wt / ".superlite").resolve() / fl.GH_SEAL_FILE
+    assert argv[argv.index("--settings") + 1] == str(f)
+    assert json.loads(f.read_text(encoding="utf-8")) == {"env": {**SEALED, "GH_CONFIG_DIR": str(gh)}}
+    env = next(c for c in world.fh.calls if c[0] == "create_workspace")[2]
+    assert env["GH_CONFIG_DIR"] == str(gh) and not set(SEALED) & set(env)
+    assert json.loads((world.sd / "fleet.json").read_text())["workers"][r["id"]]["launch"]["argv"] == argv
+
+
+def test_unsealed_lead_starts_without_settings(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
+    wt = tmp_path / "wt"; wt.mkdir()
+    fleet.main(["on", "--accounts", "claude1,claude3"])
+    r = fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u", "GH_TOKEN": "t"}, rc=fl.run_config.resolve())
+    argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent" and c[1] == r["name"])
+    assert "--settings" not in argv and not (wt / ".superlite" / fl.GH_SEAL_FILE).exists()
