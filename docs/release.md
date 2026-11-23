@@ -20,7 +20,7 @@ Steps:
 3. Golden batches for the level; results go to the main checkout's `.superlite/golden-results.jsonl`.
 4. Bump with `scripts/bump-version.sh`, then `claude plugin validate --strict .` (skipped when `claude` is missing).
 5. Commit `Release v<version>`, annotated tag, push branch and tag.
-6. `gh release create` with generated notes, starting at the last `X.Y.0` tag.
+6. `gh release create` with generated notes, starting at the newest tag below the new version that `sl release` made (its commit is `Release vX.Y.0`); with none yet, at the newest `v*` tag below it.
 7. Move `stable` to the tag. A failure here is only a warning.
 
 The ship lock is held from the bump to the last push.
