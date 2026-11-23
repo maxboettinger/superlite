@@ -123,6 +123,15 @@ def _count(out: str, word: str) -> int:
     return int(m.group(1)) if m else 0  # O(1)
 
 
+def results_file(root) -> Path:  # the main checkout's results file, also for a linked worktree's root, so rows and patches outlive the worktree (#925); outside git root's own | O(1)
+    import backlog_state
+    try:  # O(1)
+        base = backlog_state.main_root(Path(root))  # O(1)
+    except RuntimeError:  # O(1)
+        base = Path(root).resolve()  # O(1)
+    return base / ".superlite" / "golden-results.jsonl"  # O(1)
+
+
 def hidden_run(case: dict, wt) -> dict:
     paths = []  # O(1)
     for t in case.get("hidden_tests", []):  # O(tests)
@@ -322,7 +331,7 @@ def main(argv: list) -> int:
     except SystemExit as e:  # O(1)
         return int(e.code or 0)  # O(1)
     root = Path(a.root).resolve()  # O(1)
-    out = root / ".superlite" / "golden-results.jsonl"  # O(1)
+    out = results_file(root)  # O(1)
     if a.cmd == "history":  # O(1)
         return _history(out, a.id)  # O(rows)
     allc = {c["id"]: c for c in golden_case.cases(root)}  # O(cases)
