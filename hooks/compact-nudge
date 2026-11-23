@@ -32,11 +32,7 @@ esc="${esc//$'\n'/\\n}"
 esc="${esc//$'\t'/\\t}"
 
 # Same host test as hooks/session-start.
-if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then
-  printf '{"additional_context":"%s"}\n' "$esc"
-elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -z "${COPILOT_CLI:-}" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$esc"
-elif [ -n "${MUSE_PLUGIN_ROOT:-}" ]; then
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
   printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$esc"
 else
   printf '{"additionalContext":"%s"}\n' "$esc"

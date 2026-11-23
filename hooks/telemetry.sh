@@ -105,8 +105,6 @@ sl_tel_emit() {
   done
   if [[ -n ${SUPERLITE_HARNESS-} ]]; then harn=$SUPERLITE_HARNESS
   elif [[ -n ${CLAUDECODE-} ]]; then harn=claude-code
-  elif [[ -n ${CODEX_THREAD_ID-}${CODEX_SANDBOX-} ]]; then harn=codex
-  elif [[ -n ${GEMINI_CLI-} ]]; then harn=gemini
   else harn=; fi
   ver=$_SL_TEL_VERSION
   _sl_tel_now

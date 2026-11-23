@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Complexity notation:
 #   s = bytes of skills/using-superlite/SKILL.md; each ${s//x/y} is one O(s) pass
-# SessionStart hook for the superlite plugin (Claude Code, Cursor, Copilot CLI, Muse and other SDK-style hosts)
+# SessionStart hook for the superlite plugin (Claude Code)
 
 set -euo pipefail  # O(1)
 
@@ -213,17 +213,10 @@ fi  # O(1)
 session_context="${lead_note}You have superlite. Its 'superlite:using-superlite' skill follows; load other skills with the Skill tool.\n\n${escaped}"  # O(s)
 
 # Emit only the field the current platform consumes:
-# - Cursor sets CURSOR_PLUGIN_ROOT (and may also set CLAUDE_PLUGIN_ROOT) and expects additional_context (snake_case).
-# - Claude Code sets CLAUDE_PLUGIN_ROOT without COPILOT_CLI or MUSE_PLUGIN_ROOT and expects
-#   hookSpecificOutput.additionalContext (nested). It reads BOTH forms without deduplication, so never emit both.
-# - Muse sets MUSE_PLUGIN_ROOT; it accepts the Claude-style nested output.
-# - Copilot CLI (sets COPILOT_CLI=1) and unknown hosts expect top-level additionalContext (SDK standard).
+# - Claude Code sets CLAUDE_PLUGIN_ROOT and expects hookSpecificOutput.additionalContext (nested); it reads BOTH forms, so never emit both.
+# - No CLAUDE_PLUGIN_ROOT (a hand run, a test): top-level additionalContext.
 # printf only (no heredoc) to avoid the bash 5.3+ heredoc hang.
-if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then  # O(1)
-  emit_json '{"additional_context":"%s"}\n' "$session_context"  # O(s)
-elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -z "${COPILOT_CLI:-}" ] && [ -z "${MUSE_PLUGIN_ROOT:-}" ]; then  # O(1)
-  emit_json '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$session_context"  # O(s)
-elif [ -n "${MUSE_PLUGIN_ROOT:-}" ]; then  # O(1)
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then  # O(1)
   emit_json '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$session_context"  # O(s)
 else  # O(1)
   emit_json '{"additionalContext":"%s"}\n' "$session_context"  # O(s)

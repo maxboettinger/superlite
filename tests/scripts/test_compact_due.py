@@ -16,8 +16,8 @@ sys.path.insert(0, str(SCRIPTS))
 import compact_due  # noqa: E402
 
 MODE_FILE = "orchestrator" + ".json"
-_DROPPED = ("SUPERLITE_STATE_DIR", "CLAUDE_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT", "CURSOR_AGENT", "CURSOR_TRACE_ID",
-            "SUPERLITE_NO_AUTOCOMPACT", "COPILOT_CLI", "MUSE_PLUGIN_ROOT", "SUPERLITE_FLEET_WORKER",
+_DROPPED = ("SUPERLITE_STATE_DIR", "CLAUDE_PLUGIN_ROOT",
+            "SUPERLITE_NO_AUTOCOMPACT", "SUPERLITE_FLEET_WORKER",
             "SUPERLITE_FLEET_ROLE", "SUPERLITE_PYTHON")
 
 
@@ -172,8 +172,7 @@ def test_hook_fails_open_without_python(tmp_path):
 # --- session-start: stale stamps and hint markers (#466) -------------------------------------------------------------
 
 START = ROOT / "hooks" / "session-start"
-_START_DROPPED = ("CLAUDE_ENV_FILE", "CLAUDE_PID", "CURSOR_PLUGIN_ROOT", "CURSOR_AGENT", "CURSOR_TRACE_ID",
-                  "COPILOT_CLI", "MUSE_PLUGIN_ROOT")
+_START_DROPPED = ("CLAUDE_ENV_FILE", "CLAUDE_PID")
 KEPT = {MODE_FILE, "compact-hint.live", "compact-hint.s1", "compact-hint", "compact-hint.odd.name", "notes.md"}
 
 

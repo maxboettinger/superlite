@@ -1,8 +1,8 @@
-"""One contract for every hook both manifests register (#846): a valid event and matcher, LF endings,
+"""One contract for every hook the manifest registers (#846): a valid event and matcher, LF endings,
 `bash -n`, and fail-open on malformed stdin. A hook that must block on one of those inputs is listed in
 `FAIL_CLOSED` with its reason; a hook that talks on stdout in every run is listed in `TALKS`.
 
-The cases come from hooks/hooks.json and hooks/hooks-cursor.json, so a new entry is checked without
+The cases come from hooks/hooks.json, so a new entry is checked without
 editing this file. deny-worker-permission and capture-worker-stop act only with SUPERLITE_FLEET_WORKER
 set and final-review-check only inside a git repository; the runs here are outside both."""
 import json
@@ -29,13 +29,8 @@ TOOLS = {"Bash", "PowerShell", "Monitor", "Edit", "Write", "NotebookEdit", "Mult
          "ExitPlanMode"}
 MATCHER_WORDS = {"SessionStart": {"startup", "resume", "clear", "compact"}, "PreCompact": {"manual", "auto"},
                  **{e: TOOLS for e in ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest")}}
-CURSOR_EVENTS = {"sessionStart", "sessionEnd", "beforeShellExecution", "afterShellExecution",
-                 "beforeMCPExecution", "afterMCPExecution", "beforeReadFile", "afterFileEdit",
-                 "beforeSubmitPrompt", "afterAgentResponse", "afterAgentThought", "stop", "preToolUse",
-                 "postToolUse", "postToolUseFailure", "subagentStart", "subagentStop", "preCompact"}
-COMMAND = {"claude": re.compile(r'bash "\$\{CLAUDE_PLUGIN_ROOT\}/hooks/([\w-]+)"'),
-           "cursor": re.compile(r"bash \./hooks/([\w-]+)")}
-PLUGIN_ROOT_VAR = {"claude": "CLAUDE_PLUGIN_ROOT", "cursor": "CURSOR_PLUGIN_ROOT"}
+COMMAND = {"claude": re.compile(r'bash "\$\{CLAUDE_PLUGIN_ROOT\}/hooks/([\w-]+)"')}
+PLUGIN_ROOT_VAR = {"claude": "CLAUDE_PLUGIN_ROOT"}
 
 
 class Hook(NamedTuple):
@@ -53,20 +48,15 @@ class Hook(NamedTuple):
 def registered(manifest: Path) -> list[Hook]:
     data = json.loads(manifest.read_text(encoding="utf-8"))
     found = []
-    if "version" in data:  # Cursor: {event: [{command}]}
-        for event, entries in data["hooks"].items():
-            found += [Hook("cursor", event, e.get("matcher"), e) for e in entries]
-    else:  # Claude: {event: [{matcher?, hooks: [{...}]}]}
-        for event, groups in data["hooks"].items():
-            for g in groups:
-                found += [Hook("claude", event, g.get("matcher"), h) for h in g["hooks"]]
+    for event, groups in data["hooks"].items():  # Claude: {event: [{matcher?, hooks: [{...}]}]}
+        for g in groups:
+            found += [Hook("claude", event, g.get("matcher"), h) for h in g["hooks"]]
     return found
 
 
 def entry_problems(hook: Hook, hooks_dir: Path = HOOKS) -> list[str]:
     out = []
-    known = CLAUDE_EVENTS if hook.host == "claude" else CURSOR_EVENTS
-    if hook.event not in known:
+    if hook.event not in CLAUDE_EVENTS:
         return [f"unknown {hook.host} event {hook.event}"]
     cmd = hook.entry.get("command")
     if hook.script is None:
@@ -112,7 +102,7 @@ def project(tmp_path: Path, state: str) -> Path:
 
 
 def run_hook(script: Path, raw: str, project: Path, host: str = "claude") -> subprocess.CompletedProcess:
-    drop = ("SUPERLITE_FLEET_", "CLAUDE_", "CURSOR_", "SUPERLITE_STATE_DIR", "SUPERLITE_FINAL_REVIEW")
+    drop = ("SUPERLITE_FLEET_", "CLAUDE_", "SUPERLITE_STATE_DIR", "SUPERLITE_FINAL_REVIEW")
     env = {k: v for k, v in os.environ.items() if not k.startswith(drop)}
     env.update({"HOME": str(project.parent / "home"), "CLAUDE_PROJECT_DIR": str(project),
                 PLUGIN_ROOT_VAR[host]: str(script.parent.parent)})
@@ -200,25 +190,18 @@ def test_contract_rejects_a_bad_event_matcher_or_command(tmp_path):
     for problems, needle in zip(got, ("unknown claude event PreToolUs", "Bsh", "does not run a hooks/ script",
                                       "hooks/gone missing", "Stop takes no matcher")):
         assert needle in problems[0], (needle, problems)
-    (hooks / "hooks-cursor.json").write_text(json.dumps({"version": 1, "hooks": {"sesionStart": [{"command": "bash ./hooks/ok"}]}}),
-                                              encoding="utf-8")
-    [cursor] = registered(hooks / "hooks-cursor.json")
-    assert cursor.host == "cursor" and cursor.script == "ok"
-    assert entry_problems(cursor, hooks) == ["unknown cursor event sesionStart"]
 
 
 CLAUDE = registered(HOOKS / "hooks.json")
-CURSOR = registered(HOOKS / "hooks-cursor.json")
 HOOK_FILES = sorted(p for p in HOOKS.iterdir() if p.is_file() and p.suffix != ".json")
 
 
 def test_manifests_register_hooks():
     assert CLAUDE
-    assert ("cursor", "session-start") in {(h.host, h.script) for h in CURSOR}
-    assert json.loads((HOOKS / "hooks-cursor.json").read_text(encoding="utf-8"))["version"] == 1
+    assert ("claude", "session-start") in {(h.host, h.script) for h in CLAUDE}
 
 
-@pytest.mark.parametrize("hook", CLAUDE + CURSOR, ids=lambda h: f"{h.host}-{h.event}-{h.script}")
+@pytest.mark.parametrize("hook", CLAUDE, ids=lambda h: f"{h.host}-{h.event}-{h.script}")
 def test_manifest_entry_is_valid(hook):
     assert entry_problems(hook) == []
 
@@ -284,7 +267,7 @@ TALKS = {
 }
 
 SESSION_START_INPUTS = ("empty", "garbage", "binary")
-SCRIPTS = sorted({(h.host, h.script) for h in CLAUDE + CURSOR if h.script})
+SCRIPTS = sorted({(h.host, h.script) for h in CLAUDE if h.script})
 CASES = [pytest.param(host, script, state, name, id=f"{host}-{script}-{state}-{name}")
          for host, script in SCRIPTS for state in STATES for name in MALFORMED
          if script != "session-start" or name in SESSION_START_INPUTS]
@@ -334,7 +317,7 @@ HOOK_SCRIPTS = sorted({h.script for h in CLAUDE if h.script})
 
 
 def run_with_home(script: str, raw: str, proj: Path, sl_home: Path) -> subprocess.CompletedProcess:
-    drop = ("SUPERLITE_FLEET_", "CLAUDE_", "CURSOR_", "SUPERLITE_STATE_DIR", "SUPERLITE_FINAL_REVIEW")
+    drop = ("SUPERLITE_FLEET_", "CLAUDE_", "SUPERLITE_STATE_DIR", "SUPERLITE_FINAL_REVIEW")
     env = {k: v for k, v in os.environ.items() if not k.startswith(drop)}
     env.update({"HOME": str(proj.parent / "home"), "CLAUDE_PROJECT_DIR": str(proj), "SUPERLITE_HOME": str(sl_home),
                 "CLAUDE_PLUGIN_ROOT": str(ROOT)})

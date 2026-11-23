@@ -51,8 +51,7 @@ SCRUB = [(re.compile(r"[A-Za-z]:(?:\\{1,2}|/)Users(?:\\{1,2}|/)[^\\/\s]+"), "~")
          (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "<email>")]
 STOP = {"the", "and", "for", "with", "this", "that", "from", "when", "again", "its", "was", "are", "not", "but",  # O(1)
         "into", "then", "than", "after", "before", "has", "had", "have", "does", "did", "should"}
-HARNESS_ENV = [("CLAUDECODE", "claude-code"), ("CODEX_THREAD_ID", "codex"), ("CODEX_SANDBOX", "codex"),  # O(1)
-               ("GEMINI_CLI", "gemini")]
+HARNESS_ENV = [("CLAUDECODE", "claude-code")]  # O(1)
 
 
 def home() -> Path:  # O(1)
@@ -332,8 +331,7 @@ def new_entry(kind: str, text: str, plan: str = "", ver: str = "", **extra) -> d
     eid = hashlib.sha1(f"{host}|{date}|{text}|{time.time_ns()}".encode("utf-8")).hexdigest()[:12]  # O(w)
     return {"v": 1, "id": eid, "date": date, "host": host, "kind": kind, "text": text, "version": ver or version(),  # O(w)
             "harness": harness(), "project": project(),
-            "session": os.environ.get("SUPERLITE_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
-            or os.environ.get("CODEX_THREAD_ID") or "",
+            "session": os.environ.get("SUPERLITE_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID") or "",
             "plan": Path(plan).name if plan else "", **extra}
 
 
