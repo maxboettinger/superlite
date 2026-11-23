@@ -1,0 +1,12 @@
+- start 346fa2a8561de188ba3b8d3bedeeb5c212ce29ce
+- unblocked: dispatched T1 at 19:55:03; waiting on fixes: none
+- tests fast passed=13 failed=5 skipped=0 seconds=1.0
+- tests fast passed=106 failed=0 skipped=0 seconds=3.7
+- commit T1 bea7727343 local worker seal
+- tests fast passed=75 failed=0 skipped=0 seconds=2.8
+- tests fast passed=58 failed=1 skipped=0 seconds=13.7
+- tests fast passed=87 failed=0 skipped=0 seconds=14.4
+- commit T2 6f6aa2fd93 remote worker seal and keychain pin
+Ruling: review-T1 not_run (test_fleet_lead_config_681/b87/906 files) ruled out - T1's own run covered them (106 passed) and the full suite runs them again - cost if wrong: none, the full suite gates the ship
+- tests fast passed=59 failed=0 skipped=0 seconds=16.8
+- tests full passed=13643 failed=0 skipped=12 seconds=414.2
