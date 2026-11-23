@@ -562,3 +562,135 @@ def test_history_median_hidden_share(tmp_path, capsys):
                            for i, s in enumerate((0.5, 1.0, 0.75))))
     assert golden.main(["history", "--root", str(tmp_path)]) == 0
     assert capsys.readouterr().out.strip() == "small: runs 3 median lead $3.00 hidden 0.75 (noise from 5 runs)"
+
+
+# --- B291: golden attempt (host side) and --machine ---
+import signal  # noqa: E402
+
+
+def _attempt_args(tmp_path, repo, case=None, extra=()):
+    f = tmp_path / "case.json"
+    f.write_text(json.dumps(case or {**CASE, "base": "abc"}))
+    d, r = tmp_path / "d", tmp_path / "r" / "row.json"
+    return f, d, r, ["attempt", "--case", str(f), "--n", "2", "--timeout", "60", "--out-dir", str(d), "--row", str(r),
+                     "--src", str(repo), *extra]
+
+
+def test_attempt_cli_writes_row(env, tmp_path, monkeypatch):
+    monkeypatch.delenv("SUPERLITE_FLEET_WORKER", raising=False)
+    flaky(env, [True])
+    fake = Fake()
+    fake.patch = lambda wt, base: "diff --git a/a b/a\n"
+    monkeypatch.setattr(golden, "golden_seal", fake)
+    f, d, r, argv = _attempt_args(tmp_path, env.repo, extra=["--earlier", "0.5,1.0"])
+    assert golden.main(argv) == 0
+    row = json.loads(r.read_text())
+    assert row["case"] == "small" and row["attempt"] == 2 and row["passed"] is True
+    assert row["plugin"] == "" and row["patch"] == "small-2.patch"
+    assert (d / "golden" / "small-2.patch").exists()
+    assert fake.cleaned == fake.clones and len(fake.clones) == 1
+    assert not fake.works[0].parent.exists()
+    assert not Path(str(r) + ".tmp").exists()
+
+
+def test_attempt_cli_bad_case_exits_2(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("SUPERLITE_FLEET_WORKER", raising=False)
+    argv = ["attempt", "--case", str(tmp_path / "nope.json"), "--out-dir", str(tmp_path), "--row", str(tmp_path / "r.json")]
+    assert golden.main(argv) == 2
+    assert capsys.readouterr().err.startswith("golden: cannot read case")
+
+
+def test_attempt_cli_interrupt_cleans_clone(env, tmp_path, monkeypatch):
+    monkeypatch.delenv("SUPERLITE_FLEET_WORKER", raising=False)
+    fake = Fake()
+
+    def boom(clone, timeout_s=5400):
+        raise KeyboardInterrupt
+    fake.wait = boom
+    monkeypatch.setattr(golden, "golden_seal", fake)
+    before = (signal.getsignal(signal.SIGHUP), signal.getsignal(signal.SIGTERM))
+    f, d, r, argv = _attempt_args(tmp_path, env.repo)
+    assert golden.main(argv) == 130
+    assert fake.cleaned == fake.clones and len(fake.clones) == 1
+    assert not r.exists()
+    assert (signal.getsignal(signal.SIGHUP), signal.getsignal(signal.SIGTERM)) == before
+
+
+def test_attempt_cli_sets_hangup_handler(env, tmp_path, monkeypatch):
+    monkeypatch.delenv("SUPERLITE_FLEET_WORKER", raising=False)
+    fake, seen = Fake(), []
+
+    def wait(clone, timeout_s=5400):
+        seen.append(signal.getsignal(signal.SIGHUP))
+        return {"state": "parked", "reason": "BLOCKED (ship not approved)"}
+    fake.wait = wait
+    flaky(env, [True])
+    monkeypatch.setattr(golden, "golden_seal", fake)
+    f, d, r, argv = _attempt_args(tmp_path, env.repo)
+    golden.main(argv)
+    assert seen == [golden._hangup]
+
+
+def test_hangup_raises_keyboard_interrupt():
+    with pytest.raises(KeyboardInterrupt):
+        golden._hangup(signal.SIGHUP, None)
+
+
+MROW = {"v": 1, "row": "golden", "case": "small", "attempt": 1, "passed": True, "why": [], "warn": [], "started": True,
+        "lead_usd": 3.0, "total_usd": 3.5, "lead_turns": 60, "wall_min": 30.0, "plugin": "1.5.244+076a39a", "machine": "mxn"}
+
+
+def _remote(monkeypatch, rows, ready=""):
+    calls = []
+
+    def attempt(*a):
+        calls.append(a)
+        return {**rows[min(len(calls), len(rows)) - 1], "attempt": a[4]}
+    monkeypatch.setitem(sys.modules, "golden_remote", types.SimpleNamespace(ready=lambda label: ready, attempt=attempt))
+    return calls
+
+
+def test_run_machine_sends_attempts_to_remote(env, monkeypatch):
+    calls = _remote(monkeypatch, [MROW])
+    assert golden.run([CASE], env.repo, env.out, rerun=False, machine="mxn") == [MROW]
+    assert calls == [("mxn", CASE, env.repo, 5400, 1, "1.5.244+076a39a", env.out.parent, [], golden.ABORT)]
+    assert [json.loads(x) for x in env.out.read_text().splitlines()] == [MROW]
+
+
+def test_run_machine_reruns_a_failed_attempt(env, monkeypatch):
+    calls = _remote(monkeypatch, [{**MROW, "passed": False, "started": True}, MROW])
+    rows = golden.run([CASE], env.repo, env.out, machine="mxn")
+    assert [c[4] for c in calls] == [1, 2] and len(rows) == 2
+
+
+def test_run_machine_not_run_stops_rerun(env, monkeypatch):
+    calls = _remote(monkeypatch, [{**MROW, "passed": False, "started": False}])
+    golden.run([CASE], env.repo, env.out, machine="mxn")
+    assert len(calls) == 1
+
+
+def test_main_machine_refused_when_not_ready(cli, monkeypatch, capsys):
+    _remote(monkeypatch, [MROW], ready="unreachable: timeout")
+    assert golden.main(["run", "--ids", "small", "--machine", "mxn", "--root", cli.root]) == 2
+    assert capsys.readouterr().err.strip() == "golden: machine mxn: unreachable: timeout"
+    assert cli.seen == []
+
+
+def test_main_machine_passes_machine_to_run(cli, monkeypatch):
+    _remote(monkeypatch, [MROW])
+    got = []
+
+    def fake_run(cases, src, out, rerun=True, timeout_s=5400, seal=None, machine=None):
+        got.append(machine)
+        return [{"case": c["id"], "passed": True, "why": []} for c in cases]
+    monkeypatch.setattr(golden, "run", fake_run)
+    assert golden.main(["run", "--ids", "small", "--machine", "mxn", "--root", cli.root]) == 0
+    assert got == ["mxn"]
+
+
+def test_main_machine_local_runs_here(cli, monkeypatch):
+    def ready(label):
+        raise AssertionError("ready called")
+    monkeypatch.setitem(sys.modules, "golden_remote", types.SimpleNamespace(ready=ready, attempt=None))
+    assert golden.main(["run", "--ids", "small", "--machine", "local", "--root", cli.root]) == 0
+    assert cli.seen == [["small"]]
