@@ -694,3 +694,68 @@ def test_main_machine_local_runs_here(cli, monkeypatch):
     monkeypatch.setitem(sys.modules, "golden_remote", types.SimpleNamespace(ready=ready, attempt=None))
     assert golden.main(["run", "--ids", "small", "--machine", "local", "--root", cli.root]) == 0
     assert cli.seen == [["small"]]
+
+
+# (#1051)
+def write_fleet(clone, workers):
+    (clone / ".superlite").mkdir(parents=True, exist_ok=True)
+    (clone / ".superlite" / "fleet.json").write_text(json.dumps({"workers": workers}))
+
+
+def plugin_tree(tmp_path, version="9.9.9"):
+    p = tmp_path / "plug"
+    (p / ".claude-plugin").mkdir(parents=True)
+    (p / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": version}))
+    return p
+
+
+def test_lead_plugin_names_the_plugin_dir_of_the_lead(env, tmp_path):
+    p = plugin_tree(tmp_path)
+    clone = tmp_path / "clone"
+    write_fleet(clone, {"W1": {"role": "lead", "state": "blocked", "launch": {"argv": ["--model", "opus"]}},
+                        "W2": {"role": "lead", "launch": {"argv": ["--model", "opus", "--plugin-dir", str(p), "--allowedTools", "x"]}},
+                        "W3": {"role": "research", "launch": {"argv": ["--agent", "superlite:researcher"]}}})
+    assert golden.lead_plugin(clone) == "9.9.9+076a39a"
+
+
+def test_lead_plugin_says_installed_without_a_plugin_dir(tmp_path):
+    clone = tmp_path / "clone"
+    write_fleet(clone, {"W1": {"role": "lead", "launch": {"argv": ["--model", "opus", "--permission-mode", "auto"]}}})
+    assert golden.lead_plugin(clone) == "installed"
+
+
+def test_lead_plugin_none_without_a_lead_record(tmp_path):
+    clone = tmp_path / "clone"
+    assert golden.lead_plugin(clone) is None
+    write_fleet(clone, {"W1": {"role": "research", "launch": {"argv": []}}})
+    assert golden.lead_plugin(clone) is None
+    write_fleet(clone, {"W1": {"role": "lead"}})
+    assert golden.lead_plugin(clone) is None
+    (clone / ".superlite" / "fleet.json").write_text("{torn")
+    assert golden.lead_plugin(clone) is None
+    (clone / ".superlite" / "fleet.json").write_text("[]")
+    assert golden.lead_plugin(clone) is None
+
+
+def test_run_row_names_the_lead_plugin(env, tmp_path):
+    flaky(env, [True])
+    p = plugin_tree(tmp_path)
+
+    class Sealed(Fake):
+        def start(self, clone, config=None):
+            write_fleet(clone, {"W1": {"role": "lead", "launch": {"argv": ["--plugin-dir", str(p)]}}})
+            return super().start(clone, config)
+    rows = golden.run([CASE], env.repo, env.out, seal=Sealed())
+    assert rows[0]["lead_plugin"] == "9.9.9+076a39a" and rows[0]["plugin"] == "1.5.244+076a39a"
+    assert json.loads(env.out.read_text().splitlines()[0])["lead_plugin"] == "9.9.9+076a39a"
+
+
+def test_run_row_without_a_lead_record_has_no_lead_plugin(env):
+    flaky(env, [True])
+    rows = golden.run([CASE], env.repo, env.out, seal=Fake())
+    assert rows[0]["passed"] is True and "lead_plugin" not in rows[0]
+
+
+def test_unstarted_row_has_no_lead_plugin(env):
+    rows = golden.run([CASE], env.repo, env.out, rerun=False, seal=Fake(start_ok=False))
+    assert rows[0]["started"] is False and "lead_plugin" not in rows[0]

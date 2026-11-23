@@ -1,0 +1,9 @@
+- start 828ebb61c894b1c95554198268b723aa7a56b10a
+- unblocked: dispatched T1 T2 at 19:29:06; waiting on fixes: none
+- tests fast passed=9 failed=4 skipped=0 seconds=1.2
+- tests fast passed=101 failed=0 skipped=0 seconds=3.7
+- commit T1 b1c10ce7dc sealed lead plugin dir
+- commit T2 6230f0135f golden row lead plugin
+- tests fast passed=122 failed=0 skipped=0 seconds=1.7
+- commit T2 1e1012a78c golden row lead plugin
+- tests full passed=13635 failed=0 skipped=12 seconds=556.5
