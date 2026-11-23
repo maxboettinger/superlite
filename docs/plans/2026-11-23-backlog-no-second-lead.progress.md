@@ -1,0 +1,26 @@
+- start 828ebb61c894b1c95554198268b723aa7a56b10a
+- unblocked: dispatched T2 at 19:31:02; waiting on fixes: T1
+- unblocked: dispatched T1 at 19:31:51; waiting on fixes: none
+- tests fast passed=1 failed=2 skipped=0 seconds=0.8
+- tests fast passed=15 failed=12 skipped=0 seconds=0.8
+- tests fast passed=3 failed=0 skipped=0 seconds=0.7
+- commit T1 ddc84e8805 takeover refuses a live owner
+- commit T2 6a44519013 backlog start skips a live lead
+- tests fast passed=142 failed=1 skipped=0 seconds=11.2
+- tests fast passed=118 failed=1 skipped=0 seconds=10.5
+- tests fast passed=68 failed=0 skipped=0 seconds=5.6
+- tests fast passed=75 failed=1 skipped=0 seconds=4.7
+- tests fast passed=54 failed=1 skipped=0 seconds=5.4
+- tests fast passed=75 failed=1 skipped=0 seconds=5.6
+- tests fast passed=75 failed=1 skipped=0 seconds=5.2
+- tests fast passed=24 failed=1 skipped=0 seconds=0.4
+- tests fast passed=80 failed=0 skipped=0 seconds=5.2
+- tests fast passed=291 failed=0 skipped=0 seconds=14.8
+- Ruling: T2 also commits tests/scripts/test_backlog_run.py - final-review fix outside every Owns
+- commit T2 fb14d39266 backlog start skips a live lead
+- tests full passed=13637 failed=1 skipped=12 seconds=415.2
+- tests fast passed=85 failed=0 skipped=0 seconds=5.9
+- tests fast passed=4 failed=1 skipped=0 seconds=0.8
+- tests fast passed=85 failed=0 skipped=0 seconds=6.0
+- commit T2 afc049926c backlog start skips a live lead
+- tests full passed=13638 failed=0 skipped=12 seconds=426.0

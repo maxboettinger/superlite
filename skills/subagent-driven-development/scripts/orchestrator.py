@@ -6,7 +6,7 @@
     orchestrator.py status [--plan P]
     orchestrator.py bind [--plan P]
     orchestrator.py end [--plan P] [--outcome shipped|done|parked|stopped|failed|abandoned]
-    orchestrator.py takeover [--plan P]
+    orchestrator.py takeover [--plan P] [--force]
     orchestrator.py resume [--plan P]
 
 State: `.superlite/orchestrator.json` {mode, approved, by, time}, in the folder `state.resolve` finds: the plan's git toplevel
@@ -15,7 +15,7 @@ with --plan (the review plan's with `approve --review` and no --plan), else $SUP
 whatever directory the session was launched from. `end` closes a run: it moves the run markers (stable.json, prime.md,
 prime-haiku.md, pool.json) and the gate files (orchestrator.json, human-replies.jsonl) into the main checkout's `.superlite/runs/<time>-<label>/` (with a run.json manifest and copies of the plan and its build report) and
 releases the session's binding, so the coordinator guard stops. `takeover` binds this session to a run folder another
-session owns (`bind --force` plus a one-line message), so `end` and `set` act on it; `end` refuses another live session's folder and names it. In human mode `plan_tools lint --stable`, `dispatch`,
+session owns (`bind --force` plus a one-line message), so `end` and `set` act on it; `end` refuses another live session's folder and names it. `takeover` refuses (exit 2) a run whose owner session still runs (`alive_owner`: its Claude pid answers) unless `--force` (#1047). In human mode `plan_tools lint --stable`, `dispatch`,
 `wave0` and `build_prime` refuse to run (exit 4, one line) until `approve` has been recorded; `schedule --insert` and
 `prune` stay allowed so the plan can be shown whole with its Gantt. In AI mode nothing is gated. With no file nothing is
 gated (existing runs behave as before). `end` also drops the run's idle test trees and orphaned DerivedData (#614). `--ruling` on `set ai` also appends a `Ruling:` line to `.superlite/progress.md`
@@ -442,11 +442,46 @@ def resume_lines(sd: Path, plan: Path) -> list[str]:  # O(t * f) plus git calls
     return lines  # O(1)
 
 
+SECOND_LEAD = "a second session never takes over a live run (a batch lead ends here with Status: BLOCKED second lead); "  # O(1)
+
+
+def alive_owner(sd: Path) -> tuple[str, int] | None:  # (session, pid) of the other session that owns sd, is bound to it and whose Claude process answers, else None (#1047) | O(d)
+    """Unknown is never alive: no pid recorded, Windows, an unusable pid or any probe error give None."""
+    other = state.live_owner(sd)  # O(d)
+    if not other or os.name == "nt":  # O(1)
+        return None  # O(1)
+    try:  # O(1)
+        lines = state._binding(other).read_text(encoding="utf-8").splitlines()  # O(1)
+    except OSError:  # O(1)
+        return None  # O(1)
+    pid_text = lines[1].strip() if len(lines) > 1 else ""  # O(1)
+    if not pid_text.isascii() or not pid_text.isdigit() or int(pid_text) <= 0:  # O(1)
+        return None  # O(1)
+    pid = int(pid_text)  # O(1)
+    mine = os.environ.get("CLAUDE_PID", "")  # O(1)
+    if mine.isascii() and mine.isdigit() and int(mine) == pid:  # a /clear handoff in the same Claude process | O(1)
+        return None  # O(1)
+    try:  # O(1)
+        os.kill(pid, 0)  # O(1)
+    except PermissionError:  # the process exists | O(1)
+        return other, pid  # O(1)
+    except (OSError, ValueError, OverflowError):  # O(1)
+        return None  # O(1)
+    return other, pid  # O(1)
+
+
+def not_pruned_line(sd: Path, other: str) -> str:  # the pool prune refusal line for owner `other` (#1047) | O(d)
+    live = alive_owner(sd)  # O(d)
+    if live and live[0] == other:  # O(1)
+        return f"pool: not pruned: {sd} belongs to session {other}, still running (pid {live[1]}); prune in that session, or once it has ended: sl orchestrator takeover --plan {sd}"  # O(1)
+    return f"pool: not pruned: {sd} belongs to session {other}; take the run over first: sl orchestrator takeover --plan {sd}"  # O(1)
+
+
 def resume(sd: Path, given: str | None) -> int:  # O(t * f) the `resume` command
     """Prune dead pool entries (unless another live session owns sd), then print the per-task report; exit 2 without a plan."""
     other = state.live_owner(sd)  # O(d)
     if other:  # O(1)
-        print(f"pool: not pruned: {sd} belongs to session {other}; take the run over first: sl orchestrator takeover --plan {sd}")  # O(1)
+        print(not_pruned_line(sd, other))  # O(d)
     else:  # O(1)
         import pool  # lazy | O(1)
         try:  # O(1)
@@ -522,6 +557,7 @@ def main(argv=None):  # O(1)
     for p in (s, a_, st, b_, e_, t_, r_):  # O(1)
         p.add_argument("--plan", help="plan path (locates .superlite at its git toplevel; from a subfolder a relative path is also tried at the checkout top); default: the session's binding, else ./.superlite")  # O(1)
     b_.add_argument("--force", action="store_true", help="take over a folder another live session owns")  # O(1)
+    t_.add_argument("--force", action="store_true", help="take over a run whose owner session still runs")  # O(1)
     a = ap.parse_args(argv)  # O(1)
     a.plan = _anchor(a.plan)  # O(d)
     if getattr(a, "review", None):  # O(d)
@@ -562,11 +598,17 @@ def main(argv=None):  # O(1)
             print(f"orchestrator: no run folder {sd}; nothing to take over", file=sys.stderr)  # O(1)
             return 2  # O(1)
         old = state.owner(sd)  # O(1)
+        live = alive_owner(sd)  # O(d)
+        if live and not a.force:  # O(1)
+            print(f"orchestrator: {state._abs(sd)} belongs to session {live[0]}, still running (pid {live[1]}); not taken over: {SECOND_LEAD}"
+                  f"once that session has ended rerun this, or take it over anyway: sl orchestrator takeover --force --plan {state._abs(sd)}", file=sys.stderr)  # O(d)
+            return 2  # O(1)
         if not state.bind(sd, force=True):  # O(b + d)
             print(NO_SESSION, file=sys.stderr)  # O(1)
             return 2  # O(1)
         if old and old != state.session_id():  # O(1)
-            print(f"orchestrator: run {state._abs(sd)} taken over from session {old}; this session owns it now")  # O(d)
+            print(f"orchestrator: run {state._abs(sd)} taken over from session {old}; this session owns it now"
+                  + (f"; session {live[0]} is still running (pid {live[1]})" if live else ""))  # O(d)
         else:  # O(1)
             print(f"orchestrator: session bound to {state._abs(sd)}; no other session owned it")  # O(d)
         return 0  # O(1)
@@ -575,6 +617,10 @@ def main(argv=None):  # O(1)
             print(f"orchestrator: plan not found: {a.plan}; end before removing the worktree", file=sys.stderr)  # O(1)
             return 2  # O(1)
         other = state.live_owner(sd)  # O(d)
+        live = alive_owner(sd)  # O(d)
+        if live:  # O(1)
+            print(f"orchestrator: {sd} belongs to session {live[0]}, still running (pid {live[1]}); not ended; end the run in that session, or once it has ended: sl orchestrator takeover --plan {sd}", file=sys.stderr)  # O(1)
+            return 2  # O(1)
         if other:  # O(1)
             print(f"orchestrator: {sd} belongs to session {other}; not ended; take the run over first: sl orchestrator takeover --plan {sd}", file=sys.stderr)  # O(1)
             return 2  # O(1)
@@ -586,6 +632,11 @@ def main(argv=None):  # O(1)
             bound = state.bind(sd, force=getattr(a, "force", False))  # O(b + d)
         except state.Owned:  # O(1)
             other = state.live_owner(sd) or state.owner(sd)  # O(d)
+            live = alive_owner(sd)  # O(d)
+            if live:  # O(1)
+                print(f"orchestrator: {state._abs(sd)} belongs to session {live[0]}, still running (pid {live[1]}); not {word}: {SECOND_LEAD}pass --plan with your own worktree's plan, "
+                      f"or once that session has ended: sl orchestrator takeover --plan {state._abs(sd)}", file=sys.stderr)  # O(d)
+                return 2  # O(1)
             print(f"orchestrator: {state._abs(sd)} belongs to session {other}; pass --plan with your own worktree's plan, "
                   f"or take the run over: sl orchestrator takeover --plan {state._abs(sd)}", file=sys.stderr)  # O(d)
             return 2  # O(1)

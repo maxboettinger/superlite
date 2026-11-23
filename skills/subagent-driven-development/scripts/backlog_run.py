@@ -532,6 +532,12 @@ def cmd_start(a) -> int:
             print(f"BLOCKED: {bid} not started: worktree ensure gave {wt} ({state}), not a linked worktree under {root}/.claude/worktrees" + (f"; cause: {cause}" if cause else ""))  # O(1)
             code = 2  # O(1)
             continue  # O(1)
+        import orchestrator  # O(1) lazy
+        live = orchestrator.alive_owner(wt / ".superlite")  # O(1) + syscall
+        if live:  # a running lead session gets no second lead (#1047) | O(1)
+            print(f"BLOCKED: {bid} not started: lead session {live[0]} is still running (pid {live[1]}) in {wt}; no second lead: sl backlog wait; to restart it, stop that session first, then sl backlog start {bid} (if pid {live[1]} is not that session, delete {wt}/.superlite/session first)")  # O(1)
+            code = 2  # O(1)
+            continue  # O(1)
         brc, arm = rc, None  # O(1)
         if a.config is None:  # O(1)
             try:  # O(1)
