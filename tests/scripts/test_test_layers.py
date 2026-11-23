@@ -8,6 +8,8 @@ import os
 import shlex
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -491,3 +493,127 @@ def test_stamp_ruling_records_green(repo):
     assert cli(repo, "stamp", "tui", "--ruling", "why").returncode == 0
     assert real_store.is_green(store_file(repo), "tui", tl.layer_hash("tui", repo))
     assert "Ruling: skip tui - why\n" in (repo / ".superlite" / "progress.md").read_text()
+
+
+def session_log(tmp_path, start, name="t.jsonl"):
+    """A Claude Code transcript whose first timestamped line starts the session at epoch `start` (#914)."""
+    ts = datetime.fromtimestamp(start, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    path = tmp_path / name
+    path.write_text("\n".join([json.dumps({"type": "agent-setting"}), "{not json",
+                               json.dumps({"type": "queue-operation", "timestamp": ts}),
+                               json.dumps({"type": "user", "timestamp": "2000-01-01T00:00:00Z"})]) + "\n")
+    return path
+
+
+def stop_input(repo, transcript):
+    return json.dumps({"stop_hook_active": False, "cwd": str(repo), "transcript_path": str(transcript)})
+
+
+def test_session_start_reads_the_first_timestamp(tmp_path):
+    """#914: the first line holding a string `timestamp` starts the session; lines before it without one are skipped."""
+    want = datetime(2026, 11, 18, 12, 29, 59, 168000, tzinfo=timezone.utc).timestamp()
+    path = tmp_path / "t.jsonl"
+    path.write_text('{"type": "agent-setting"}\n{not json\n[1, 2]\n{"timestamp": 5}\n'
+                    '{"type": "queue-operation", "timestamp": "2026-11-18T12:29:59.168Z"}\n'
+                    '{"timestamp": "2026-11-19T00:00:00Z"}\n')
+    assert tl.session_start(str(path)) == pytest.approx(want)
+    path.write_text('{"timestamp": "2026-11-18T12:29:59.168"}\n')
+    assert tl.session_start(str(path)) == pytest.approx(want)
+    path.write_text('{"timestamp": "2026-11-18T13:29:59.168+01:00"}\n')
+    assert tl.session_start(str(path)) == pytest.approx(want)
+
+
+def test_session_start_unknown_gives_none(tmp_path):
+    """#914: no path, an unreadable one, an unparsable first timestamp or none within the caps: the start is unknown."""
+    path = tmp_path / "t.jsonl"
+    for value in (None, 5, "", str(tmp_path / "missing.jsonl"), str(tmp_path)):
+        assert tl.session_start(value) is None
+    path.write_text('{"timestamp": "yesterday"}\n{"timestamp": "2026-11-18T12:29:59Z"}\n')
+    assert tl.session_start(str(path)) is None
+    path.write_text('{"type": "x"}\n' * tl.SESSION_LINES + '{"timestamp": "2026-11-18T12:29:59Z"}\n')
+    assert tl.session_start(str(path)) is None
+    path.write_text(json.dumps({"type": "user", "text": "x" * tl.SESSION_BYTES}) + '\n{"timestamp": "2026-11-18T12:29:59Z"}\n')
+    assert tl.session_start(str(path)) is None
+
+
+def test_changed_since_reads_mtime_ctime_and_removed_files(tmp_path):
+    """#914: a write, a move or copy that keeps an old mtime (ctime) and a removal (its nearest existing folder) count."""
+    root = tmp_path / "r"
+    (root / "a").mkdir(parents=True)
+    (root / "a" / "f").write_text("x")
+    old = time.time() - 3600
+    os.utime(root / "a" / "f", (old, old))
+    now = time.time()
+    assert tl.changed_since(root, ["a/f"], now - 60) is True
+    assert tl.changed_since(root, ["a/f"], now + 60) is False
+    assert tl.changed_since(root, ["a/gone", "b/c/gone"], now + 60) is False
+    assert tl.changed_since(root, ["b/c/gone"], now - 60) is True
+    assert tl.changed_since(root, [], now - 60) is False
+
+
+def test_changed_since_exists_error_gives_true(tmp_path, monkeypatch):
+    """F-T1-1: Path.exists() raising PermissionError (Python 3.10-3.12) is a stat error: True, no crash."""
+    def boom(self):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(Path, "exists", boom)
+    assert tl.changed_since(tmp_path, ["a/f"], time.time() + 60) is True
+
+
+def test_stale_changes_names_each_stale_layers_changed_files(repo, tmp_path, store_api):
+    """#914: each stale layer maps to its files that differ from this checkout's last green run (all of them without one)."""
+    state = tmp_path / "s" / "test-layers.json"
+    changes = tl.stale_changes(repo, state)
+    assert list(changes) == ["unit", "headless", "tui", "evals"] == tl.stale_layers(repo, state)
+    assert changes["unit"] == ["hooks/session-start", "hooks/x"]
+    for layer in tl.LAYERS:
+        store_api.record_green(state, layer, tl.layer_hash(layer, repo), tl.layer_digests(layer, repo), checkout=tl.checkout_key(repo))
+    assert tl.stale_changes(repo, state) == {}
+    (repo / "agents" / "a.md").write_text("changed\n")
+    (repo / "hooks" / "x").unlink()
+    store_api.start_run(state, "evals", tl.layer_hash("evals", repo), os.getpid())
+    assert tl.stale_changes(repo, state) == {"unit": ["hooks/x"], "headless": ["agents/a.md", "hooks/x"]}
+    if isinstance(store_api, FakeStore):
+        store_api.green["tui"] = []
+        assert tl.stale_changes(repo, state)["tui"] == ["hooks/session-start"]
+
+
+def test_hook_silent_when_the_session_changed_no_stale_file(repo, tmp_path):
+    """#914: a reviewer that edited nothing is not gated on changes made before its session started."""
+    stamp_all(repo)
+    (repo / "agents" / "a.md").write_text("changed\n")
+    (repo / "hooks" / "x").unlink()
+    r = cli(repo, "check", "--hook", stdin=stop_input(repo, session_log(tmp_path, time.time() + 60)))
+    assert (r.returncode, r.stdout) == (0, "")
+    r = cli(repo, "check", "--hook", stdin=stop_input(repo, session_log(tmp_path, time.time() - 60)))
+    out = json.loads(r.stdout)
+    assert out["decision"] == "block"
+    assert out["reason"].startswith("unit headless evals not run since the last change: ")
+
+
+def test_hook_ignores_changes_outside_stale_layers_in_the_session(repo, tmp_path):
+    """#914: only a stale layer's file changed in the session keeps the gate; a doc no layer maps does not."""
+    stamp_all(repo)
+    (repo / "agents" / "a.md").write_text("changed\n")
+    time.sleep(0.05)
+    transcript = session_log(tmp_path, time.time())
+    time.sleep(0.05)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "notes.md").write_text("a doc no layer maps\n")
+    r = cli(repo, "check", "--hook", stdin=stop_input(repo, transcript))
+    assert (r.returncode, r.stdout) == (0, "")
+    (repo / "commands" / "a.md").write_text("changed in the session\n")
+    r = cli(repo, "check", "--hook", stdin=stop_input(repo, transcript))
+    assert json.loads(r.stdout)["decision"] == "block"
+
+
+def test_hook_blocks_when_the_session_start_is_unknown(repo, tmp_path):
+    """#914: a missing transcript, one without a timestamp or a non-string path keeps the gate."""
+    stamp_all(repo)
+    (repo / "agents" / "a.md").write_text("changed\n")
+    bare = tmp_path / "bare.jsonl"
+    bare.write_text('{"type": "agent-setting"}\n')
+    for stdin in (stop_input(repo, tmp_path / "missing.jsonl"), stop_input(repo, bare),
+                  json.dumps({"stop_hook_active": False, "cwd": str(repo), "transcript_path": 5})):
+        r = cli(repo, "check", "--hook", stdin=stdin)
+        assert json.loads(r.stdout)["decision"] == "block"
