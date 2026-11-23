@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Golden run: score and run golden cases against sealed clones, append rows to the results file.
 
-golden.py run [--level minor|major | --ids a,b] [--no-rerun] [--timeout S] [--root R]
+golden.py run [--level minor|major | --ids a,b] [--no-rerun] [--timeout S] [--root R] [--machine M]
+golden.py attempt --case F --out-dir D --row R [--n N] [--timeout S] [--earlier a,b] [--src S]  (the host side of --machine)
 golden.py history [ID]
 """
 
@@ -13,6 +14,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -237,18 +239,22 @@ def _attempt(case: dict, src: Path, work: Path, timeout_s: int, seal, n: int, pl
     return {"v": 1, "row": "golden", "case": case["id"], "attempt": n, **res, "plugin": plugin}  # O(1)
 
 
-def _case(case: dict, src: Path, work: Path, rerun: bool, timeout_s: int, seal, plugin: str, out_dir=None, earlier=None) -> list:
+def _case(case: dict, src: Path, work: Path, rerun: bool, timeout_s: int, seal, plugin: str, out_dir=None, earlier=None, machine=None) -> list:
     rows = []  # O(1)
     for n in (1, 2) if rerun else (1,):  # O(2)
         if ABORT.is_set():  # O(1)
             break  # O(1)
-        rows.append(_attempt(case, src, work / f"{case['id']}-{n}", timeout_s, seal, n, plugin, out_dir, earlier))  # O(attempt)
+        if machine:  # O(1)
+            import golden_remote  # lazy: only a machine run needs it | O(1)
+            rows.append(golden_remote.attempt(machine, case, src, timeout_s, n, plugin, out_dir, earlier or [], ABORT))  # O(attempt)
+        else:  # O(1)
+            rows.append(_attempt(case, src, work / f"{case['id']}-{n}", timeout_s, seal, n, plugin, out_dir, earlier))  # O(attempt)
         if rows[-1]["passed"] or not rows[-1].get("started", True):  # a refused start has the same cause again | O(1)
             break  # O(1)
     return rows  # O(1)
 
 
-def run(cases: list, src: Path, out: Path, rerun: bool = True, timeout_s: int = 5400, seal=None) -> list:
+def run(cases: list, src: Path, out: Path, rerun: bool = True, timeout_s: int = 5400, seal=None, machine=None) -> list:
     seal = seal or golden_seal  # O(1)
     ABORT.clear()  # O(1)
     plugin = _plugin(src)  # O(1)
@@ -258,7 +264,7 @@ def run(cases: list, src: Path, out: Path, rerun: bool = True, timeout_s: int = 
     try:  # O(1)
         err = None  # O(1)
         with ThreadPoolExecutor(max_workers=max(len(cases), 1)) as ex:  # O(cases)
-            futs = [ex.submit(_case, c, src, work, rerun, timeout_s, seal, plugin, Path(out).parent, before[c["id"]]) for c in cases]  # O(cases)
+            futs = [ex.submit(_case, c, src, work, rerun, timeout_s, seal, plugin, Path(out).parent, before[c["id"]], machine) for c in cases]  # O(cases)
             try:  # O(1)
                 for f in futs:  # O(cases)
                     try:  # one case failing never drops the rows of the others | O(1)
@@ -310,6 +316,38 @@ def _history(out: Path, cid: str | None) -> int:
     return 0  # O(1)
 
 
+def _hangup(signum, frame) -> None:  # the host workspace closed: end the attempt so its finally stops the clone | O(1)
+    raise KeyboardInterrupt
+
+
+def _host_attempt(a) -> int:  # one attempt on this machine, the row written whole to a file | O(attempt)
+    try:  # O(1)
+        case = json.loads(Path(a.case).read_text(encoding="utf-8"))  # O(size)
+        earlier = [float(x) for x in a.earlier.split(",") if x.strip()]  # O(1)
+    except (OSError, ValueError) as e:  # O(1)
+        print(f"golden: cannot read case {a.case}: {e}", file=sys.stderr)  # O(1)
+        return 2  # O(1)
+    old = {s: signal.getsignal(s) for s in (signal.SIGHUP, signal.SIGTERM)}  # O(1)
+    work = Path(tempfile.mkdtemp(prefix="golden-"))  # O(1)
+    try:  # O(1)
+        for s in old:  # O(1)
+            signal.signal(s, _hangup)  # O(1)
+        row = _attempt(case, Path(a.src).resolve(), work / f"{case['id']}-{a.n}", a.timeout, golden_seal, a.n, "", Path(a.out_dir), earlier)  # O(attempt)
+    except KeyboardInterrupt:  # O(1)
+        return 130  # O(1)
+    finally:  # O(1)
+        for s, h in old.items():  # O(1)
+            signal.signal(s, h)  # O(1)
+        shutil.rmtree(work, ignore_errors=True)  # O(files)
+    dest = Path(a.row)  # O(1)
+    dest.parent.mkdir(parents=True, exist_ok=True)  # O(1)
+    tmp = Path(str(dest) + ".tmp")  # O(1)
+    tmp.write_text(json.dumps(row) + "\n", encoding="utf-8")  # O(row)
+    os.replace(tmp, dest)  # O(1)
+    print(json.dumps(row))  # O(row)
+    return 0  # O(1)
+
+
 def main(argv: list) -> int:
     if os.environ.get("SUPERLITE_FLEET_WORKER"):  # O(1)
         print("golden: refused inside a lead or worker", file=sys.stderr)  # O(1)
@@ -323,6 +361,15 @@ def main(argv: list) -> int:
     r.add_argument("--no-rerun", action="store_true")  # O(1)
     r.add_argument("--timeout", type=int, default=5400)  # O(1)
     r.add_argument("--root", default=".")  # O(1)
+    r.add_argument("--machine")  # O(1)
+    t = sub.add_parser("attempt")  # O(1)
+    t.add_argument("--case", required=True)  # O(1)
+    t.add_argument("--out-dir", required=True)  # O(1)
+    t.add_argument("--row", required=True)  # O(1)
+    t.add_argument("--n", type=int, default=1)  # O(1)
+    t.add_argument("--timeout", type=int, default=5400)  # O(1)
+    t.add_argument("--earlier", default="")  # O(1)
+    t.add_argument("--src", default=".")  # O(1)
     h = sub.add_parser("history")  # O(1)
     h.add_argument("id", nargs="?")  # O(1)
     h.add_argument("--root", default=".")  # O(1)
@@ -330,6 +377,8 @@ def main(argv: list) -> int:
         a = ap.parse_args(argv)  # O(1)
     except SystemExit as e:  # O(1)
         return int(e.code or 0)  # O(1)
+    if a.cmd == "attempt":  # O(1)
+        return _host_attempt(a)  # O(attempt)
     root = Path(a.root).resolve()  # O(1)
     out = results_file(root)  # O(1)
     if a.cmd == "history":  # O(1)
@@ -340,8 +389,15 @@ def main(argv: list) -> int:
     if bad:  # O(1)
         print(f"golden: unknown case {', '.join(bad)}", file=sys.stderr)  # O(1)
         return 2  # O(1)
+    machine = None if a.machine in (None, "", "local") else a.machine  # O(1)
+    if machine:  # O(1)
+        import golden_remote  # lazy: only a machine run needs it | O(1)
+        why = golden_remote.ready(machine)  # O(1)
+        if why:  # O(1)
+            print(f"golden: machine {machine}: {why}", file=sys.stderr)  # O(1)
+            return 2  # O(1)
     try:  # O(1)
-        rows = run([allc[i] for i in ids], root, out, not a.no_rerun, a.timeout)  # O(cases)
+        rows = run([allc[i] for i in ids], root, out, not a.no_rerun, a.timeout, **({"machine": machine} if machine else {}))  # O(cases)
     except Exception as e:  # a failed clone or checkout in seal | O(1)
         print(f"golden: {e}", file=sys.stderr)  # O(1)
         return 2  # O(1)

@@ -9,6 +9,7 @@ and `remote` (label, tree, sd, name, plugin, project, offset, tr); stop records 
 # w = workers, a = agents of a machine, p = path pairs, l = length of a message
 import os  # O(1)
 import re  # O(1)
+import shlex  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
 import time  # O(1)
@@ -422,3 +423,39 @@ def send_task(sd, wid, plan, tasks, sl_path):  # O(w + n + k*s) plus herdr calls
         fio._busy(sd, wid, label, sent)  # O(w)
         fio.pane_label(sd, wid, fio.pane_title(sd, wid, label))  # O(w)
     print(f"{wid} {label} sent")  # O(1)
+
+
+def run_script(label, cwd, script, out, title):  # a Herdr workspace on the host runs `script` in cwd under sh; output and a final "exit N" line go to out; returns the workspace id | O(1)
+    q = shlex.quote  # O(1)
+    d = os.path.dirname(out) or "."  # O(1)
+    full = f'mkdir -p {q(d)}; ( cd {q(cwd)} && {script} ) > {q(out + ".tmp")} 2>&1; echo "exit $?" >> {q(out + ".tmp")}; mv {q(out + ".tmp")} {q(out)}'  # a subshell: an `exit` of the script still leaves the exit line | O(1)
+    with hc.on(label):  # O(1)
+        ws, pane = hc.create_workspace(title, cwd, {})  # O(1)
+        try:  # O(1)
+            hc.run_in_pane(pane, f"sh -c {q(full)}")  # O(1)
+        except hc.HerdrError:  # the caller never got the workspace id: close it here | O(1)
+            with _quiet():  # O(1)
+                hc.close_workspace(ws)  # O(1)
+            raise  # O(1)
+    return ws  # O(1)
+
+
+def script_result(label, out):  # (exit code, output) once the script ended, None while out is absent or partial; a RemoteError propagates | O(B)
+    parts, offset = [], 0  # O(1)
+    while True:  # fr.read returns one chunk per offset: read until an empty chunk | O(B / chunk)
+        data = fr.read(label, out, offset)  # O(chunk)
+        if not data:  # O(1)
+            break  # O(1)
+        parts.append(data)  # O(1)
+        offset += len(data)  # O(1)
+    text = b"".join(parts).decode("utf-8", errors="replace").rstrip("\n")  # O(B)
+    lines = text.split("\n")  # O(B)
+    m = re.fullmatch(r"exit (\d+)", lines[-1]) if text else None  # O(1)
+    if not m:  # O(1)
+        return None  # O(1)
+    return int(m.group(1)), "\n".join(lines[:-1])  # O(B)
+
+
+def close_script(label, ws):  # close the script's workspace; a HerdrError is swallowed | O(1)
+    with hc.on(label), _quiet():  # O(1)
+        hc.close_workspace(ws)  # O(1)
