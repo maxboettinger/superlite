@@ -17,7 +17,7 @@ Flags: `--dry-run`, `--no-golden` (only with `--dry-run`), `--accept-flags`, `--
 Steps:
 1. Preflight: not in a lead or worker, on the default branch, clean tree, level with origin after `git fetch`, tag `v<next>` absent.
 2. Scoreboard: flags stop the run until `--accept-flags`.
-3. Golden batches for the level; results go to `.superlite/golden-results.jsonl`.
+3. Golden batches for the level; results go to the main checkout's `.superlite/golden-results.jsonl`.
 4. Bump with `scripts/bump-version.sh`, then `claude plugin validate --strict .` (skipped when `claude` is missing).
 5. Commit `Release v<version>`, annotated tag, push branch and tag.
 6. `gh release create` with generated notes, starting at the last `X.Y.0` tag.
@@ -50,7 +50,8 @@ A case is `bench/golden/<id>/case.json`: a base commit, frozen issue text, hidde
 - The hidden tests are a score, not a gate: they are the original pull request's tests and check choices the issue does not state, so a correct but different solution fails some of them. The row stores `hidden` (counts) and `hidden_share`; a share below the case's earlier runs only warns.
 - A case whose lead got no slot (machine busy) prints `NOT RUN`, is stored with `started` false and is not rerun.
 - A red case is rerun once unless `--no-rerun`.
-- Each attempt saves the lead's change as `.superlite/golden/<case>-<attempt>.patch` and, for red hidden tests, the end of their output in the row (`hidden_out`).
+- Each attempt saves the lead's change as `.superlite/golden/<case>-<attempt>.patch` beside the results file and, for red hidden tests, the end of their output in the row (`hidden_out`).
+- `--root R` picks the cases and the plugin under test; the results file and the patches stay in the main checkout's `.superlite/` also when R is a linked worktree, so they outlive it (#925).
 - `sl golden history [ID]` prints stored runs. Once a case has 5 runs it also prints the run-to-run noise.
 
 ## Scoreboard
