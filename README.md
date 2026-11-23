@@ -75,13 +75,13 @@ And it is not tied to one language. A TypeScript site generator went from spec t
 You need Claude Code, git, Python 3.10 or newer (the tools are Python; the project you build can be in any language), and `bash` (Git Bash on Windows). `uv` is optional.
 
 ```
-/plugin marketplace add iha2/superlite
+/plugin marketplace add maxboettinger/superlite
 /plugin install superlite@superlite-dev
 ```
 
 Or load a local checkout for one session: `claude --plugin-dir <path-to-superlite>`
 
-Open a fresh session and send `Let's make a react todo list`. A working install starts `brainstorming` before any code is written. Installs for Codex, Cursor, Gemini CLI, OpenCode and the other harnesses are in [Installation](#installation) below.
+Open a fresh session and send `Let's make a react todo list`. A working install starts `brainstorming` before any code is written. Installs for Pi, Gemini CLI and the other harnesses are in [Installation](#installation) below.
 
 ## Use it
 
@@ -133,7 +133,7 @@ Or add a local checkout as a marketplace:
 
 Or install from GitHub:
 
-    /plugin marketplace add iha2/superlite
+    /plugin marketplace add maxboettinger/superlite
     /plugin install superlite@superlite-dev
 
 ### Antigravity
@@ -145,62 +145,6 @@ agy plugin install https://github.com/iha2/superlite
 ```
 
 Antigravity has no session-start hook event, so superlite is not injected at session start there (#942). Reinstall with the same command to update.
-
-### Codex App
-
-> Unverified: superpowers ships on Codex through the official Codex marketplace, which superlite isn't listed in. This repo includes `.agents/plugins/marketplace.json` for a repo marketplace, but the command below hasn't been tested yet.
-
-- Add this repository as a plugin marketplace:
-
-  ```bash
-  codex plugin marketplace add iha2/superlite
-  ```
-
-- In the Codex app, click on Plugins in the sidebar, find `Superlite` in the Coding section, and click the `+` next to it.
-- Add `[features]` `multi_agent = true` to `~/.codex/config.toml` for subagent dispatch.
-
-### Codex CLI
-
-> Unverified: superpowers ships on Codex through the official Codex marketplace, which superlite isn't listed in. This repo includes `.agents/plugins/marketplace.json` for a repo marketplace, but the command below hasn't been tested yet.
-
-- Add this repository as a plugin marketplace:
-
-  ```bash
-  codex plugin marketplace add iha2/superlite
-  ```
-
-- Open the plugin search interface:
-
-  ```bash
-  /plugins
-  ```
-
-- Search for `superlite` and select `Install Plugin`.
-
-### Cursor
-
-- In Cursor Agent chat, install from marketplace:
-
-  ```text
-  /add-plugin superlite
-  ```
-
-- Or search for "superlite" in the plugin marketplace.
-- Or load a local checkout of `https://github.com/iha2/superlite` as a local plugin; Cursor reads `.cursor-plugin/plugin.json`.
-
-### Devin CLI
-
-- Install the plugin from this repository:
-
-  ```bash
-  devin plugins install iha2/superlite
-  ```
-
-- Update to the latest version with:
-
-  ```bash
-  devin plugins update superlite
-  ```
 
 ### Factory Droid
 
@@ -266,41 +210,12 @@ Antigravity has no session-start hook event, so superlite is not injected at ses
   /marketplace
   ```
 
-### Kimi Code
-
-- Open Kimi Code's plugin manager:
-
-  ```text
-  /plugins
-  ```
-
-- Install directly from this repository:
-
-  ```text
-  /plugins install https://github.com/iha2/superlite
-  ```
-
-- Start a fresh session with `/new` afterwards.
-- Detailed docs: [docs/README.kimi.md](docs/README.kimi.md)
-
-### OpenCode
-
-OpenCode uses its own plugin install; install superlite separately even if you already use it in another harness.
-
-- Tell OpenCode:
-
-  ```
-  Fetch and follow instructions from https://raw.githubusercontent.com/iha2/superlite/refs/heads/main/.opencode/INSTALL.md
-  ```
-
-- Detailed docs: [docs/README.opencode.md](docs/README.opencode.md)
-
 ### Pi
 
 Install superlite as a Pi package from this repository:
 
 ```bash
-pi install git:github.com/iha2/superlite
+pi install git:github.com/maxboettinger/superlite
 ```
 
 For local development, run Pi with a checkout loaded as a temporary package:
@@ -326,16 +241,6 @@ Qwen Code installs plugins from Claude Code marketplaces directly.
   ```bash
   qwen extensions update superlite
   ```
-
-### Hermes Agent
-
-Install superlite as a Hermes plugin from this repository:
-
-```bash
-hermes plugins install iha2/superlite --enable
-```
-
-Restart any active Hermes sessions after installing. Hermes has no post-compaction hook, so a very long session that compacts over its first turn loses the bootstrap; start a fresh session if skills stop triggering.
 
 ### Muse
 
