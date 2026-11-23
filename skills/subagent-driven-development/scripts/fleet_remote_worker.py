@@ -4,9 +4,11 @@
 The worker runs in its own tree on the host (`fleet_remote.push`) and loads superlite from a tree of this checkout's commit
 (`claude --plugin-dir`); every Herdr call for it runs inside `herdr_client.on(machine)`. Its worker record carries `machine`
 and `remote` (label, tree, sd, name, plugin, project, offset, tr); stop records and transcripts are mirrored by `fleet_remote.sync`.
+A worker of a sealed spawner (GH_CONFIG_DIR pinned) also starts with `--settings <tree>/.superlite/gh-seal-settings.json`, carried in its start commit, whose env clears the GitHub token variables and points GH_CONFIG_DIR at a folder the host does not have (#1049).
 """
 # Complexity notation:
 # w = workers, a = agents of a machine, p = path pairs, l = length of a message
+import json  # O(1)
 import os  # O(1)
 import re  # O(1)
 import shlex  # O(1)
@@ -72,6 +74,9 @@ def spawn(sd, role, tier, project, label, cfg=None, task=None, plan=None, brief=
         base = trees.base_commit(project)  # O(1)
         mapped = _mapper(sd, project, tree, plugin, plan)  # O(p log p)
         blobs = {}  # O(1)
+        seal = fleet.gh_seal_env(dict(os.environ), gh_dir=f"{tree}/.superlite/gh-config")  # O(1)
+        if seal:  # the seal rides in the start commit, unmapped | O(1)
+            blobs[f".superlite/{fleet.GH_SEAL_FILE}"] = (json.dumps({"env": seal}, indent=2) + "\n").encode("utf-8")  # O(1)
         if launch["prime"]:  # O(1)
             blobs[f".superlite/{prime}"] = mapped((sd / prime).read_bytes())  # O(b)
         if plan:  # O(1)
@@ -96,7 +101,7 @@ def spawn(sd, role, tier, project, label, cfg=None, task=None, plan=None, brief=
         _drop(label, project, sd, wid)  # O(1)
         _blocked(label, str(e) if not isinstance(e, KeyError) else f"no task {e} in the plan")  # O(1)
     name = fs.agent_name(sd, wid)  # O(1)
-    argv = ["--plugin-dir", plugin] + fleet_roles.skills_read(fleet.lean_argv(launch["argv"]), plugin.rstrip("/") + "/skills")  # O(n)
+    argv = ["--plugin-dir", plugin] + (["--settings", f"{tree}/.superlite/{fleet.GH_SEAL_FILE}"] if seal else []) + fleet_roles.skills_read(fleet.lean_argv(launch["argv"]), plugin.rstrip("/") + "/skills")  # O(n)
     env = {**fleet.worker_env(sd, wid, launch["agent"], "", {}), **fleet_roles.env(role)}  # O(1)
     env.pop("CLAUDE_CONFIG_DIR", None)  # the host's default account unless `pick` names a folder | O(1)
     if cdir:  # O(1)

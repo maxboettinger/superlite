@@ -41,7 +41,7 @@ def _env() -> dict:  # the caller's state folder, tokens and stored gh login nev
             _EXIT.append(1)  # O(1)
             atexit.register(_drop_gh)  # O(1)
     env = {k: v for k, v in os.environ.items() if k not in DROP_ENV and not k.startswith("SUPERLITE_FLEET_")}  # O(env)
-    env["GH_CONFIG_DIR"] = _GH_DIR[0]  # an empty config folder: gh has no login | O(1)
+    env["GH_CONFIG_DIR"] = _GH_DIR[0]  # an empty config folder: gh has no file login; the macOS keychain login stays readable to `gh auth token` and the seal sets no invalid token (Max's decision, #1049) | O(1)
     return env  # O(1)
 
 
