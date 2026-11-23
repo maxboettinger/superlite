@@ -96,3 +96,51 @@ def test_unsealed_lead_starts_without_settings(world, tmp_path, monkeypatch):
     r = fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u", "GH_TOKEN": "t"}, rc=fl.run_config.resolve())
     argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent" and c[1] == r["name"])
     assert "--settings" not in argv and not (wt / ".superlite" / fl.GH_SEAL_FILE).exists()
+
+
+# (#1051)
+def test_plugin_dir_is_the_checkout_with_a_plugin_manifest(tmp_path):
+    assert fl.PLUGIN_ROOT == Path(fl.__file__).resolve().parents[3]
+    assert (fl.PLUGIN_ROOT / ".claude-plugin" / "plugin.json").is_file() and fl.plugin_dir() == fl.PLUGIN_ROOT
+    assert fl.plugin_dir(tmp_path) is None
+    (tmp_path / ".claude-plugin").mkdir(); (tmp_path / ".claude-plugin" / "plugin.json").write_text("{}")
+    assert fl.plugin_dir(tmp_path) == tmp_path
+
+
+def test_lead_argv_puts_plugin_dir_after_the_settings():
+    base = fl.lead_argv("/p/sl", "opus")
+    assert fl.lead_argv("/p/sl", "opus", plugin_dir=None) == base and "--plugin-dir" not in base
+    assert fl.lead_argv("/p/sl", "opus", settings="/w/s.json", plugin_dir="/src") == base[:4] + ["--settings", "/w/s.json", "--plugin-dir", "/src"] + base[4:]
+    assert fl.lead_argv("/p/sl", "opus", plugin_dir=Path("/src")) == base[:4] + ["--plugin-dir", "/src"] + base[4:]
+
+
+def test_sealed_lead_loads_the_plugin_of_its_scripts_checkout(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
+    wt, gh = tmp_path / "wt", tmp_path / "gh"
+    wt.mkdir(); gh.mkdir()
+    fleet.main(["on", "--accounts", "claude1,claude3"])
+    r = fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u", "GH_CONFIG_DIR": str(gh)}, rc=fl.run_config.resolve())
+    argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent" and c[1] == r["name"])
+    assert argv.count("--plugin-dir") == 1 and argv[argv.index("--plugin-dir") + 1] == str(fl.PLUGIN_ROOT)
+    assert argv.index("--plugin-dir") == argv.index("--settings") + 2
+    assert json.loads((world.sd / "fleet.json").read_text())["workers"][r["id"]]["launch"]["argv"] == argv
+
+
+def test_unsealed_lead_loads_the_installed_plugin(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
+    wt = tmp_path / "wt"; wt.mkdir()
+    fleet.main(["on", "--accounts", "claude1,claude3"])
+    r = fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u"}, rc=fl.run_config.resolve())
+    argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent" and c[1] == r["name"])
+    assert "--plugin-dir" not in argv
+
+
+def test_sealed_lead_without_a_plugin_manifest_loads_the_installed_plugin(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(fl, "PLUGIN_ROOT", tmp_path / "bare")
+    wt, gh = tmp_path / "wt", tmp_path / "gh"
+    wt.mkdir(); gh.mkdir()
+    fleet.main(["on", "--accounts", "claude1,claude3"])
+    r = fl.spawn_lead(world.sd, wt, "opus", env={"HOME": "/u", "GH_CONFIG_DIR": str(gh)}, rc=fl.run_config.resolve())
+    argv = next(c[2] for c in world.fh.calls if c[0] == "start_agent" and c[1] == r["name"])
+    assert "--settings" in argv and "--plugin-dir" not in argv

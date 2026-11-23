@@ -4,6 +4,8 @@
 golden.py run [--level minor|major | --ids a,b] [--no-rerun] [--timeout S] [--root R] [--machine M]
 golden.py attempt --case F --out-dir D --row R [--n N] [--timeout S] [--earlier a,b] [--src S]  (the host side of --machine)
 golden.py history [ID]
+
+A started row names the plugin its lead loaded as `lead_plugin` (`<version>+<sha>` of the lead's `--plugin-dir`, or `installed`), read from the clone's fleet.json (#1051).
 """
 
 from __future__ import annotations
@@ -159,6 +161,25 @@ def _plugin(src: Path) -> str:
     return f"{v}+{sha.strip()}" if code == 0 and sha.strip() else v  # O(1)
 
 
+def lead_plugin(clone: Path) -> str | None:  # O(workers + argv) the plugin the clone's lead loaded, read from its recorded launch argv
+    try:  # O(1)
+        data = json.loads((Path(clone) / ".superlite" / "fleet.json").read_text(encoding="utf-8"))  # O(1)
+    except (OSError, ValueError):  # O(1)
+        return None  # O(1)
+    workers = data.get("workers") if isinstance(data, dict) else None  # O(1)
+    if not isinstance(workers, dict):  # O(1)
+        return None  # O(1)
+    argv = None  # O(1)
+    for rec in workers.values():  # the last lead record wins: a retried start comes after the blocked one | O(workers)
+        launch = rec.get("launch") if isinstance(rec, dict) and rec.get("role") == "lead" else None  # O(1)
+        if isinstance(launch, dict) and isinstance(launch.get("argv"), list):  # O(1)
+            argv = launch["argv"]  # O(1)
+    if argv is None:  # O(1)
+        return None  # O(1)
+    i = argv.index("--plugin-dir") if "--plugin-dir" in argv else -1  # O(argv)
+    return _plugin(Path(str(argv[i + 1]))) if 0 <= i < len(argv) - 1 else "installed"  # O(1)
+
+
 ABORT = threading.Event()  # set on Ctrl-C: waits end at their next slice
 
 
@@ -209,6 +230,7 @@ def _attempt(case: dict, src: Path, work: Path, timeout_s: int, seal, n: int, pl
             res = {"passed": False, "why": [f"lead did not start: {st.get('out', '')}"], "warn": [], "lead_usd": 0.0,
                    "total_usd": 0.0, "lead_turns": 0, "wall_min": 0.0, "started": False}  # O(1)
         else:  # O(1)
+            lp = lead_plugin(clone)  # O(1)
             w = _await(seal, clone, case, timeout_s)  # O(timeout)
             wt = seal.worktree(clone)  # O(1)
             patch_name = _save_patch(seal, case, wt, out_dir, n) if w.get("state") != "timeout" else ""  # before the hidden tests are written | O(diff)
@@ -217,6 +239,8 @@ def _attempt(case: dict, src: Path, work: Path, timeout_s: int, seal, n: int, pl
             suite_fn = getattr(seal, "suite", None)  # the lead's last full-suite summary, read before cleanup | O(1)
             suite = suite_fn(clone) if suite_fn and w.get("state") != "timeout" else None  # O(1)
             res = {**score(case, {"state": w.get("state"), "reason": w.get("reason", ""), "row": brow, "hidden": hid, "suite": suite, "earlier": earlier}), "started": True}  # O(1)
+            if lp is not None:  # O(1)
+                res["lead_plugin"] = lp  # O(1)
             if hid:  # the facts of the hidden run, so a red one can be diagnosed | O(1)
                 res["hidden"] = {k: hid[k] for k in ("exit", "passed", "failed", "skipped", "errors")}  # O(1)
                 if not hid["ok"]:  # O(1)
