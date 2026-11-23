@@ -1,5 +1,5 @@
 # tests/scripts/test_backlog_run.py
-import json, os, sys, types
+import contextlib, json, os, sys, types
 from pathlib import Path
 import pytest
 from backlog_fixtures import APPROVED, Q, batch as b
@@ -11,8 +11,7 @@ import backlog_state as bs  # noqa: E402
 class Herdr(Exception):
     pass
 
-@pytest.fixture
-def bk(tmp_path, monkeypatch):
+def _bk(tmp_path, monkeypatch):
     root = tmp_path / "main"; (root / ".superlite").mkdir(parents=True)
     ns = types.SimpleNamespace(root=root, sd=root / ".superlite", calls=[], stops={}, states={}, down=False, n=[0], fleets={})
     log = lambda *a: ns.calls.append(a)
@@ -37,11 +36,16 @@ def bk(tmp_path, monkeypatch):
         fakes["backlog_brief"] = types.SimpleNamespace(lead_brief=lambda batch, ctx: f"brief {batch['id']} resume={ctx['resume']}",
                                                       pick_summaries=lambda batch, shipped: ([x["path"] for x in shipped], 0),
                                                       scope_rulings=__import__("backlog_brief").scope_rulings)
+    before = set(sys.modules)
     for k, v in fakes.items():
         monkeypatch.setitem(sys.modules, k, v)
     monkeypatch.setattr(br, "_root", lambda: root); monkeypatch.setattr(br, "_now_ms", lambda: 5000)
     monkeypatch.setattr(br, "_run", lambda cmd, cwd: log("run", cmd[:3], Path(cwd).name) or (0, "shipped #201"))
-    return ns
+    yield ns
+    for k in set(sys.modules) - before - set(fakes):  # a module first imported under the fakes bound them (run_archive's worktree): drop it
+        sys.modules.pop(k, None)
+
+bk = pytest.fixture(_bk)  # no name=: an importer's alias (`import bk as run_bk`) names the fixture
 
 def put(bk, *batches, approved=APPROVED):
     bs.update(bs.path(bk.root), lambda d: d.update({"repo": "o/r", "approved_ship": approved, "batches": list(batches)}))
@@ -65,6 +69,17 @@ def test_start_picks_disjoint_batches_up_to_the_cap(bk, capsys):
     assert (x["state"], x["agent"], x["branch"], x["since"]) == ("running", "sl-m-W1", "superlite/b1-t", 5000) and get(bk, "B2")["state"] == "planned"
     assert "B1" in (w1 / ".superlite" / "briefs" / "lead.md").read_text() and ("send", "W1", "lead.md", "B1") in bk.calls
     assert ("fleet", ["on", "--plan", str(bk.sd)]) in bk.calls
+
+def test_bk_leaks_no_fake_into_a_module_first_imported_under_it(tmp_path, monkeypatch, capsys):
+    # start imports main_cost -> batch_cost -> batch_grade -> run_archive, whose `import worktree` would keep the fake
+    for k in ("main_cost", "batch_cost", "batch_grade", "run_archive"):
+        monkeypatch.delitem(sys.modules, k, raising=False)
+    with pytest.MonkeyPatch.context() as mp, contextlib.contextmanager(_bk)(tmp_path, mp) as ns:
+        put(ns, b("B1", ["a.py"]))
+        assert run(capsys, "start", "B1", "--cap", "1")[0] == 0
+    import run_archive
+    assert not isinstance(run_archive.worktree, types.SimpleNamespace)
+    assert run_archive.archive_dir(ns.sd).parts[-2:] == (".superlite", "runs")
 
 def test_start_refusals(bk, capsys):
     put(bk, b("B1", ["a.py"]), approved=None)
