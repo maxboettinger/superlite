@@ -3,7 +3,9 @@
 project_python(root): the project's own interpreter, found by file lookup and never run:
 `root/.venv/bin/python` (Windows `root/.venv/Scripts/python.exe`), else the same layout under
 the `VIRTUAL_ENV` environment variable, else `sys.executable`. Checks run in it so they see the
-project's packages, not only superlite's.
+project's packages, not only superlite's. #1068: a lead worktree or task tree also finds the main
+checkout's `.venv` (main_checkout reads `.git` files, never runs git); project_cmd(root) returns the
+argv prefix: that interpreter, else `uv run --frozen --project root python` for a uv project, else ours.
 
 pytest_cmd(): command prefix that runs pytest. Uses the current interpreter when it can
 import pytest, else `uv run --no-project --with pytest python -m pytest`, else raises
@@ -42,14 +44,55 @@ def venv_python(venv):  # O(1) two stat calls
     return None  # O(1)
 
 
-def project_python(root):  # O(1) up to four stat calls
-    """root/.venv's interpreter, else the VIRTUAL_ENV one, else sys.executable."""  # O(1)
+def main_checkout(root):  # O(d) d = folders from root up to the first .git; stat and small reads, git never runs
+    """The main checkout holding root: the first .git up the tree is a folder (that checkout) or a linked-worktree file (its commondir's parent); else None."""  # O(1)
+    here = Path(root).resolve()  # O(d)
+    for folder in (here, *here.parents):  # O(d)
+        dot_git = folder / ".git"  # O(1)
+        if dot_git.is_dir():  # O(1) stat
+            return folder  # O(1)
+        if not dot_git.exists():  # O(1) stat
+            continue  # O(1)
+        try:  # O(1)
+            line = dot_git.read_text(encoding="utf-8").strip()  # O(1) small file
+            if not line.startswith("gitdir:"):  # O(1)
+                return None  # O(1)
+            gitdir = folder / line[len("gitdir:"):].strip()  # O(1) relative to the folder holding .git
+            common = (gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()).resolve()  # O(1) commondir may be absolute
+        except (OSError, ValueError):  # unreadable or undecodable link | O(1)
+            return None  # O(1)
+        return common.parent if common.name == ".git" else None  # O(1)
+    return None  # O(1)
+
+
+def found_python(root):  # O(d) up to five stat calls plus the .git walk; None when no venv interpreter exists
+    """root/.venv's interpreter, else the main checkout's .venv one (#1068), else the VIRTUAL_ENV one, else None."""  # O(1)
     found = venv_python(Path(root) / ".venv")  # O(1)
     if found:  # O(1)
         return found  # O(1)
+    main = main_checkout(root)  # O(d)
+    if main is not None and main != Path(root).resolve():  # O(d)
+        found = venv_python(main / ".venv")  # O(1) returned unresolved
+        if found:  # O(1)
+            return found  # O(1)
     env = os.environ.get("VIRTUAL_ENV")  # O(1)
-    found = venv_python(env) if env else None  # O(1)
-    return found or sys.executable  # O(1)
+    return venv_python(env) if env else None  # O(1)
+
+
+def project_python(root):  # O(d) found_python or sys.executable
+    """root/.venv's interpreter, else the main checkout's .venv one (#1068), else the VIRTUAL_ENV one, else sys.executable."""  # O(1)
+    return found_python(root) or sys.executable  # O(d)
+
+
+def project_cmd(root):  # O(d + P) PATH search
+    """argv prefix for the project's python: the found interpreter, else uv run --frozen for a uv project (#1068), else ours."""  # O(1)
+    py = project_python(root)  # O(d)
+    if py != sys.executable or found_python(root):  # a found interpreter that equals ours is still found | O(d)
+        return [py]  # O(1)
+    uv = shutil.which("uv")  # O(P) PATH search
+    if uv and (Path(root) / "uv.lock").is_file() and (Path(root) / "pyproject.toml").is_file():  # O(1) two stats
+        return [uv, "run", "--frozen", "--project", str(root), "python"]  # O(1)
+    return [py]  # O(1)
 
 
 class PytestUnavailable(RuntimeError):  # O(1)
