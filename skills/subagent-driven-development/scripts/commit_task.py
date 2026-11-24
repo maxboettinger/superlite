@@ -38,7 +38,7 @@ task owns are left uncommitted; when its owner is committed and not running and 
 checkpoint, `left uncommitted (owned by T2, changed after its checkpoint; run commit_task T2): F` says so. A changed file another task owns that Tn's fresh fleet report lists (or that nothing but Tn can have written) fails `Tn FAILED: edits F owned by Tm` with a `next: ... --also F --ruling` line (#907). A file another task claims (`--also` or `--claim` ruling) prints nothing when its claimer is in this call or the file equals the newest checkpoint, else `left uncommitted (claimed by T2, changed after its checkpoint; run commit_task T2): F` (claimer committed, not running) or `left uncommitted (claimed by T2; commit_task T2 commits it once T2 is done): F`. Each stderr note
 prints once per call, not once per task). A file this task owns that a running sibling (busy in pool.json, outside this call) also owns and that
 differs from the newest checkpoint is held out: one `left uncommitted (shared with running T2; commit_task T1 again once it is done): F` note per task;
-a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held, py_compile plus an import check on each touched .py file (a file under a `fixtures/` folder is a data script and is skipped, noted `import check skipped (fixture): F`; a `__main__.py` is compiled but not imported, noted `import check skipped (__main__ runs the program): F`; an import that blocks fails `import F:0 TimeoutExpired: import did not finish in N s ...` naming the file, `SUPERLITE_IMPORT_TIMEOUT` (seconds) overrides the 120 s limit; a ModuleNotFoundError for a package found in the repo outside the import roots names the `"pythonpath"` fix), commit
+a task left with nothing fails `nothing to commit; held for running T2: F`; --also files and the Wave 0 task are never held, py_compile plus an import check on each touched .py file (a file under a `fixtures/` folder is a data script and is skipped, noted `import check skipped (fixture): F`; a `__main__.py` is compiled but not imported, noted `import check skipped (__main__ runs the program): F`; an import that blocks fails `import F:0 TimeoutExpired: import did not finish in N s ...` naming the file, `SUPERLITE_IMPORT_TIMEOUT` (seconds) overrides the 120 s limit; a ModuleNotFoundError for a package found in the repo outside the import roots names the `"pythonpath"` fix; #1068: the check runs under the project's environment, a declared main dependency missing there is the non-blocking note `import warning F:L ... (declared dependency not installed under CMD; environment gap, not blocking)`, a uv environment that never starts the check is `import check not run under CMD: WHY (environment gap, not blocking)`, and a standalone script whose top-level code runs the program is never imported, noted `import check skipped (script: top-level code runs the program): F`), commit
 with the task title, append the SHA to the progress ledger, then launch in the
 background `sl probe_run --commit SHA [--plan P]` and, for every seam of the task graph
 (`sl plan_tools taskgraph --format full`) that involves this task and whose both
@@ -70,6 +70,7 @@ Stdlib only.
 # s = seams in the task graph (<= e), c = lines in the progress ledger, x = lines in .git/info/exclude
 # "process spawn" = fork/exec of git, sl or python; dominates wall time over the O(...) CPU term
 import argparse  # O(1)
+import ast  # O(1)
 import json  # O(1)
 import os  # O(1)
 import py_compile  # O(1)
@@ -96,6 +97,7 @@ SURROGATE = re.compile("[\ud800-\udfff]")  # lone surrogates from argv cannot be
 TASK_ID = re.compile(r"\b[A-Z]{1,3}\d+[A-Za-z]?\b")  # O(1)
 
 IMPORT_TIMEOUT = 120  # seconds one import batch may run unless SUPERLITE_IMPORT_TIMEOUT says otherwise | O(1)
+GAP_TAIL = "; environment gap, not blocking)"  # end of an env note about a declared dependency | O(1)
 IMPORT_MARK = "@import-check "  # stdout line the driver prints before each import; the last one names a blocking file | O(1)
 IMPORT_DRIVER = r"""
 # a file inside a package imports by its dotted name from the package base
@@ -104,6 +106,7 @@ sys.dont_write_bytecode = True
 root = os.path.abspath(sys.argv[1])
 roots = sorted((os.path.abspath(os.path.join(root, r)) for r in json.loads(sys.argv[2])), key=len, reverse=True)
 files = sys.argv[3:]
+scripts = set(json.loads(os.environ.get("SUPERLITE_IMPORT_SCRIPTS") or "[]"))
 sys.path.insert(0, root)
 if os.path.isdir(os.path.join(root, "src")):
     sys.path.insert(1, os.path.join(root, "src"))
@@ -130,6 +133,10 @@ for rel in files:
         if dotted[-1] == "__init__":
             dotted = dotted[:-1]
     print("@IMPORT_MARK@" + rel, flush=True)
+    named = bool(parts and all(p.isidentifier() for p in parts)) or bool(dotted and all(p.isidentifier() for p in dotted))
+    if named and rel in scripts:
+        failures.append({"file": rel, "skip": "script: top-level code runs the program"})
+        continue
     try:
         if parts and all(p.isidentifier() for p in parts):
             importlib.import_module(".".join(parts))
@@ -266,42 +273,118 @@ def import_timeout():  # seconds one import batch may run: SUPERLITE_IMPORT_TIME
     return secs if 0 < secs < float("inf") else IMPORT_TIMEOUT  # zero, negative, nan (compares false) and inf fall back to the default | O(1)
 
 
+def _is_main_guard(test):  # `__name__ == "__main__"`, either side | O(1)
+    if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)):  # O(1)
+        return False  # O(1)
+    sides = [test.left, *test.comparators]  # O(1)
+    return (any(isinstance(n, ast.Name) and n.id == "__name__" for n in sides)  # O(1)
+            and any(isinstance(n, ast.Constant) and n.value == "__main__" for n in sides))  # O(1)
+
+
+def runs_on_import(path):  # O(file size) parse and walk; True when the module-level code runs the program (#1068)
+    """True for a standalone script: module-level code (outside def and lambda bodies and the `if __name__ == "__main__":`
+    body) reads sys.argv, parses arguments, exits or raises SystemExit."""
+    try:  # O(1)
+        tree = ast.parse(Path(path).read_text(encoding="utf-8", errors="replace"))  # O(size)
+    except (OSError, SyntaxError, ValueError):  # O(1)
+        return False  # O(1)
+    argv_name = any(isinstance(n, ast.ImportFrom) and n.module == "sys" and any(a.name == "argv" and not a.asname for a in n.names)  # O(nodes)
+                    for n in ast.walk(tree))  # O(nodes)
+
+    def hit(n):  # O(1)
+        if isinstance(n, ast.Attribute):  # O(1)
+            if isinstance(n.value, ast.Name) and (n.value.id, n.attr) in {("sys", "argv"), ("sys", "exit"), ("os", "_exit")}:  # O(1)
+                return True  # O(1)
+            return False  # O(1)
+        if isinstance(n, ast.Name):  # O(1)
+            return argv_name and n.id == "argv" and isinstance(n.ctx, ast.Load)  # O(1)
+        if isinstance(n, ast.Call):  # O(1)
+            f = n.func  # O(1)
+            return (isinstance(f, ast.Attribute) and f.attr in ("parse_args", "parse_known_args")) \
+                or (isinstance(f, ast.Name) and f.id in ("exit", "quit"))  # O(1)
+        if isinstance(n, ast.Raise):  # O(1)
+            e = n.exc.func if isinstance(n.exc, ast.Call) else n.exc  # O(1)
+            return isinstance(e, ast.Name) and e.id == "SystemExit"  # O(1)
+        return False  # O(1)
+
+    def walk(node):  # O(nodes)
+        for child in ast.iter_child_nodes(node):  # O(children)
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):  # O(1)
+                continue  # O(1)
+            if hit(child):  # O(1)
+                return True  # O(1)
+            if isinstance(child, ast.If) and _is_main_guard(child.test):  # O(1)
+                if any(walk_stmt(st) for st in child.orelse):  # O(nodes)
+                    return True  # O(1)
+                continue  # O(1)
+            if walk(child):  # O(nodes)
+                return True  # O(1)
+        return False  # O(1)
+
+    def walk_stmt(st):  # a statement node itself, then its children | O(nodes)
+        if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):  # O(1)
+            return False  # O(1)
+        if isinstance(st, ast.If) and _is_main_guard(st.test):  # O(1)
+            return any(walk_stmt(x) for x in st.orelse)  # O(nodes)
+        return hit(st) or walk(st)  # O(nodes)
+
+    return walk_stmt(tree)  # O(nodes)
+
+
 def import_errors(files, roots=None, root=".", notes=None):  # O(m_py * import cost) + 1 process spawn (batched)
-    """Import every file once under the project's own interpreter (root/.venv, VIRTUAL_ENV, else ours).
-    Files no import can name are skipped; a missing optional dependency is a warning. Both go to notes."""
+    """Import every file once under the project's own environment (_pyrun.project_cmd: its interpreter, else uv run).
+    Files no import can name are skipped, and so is a script whose top-level code runs the program (#1068); a missing
+    optional dependency is a warning; a missing declared main dependency, or a uv environment that never started the
+    check, is a non-blocking environment gap (#1068). All go to notes."""
     if not files:  # O(1)
         return []  # O(1)
-    py = _pyrun.project_python(root)  # O(1) file lookups, never run
+    cmd = _pyrun.project_cmd(root)  # O(1) file lookups, never run
+    uv = len(cmd) > 1  # the uv run command | O(1)
+    shown = " ".join(cmd) if uv else os.path.abspath(cmd[0])  # O(a)
     secs = import_timeout()  # O(1)
+    scripts = [f for f in files if runs_on_import(Path(root) / f)]  # O(total size)
+
+    def gap(why):  # O(m) one env note per file, nothing blocks
+        if notes is not None:  # O(1)
+            notes.extend(("env", f, 0, f"import check not run under {shown}: {why} (environment gap, not blocking)") for f in files)  # O(m)
+        return []  # O(1)
     try:  # O(1)
-        r = subprocess.run([py, "-I", "-c", IMPORT_DRIVER, str(root), json.dumps(list(roots or [])), *files],  # O(output) + process spawn
+        r = subprocess.run([*cmd, "-I", "-c", IMPORT_DRIVER, str(root), json.dumps(list(roots or [])), *files],  # O(output) + process spawn
                            capture_output=True, text=True, encoding="utf-8", timeout=secs,  # O(1)
-                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})  # O(1)
+                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "SUPERLITE_IMPORT_SCRIPTS": json.dumps(scripts)})  # O(1)
     except OSError as e:  # a venv interpreter that cannot start (not executable, wrong platform): a block, not a traceback | O(1)
-        return [(files[0], 0, f"import check crashed under {os.path.abspath(py)}: {e}"[:300])]  # O(1)
+        return [(files[0], 0, f"import check crashed under {shown}: {e}"[:300])]  # O(1)
     except subprocess.TimeoutExpired as e:  # a top-level import that blocks: a check result naming the file, not a crash | O(output)
         got = e.stdout or ""  # bytes or None after the kill | O(1)
         got = got.decode("utf-8", errors="replace") if isinstance(got, bytes) else got  # O(output)
         marks = [ln[len(IMPORT_MARK):] for ln in got.splitlines() if ln.startswith(IMPORT_MARK)]  # O(output)
+        if uv and not marks:  # uv still building the environment: no check ran | O(1)
+            return gap(f"the environment did not start in {secs:g} s")  # O(m)
         msg = (f"TimeoutExpired: import did not finish in {secs:g} s "  # O(1)
                '(top-level code that blocks: move it under if __name__ == "__main__":)')  # O(1)
         return [(marks[-1] if marks else files[0], 0, msg)]  # O(1)
     try:  # O(1)
         out = json.loads(r.stdout.strip().splitlines()[-1])  # O(output)
     except (IndexError, json.JSONDecodeError):  # O(1)
-        return [(files[0], 0, f"import check crashed under {os.path.abspath(py)}: {r.stderr.strip()[-150:]}")]  # O(1) absolute, so the log names the exact file
+        if uv and IMPORT_MARK not in r.stdout:  # uv failed before the check started | O(output)
+            return gap(r.stderr.strip()[-150:])  # O(m)
+        return [(files[0], 0, f"import check crashed under {shown}: {r.stderr.strip()[-150:]}")]  # O(1) absolute, so the log names the exact file
     main, optional = _pyproject_deps(root) if any(not f.get("skip") for f in out) else (set(), set())  # O(size)
     errors = []  # O(1)
     for f in out:  # O(failures)
         if f.get("skip"):  # O(1)
             if notes is not None:  # O(1)
-                notes.append(("skip", f["file"], 0, "no module name"))  # O(1)
+                notes.append(("skip", f["file"], 0, f["skip"] if isinstance(f["skip"], str) else "no module name"))  # O(1)
             continue  # O(1)
         m = re.match(r"ModuleNotFoundError: No module named '([^'.]+)", f["error"])  # O(len)
         name = re.sub(r"[-.]+", "_", m.group(1)).lower() if m else None  # O(len)
         if name and name in optional and name not in main:  # O(1)
             if notes is not None:  # O(1)
                 notes.append(("warn", f["file"], f["line"], f["error"]))  # O(1)
+            continue  # O(1)
+        if name and name in main and re.fullmatch(r"ModuleNotFoundError: No module named '[^'.]+'", f["error"]):  # a declared dependency missing from the environment | O(1)
+            if notes is not None:  # O(1)
+                notes.append(("env", f["file"], f["line"], f"{f['error']} (declared dependency not installed under {shown}{GAP_TAIL}"))  # O(1)
             continue  # O(1)
         err = f["error"]  # O(1)
         if m:  # a package that sits in the repo outside the import roots: name the pythonpath fix (#712) | O(1)
@@ -977,6 +1060,8 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         for kind, f, line, msg in gate:  # O(notes) iterations
             if kind == "skip":  # O(1)
                 print(f"import check skipped ({msg}): {f}", file=sys.stderr)  # O(1)
+            elif kind == "env":  # O(1)
+                print(f"import warning {f}:{line} {msg}", file=sys.stderr)  # O(1)
             else:  # O(1)
                 print(f"import warning {f}:{line} {msg} (optional dependency not installed; not blocking)", file=sys.stderr)  # O(1)
     if problems:  # O(1)

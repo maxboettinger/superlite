@@ -52,13 +52,13 @@ def test_optional_dependency_is_a_warning(tmp_path):
 
 
 @NEW_PY
-def test_main_dependency_still_blocks(tmp_path):
+def test_main_dependency_is_an_environment_gap(tmp_path):
+    """#1068 reverses #471's block: a declared main dependency missing from the environment is a gap, not a code error."""
     write(tmp_path, "pyproject.toml", '[project]\ndependencies = ["marimo_absent_xyz"]\n' + OPT)
     write(tmp_path, "notebooks/frame.py", "import marimo_absent_xyz\n")
     notes = []
-    errs = commit_task.import_errors(["notebooks/frame.py"], [], root=tmp_path, notes=notes)
-    assert len(errs) == 1
-    assert [n for n in notes if n[0] == "warn"] == []
+    assert commit_task.import_errors(["notebooks/frame.py"], [], root=tmp_path, notes=notes) == []
+    assert [n[:3] for n in notes] == [("env", "notebooks/frame.py", 1)]
 
 
 @NEW_PY
