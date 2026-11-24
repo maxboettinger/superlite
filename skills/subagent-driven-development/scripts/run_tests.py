@@ -15,7 +15,7 @@ A red xcodebuild run that never reached its test runner (testmanagerd) is the sa
 A red pytest id in the output is placed at its file with its message and line when the file exists, else it stays `-::<id>: <message>` (B119).
 A red Swift (xcodebuild) run reports each failure at its file and line (`failure_sites`, #499); a counted `--fast` run limited to Swift files covers them, so a later green run closes those files' located failures and an uncounted run closes none.
 When a run prints no test count and exits 0, the stop names the runner's own "no tests" line (`; runner: <line>`).
-Every run keeps its full output (pytest with `-rP`, so a passing test's prints show) in `<summary stem>.output.log` beside the summary (newest 20 kept); the summary's `output` names it, a foreground run prints `run_tests: output <path>` and `--wait` prints `output: <path>` right before its summary line (#501).
+Every run keeps its full output (pytest with `-rP`, so a passing test's prints show) in `<summary stem>.output.log` beside the summary (newest 20 kept); the summary's `output` names it, a foreground run prints `run_tests: output <path>` and `--wait` prints `output: <path>` right before its summary line (#501). `--wait`'s stdout JSON leaves out `files` and the keys its stderr lines print (`WAIT_STDERR_KEYS`: output, warning, tree, lacks, drift, result_bundles); the summary file its `summary` key names keeps them (#1085).
 A no-result stop keeps its command, exit and output in `.superlite/no-result-*.log` (newest 20) and its incident carries them as `target`, `command`, `exit`, `log`.
 An isolated tree run writes `tree` (relative to the run root), `lacks` (changed files of the run root the tree lacks) and `drift` (files that changed while it ran) to the summary, and a run whose command or output names an `.xcresult` result bundle writes `result_bundles` (a tree run warns about one outside its tree, except a `maxapp` command); `--wait`, `fleet wait --tests` and one stderr line `run_tests: tested <tree; lacks; drift; bundle>` (`run_tests: result bundle <path>` without a tree) repeat them (#818).
 An isolated `--task` run prints a stderr `tree` line; its `--fast` tree overlays every working-tree change except files owned by unfinished sibling tasks (kept at base, named on the line), a `--full` tree the task's own files.
@@ -663,6 +663,14 @@ def failing_text(f):  # `<head>: <reason>` of one failure for the --wait line: t
     return f"{head[:60]}: {rest[:90]}" if rest else head[:60]  # O(1)
 
 
+WAIT_STDERR_KEYS = ("output", "warning", "tree", "lacks", "drift", "result_bundles")  # the keys --wait's stderr lines print (#1085)
+
+
+def wait_shown(data, summary):  # --wait's stdout JSON: no per-file counts, no key its stderr prints | O(keys)
+    drop = set(WAIT_STDERR_KEYS) | {"files"}  # O(1)
+    return {**{k: v for k, v in data.items() if k not in drop}, "summary": summary}  # O(keys)
+
+
 def summary_line(data):  # the last line of --wait: counts, mode and error | O(1)
     head = f"tests ({data['mode']})" if data.get("mode") else "tests"  # O(1)
     if data.get("paths_dropped"):  # the command took no paths and ran whole (#708) | O(1)
@@ -830,8 +838,7 @@ def wait_background(a):  # O(timeout / POLL_SECONDS) polls
             print(f"tests: no result yet after {limit:g} s{alive}; run again: {wait_line(mine)[len('wait: '):]}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         time.sleep(POLL_SECONDS)  # O(1)
-    shown = {k: v for k, v in data.items() if k != "files"}  # the file on disk keeps the per-file counts | O(keys)
-    print(json.dumps({**shown, "summary": str(Path(mine).resolve())}, ensure_ascii=False, indent=1))  # O(summary size)
+    print(json.dumps(wait_shown(data, str(Path(mine).resolve())), ensure_ascii=False, indent=1))  # O(summary size)
     sys.stdout.flush()  # O(1)
     if data.get("output"):  # O(1)
         print(f"output: {data['output']}", file=sys.stderr)  # O(1)
