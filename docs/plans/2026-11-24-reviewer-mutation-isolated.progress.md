@@ -1,0 +1,14 @@
+- start f1019a4e24800f03164415278b3d006d541f7ac8
+- unblocked: dispatched T1 T2 at 13:33:42; waiting on fixes: none
+- tests fast passed=0 failed=2 skipped=0 seconds=0.5
+- tests fast passed=5 failed=10 skipped=0 seconds=4.3
+- tests fast passed=2 failed=0 skipped=0 seconds=0.3
+- tests fast passed=14 failed=0 skipped=0 seconds=0.4
+- tests fast passed=65 failed=0 skipped=0 seconds=19.8
+- commit T1 02e4093597 commit_task holds reviewer scope
+- commit T2 a5762ccc77 reviewer mutation worktree rule
+- tests fast passed=68 failed=0 skipped=0 seconds=34.8
+- tests fast passed=10 failed=0 skipped=0 seconds=4.9
+- commit T1 9cdab91a80 commit_task holds reviewer scope
+- tests fast passed=4 failed=0 skipped=0 seconds=21.4
+- tests full passed=13994 failed=0 skipped=12 seconds=458.2
