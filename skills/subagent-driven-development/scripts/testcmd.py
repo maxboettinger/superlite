@@ -16,7 +16,7 @@ vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo
 `not_code` in (a) is a list of globs of paths that are not code (read by not_code_globs, returned as spec["not_code"]).
 `cwd` in (a) is the folder, relative to the project root (`.` is the root), that run_tests runs `setup` and the test command in (run_tests.run_folder checks it; unset: the `.maxapp` package folder, else the root); resolve returns it as written as spec["cwd"], `""` when unset, so `sl testcmd` prints it.
 `{only_testing}` expands (to `--only <Target>/<Suite>` pairs in a `maxapp test` command) to one shell-quoted -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing); the target comes from Xcode target membership and Package.swift test targets, else the folder name; a path in no test target runs the unfiltered `test` command.
-Library: resolve, file_slot_note (a {file} typo for {files} in a config's test or test_file, said once per process), propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, select_affected (the test files a change touches, by changed file, name, related template, Swift module, test-map and mention; a shared-setup change selects everything), pytest_testpaths, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit), xcsift_summary (the `summary` object's int `passed_tests`, `failed_tests` and `skipped_tests` and the `failed_tests` entries of xcsift's JSON, when no raw xcodebuild lines were printed; summed over every summary block in the output, a block that counted tests keeps only errors with a line, #1076). Stdlib only.
+Library: resolve, unfiltered_paths (the --fast paths resolve would widen to the unfiltered `test` command, so run_tests can skip them, #1119), file_slot_note (a {file} typo for {files} in a config's test or test_file, said once per process), propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, select_affected (the test files a change touches, by changed file, name, related template, Swift module, test-map and mention; a shared-setup change selects everything), pytest_testpaths, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit), xcsift_summary (the `summary` object's int `passed_tests`, `failed_tests` and `skipped_tests` and the `failed_tests` entries of xcsift's JSON, when no raw xcodebuild lines were printed; summed over every summary block in the output, a block that counted tests keeps only errors with a line, #1076). Stdlib only.
 """
 # Complexity notation:
 #   m = marker files checked, f = files walked for the Python test-file scan (bounded), o = output lines
@@ -1505,6 +1505,19 @@ def resolve(root=".", paths=(), notes: list | None = None):  # O(m + f)
             command = command.replace("{only_testing}", ids)  # O(p)
     return {"language": lang, "isolate": iso, "python": False, "command": command, "junit": cfg.get("junit") or "",  # O(1)
             "env": cfg.get("env") or {}, "setup": cfg.get("setup") or "", "source": src, "origin": origin, "lock": lock_enabled(cfg), "destinations": destinations(cfg), "not_code": not_code_globs(cfg), "cwd": cfg.get("cwd", ""), "paths_dropped": dropped}  # O(1)
+
+
+def unfiltered_paths(root, paths: list[str]) -> list[str]:  # the paths resolve would widen to the unfiltered `test` command; prints nothing (#1119) | O(p*files)
+    root = Path(root)  # O(1)
+    cfg = config_source(root)[0]  # O(m + f)
+    if cfg is None or (cfg.get("test") is None and cfg.get("language") == "python"):  # O(1)
+        return []  # O(1)
+    template = cfg.get("test_file") or cfg["test"]  # O(1)
+    if "{only_testing}" in template:  # wins over {names}, as in resolve | O(len)
+        return [p for p in paths if xcode_only_testing(root, [p], [])[0] is None]  # O(p*files)
+    if "{names}" in template and (cfg.get("language") == "swift" or any(str(p).endswith(".swift") for p in paths)):  # O(p)
+        return [p for p in paths if swift_names(root, [p]) is None]  # O(p*files)
+    return []  # O(1)
 
 
 NAME_PATTERNS = [r"^--- FAIL: (\S+)", r"^test (\S+) \.\.\. FAILED", r"^\s*(?:FAIL|✗|×|✕)\s+(.+?)\s*$", r"^\s*Failed\s+((?:[\w`]+(?:\.|::|/))+[\w`]\S*)",  # a dotted, `::` or path name: "Failed to connect" is no test | O(1)
