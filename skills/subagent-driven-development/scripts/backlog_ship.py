@@ -4,6 +4,7 @@
 `done --pr N [--version X]` runs in the main session: it records a batch main shipped by hand (PR merged); the batch may be planned, with no lead or worktree (#585, #586). It only cleans up (never runs `maxapp ship`; the worktree goes by `git worktree remove`, the branch by `-d`, or `-D` when it is the PR head, #587).
 `lock` and `merge --from-main` merge a branch already on origin (`origin/<branch>`, then `origin/<default>`) and rebase an unpushed one (#587); a merge conflict keeps the lock (lock) or runs `git merge --abort` (--from-main).
 `--wait` alone waits until the lock is free; the lock is served first come first served and the WAIT line names the queue place (#588). A `maxapp ship` timeout with a healthy PR (open, not DIRTY, no red check) is a RERUN that does not count as a run, up to 30 times (#588).
+A lock rerun after a resolved CONFLICT compares the tree before the first sync (batch key `sync_before_tree`, #1074); `merge` reruns `maxapp ship` once after 15 s on a transient GitHub error (#1075).
 `merge --from-main` runs in the main session: it ships a parked batch (lock as main, rebase, second bump, maxapp ship, then done's bookkeeping).
 A lead resumed after a crash has no fleet env: its ship call parks the batch and names the start command as the fix.
 
@@ -217,6 +218,14 @@ def tree_line(wt, before):  # O(output)
     return f"TREE: changed by the sync{what}: run the full suite once (sl run_tests --full) before bump"  # O(1)
 
 
+TRANSIENT = re.compile(r"(?i)something went wrong|submitted too quickly|HTTP 5\d\d|returned error: 5\d\d|internal server error|bad gateway|service unavailable|gateway time-?out")  # O(1)
+
+
+def transient(out):  # O(len(out))
+    """True when a failed maxapp ship run's output names a transient GitHub error (#1075)."""
+    return bool(TRANSIENT.search(out or ""))  # O(len(out))
+
+
 def _lock(a, ctx):  # O(wait)
     b, wt = ctx["batch"], ctx["wt"]  # O(1)
     owner = {"batch": b["id"], "lead": b["lead"], "agent": b.get("agent"), "repo": ctx["repo"]}  # O(1)
@@ -229,11 +238,16 @@ def _lock(a, ctx):  # O(wait)
         return _out(3, "\n".join(lines + [f"BLOCKED: git fetch origin failed: {_tail(out)}; lock held"]))  # O(1)
     _, ref = _run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], wt)  # O(1)
     default = (ref.strip().split("/", 1)[-1] if ref.strip() else "") or "main"  # O(1)
-    before = _run(["git", "rev-parse", "HEAD^{tree}"], wt)[1].strip()  # O(1)
+    stored = b.get("sync_before_tree")  # O(1)
+    before = stored or _run(["git", "rev-parse", "HEAD^{tree}"], wt)[1].strip()  # O(1)
     conflict = _sync(ctx, default, False)  # O(output)
     if conflict:  # O(1)
+        if not stored and before:  # O(1)
+            _set(ctx["root"], b["id"], sync_before_tree=before)  # O(batches)
         return _out(5, "\n".join(lines + [conflict]))  # O(1)
     tree = tree_line(wt, before)  # O(output)
+    if stored:  # O(1)
+        _set(ctx["root"], b["id"], sync_before_tree=None)  # O(batches)
     if tree:  # O(1)
         lines.append(tree)  # O(1)
     stale = _layers(wt)  # O(output)
@@ -503,6 +517,10 @@ def _merge(a, ctx):  # O(1)
     except Exception:  # O(1)
         pass  # O(1)
     rc, out = _run(cmd, wt)  # O(output)
+    if rc not in (0, 3, 4) and transient(out):  # O(len(out))
+        ctx.setdefault("pre", []).append("maxapp ship hit a transient GitHub error; retried once after 15 s")  # O(1)
+        _sleep(15)  # O(1)
+        rc, out = _run(cmd, wt)  # O(output)
     if rc == 3:  # O(1)
         _set(root, bid, ship_reds=(b.get("ship_reds") or 0) + 1)  # O(batches)
     if rc == 0:  # O(1)
@@ -553,13 +571,14 @@ def _merge(a, ctx):  # O(1)
         return _out(3, "\n".join(ctx.get("pre", []) + [f"BLOCKED: maxapp ship timed out {MAX_RUNS} times; lock released"]))  # O(1)
     if ctx.get("main"):  # O(1)
         return _give_up(ctx, 3, f"BLOCKED: maxapp ship failed ({_tail(out)})")  # O(1)
-    return _out(3, f"BLOCKED: maxapp ship failed ({_tail(out)}); lock held")  # O(1)
+    return _out(3, "\n".join(ctx.get("pre", []) + [f"BLOCKED: maxapp ship failed ({_tail(out)}); lock held"]))  # O(1)
 
 
 def _release(a, ctx):  # O(1)
     import ship_lock  # O(1)
     bid = ctx["batch"]["id"]  # O(1)
     held = ship_lock.release(ctx["lock"], bid)  # O(1)
+    _set(ctx["root"], bid, sync_before_tree=None)  # O(batches)
     text = f"{bid} lock released" if held else f"{bid} lock not held"  # O(1)
     if a.park:  # O(1)
         _set(ctx["root"], bid, state="parked", reason=a.park, parked_at=_now_ms())  # O(batches)

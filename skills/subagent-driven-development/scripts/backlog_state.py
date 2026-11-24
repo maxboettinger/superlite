@@ -3,6 +3,7 @@
 
 An `outside[]` entry with a non-empty string `reason` is a left-out issue (the plan did not take it): it never becomes an
 Admit question and `status_lines` prints it grouped by reason. An entry without one is an outside-author issue.
+A parked batch's unanswered plan questions are open questions like a planned batch's (#1073).
 `status_lines` collapses the shipped batches of earlier plan rounds into one `earlier rounds: N shipped` line; `status --all` lists them (#406)."""
 import fcntl
 import json
@@ -195,7 +196,7 @@ def open_questions(data: dict) -> list:
             {"label": "Admit", "description": "triaged on the next sl backlog plan"},
             {"label": "Skip", "description": "stays out of this backlog"}]})
     for b in data.get("batches", []):  # O(batches * questions)
-        if b["state"] == "planned":
+        if b["state"] in ("planned", "parked"):  # O(1)
             out.extend({**q, "question": f"{b['id']}: {q['question']}"} for q in _unanswered(b))
     if data.get("approved_ship") is None and data.get("batches"):
         out.append({"question": SHIP_Q, "header": "Ship", "multiSelect": False, "options": [
