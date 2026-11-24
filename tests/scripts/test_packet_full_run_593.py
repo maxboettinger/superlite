@@ -114,7 +114,7 @@ def test_packet_section4_lists_tasks_committed_after_the_full_run(tmp_path):
 def test_error_is_cut_at_120_and_a_recorded_summary_without_scope_says_external(tmp_path):
     long = s("full", 500.0, 0, 1, 0, error="e" * 300)
     text, _ = pt.read_test_summary(write(tmp_path / "test-summary.json", FULL), runs=[long, FULL])
-    assert text.splitlines()[-1].endswith("error: " + "e" * 120)
+    assert text.splitlines()[-1].endswith("error: " + "e" * 120 + "[… 180 chars cut …]")
     rec = {k: v for k, v in REC.items() if k != "scope"}
     text, _ = pt.read_test_summary(write(tmp_path / "test-summary.json", rec), runs=[rec])
     assert text.startswith("- recorded external run outside run_tests")

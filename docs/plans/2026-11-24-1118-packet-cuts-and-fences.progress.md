@@ -1,0 +1,12 @@
+- start e903fa87464d79a94bab615dc5c80eddf606004c
+- unblocked: dispatched T1 at 14:58:37; waiting on fixes: none
+- tests fast passed=1 failed=9 skipped=0 seconds=1.0
+- tests fast passed=73 failed=0 skipped=0 seconds=20.0
+- commit T1 d3d442a143 packet cuts marked, fences outlast inner fences
+- tests fast passed=73 failed=0 skipped=0 seconds=3.5
+- tests full passed=14082 failed=1 skipped=12 seconds=490.5
+- tests fast passed=25 failed=0 skipped=0 seconds=0.5
+- commit T1 f744bf6609 packet cuts marked, fences outlast inner fences
+- Ruling: T1 also commits tests/scripts/test_packet_full_run_593.py - the #593 test asserted the old unmarked 120-char error cut that #1118 replaces with a marked one
+Ruling: test_packet_full_run_593 asserted the unmarked [:120] error cut #1118 replaces; one assert now expects the marker (F1, commit_task T1 --also) - spec binds - cost if wrong: one test line
+- tests full passed=14083 failed=0 skipped=12 seconds=891.0
