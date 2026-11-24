@@ -30,6 +30,7 @@ import herdr_client as hc  # noqa: E402 | O(1)
 import plan_tools as pt  # noqa: E402 | O(1)
 import remote_apply as ra  # noqa: E402 | O(1)
 import routing  # noqa: E402 | O(1)
+import task as taskmod  # noqa: E402 | O(1)
 import trees  # noqa: E402 | O(1)
 
 WRITE_ROLES = ("implementer", "fixer", "package-reviewer")  # a write worker takes one task or brief; its tree comes home as a snapshot | O(1)
@@ -43,6 +44,20 @@ SIGNED_OUT = "account_signed_out"  # the error code of a prompt the host's accou
 SNAPSHOT_MS = 30000  # the stop hook's snapshot bound: a write worker's stop record can lag this much longer | O(1)
 SYNC_POLL_S = 2  # seconds between two mirror syncs of the brief-taken check (each sync is a remote read) | O(1)
 SUPERLITE_ROOT = str(Path(__file__).resolve().parents[3])  # the checkout whose commit the host loads | O(1)
+
+
+def git_ident(project):  # the project's git identity as the four GIT_* variables; either value unset or git failing gives remote_apply's superlite identity (#1112) | O(1)
+    vals = []  # O(1)
+    try:  # O(1)
+        for key in ("user.name", "user.email"):  # O(1)
+            p = subprocess.run(["git", "-C", str(project), "config", key], capture_output=True, text=True, timeout=GIT_TIMEOUT_S)  # O(1)
+            vals.append(p.stdout.strip() if p.returncode == 0 else "")  # O(1)
+    except (OSError, subprocess.SubprocessError):  # O(1)
+        return dict(ra._IDENT)  # O(1)
+    if not all(vals):  # O(1)
+        return dict(ra._IDENT)  # O(1)
+    name, email = vals  # O(1)
+    return {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email}  # O(1)
 
 
 def _blocked(label, why):  # O(1)
@@ -95,7 +110,7 @@ def spawn(sd, role, tier, project, label, cfg=None, task=None, plan=None, brief=
     name_, write = fr.tree_name(sd, wid), role in WRITE_ROLES  # O(l)
     start_ref = f"refs/superlite/remote/{name_}/start"  # O(1)
     snap_ref = f"refs/superlite/remote/{name_}/stop"  # O(1)
-    owns = None  # O(1)
+    owns = also = None  # O(1)
     try:  # O(1)
         plugin = fr.plugin(label, SUPERLITE_ROOT)  # O(1)
         _prune(sd, label, plugin)  # O(w + trees)
@@ -124,7 +139,8 @@ def spawn(sd, role, tier, project, label, cfg=None, task=None, plan=None, brief=
             if key not in blobs:  # O(1)
                 blobs[key] = (sd.resolve() / "briefs" / name).read_bytes()  # O(b)
         if task and plan and role == "implementer":  # the task's own changes only | O(1)
-            owns = list(pt.Plan.load(str(plan)).by_id[task].owns)  # KeyError for an unknown task | O(L)
+            t = pt.Plan.load(str(plan)).by_id[task]  # KeyError for an unknown task | O(L)
+            owns, also = list(t.owns), taskmod.also_touches(t)  # O(len body)
             copy, delete = trees.own_changes(str(project), base, owns)  # O(f * o)
             files = copy + delete  # O(f)
         else:  # O(1)
@@ -146,8 +162,9 @@ def spawn(sd, role, tier, project, label, cfg=None, task=None, plan=None, brief=
     env["SUPERLITE_STATE_DIR"] = f"{tree}/.superlite"  # O(1)
     if write:  # the stop hook snapshots a write worker's tree under this ref | O(1)
         env["SUPERLITE_REMOTE_SNAPSHOT"] = snap_ref  # O(1)
+        env.update(git_ident(project))  # the host may have no git identity (#1112) | O(1)
     remote = {"label": label, "tree": tree, "sd": f"{tree}/.superlite", "name": name_, "plugin": plugin, "project": str(project), "offset": 0, "tr": {},  # O(1)
-              "write": write, "start": start, "snapshot_ref": snap_ref if write else None, "owns": [*owns, "tests/regression/**"] if owns is not None else None}
+              "write": write, "start": start, "snapshot_ref": snap_ref if write else None, "owns": [*owns, *also, "tests/regression/**"] if owns is not None else None}
     record = {"name": name, "account": account, "agent": launch["agent"], "tier": tier or launch["model"], "state": "starting", "task": None, "role": role,  # O(1)
               "one_turn": launch["one_turn"], "launch": {"argv": argv, "env": env, "cwd": tree}, "machine": label, "remote": remote,
               "state_dir": str(sd / "remote" / wid)}
