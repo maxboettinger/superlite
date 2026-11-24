@@ -1,0 +1,10 @@
+- start 9565c9bcf940ff65df2507b53d33aeac7013ed10
+- unblocked: dispatched T1 at 16:36:58; waiting on fixes: none
+- tests fast passed=1 failed=6 skipped=0 seconds=0.7
+- tests fast passed=26 failed=0 skipped=0 seconds=0.9
+- tests fast passed=114 failed=1 skipped=0 seconds=3.5
+- tests fast passed=115 failed=0 skipped=0 seconds=3.5
+- commit T1 a3afa4a8da lock refuses uncommitted work
+- Ruling: T1 also commits tests/scripts/test_backlog_ship_tree_639.py - real fixture ignores .superlite/ in the clone like a real lead worktree; the new dirty check otherwise counts the fixture's test-cmd.json
+- tests fast passed=32 failed=0 skipped=0 seconds=2.5
+- tests full passed=14233 failed=0 skipped=12 seconds=350.8
