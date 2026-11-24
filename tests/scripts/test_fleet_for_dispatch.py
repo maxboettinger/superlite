@@ -8,6 +8,7 @@ sys.path.insert(0, str(SCRIPTS))
 import dispatch  # noqa: E402
 import fleet  # noqa: E402
 import fleet_io  # noqa: E402
+import fleet_remote_worker as frw  # noqa: E402
 REAL = os.environ.get("SUPERLITE_REAL") == "1"
 FRESH = "fresh tier=sonnet agent=superlite:implementer"
 
@@ -168,3 +169,92 @@ def test_fleet_json_on_false_refuses_until_fleet_on(dwld, capsys):
     fleet.main(["on"])
     assert _go(dwld) == 0
     assert capsys.readouterr().out.splitlines() == ["W1 T2 sent"]
+
+
+@pytest.fixture
+def rw(world, tmp_path, monkeypatch, capsys):
+    """#1057: fleet on, placement off; frw.spawn writes a remote record like the real one
+    (machine, state_dir <sd>/remote/<wid>, state ready); send_task marks it busy through fleet_io._busy as the real one does."""
+    monkeypatch.setenv("SUPERLITE_HOME", str(tmp_path / "home"))
+    if not REAL:
+        monkeypatch.setattr(fleet_io, "hc", world.fh)
+    fleet.main(["on"]); capsys.readouterr()
+    r = types.SimpleNamespace(**vars(world), remote=[], stopped=[])
+
+    def rspawn(sd, role, tier, project, label, cfg=None, task=None, plan=None, brief=None):
+        wid = fleet.fs.next_id(sd); r.remote.append((role, tier, label, task))
+        d = fleet.fs.load(sd)
+        d["workers"][wid] = {"name": f"remote-{wid}", "account": "claude1", "tier": tier or "sonnet", "state": "ready", "task": None,
+                             "role": role, "machine": label, "state_dir": str(sd / "remote" / wid)}
+        fleet.fs.save(sd, d)
+        return {"id": wid, "account": "claude1"}
+
+    def rstop(sd, wid):
+        r.stopped.append(wid); fleet.fs.set_state(sd, wid, "stopped")
+    monkeypatch.setattr(frw, "spawn", rspawn)
+    monkeypatch.setattr(frw, "stop", rstop)
+    monkeypatch.setattr(frw, "send_task", lambda sd, wid, plan, tasks, sl: fleet_io._busy(sd, wid, ",".join(tasks), fleet_io.now_ms()))
+    return r
+
+
+def _pool(sd):
+    p = sd / "pool.json"
+    return {a["id"]: a for a in json.loads(p.read_text())["agents"]} if p.exists() else {}
+
+
+def _workers(sd, **records):
+    d = fleet.fs.load(sd); d["workers"].update(records); fleet.fs.save(sd, d)
+
+
+def test_remote_dispatch_worker_gets_a_pool_entry_and_its_task_is_not_sent_twice(rw, capsys):
+    """#1057: W1 on box holds T1; the next round (local, real dispatch.run) must not hand T1 to a second worker."""
+    assert fleet.main(["spawn", "--for-dispatch", "--machine", "box", "--plan", str(rw.plan)]) == 0
+    assert capsys.readouterr().out.splitlines() == ["W1 T1 sent machine=box"]
+    ag = _pool(rw.sd)["W1"]
+    assert (ag["backend"], ag["account"], ag["machine"], ag["current"], ag["busy"]) == ("herdr", "claude1", "box", "T1", True)
+    assert fleet.main(["spawn", "--for-dispatch", "--plan", str(rw.plan)]) == 0
+    assert [x for x in capsys.readouterr().out.splitlines() if " sent" in x] == []
+    assert [x[3] for x in rw.remote] == ["T1"] and set(fleet.fs.load(rw.sd)["workers"]) == {"W1"}
+
+
+def test_pruned_remote_entry_comes_back_before_dispatch(rw, capsys):
+    """`orchestrator resume` prunes a remote entry as gone from Herdr: the next round re-adds it and still sends T1 to nobody."""
+    assert fleet.main(["spawn", "--for-dispatch", "--machine", "box", "--plan", str(rw.plan)]) == 0
+    (rw.sd / "pool.json").write_text(json.dumps({"agents": []}))
+    capsys.readouterr()
+    assert fleet.main(["spawn", "--for-dispatch", "--plan", str(rw.plan)]) == 0
+    assert [x for x in capsys.readouterr().out.splitlines() if " sent" in x] == []
+    ag = _pool(rw.sd)["W1"]
+    assert (ag["machine"], ag["current"], ag["busy"]) == ("box", "T1", True)
+
+
+def test_sync_remote_pool_adds_drops_and_skips(rw):
+    sd = rw.sd
+    _workers(sd,
+             W1={"state": "busy", "task": "T1", "role": "implementer", "machine": "box", "tier": "sonnet", "account": "claude1", "state_dir": str(sd / "remote" / "W1")},
+             W2={"state": "ready", "task": "T2", "role": "implementer", "machine": "box", "tier": "sonnet", "state_dir": str(sd / "remote" / "W2")},
+             W3={"state": "busy", "task": "T3", "role": "implementer", "machine": "box", "tier": "sonnet", "state_dir": str(sd.parent / "other" / "remote" / "W3")},
+             W4={"state": "ready", "task": None, "role": "implementer", "tier": "sonnet"},
+             W5={"state": "stopped", "task": "T5", "role": "implementer", "machine": "box", "tier": "sonnet", "state_dir": str(sd / "remote" / "W5")},
+             W6={"state": "busy", "task": "R1", "role": "research", "machine": "box", "state_dir": str(sd / "remote" / "W6")})
+    (sd / "pool.json").write_text(json.dumps({"agents": [
+        {"id": "W2", "tier": "sonnet", "tasks": ["T2"], "files": [], "context_k": 20, "idle_min": 0, "busy": False, "backend": "herdr", "machine": "box"},
+        {"id": "W4", "tier": "sonnet", "tasks": [], "files": [], "context_k": 20, "idle_min": 0, "busy": False, "backend": "herdr"}]}))
+    assert fleet._sync_remote_pool(sd) == (["W1"], ["W2"])
+    pool = _pool(sd)
+    assert set(pool) == {"W1", "W4"}
+    assert (pool["W1"]["current"], pool["W1"]["busy"], pool["W1"]["machine"], pool["W1"]["tier"], pool["W1"]["account"]) == ("T1", True, "box", "sonnet", "claude1")
+    assert fleet._sync_remote_pool(sd) == ([], [])
+
+
+def test_sync_remote_pool_creates_no_pool_without_work(rw):
+    assert fleet._sync_remote_pool(rw.sd) == ([], []) and not (rw.sd / "pool.json").exists()
+
+
+def test_failed_remote_send_leaves_no_pool_entry(rw, capsys, monkeypatch):
+    def boom(sd, wid, plan, tasks, sl):
+        raise fleet_io.hc.HerdrError("agent_not_found", "gone")
+    monkeypatch.setattr(frw, "send_task", boom)
+    assert fleet.main(["spawn", "--for-dispatch", "--machine", "box", "--plan", str(rw.plan)]) == 3
+    assert "BLOCKED: T1 not sent" in capsys.readouterr().out
+    assert rw.stopped == ["W1"] and "W1" not in _pool(rw.sd)
