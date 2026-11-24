@@ -143,7 +143,7 @@ def _start(c, name, pane, argv):  # start the agent, one retry after a pause on 
             c.start_agent(name, pane, argv)  # O(n)
             break  # O(1)
         except Exception as e:  # noqa: BLE001 | O(1)
-            if fleet.SHELL_MSG in _msg(e) and attempt == 0:  # O(len)
+            if fleet.no_shell(_msg(e)) and attempt == 0:  # O(len)
                 _pause(fleet.SHELL_PAUSE_S)  # O(1)
                 continue  # O(1)
             screen = _try(c.read_screen, name, fleet.SCREEN_ROWS) or ""  # O(s)

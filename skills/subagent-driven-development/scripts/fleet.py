@@ -25,10 +25,10 @@ Every subcommand but name first moves this session's fleet into its folder (#580
 `--plan P` (or `--plan=P`) is checked first, for every subcommand: a path that is neither file nor folder, or whose state folder cannot be
 created, prints `error: --plan P: <reason>; ...` on stderr and exits 2, creating nothing (#372).
 `spawn --brief F [--label L] [--wait [--timeout T]]` spawns, sends the brief and optionally waits in one call; a failed send stops the worker (`BLOCKED: Wn L not sent (...)`, exit 3) (#578).
-A worker whose pane is still no shell after the retry is closed and started once more in a fresh pane (`NoShell`, #551).
+A pane still not a shell after the retry (`not an available shell`, or Herdr's canonical-mode refusal, #1151) is closed and started once more in a fresh pane (`NoShell`, #551).
 `status` probes each ready or busy worker's agent: a gone one is marked dead (`W1 dead`, hidden after) with its fresh-spawn line, a busy one whose turn ended shows `reported` (#579).
 `report W` reads a busy worker's ended but uncollected turn from its transcript, read-only (#579).
-A start that fails with `not an available shell` (a freed pane) is retried once after SHELL_PAUSE_S (`start_on_shell`).
+A start that fails with `not an available shell` (a freed pane) or Herdr's canonical-mode refusal (`terminal is in canonical mode`, #1151) is retried once after SHELL_PAUSE_S (`start_on_shell`).
 `spawn --for-dispatch` also stops the ready implementers an earlier dispatch dropped from pool.json (#424).
 `spawn --for-dispatch` sends no task to a worker fleet.json marks busy, such as one still answering a `send --text` (dispatch leaves it out of the idle agents) (#553).
 A stalled prime waits up to STALL_WAIT_MS for a late start, then is resent once; a start that stays slow is retried once on another account (#428).
@@ -82,6 +82,8 @@ import state  # noqa: E402 | O(1)
 TRUST = "Yes, I trust this folder"  # O(1)
 SHELL_PAUSE_S = 3.0  # O(1)
 SHELL_MSG = "not an available shell"  # O(1)
+CANON_MSG = "terminal is in canonical mode"  # O(1) herdr refuses a start line over the tty's canonical-mode line limit before the shell prompt, #1151
+SHELL_MSGS = (SHELL_MSG, CANON_MSG)  # O(1)
 PASS_THROUGH = ("CLAUDE_CODE_PLUGIN_CACHE_DIR", "GH_CONFIG_DIR")  # O(1) GH_CONFIG_DIR: a sealed golden run's empty gh folder reaches the lead and its workers
 GH_TOKENS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")  # O(1)
 GH_SEAL_FILE = "gh-seal-settings.json"  # O(1)
@@ -267,12 +269,16 @@ def writer_output(brief, root, sd):  # the one file a writer brief names on its 
     raise ValueError(f"writer output {out} is outside {root} and {sd}")  # O(1)
 
 
-def start_on_shell(name, pane, argv):  # one start; a freed pane is not a shell yet: one pause, one more start | O(1)
+def no_shell(text):  # a pane that is not a shell yet: herdr says `not an available shell` (a freed pane) or `terminal is in canonical mode` (#1151) | O(len)
+    return any(m in (text or "") for m in SHELL_MSGS)  # O(len)
+
+
+def start_on_shell(name, pane, argv):  # one start; a freed pane, or one whose shell has not drawn its prompt yet (#1151): one pause, one more start | O(1)
     try:  # O(1)
         hc.start_agent(name, pane, argv)  # O(1)
         return ""  # O(1)
     except hc.HerdrError as e:  # O(1)
-        if SHELL_MSG not in (getattr(e, "message", "") or ""):  # O(len)
+        if not no_shell(getattr(e, "message", "")):  # O(len)
             raise  # O(1)
     _pause(SHELL_PAUSE_S)  # O(1)
     try:  # O(1)
@@ -751,7 +757,7 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=Fa
             except hc.HerdrError:  # O(1)
                 pass  # O(1)
             if e.code != "agent_not_ready" or TRUST not in screen:  # O(s)
-                shell = SHELL_MSG in (getattr(e, "message", "") or "")  # O(len)
+                shell = no_shell(getattr(e, "message", ""))  # O(len)
                 retried = getattr(e, "retried", "")  # O(1)
                 fail(f"startup: {e.message if shell else first_line(screen, e)}{retried}", screen, slow=_slow(e), shell=shell)  # O(s)
             _accept_trust(name)  # O(1)
@@ -1004,7 +1010,7 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0, machine=None
         if queued:  # not a block: the tasks stay ready for the next round (#916) | O(1)
             print(f"QUEUED: {tasks} not sent ({why}); {QUEUE_TAIL}")  # O(1)
         elif why is not None:  # O(1)
-            if SHELL_MSG in why:  # O(len)
+            if no_shell(why):  # O(len)
                 why += "; rerun sl fleet spawn --for-dispatch"  # O(1)
             print(f"BLOCKED: {tasks} not sent ({why})")  # O(1)
             blocked = True  # the next line still goes out | O(1)
