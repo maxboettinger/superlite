@@ -15,7 +15,7 @@ T = "2026-11-14T10:00:00Z"
 
 
 def NOTE(f, n):
-    return f"run end: standing note from {f} ({T}, {n}) still goes into every later lead brief; sl backlog start --note /dev/null clears it"
+    return f"run end: standing note from {f} ({T}, {n}) still goes into every later lead brief; sl backlog note /dev/null clears it"
 
 
 def store(rk, text, file="/x/note.md"):

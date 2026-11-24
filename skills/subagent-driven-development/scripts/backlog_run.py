@@ -329,6 +329,10 @@ def _pick(data: dict, bids: list, cap: int, live: dict) -> tuple:
     """-> (ids to start, refusal messages); a passed id counts as active for the later ids."""
     active = [x for x in data["batches"] if x["state"] in ACTIVE]  # O(b)
     ids, msgs = [], []  # O(1)
+    if not bids and cap < 1:  # O(1) cap 0: name the batch that waits for room (#1114)
+        first = bs.startable(data, len(active) + 1)  # O(b * files)
+        if first:  # O(1)
+            return [], [f"no free slot for {first[0]} (cap {cap}); rerun once the cap: line shows room"]  # O(1)
     for bid in (list(dict.fromkeys(bids)) if bids else bs.startable(data, cap)):  # O(ids * b * files)
         try:  # O(1)
             b = bs.batch(data, bid)  # O(b)
@@ -1072,7 +1076,7 @@ def run_end(root: Path, sd: Path, p: Path) -> list:
     cl = lambda v: re.sub(r"[\x00-\x1f\x7f]", " ", str(v))  # O(len)
     n = len(nt["text"].split("\n"))  # O(len)
     return lines + [f"run end: standing note from {cl(nt.get('file'))} ({cl(nt.get('time'))}, {n} line{'' if n == 1 else 's'}) "
-                    "still goes into every later lead brief; sl backlog start --note /dev/null clears it"]  # O(len)
+                    "still goes into every later lead brief; sl backlog note /dev/null clears it"]  # O(len)
 
 
 def _run_end_lines(root: Path, sd: Path, data: dict) -> list:
@@ -1183,6 +1187,7 @@ def cmd_run(a) -> int:
     deadline = time.monotonic() + a.timeout  # O(1)
     due, retry, last, seen = True, False, 0.0, set()  # O(1)
     shown = None  # O(1) the cap of the last printed cap: line
+    room, held = False, False  # O(1) the last start round refused at cap 0; the hold line is printed
     while True:  # O(timeout / poll)
         if due or (retry and time.monotonic() - last >= a.retry):  # O(1)
             backlog.set_standing(root)  # O(b)
@@ -1207,6 +1212,8 @@ def cmd_run(a) -> int:
             show = [x for x in out if not (retry_refusal(x) and x in seen)]  # O(lines)
             seen.update(x for x in out if retry_refusal(x))  # O(lines)
             fatal = any(x.startswith("BLOCKED:") and not retry_refusal(x) for x in out)  # O(lines)
+            room = cap < 1 and any(x.startswith("BLOCKED: no free slot") and f"(cap {cap})" in x for x in out)  # O(lines)
+            held = held and room  # O(1)
             if show or fatal:  # O(1)
                 print("\n".join(show + (run_end(root, sd, p) if fatal else [])), flush=True)  # O(lines)
             if fatal:  # O(1)
@@ -1221,7 +1228,11 @@ def cmd_run(a) -> int:
             due = True  # O(1)
             continue  # O(1)
         if not any(b["state"] == "running" for b in bs.load(p)["batches"]):  # O(b)
-            return _no_running(root, sd, p)  # O(w)
+            if not (room and not any(b["state"] in ACTIVE for b in bs.load(p)["batches"])):  # O(b)
+                return _no_running(root, sd, p)  # O(w)
+            if not held:  # O(1)
+                print(f"waiting for room: cap {cap}; start retried every {a.retry} s until --timeout", flush=True)  # O(1)
+                held = True  # O(1)
         if time.monotonic() >= deadline:  # O(1)
             print("TIMEOUT", flush=True)  # O(1)
             return 0  # O(1)
