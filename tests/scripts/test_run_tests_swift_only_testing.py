@@ -1,4 +1,4 @@
-"""run_tests --fast maps Swift test files to -only-testing:<Target>/<Suite> and runs other paths unfiltered (#398)."""
+"""run_tests --fast maps Swift test files to -only-testing:<Target>/<Suite> and skips other paths, never widening them to the whole suite (#398, #1119)."""
 import json
 import subprocess
 import sys
@@ -149,33 +149,60 @@ def test_fast_free_function_survives_the_shell(tmp_path):
     assert got(root) == ["-only-testing:AppTests/adds()", "-only-testing:App UITests/LaunchTests"]
 
 
-def test_fast_source_file_runs_unfiltered(tmp_path):
+SRC = "App/Views/ContentView.swift"
+NOTE = f"run_tests: --fast {SRC} is in no test target, so it maps to no test filter; skipped, never widened to the whole suite (#1119)"
+REFUSAL = f"--fast paths map to no test filter (in no test target): {SRC}; nothing to run: name a test file in a test target, or use --affected or --full (#1119)"
+
+
+def test_fast_source_file_refused(tmp_path):
     root = xcode_repo(tmp_path)
-    r = rt(root, "--fast", "App/Views/ContentView.swift")
-    assert r.returncode == 0, r.stderr
-    assert got(root) == ["FULL"]
-    assert ("run_tests: App/Views/ContentView.swift is not in a test target; running the unfiltered test command"
-            in r.stderr)
-    assert "declares no test suite" not in r.stderr
+    r = rt(root, "--fast", SRC)
+    assert r.returncode == 2, r.stderr
+    assert f"run_tests: {REFUSAL}" in r.stderr
+    assert not (root / ".superlite" / "got.txt").exists()
     summary = json.loads((root / ".superlite" / "test-summary.json").read_text(encoding="utf-8"))
-    assert summary["mode"] == "fast" and summary["passed"] == 1
+    assert summary["error"] == REFUSAL
+    log = root / ".superlite" / "incidents.jsonl"
+    assert not log.exists() or not log.read_text(encoding="utf-8").strip()
 
 
-def test_fast_mixed_paths_run_unfiltered(tmp_path):
+def test_fast_mixed_paths_runs_test_file_only(tmp_path):
     root = xcode_repo(tmp_path)
-    r = rt(root, "--fast", "AppTests/FooTests.swift", "App/Views/ContentView.swift")
+    r = rt(root, "--fast", "AppTests/FooTests.swift", SRC)
     assert r.returncode == 0, r.stderr
-    assert got(root) == ["FULL"]
+    assert got(root) == ["-only-testing:AppTests/FooTests"]
+    assert r.stderr.count(NOTE) == 1
+    summary = json.loads((root / ".superlite" / "test-summary.json").read_text(encoding="utf-8"))
+    assert f"skipped --fast paths in no test target: {SRC} (#1119)" in summary["warning"]
 
 
-def test_background_parent_is_quiet(tmp_path):
+def test_background_parent_refuses_unmapped(tmp_path):
     root = xcode_repo(tmp_path)
-    r = rt(root, "--fast", "App/Views/ContentView.swift", "--background")
+    r = rt(root, "--fast", SRC, "--background")
+    assert r.returncode == 2, r.stderr
+    assert f"run_tests: {REFUSAL}" in r.stderr
+    assert not (root / ".superlite" / "got.txt").exists()
+
+
+def test_background_mixed_runs_child(tmp_path):
+    root = xcode_repo(tmp_path)
+    r = rt(root, "--fast", "AppTests/FooTests.swift", SRC, "--background")
     assert r.returncode == 0, r.stderr
-    assert "not in a test target" not in r.stderr and "declares no test suite" not in r.stderr
+    assert "no test filter" not in r.stderr and "declares no test suite" not in r.stderr
     w = rt(root, "--timeout", "60", "--wait")
     assert w.returncode == 0, w.stdout + w.stderr
-    assert got(root) == ["FULL"]
+    assert got(root) == ["-only-testing:AppTests/FooTests"]
+    logs = list((root / ".superlite").glob("*.output.log")) + list((root / ".superlite").glob("*.log"))
+    assert any(NOTE in x.read_text(encoding="utf-8", errors="replace") for x in logs)
+
+
+def test_names_template_source_refused(tmp_path):
+    cfg = {"language": "swift", "test": f"echo FULL > .superlite/got.txt; {OK}",
+           "test_file": f"echo {{names}} > .superlite/got.txt; {OK}"}
+    root = xcode_repo(tmp_path, cfg=cfg)
+    r = rt(root, "--fast", SRC)
+    assert r.returncode == 2, r.stderr
+    assert not (root / ".superlite" / "got.txt").exists()
 
 
 def test_targets_empty_name_is_skipped(tmp_path):

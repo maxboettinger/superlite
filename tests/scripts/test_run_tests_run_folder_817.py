@@ -193,16 +193,17 @@ def test_no_result_in_a_tree_folder_run_names_the_folder(tmp_path):
     assert FOLDER in json.dumps(rows[0]), rows[0]
 
 
-def test_marker_files_are_relative_to_the_run_folder(tmp_path):
+def test_marker_with_an_unmapped_path_is_refused(tmp_path):
     out = tmp_path / "files.txt"
-    cmd = f"echo {{files}} > {out}; pytest {{names}}"  # {names} with a path outside a test target: the resolved command is the plain test, so -m goes through marker_spec
+    cmd = f"echo {{files}} > {out}; pytest {{names}}"  # {names} with a path outside a test target: it maps to no filter, so it is skipped and nothing is left (#1119)
     fake = "#!/bin/sh\necho 1 passed\n"
     project(tmp_path, {"language": "other", "test": "echo 1 passed", "test_file": cmd, "cwd": FOLDER, "isolate": False}, fake=fake)
     (tmp_path / "bin" / "pytest").write_text(fake, encoding="utf-8")
     (tmp_path / "bin" / "pytest").chmod(0o755)
     cp = go(tmp_path, "-m", "slow", "--fast", f"{FOLDER}/Package.swift")
-    assert cp.returncode == 0, cp.both
-    assert out.read_text(encoding="utf-8") == "Package.swift\n"
+    assert cp.returncode == 2, cp.both
+    assert "map to no test filter" in cp.err and f"{FOLDER}/Package.swift" in cp.err
+    assert not out.exists()
 
 
 def test_red_pytest_id_is_located_under_the_run_folder(tmp_path):
