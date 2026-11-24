@@ -863,12 +863,12 @@ def _dispatch_machine(sd, plan, project, machine, lines, sl, fio):  # O(R * (spa
     return 3 if blocked else 0  # O(1)
 
 
-def _placed(sd, role, project, tier=None):  # O(w + m): the machine placement picks for a new worker, or None for local; off, or any failure, means local
+def _placed(sd, role, project, tier=None, brief=None):  # O(w + m): the machine placement picks for a new worker, or None for local; off, or any failure, means local
     try:  # O(1)
         import fleet_placement as fp  # noqa: E402 | O(1) lazy
         if tier == "haiku" or not fp.enabled(sd):  # O(w)
             return None  # O(1)
-        return fp.choose(sd, role, project)  # O(w + m)
+        return fp.choose(sd, role, project, brief=brief)  # O(w + m)
     except Exception:  # noqa: BLE001 | placement never blocks a spawn | O(1)
         return None  # O(1)
 
@@ -1480,7 +1480,7 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
         return for_review(sd, a.plan, state.project(sd), ids, a.package, a.over_limit, a.machine_wait, note, a.machine, **bkw)  # O(L + e + spawn + send)
     placed = False  # the machine came from placement, not from --machine | O(1)
     if a.brief and not a.machine and not forced:  # O(1)
-        a.machine = _placed(sd, a.role, state.project(sd))  # O(w + m)
+        a.machine = _placed(sd, a.role, state.project(sd), brief=a.brief)  # O(w + m)
         placed = bool(a.machine)  # O(1)
     mkw = {"machine": a.machine, "remote_brief": a.brief} if a.machine else {}  # only a remote spawn passes it | O(1)
     if a.machine and a.brief:  # a remote worker's start commit carries the brief, so its constraints go in first | O(L + len)

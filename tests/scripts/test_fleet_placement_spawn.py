@@ -18,10 +18,10 @@ def pl(world, tmp_path, monkeypatch, capsys):
     (home / "machine.json").write_text(json.dumps({"remote_room": ["x"], "remote_tree": ["y"]}))
     fleet.main(["on"]); capsys.readouterr()
     brief = world.proj / "b.md"; brief.write_text("do it")
-    r = types.SimpleNamespace(**vars(world), brief=brief, pick="box", asked=[], skips=[], remote=[], sends=[], local=[], sent_briefs=[], fail=None, n=[0])
+    r = types.SimpleNamespace(**vars(world), brief=brief, pick="box", asked=[], briefs=[], skips=[], remote=[], sends=[], local=[], sent_briefs=[], fail=None, n=[0])
 
-    def choose(sd, role, project, now=None):
-        r.asked.append(role); return r.pick
+    def choose(sd, role, project, now=None, brief=None):
+        r.asked.append(role); r.briefs.append(brief); return r.pick
     monkeypatch.setattr(fp, "choose", choose)
     monkeypatch.setattr(fp, "skip", lambda sd, label, why, minutes=10.0, now=None: r.skips.append((label, why)))
 
@@ -210,3 +210,21 @@ def test_placed_send_failure_survives_failing_stop(pl, capsys, monkeypatch):
     assert fleet.main(["spawn", "--role", "research", "--brief", str(pl.brief)]) == 0
     out = capsys.readouterr().out
     assert "placement: box unavailable" in out and "W2 local" in out and pl.sent_briefs == ["W2"]
+
+
+def test_plain_spawn_hands_placement_the_brief(pl):
+    assert fleet.main(["spawn", "--role", "research", "--brief", str(pl.brief)]) == 0
+    assert pl.asked == ["research"] and pl.briefs == [str(pl.brief)]
+
+
+def test_placed_passes_brief_to_choose(pl, monkeypatch):
+    seen = []
+    monkeypatch.setattr(fp, "choose", lambda sd, role, project, now=None, brief=None: seen.append((role, brief)) or "box")
+    assert fleet._placed(pl.sd, "research", pl.proj, brief="/b/R1.md") == "box"
+    assert fleet._placed(pl.sd, "implementer", pl.proj) == "box"
+    assert seen == [("research", "/b/R1.md"), ("implementer", None)]
+
+
+def test_placed_haiku_skips_choose_with_brief(pl, monkeypatch):
+    monkeypatch.setattr(fp, "choose", lambda *a, **k: pytest.fail("choose called"))
+    assert fleet._placed(pl.sd, "implementer", pl.proj, "haiku", brief="/b/x.md") is None
