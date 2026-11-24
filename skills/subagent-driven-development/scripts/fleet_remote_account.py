@@ -13,8 +13,16 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import accounts as ac  # noqa: E402 | O(1)
 
-LOGIN_MARKS = ("Select login method:", "Please run /login", "Invalid API key")  # O(1) screens that mean the account is signed out on the host
+LOGIN_MARKS = ("Select login method:", "Please run /login", "Invalid API key", "Not logged in", "Login reached its time limit")  # O(1) screens that mean the account is signed out on the host
 SIGNED_OUT = re.compile(r"account (\S+) is not signed in on ")  # O(1) the one reason phrase of a remote sign-in failure
+
+
+AUTH_ERRORS = ("Login reached its time limit", "Not logged in", "Invalid API key")  # O(1) the texts a turn that ended on an expired login starts with (#1093)
+
+
+def signed_out_stop(rec):  # True when a stop record's last line is one sign-in error line, not a report quoting one (#1093) | O(l)
+    last = ((rec or {}).get("last") or "").strip()  # O(l)
+    return "\n" not in last and last.startswith(AUTH_ERRORS) and "/login" in last  # O(l)
 
 
 def signed_out_account(why):  # O(l): the account name a sign-in failure reason names, else None
