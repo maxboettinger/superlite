@@ -46,6 +46,7 @@ While the budget is paused (spend above the cap), every `spawn` that names a `--
 A remote dispatch write worker gets its pool.json entry, busy on its task, and `--for-dispatch` re-adds a lost one and drops a taskless one first, so a task is never sent twice (#1057).
 A worker whose spawner pins GH_CONFIG_DIR (a sealed golden lead) starts with the lead's `--settings <state>/gh-seal-settings.json` and `--plugin-dir <this checkout>` (#1049).
 `spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F lies outside the project, the run folder and the plugin skills folder, or when F (with the plan's Global constraints) or a review spawn's `--note` names an existing path outside the project, the run folder and the plugin skills folder outside fenced code blocks; system folders such as /dev and /usr do not count (#1015).
+`spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F names the worker's own report file (`<run>/fleet/reports/<label>.md` or `.json`): fleet wait overwrites it with the worker's reply (#1094).
 A session's private state folder (`<superlite home>/sessions/<sid>.d/.superlite`) spawns its workers in the launch folder's git root (`$CLAUDE_PROJECT_DIR`, else the cwd; `state.project`), and its brief check judges paths against that project (#1088).
 """
 
@@ -210,6 +211,22 @@ def outside_error(what, where, paths, sd):  # the one-line refusal naming at mos
     named = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")  # O(1)
     return (f"error: {what} {where} names paths outside the project, the run folder and the plugin skills folder: {named}; "  # O(1)
             f"a worker cannot read them: copy each file into {sd}/briefs/ and name the copy, or drop the path (#1015)")  # O(1)
+
+
+def report_refusal(sd, brief, label, project):  # the refusal when BRIEF names the worker's own report file, which fleet wait overwrites (#1094), else None | O(file)
+    rid = label.split(",")[0]  # O(1)
+    rd = Path(sd).resolve() / "fleet" / "reports"  # O(1)
+    reserved = {rd / f"{rid}.md", rd / f"{rid}.json"}  # O(1)
+    text = Path(brief).read_text(encoding="utf-8")  # O(file)
+    rx = r"(?:file://)?([^\s`'\"()\[\]{}<>,;:=]*fleet/reports/" + re.escape(rid) + r"\.(?:md|json))(?![\w-]|\.\w)"  # O(1)
+    for m in re.finditer(rx, text):  # O(len) iterations
+        tok = m.group(1)  # O(1)
+        p = Path(os.path.expanduser(tok))  # O(1)
+        cands = [p] if p.is_absolute() else [Path(project) / tok, Path(sd) / tok, Path(sd).parent / tok]  # O(1)
+        if any(c.resolve() in reserved for c in cands):  # O(1)
+            return (f"error: brief {Path(brief).resolve()} names {tok}: fleet wait saves the worker's reply as {rd}/{rid}.md and {rd}/{rid}.json "  # O(1)
+                    f"and would overwrite a report the worker writes there; name another file, such as {rd}/{rid}-full.md (#1094)")  # O(1)
+    return None  # O(1)
 
 
 def writer_output(brief, root, sd):  # the one file a writer brief names on its `Output:` line, as an absolute path inside root or sd | O(file)
@@ -1728,6 +1745,10 @@ def main(argv=None):  # O(w) plus command cost
                 except Exception:  # noqa: BLE001 | no readable plan: the brief alone is checked | O(1)
                     plan = None  # O(1)
                 why = importlib.import_module("fleet_io").brief_refusal(sd, a.brief, a.role, plan=plan)  # O(file)
+                if why:  # O(1)
+                    print(why, file=sys.stderr)  # O(1)
+                    return 2  # O(1)
+                why = report_refusal(sd, a.brief, a.label or Path(a.brief).stem, state.project(sd))  # O(file)
                 if why:  # O(1)
                     print(why, file=sys.stderr)  # O(1)
                     return 2  # O(1)
