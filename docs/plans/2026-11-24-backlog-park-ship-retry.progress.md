@@ -1,0 +1,16 @@
+- start fa2264878b9c04ba33ac29a35c68a70284c2ce67
+- unblocked: dispatched T1 T2 at 11:37:02; waiting on fixes: none
+- tests fast passed=4 failed=4 skipped=0 seconds=0.6
+- tests fast passed=0 failed=1 skipped=0 seconds=0.3
+- tests fast passed=49 failed=0 skipped=0 seconds=1.5
+- tests fast passed=3 failed=7 skipped=0 seconds=0.9
+- tests fast passed=61 failed=1 skipped=0 seconds=3.8
+- tests fast passed=10 failed=0 skipped=0 seconds=1.0
+- commit T1 b894d7cdec parked plan questions
+- commit T2 37c55f7a84 ship lock tree and merge retry
+- tests fast passed=49 failed=0 skipped=0 seconds=1.1
+- tests fast passed=50 failed=0 skipped=0 seconds=4.3
+- tests fast passed=10 failed=1 skipped=0 seconds=1.1
+- tests fast passed=11 failed=0 skipped=0 seconds=0.9
+- commit T2 b13b4bdd6c ship lock tree and merge retry
+- tests full passed=13917 failed=0 skipped=12 seconds=439.5
