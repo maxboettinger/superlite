@@ -12,7 +12,7 @@ import plan_tools  # noqa: E402
 FOCUS = "## Review Focus\n\n- auth: protocol, state; security review required\n"
 OWNS = "src/auth/login.py, tests/test_login.py"
 TASK = {"id": "T1", "owns": OWNS, "components": 1, "loc": 100, "tests": "fast", "model": "sonnet"}
-NOTE = "NOTE: T1 predicted 6.7 min, 5.0 of it outside the size band (existing tests, review rounds); splitting does not shrink it"
+NOTE = "NOTE: T1 predicted 6.7 min, 5.0 of it outside the size band (review rounds); splitting does not shrink it"
 
 
 def flagged(tmp_path, **kw):

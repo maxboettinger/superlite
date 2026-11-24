@@ -22,6 +22,7 @@ files; counted statically per language) times the ledgers' seconds per case set 
 exceed the project's fast-run figure (`suite`). With `plan=`, a task of a package whose Review Focus line names `security`
 or `auth` adds `review.rounds` review/fix rounds (`review`, priced on `review.model`). Both fold into est_time_min, only the review term adds
 cost (cost.total); the suite term adds time only. `extra_min` names their minutes so lint SIZE can leave them out.
+Slow tests (#1121): a `Tests: slow` task's minutes beyond its fast twin (the same features with `Tests: fast`, no suite term) are `slow_min`; they join `extra_min`, since splitting does not shrink them.
 """
 
 # Complexity notation:
@@ -496,9 +497,13 @@ def predict_task(task, models: dict, coef: dict, plan=None) -> dict:  # O(M) via
     cost = cost_from(feats, peak, model, models, coef)  # O(1)
     extra = 0.0  # minutes of the suite and review terms | O(1)
     suite = None  # O(1)
+    no_suite = {k: v for k, v in feats.items() if k != "suite_run_min"}  # O(1)
+    slow_min = 0.0  # minutes a Tests: slow task adds beyond its fast twin (#1121) | O(1)
+    if feats["tests"] == "slow":  # O(1)
+        slow_min = round(max(0.0, time_from(no_suite, model, models, coef) - time_from(dict(no_suite, tests="fast"), model, models, coef)), 3)  # O(1)
+        extra += slow_min  # O(1)
     info = suite_info(task, coef) if "live" in coef else None  # O(files)
     if info:  # O(1)
-        no_suite = {k: v for k, v in feats.items() if k != "suite_run_min"}  # O(1)
         gain = round(test_extra_min(feats, coef) - test_extra_min(no_suite, coef), 3)  # O(1)
         if gain > 0:  # O(1)
             suite = dict(info, extra_min=gain)  # O(1)
@@ -538,11 +543,13 @@ def predict_task(task, models: dict, coef: dict, plan=None) -> dict:  # O(M) via
     }  # O(1)
     if "live" in coef:  # O(1)
         out["test_min"] = round(test_extra_min(feats, coef), 3)  # O(1)
+    if slow_min > 0:  # O(1)
+        out["slow_min"] = slow_min  # O(1)
     if suite:  # O(1)
         out["suite"] = suite  # O(1)
     if review:  # O(1)
         out["review"] = review  # O(1)
-    if suite or review:  # O(1)
+    if suite or review or slow_min > 0:  # O(1)
         out["extra_min"] = round(extra, 3)  # O(1)
     return out  # O(1)
 
