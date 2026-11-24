@@ -30,6 +30,8 @@ def real(sh, tmp_path, monkeypatch):
     g(seed, "push", "origin", "main")
     subprocess.run(["rm", "-rf", str(sh.wt)], check=True)
     subprocess.run(["git", "clone", str(origin), str(sh.wt)], check=True, capture_output=True)
+    with (sh.wt / ".git" / "info" / "exclude").open("a") as f:
+        f.write(".superlite/\n")
     g(sh.wt, "checkout", "-b", "feat")
     put(sh.wt, "f.txt")
     sh.seed = seed
