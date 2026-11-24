@@ -108,7 +108,7 @@ def test_coordinator_run_untouched(proj):
 
 def test_unknown_agent_still_denied_without_task_id(proj):
     r = run(proj, RAW, agent_id="zz")
-    assert r.returncode == 2 and "run_tests --fast" in r.stderr and "--task <Tn>" in r.stderr
+    assert r.returncode == 2 and "run_tests --fast" in r.stderr and "no plan task" in r.stderr
 
 
 def test_main_checkout_config_fallback(tmp_path):
@@ -145,11 +145,11 @@ def test_batch_current_names_first_task(proj):
 def test_agent_without_current_and_no_pool(proj):
     (proj / ".superlite" / "pool.json").write_text(json.dumps({"agents": [{"id": "a1", "busy": False}]}))
     r = run(proj, RAW, agent_id="a1")
-    assert r.returncode == 2 and "--task <Tn>" in r.stderr
+    assert r.returncode == 2 and "no plan task" in r.stderr
     (proj / ".superlite" / "pool.json").unlink()
     (proj / ".superlite" / "prime.md").write_text("run\n")  # still an active run, but no pool
     r = run(proj, RAW, agent_id="a1")
-    assert r.returncode == 2 and "--task <Tn>" in r.stderr
+    assert r.returncode == 2 and "no plan task" in r.stderr
 
 
 @pytest.mark.parametrize("body", ["{not json", "", '{"language": swift', '{"test": "Scripts/test.sh x", "isolate": }'])
