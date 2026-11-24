@@ -62,6 +62,7 @@ import argparse  # O(1)
 import ast  # O(1)
 import concurrent.futures as cf  # O(1)
 import contextlib  # O(1)
+import functools  # O(1)
 import hashlib  # O(1)
 import importlib.util  # O(1)
 import inspect  # O(1)
@@ -533,16 +534,22 @@ class Cfg:  # O(1)
             return Path(filename).as_posix()  # O(1)
 
 
-def project_python(root: Path) -> str:  # O(module size) once per worker spawn
-    """The project's own interpreter (root/.venv, VIRTUAL_ENV, else ours), so the adapter sees the
-    project's packages. _pyrun is loaded by path under a private name (no sys.path change, no clash);
-    a copy of this file without the scripts folder falls back to sys.executable."""
+@functools.lru_cache(maxsize=1)  # O(1) one load per process: the sync memo (#1145) lives in that module
+def _pyrun_module():  # O(module size) once per process
+    """scripts/_pyrun.py loaded by path under a private name (no sys.path change, no clash)."""  # O(1)
+    spec = importlib.util.spec_from_file_location(  # O(1)
+        "_superlite_pyrun", HERE.parent / "scripts" / "_pyrun.py")  # O(1)
+    pyrun = importlib.util.module_from_spec(spec)  # O(1)
+    spec.loader.exec_module(pyrun)  # O(module size)
+    return pyrun  # O(1)
+
+
+def project_python(root: Path) -> str:  # O(d + P) file lookups; one uv sync per tree (#1145)
+    """The project's own interpreter by _pyrun.tree_python: root/.venv; for a linked worktree or task tree
+    without one, its own .venv synced once instead of the main checkout's (#1145); VIRTUAL_ENV; else ours.
+    A copy of this file without the scripts folder falls back to sys.executable."""
     try:  # O(1)
-        spec = importlib.util.spec_from_file_location(  # O(1)
-            "_superlite_pyrun", HERE.parent / "scripts" / "_pyrun.py")  # O(1)
-        pyrun = importlib.util.module_from_spec(spec)  # O(1)
-        spec.loader.exec_module(pyrun)  # O(module size)
-        return pyrun.project_python(root)  # O(1) file lookups, never run
+        return _pyrun_module().tree_python(root, "probe_run")  # O(d + P)
     except Exception:  # missing or broken _pyrun | O(1)
         return sys.executable  # O(1)
 
