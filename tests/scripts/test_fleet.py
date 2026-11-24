@@ -589,3 +589,61 @@ def test_for_dispatch_machine_wave0_says_run_without_machine(rdisp, capsys):
     rdisp.lines = [("T0", "wave0 tier=haiku")]
     assert fleet.main(["spawn", "--for-dispatch", "--machine", "box", "--plan", str(rdisp.plan2)]) == 3
     assert "run Wave 0 without --machine" in capsys.readouterr().out and rdisp.spawns == []
+
+
+def _two_runs(world, other="/elsewhere/b/.superlite"):  # W1 of this run and W2 of another run share one fleet.json, both busy
+    fleet.main(["on"])
+    data = json.loads((world.sd / "fleet.json").read_text())
+    base = {"agent": "superlite:implementer", "tier": "sonnet", "state": "busy", "task": "T1", "account": "claude3"}
+    data["workspace_id"] = "w6"
+    data["workers"] = {"W1": {**base, "name": "sl-proj-w1", "pane_id": "w6:p1", "launch": {"env": {"SUPERLITE_STATE_DIR": str(world.sd)}}},
+                       "W2": {**base, "name": "sl-proj-w2", "pane_id": "w6:p2", "launch": {"env": {"SUPERLITE_STATE_DIR": other}}}}
+    (world.sd / "fleet.json").write_text(json.dumps(data))
+
+
+def test_run_of_examples():
+    import fleet_io as fio
+    assert fio.run_of({"launch": {"env": {"SUPERLITE_STATE_DIR": "/r/b/.superlite"}}}) == Path("/r/b/.superlite")
+    assert fio.run_of({"role": "lead", "launch": {"env": {"SUPERLITE_STATE_DIR": "/wt/.superlite", "SUPERLITE_FLEET_PARENT_DIR": "/m/.superlite"}}}) == Path("/m/.superlite")
+    assert fio.run_of({"machine": "m1", "state_dir": "/r/a/.superlite/remote/W9", "launch": {"env": {"SUPERLITE_STATE_DIR": "/trees/W9/.superlite"}}}) == Path("/r/a/.superlite")
+    assert fio.run_of({"state_dir": "/r/a/.superlite"}) == Path("/r/a/.superlite")
+    assert fio.run_of({}) is None and fio.of_run(Path("/r/a/.superlite"), {}) is True
+
+
+def test_of_run_compares_resolved_paths(tmp_path):
+    import fleet_io as fio
+    real = tmp_path / "real"; real.mkdir(); link = tmp_path / "link"; link.symlink_to(real)
+    assert fio.of_run(link, {"launch": {"env": {"SUPERLITE_STATE_DIR": str(real)}}}) and fio.of_run(real, {"launch": {"env": {"SUPERLITE_STATE_DIR": str(link)}}})
+    assert not fio.of_run(real, {"launch": {"env": {"SUPERLITE_STATE_DIR": str(tmp_path / "other")}}})
+
+
+@pytest.mark.skipif(REAL, reason="call list is read from the in-process fake")
+def test_stop_all_keeps_other_runs_workers(world):
+    _two_runs(world)
+    assert fleet.stop(world.sd, all_=True) == ["W1"]
+    data = json.loads((world.sd / "fleet.json").read_text())
+    assert data["workers"]["W1"]["state"] == "stopped" and data["workers"]["W2"]["state"] == "busy" and data["workspace_id"] == "w6"
+    assert not any(c[0] == "exit_agent" and c[1] == "sl-proj-w2" or c[0] == "close_pane" and c[1] == "w6:p2" or c[0] == "close_workspace" for c in world.fh.calls)
+
+
+@pytest.mark.skipif(REAL, reason="call list is read from the in-process fake")
+def test_stop_all_takes_lead_of_this_run(world):
+    _two_runs(world)
+    data = json.loads((world.sd / "fleet.json").read_text())
+    data["workers"]["W2"]["role"] = "lead"
+    data["workers"]["W2"]["launch"]["env"] = {"SUPERLITE_STATE_DIR": "/wt/.superlite", "SUPERLITE_FLEET_PARENT_DIR": str(world.sd)}
+    (world.sd / "fleet.json").write_text(json.dumps(data))
+    assert fleet.stop(world.sd, all_=True) == ["W1", "W2"]
+
+
+@pytest.mark.skipif(REAL, reason="call list is read from the in-process fake")
+def test_off_stops_every_run(world):
+    _two_runs(world)
+    fleet.main(["off"])
+    assert ("close_pane", "w6:p1") in world.fh.calls and ("close_pane", "w6:p2") in world.fh.calls
+
+
+@pytest.mark.skipif(REAL, reason="call list is read from the in-process fake")
+def test_stop_ids_ignores_run(world):
+    _two_runs(world)
+    assert fleet.stop(world.sd, ["W2"]) == ["W2"]

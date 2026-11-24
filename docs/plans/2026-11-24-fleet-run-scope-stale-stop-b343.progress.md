@@ -1,0 +1,22 @@
+- start c9f0de467363a6aaa25af6a7a85c7f9d42d5fafc
+- unblocked: dispatched T1 at 22:37:18; waiting on fixes: none
+- tests fast passed=73 failed=5 skipped=0 seconds=3.2
+- tests fast passed=76 failed=2 skipped=0 seconds=2.1
+- tests fast passed=78 failed=0 skipped=0 seconds=3.4
+- commit T1 98ea42a217 run scope
+- unblocked: dispatched T2 at 22:39:36; waiting on fixes: none
+- tests fast passed=2 failed=5 skipped=0 seconds=0.5
+- tests fast passed=2 failed=5 skipped=0 seconds=0.7
+- tests fast passed=155 failed=1 skipped=1 seconds=4.2
+- tests fast passed=7 failed=0 skipped=0 seconds=0.4
+- commit T2 2e9a055c40 stale stop
+- tests fast passed=8 failed=0 skipped=0 seconds=0.4
+- tests fast passed=7 failed=1 skipped=0 seconds=0.6
+- tests fast passed=137 failed=0 skipped=1 seconds=2.4
+- commit T2 88fd0dbd37 stale stop
+- tests full passed=14498 failed=1 skipped=12 seconds=511.9
+- tests fast passed=8 failed=1 skipped=0 seconds=0.6
+- tests fast passed=16 failed=0 skipped=0 seconds=0.7
+- Ruling: T2 also commits tests/scripts/test_telemetry_fleet_933.py - final-review fix outside every Owns
+- commit T2 4701dcc6ba stale stop
+- tests full passed=14500 failed=0 skipped=12 seconds=373.7

@@ -22,7 +22,7 @@ def usage_transcript(path, sent_s):
                 "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 50, "cache_creation_input_tokens": 10}}}
     recs = [{"type": "user", "timestamp": iso(sent_s - 500), "message": {"content": "task"}},
             asst(0, "old turn before the send", sent_s - 400),
-            {"type": "user", "timestamp": iso(sent_s + 1), "message": {"content": "task"}},
+            {"type": "user", "timestamp": iso(sent_s + 0.005), "message": {"content": "task"}},
             asst(1, "Status: DONE", sent_s + 5, tools=2)]
     path.write_text("".join(json.dumps(r) + "\n" for r in recs))
 

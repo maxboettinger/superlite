@@ -142,3 +142,30 @@ def test_partial_flag_in_result(world, tmp_path):
 def test_restore_rearms_wave():
     import fleet_restore
     assert "fleet wait --wave --timeout {WAIT_MS}" in open(fleet_restore.__file__).read()
+
+
+def _other_run_w2(world, tmp_path, state="busy"):  # W1 of this run, W2 busy in another run; herdr lists only W1
+    fleet(world, 2)
+    data = json.loads((world.sd / "fleet.json").read_text())
+    data["workers"]["W1"]["launch"] = {"env": {"SUPERLITE_STATE_DIR": str(world.sd)}}
+    data["workers"]["W2"]["launch"] = {"env": {"SUPERLITE_STATE_DIR": str(tmp_path / "other" / ".superlite")}}
+    (world.sd / "fleet.json").write_text(json.dumps(data))
+    world.fh.states = [{"sl-proj-w1": "working"}]
+
+
+def test_wave_waits_only_this_runs_workers(world, tmp_path, capsys):
+    _other_run_w2(world, tmp_path)
+    stop(world, tmp_path, "W1", 10, "Status: DONE")
+    capsys.readouterr()  # drop the send lines of the setup
+    out = io.wait(world.sd, [], 600000, wave=True)
+    text = capsys.readouterr().out
+    assert [r["id"] for r in out] == ["W1"] and "W2" not in text and "DEAD" not in text
+    assert json.loads((world.sd / "fleet.json").read_text())["workers"]["W2"]["state"] == "busy"
+
+
+def test_wait_ids_takes_other_runs_worker(world, tmp_path, capsys):
+    _other_run_w2(world, tmp_path)
+    world.fh.states = [{"sl-proj-w1": "working", "sl-proj-w2": "working"}]
+    stop(world, tmp_path, "W2", 10, "Status: DONE")
+    out = io.wait(world.sd, ["W2"], 600000)
+    assert [r["id"] for r in out] == ["W2"]

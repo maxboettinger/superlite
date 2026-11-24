@@ -1138,10 +1138,11 @@ def worktree_line(sd, on):  # O(1) plus a git call: names the cwd worktree's own
     return f"worktree: fleet is on in {W}, the folder fleet spawn --plan {W} uses (this status read {S}); sl fleet status --plan {W} shows its workers"  # O(1)
 
 
-def stop(sd, ids=None, all_=False, keep_workspace=False):  # O(w) plus herdr calls
+def stop(sd, ids=None, all_=False, keep_workspace=False, every=False):  # O(w) plus herdr calls
     sd = Path(sd)  # O(1)
     live = {k: v for k, v in fs.workers(sd).items() if v.get("state") != "stopped"}  # O(w)
-    targets = list(live) if all_ else [i for i in (ids or []) if i in live]  # O(w)
+    import fleet_io as fio  # noqa: E402 | O(1) lazy
+    targets = ([k for k, v in live.items() if every or fio.of_run(sd, v)] if all_ else [i for i in (ids or []) if i in live])  # all_ stays in this run, every takes all runs (#1164) | O(w)
     p = sd / "pool.json"  # O(1)
     pdata = pool.load(p) if p.exists() else None  # O(w)
     for wid in targets:  # O(w)
@@ -1322,7 +1323,9 @@ def _ended_stop(sd, wid, w):  # the stop record of a busy worker's turn that end
     if w.get("state") != "busy" or w.get("role") == "layer":  # O(1)
         return None  # O(1)
     import fleet_io as fio  # noqa: E402 | O(1) lazy
-    return fio.latest_stop(sd, wid, int(w.get("sent") or 0))  # O(m + w)
+    rec = fio.latest_stop(sd, wid, int(w.get("sent") or 0))  # O(m + w)
+    kind = fio.stop_turn(rec["transcript"], rec["t"]) if rec and rec.get("transcript") else "answer"  # O(T)
+    return None if kind == "after" or (kind == "note" and fio.now_ms() - rec["t"] < fio.NOTE_MS) else rec  # a stop of an earlier turn is no answer (#1165) | O(1)
 
 
 def _report(sd, ids):  # print each worker's last report or a report by label; read-only | O(ids * file)
@@ -1660,7 +1663,7 @@ def main(argv=None):  # O(w) plus command cost
     elif a.cmd == "off":  # O(1)
         ws = fs.load(sd).get("workspace_id")  # read before stop clears it | O(w)
         was = list(fs.load(sd).get("accounts") or [])  # O(w)
-        stop(sd, all_=True, keep_workspace=True)  # O(w)
+        stop(sd, all_=True, every=True, keep_workspace=True)  # O(w)
         fs.set_off(sd)  # O(1)
         _tel_fleet(sd, False, was)  # O(1)
         print("fleet: off", flush=True)  # said before the workspace closes: a caller inside it dies with its pane | O(1)
