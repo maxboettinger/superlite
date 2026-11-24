@@ -61,15 +61,16 @@ def test_one_fingerprint_twice_becomes_one_finding_at_the_highest_tier(run):
 
 def test_repeat_moves_up_one_tier_and_names_the_earlier_id(run):
     root, sd, plan, report = run
-    r1 = report("T1", [f("src/a.py", 12, 1, "off by one", quote=QUOTE)])
-    assert findings.route(sd, plan, [r1], "/sl/sl")[0].startswith("fixer tier=sonnet ")
-    lines = findings.route(sd, plan, [r1], "/sl/sl")
+    def new_report(label):
+        return report(label, [f("src/a.py", 12, 1, "off by one", quote=QUOTE)])
+    assert findings.route(sd, plan, [new_report("T1")], "/sl/sl")[0].startswith("fixer tier=sonnet ")
+    lines = findings.route(sd, plan, [new_report("T1b")], "/sl/sl")
     assert lines[0].startswith("fixer tier=sonnet-high ")
     text = brief(sd, "fix-F-T1-2.md")
     assert "repeat of F-T1-1" in text and "(tier 2," in text
-    lines = findings.route(sd, plan, [r1], "/sl/sl")
+    lines = findings.route(sd, plan, [new_report("T1c")], "/sl/sl")
     assert lines[0].startswith("fixer tier=opus ")
-    lines = findings.route(sd, plan, [r1], "/sl/sl")
+    lines = findings.route(sd, plan, [new_report("T1d")], "/sl/sl")
     assert lines[0].startswith("fixer tier=opus ")
     assert [r["round"] for r in fc.load(sd)] == [1, 2, 3, 4]
 
