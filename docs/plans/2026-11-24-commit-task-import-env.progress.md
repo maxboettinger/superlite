@@ -1,0 +1,16 @@
+- start 0daf27a17c4a07cb4add766ee0c469ba7d09c979
+- unblocked: dispatched T1 at 09:45:59; waiting on fixes: none
+- tests fast passed=2 failed=16 skipped=0 seconds=0.5
+- tests fast passed=37 failed=0 skipped=0 seconds=1.3
+- commit T1 50b86b31f4 main checkout venv and uv command
+- tests fast passed=40 failed=0 skipped=0 seconds=1.7
+- tests fast passed=35 failed=5 skipped=0 seconds=1.3
+- tests fast passed=91 failed=0 skipped=0 seconds=14.2
+- commit T2 4a05a61f66 import check env gap and script skip
+- tests fast passed=77 failed=0 skipped=0 seconds=2.1
+- tests fast passed=18 failed=1 skipped=0 seconds=0.3
+- tests fast passed=19 failed=1 skipped=0 seconds=0.3
+- tests fast passed=79 failed=0 skipped=0 seconds=2.0
+- tests full passed=13746 failed=0 skipped=12 seconds=364.3
+- commit T1 acb8bed19a main checkout venv and uv command
+- tests full passed=13748 failed=0 skipped=12 seconds=641.1
