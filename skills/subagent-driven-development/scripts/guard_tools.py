@@ -37,6 +37,23 @@ COMMANDS: frozenset[str] = frozenset(
     {"git", "cpio", "ruby", "php", "perl", "unzip", "python", "python3", "python2", "py", "pypy", "pypy3"}
     | _TARS | _NODE | _SEVENZ | _PS_CMDLETS
 )
+RUN_TESTS_CAPTURE_HINT = (
+    "The guard cannot follow a value captured from sl run_tests output: start the run with sl run_tests ... "
+    "--background, then run sl run_tests --wait with no path as its own command (it waits on this tree's newest "
+    "background run), or copy the printed wait: line literally into the next command."
+)
+ROUTE_CAPTURE_HINT = (
+    "The guard cannot follow a value captured from sl findings route output: add --send and route starts one fixer "
+    "per brief itself (sl findings route --plan PLAN --send REPORT.json), or copy the literal brief= path it printed "
+    "into the next command; add a note to a brief with the Edit tool."
+)
+SL_CAPTURE_HINT = (
+    "The guard cannot follow a value captured from sl {tool} output: run the tool in one call, then copy the literal "
+    "text it printed into the next command instead of capturing it in a variable."
+)
+_CAPTURE_STEPS = 4  # variable-to-variable hops capture_hint follows | O(1)
+_VAR_READ = re.compile(r"\$(\w+)|\$\{(\w+)\}")  # O(1)
+_CAP_WORD = re.compile(r"[^\s|;&()<>]+")  # O(1)
 
 
 def _cmd(word: str) -> str:  # O(len(word))
@@ -2366,3 +2383,97 @@ def _targets(words: list[str], cwd: str | None = None, env=None, top: str | None
     if found:  # O(1)
         return _code(found[1], found[0], temp_root(text), file)  # O(len(code))
     return []  # O(1)
+
+
+def _subst_text(cmd: str, start: int, backtick: bool) -> str:
+    """The text of a command substitution whose body begins at cmd[start]; "" when it never closes."""
+    if backtick:  # O(1)
+        i = start  # O(1)
+        while i < len(cmd):  # O(len)
+            if cmd[i] == "\\":  # O(1)
+                i += 2  # O(1)
+                continue  # O(1)
+            if cmd[i] == "`":  # O(1)
+                return cmd[start:i]  # O(len)
+            i += 1  # O(1)
+        return ""  # O(1)
+    stack = ["p"]  # open contexts: "p" a paren, "d" a double quote | O(1)
+    i = start  # O(1)
+    while i < len(cmd):  # O(len)
+        c = cmd[i]  # O(1)
+        if c == "\\":  # O(1)
+            i += 2  # O(1)
+            continue  # O(1)
+        if stack[-1] != "d" and c == "'":  # a single-quoted run holds no syntax  # O(len)
+            j = cmd.find("'", i + 1)  # O(len)
+            if j < 0:  # O(1)
+                return ""  # O(1)
+            i = j + 1  # O(1)
+            continue  # O(1)
+        if c == '"':  # O(1)
+            if stack[-1] == "d":  # O(1)
+                stack.pop()  # O(1)
+            else:  # O(1)
+                stack.append("d")  # O(1)
+        elif c == "(" and (stack[-1] != "d" or cmd[i - 1] == "$"):  # O(1)
+            stack.append("p")  # O(1)
+        elif c == ")" and stack[-1] == "p":  # O(1)
+            stack.pop()  # O(1)
+            if not stack:  # O(1)
+                return cmd[start:i]  # O(len)
+        i += 1  # O(1)
+    return ""  # O(1)
+
+
+def _capture_sources(cmd: str, name: str) -> list[str]:
+    """The substitution texts NAME=$(...), NAME="$(...)", NAME=`...` and `for NAME in $(...)` assign to NAME."""
+    n = re.escape(name)  # O(len(name))
+    pats = (rf'(?<![\w$]){n}="?(\$\(|`)', rf'\bfor\s+{n}\s+in\s+"?(\$\(|`)')  # O(len(name))
+    out = []  # O(1)
+    for pat in pats:  # O(1)
+        for m in re.finditer(pat, cmd):  # O(len)
+            text = _subst_text(cmd, m.end(), m.group(1) == "`")  # O(len)
+            if text:  # O(1)
+                out.append(text)  # O(1)
+    return out  # O(len)
+
+
+def _sl_tool(text: str) -> str:
+    """The sl tool a substitution text calls ("findings route" for the route subcommand), "" when it calls none."""
+    words = [w.strip("\"'") for w in _CAP_WORD.findall(text)]  # O(len)
+    for i, w in enumerate(words[:-1]):  # O(len)
+        if w != "sl" and not w.endswith("/sl") and w not in ("$SL", "${SL}"):  # O(1)
+            continue  # O(1)
+        tool = words[i + 1]  # O(1)
+        if not re.fullmatch(r"[\w.-]+", tool):  # O(1)
+            continue  # O(1)
+        if tool == "findings" and i + 2 < len(words) and words[i + 2] == "route":  # O(1)
+            return "findings route"  # O(1)
+        return tool  # O(1)
+    return ""  # O(1)
+
+
+def capture_hint(cmd: str, word: str) -> str:
+    """The no-capture hint when a variable `word` reads was captured from sl tool output in `cmd`, else ""."""
+    try:  # O(1)
+        names = [a or b for a, b in _VAR_READ.findall(word)]  # O(len(word))
+        seen: set[str] = set()  # O(1)
+        for _ in range(_CAPTURE_STEPS + 1):  # O(1)
+            nxt = []  # O(1)
+            for name in names:  # O(len(names))
+                if name in seen:  # O(1)
+                    continue  # O(1)
+                seen.add(name)  # O(1)
+                for text in _capture_sources(cmd, name):  # O(len)
+                    tool = _sl_tool(text)  # O(len)
+                    if tool == "run_tests":  # O(1)
+                        return RUN_TESTS_CAPTURE_HINT  # O(1)
+                    if tool == "findings route":  # O(1)
+                        return ROUTE_CAPTURE_HINT  # O(1)
+                    if tool:  # O(1)
+                        return SL_CAPTURE_HINT.format(tool=tool)  # O(1)
+                    nxt.extend(a or b for a, b in _VAR_READ.findall(text))  # O(len)
+            names = nxt  # O(1)
+    except Exception:  # any parse doubt: no hint  # O(1)
+        return ""  # O(1)
+    return ""  # O(1)
