@@ -1,2 +1,3 @@
 # <doc path> | <call> | <reason>   (call = the tokens after sl, as the failure line prints them)
 docs/mvp-flow.md | tool | not a call: the folder listing "scripts/ (sl tool)" in a code block
+docs/tools.md | from your project folder or pass --plan <project>/.superlite | not a call: the quoted state.Refused message "Run sl from your project folder" (#1116)
