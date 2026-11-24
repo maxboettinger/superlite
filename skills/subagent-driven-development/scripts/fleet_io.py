@@ -1236,11 +1236,24 @@ def test_result(path):  # the finished background test run PATH as a wait result
     return {"id": "tests", "task": str(path), "status": status, "report": str(path), "source": "tests", "findings": 0}  # O(1)
 
 
+def run_of(w):  # the run folder a worker record belongs to, None when the record names none (#1164) | O(1)
+    env = (w.get("launch") or {}).get("env") or {}  # O(1)
+    if w.get("machine") and w.get("state_dir"):  # a remote record: state_dir is <run>/remote/<wid> | O(1)
+        return Path(w["state_dir"]).parent.parent  # O(1)
+    d = env.get("SUPERLITE_FLEET_PARENT_DIR") or env.get("SUPERLITE_STATE_DIR") or w.get("state_dir")  # a lead's workers belong to its parent run | O(1)
+    return Path(d) if d else None  # O(1)
+
+
+def of_run(sd, w):  # True when worker record W belongs to run SD, or names no run | O(1)
+    r = run_of(w)  # O(1)
+    return r is None or r.resolve() == Path(sd).resolve()  # O(1)
+
+
 def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False, wave=False, tests=None):  # O(timeout/poll * (w + m))
     sd = Path(sd)  # O(1)
     clock = clock or now_ms  # O(1)
     workers = fs.load(sd)["workers"]  # O(w)
-    pending = list(ids) if ids else [k for k, v in workers.items() if v.get("state") == "busy"]  # O(w)
+    pending = list(ids) if ids else [k for k, v in workers.items() if v.get("state") == "busy" and of_run(sd, v)]  # O(w)
     changed = {}  # wid -> ms the state first read done or idle | O(1)
     seen = {}  # wid -> {t: stop t, first: ms first seen, text, lag}; a flushed transcript is read once per stop record, a lagging one each poll | O(1)
     results = []  # O(1)
