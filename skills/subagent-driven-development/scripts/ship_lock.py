@@ -102,7 +102,7 @@ def _prune(q, holder_batch, live, now_ms):  # O(q)
             continue  # O(1) its agent is gone and it stopped polling
         if not isinstance(seen, int) or now_ms - seen > QUEUE_STALE_MS or e.get("batch") == holder_batch:  # O(1)
             continue  # O(1)
-        keep.append(e)  # O(1)
+        keep.append(dict(e))  # O(1) a copy, so a refreshed seen differs from old and is written
     return keep  # O(q)
 
 
