@@ -1,4 +1,4 @@
-# tests/scripts/test_guard_fleet_private_plan_1072.py: rule 4 never names a session's private state folder as PLAN (#1072)
+# tests/scripts/test_guard_fleet_private_plan_1072.py: rule 4 names a session's private state folder as PLAN like any other (#1072, #1088)
 import json
 
 import pytest
@@ -20,15 +20,15 @@ def _private(e):
     return p
 
 
-@pytest.mark.parametrize("agent", AGENTS)
-def test_private_folder_never_named_as_plan(e, agent):
+@pytest.mark.parametrize("agent,tail", [("superlite:researcher", "before a plan exists."),
+                                        ("superlite:writer", "for a build without a plan."),
+                                        ("superlite:final-reviewer", "for a build without a plan.")])
+def test_private_folder_named_as_plan_again(e, agent, tail):
     p = _private(e)
     r = e.call(e.main, agent=agent)
     assert r.returncode == 2
-    assert (f"PLAN is the plan file, never {p}: that is this session's private state folder, so a worker spawned with it "
-            f"starts in {p.parent}, outside the project, where it cannot read the project and the brief check refuses "
-            f"project paths (#1072); before a plan exists run sl fleet off --plan {p} and repeat the Agent call.") in r.stderr
-    assert f"or {p} before a plan exists" not in r.stderr and f"or {p} for a build without a plan" not in r.stderr
+    assert f"PLAN is the plan file, or {p} {tail}" in r.stderr
+    assert "never " not in r.stderr and "#1072" not in r.stderr
     rows = (p / "incidents.jsonl").read_text().splitlines()
     assert json.loads(rows[-1])["rule"] == "fleet"
 

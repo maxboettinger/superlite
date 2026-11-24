@@ -143,6 +143,23 @@ def private_dir(sid) -> Path:  # O(1)
     return home() / "sessions" / f"{sid}.d" / ".superlite"  # O(1)
 
 
+def private(sd) -> bool:  # O(d)
+    """True when sd lies at or under <superlite home>/sessions: a session's private state folder (#1088)."""
+    p, base = _abs(sd), _abs(home() / "sessions")  # O(d)
+    if p == base or base in p.parents:  # O(d)
+        return True  # O(1)
+    rp, rb = Path(sd).resolve(), base.resolve()  # O(d)
+    return rp == rb or rb in rp.parents  # O(d)
+
+
+def project(sd) -> Path:  # O(d)
+    """The project a run folder belongs to: a private folder takes the launch folder's git root (#1088), else sd's git root or its parent."""
+    if private(sd):  # the private check comes first, so a home inside a checkout still gives the launch project | O(d)
+        launch = _abs(os.environ.get("CLAUDE_PROJECT_DIR") or ".")  # O(d)
+        return git_root(launch) or launch  # O(d)
+    return git_root(sd) or Path(sd).parent  # O(d)
+
+
 def _target(sid):  # O(1)
     try:  # O(1)
         lines = _binding(sid).read_text(encoding="utf-8").splitlines()  # O(1)
