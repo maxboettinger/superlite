@@ -365,6 +365,26 @@ def for_plan(plan) -> Path:  # O(d)
     return r  # O(1)
 
 
+def default_dir() -> Path:  # O(d)
+    """The state folder a bare `.superlite` default names (#1131): `resolve(strict=False)`, or the cwd's own folder where
+    resolve() would raise Foreign (the #224 rule of `for_plan`)."""
+    r = resolve(strict=False)  # O(d)
+    if not os.environ.get("SUPERLITE_STATE_DIR") and foreign_worktree(r) is not None:  # O(d)
+        return plan_dir(".superlite")  # O(d)
+    return r  # O(1)
+
+
+def default_root() -> Path:  # O(d)
+    """The project root a bare `.` default names (#1131): `.`, unless ./.superlite lies in the plugin; then the folder
+    holding default_dir(), and a refusal when that is the session's private folder (no project is known)."""
+    if not in_plugin(_abs(".superlite")):  # O(d)
+        return Path(".")  # O(1)
+    sd = default_dir()  # O(d)
+    if private(sd):  # O(d)
+        _refuse(_abs(".superlite"))  # O(d)
+    return _abs(sd).parent  # O(d)
+
+
 def resolve(plan_or_dir=None, strict: bool = True) -> Path:  # O(d)
     """An explicit plan or folder wins; else $SUPERLITE_STATE_DIR, the cwd's worktree run, the session's binding,
     ./.superlite or the private folder. A binding outside the cwd's linked worktree raises Foreign after one stderr
