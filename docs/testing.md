@@ -44,7 +44,7 @@ The green hashes (the newest 200 per layer) and each checkout's last green file 
 
 ## Stop hook
 
-The repo's `.claude/settings.json` registers a Stop hook that runs `python3 "$CLAUDE_PROJECT_DIR/scripts/test_layers.py" check --hook`. When a layer the turn's changes require is stale, the hook blocks the turn once and names the layer. It stays silent when the Stop input carries `stop_hook_active: true` (so it blocks once per turn only) and during an active superlite run.
+The repo's `.claude/settings.json` registers a Stop hook that runs `python3 "$CLAUDE_PROJECT_DIR/scripts/test_layers.py" check --hook`. When a layer the turn's changes require is stale, the hook blocks the turn once and names the layer. It stays silent when the Stop input carries `stop_hook_active: true` (so it blocks once per turn only), during an active superlite run, in a fleet worker (`SUPERLITE_FLEET_WORKER` set; its coordinator runs the layers) and when no file of a stale layer changed since the session started, so a session that edited nothing, such as a reviewer, is not gated on earlier changes. The session start is the first `timestamp` line of the Stop input's `transcript_path`; a change is read from the stale files' mtime or ctime (a removed file: its nearest existing folder). An unknown start keeps the gate (no transcript, no timestamp in it, a stat error).
 
 To turn the hook off for one session, set `SUPERLITE_TEST_LAYERS=off`.
 

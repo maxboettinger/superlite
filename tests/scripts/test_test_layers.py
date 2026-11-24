@@ -343,7 +343,7 @@ def write_manifests(root, version, name="x", spaced=False):
     sep = ' :  ' if spaced else ': '
     plugin = f'{{"name": "{name}", "version"{sep}"{version}"}}\n'
     files = {".claude-plugin/plugin.json": plugin, ".claude-plugin/marketplace.json": plugin.replace('"x"', '"m"'),
-             "package.json": plugin, "gemini-extension.json": plugin}
+             "package.json": plugin}
     for path, text in files.items():
         (root / path).parent.mkdir(exist_ok=True)
         (root / path).write_text(text)
@@ -362,9 +362,9 @@ def test_version_only_change_keeps_hashes(repo):
     assert hashes(repo) == before
     write_manifests(repo, "1.0.2", spaced=True)
     assert hashes(repo) == before
-    assert all(tl.is_manifest(p) for p in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "package.json",
-                                           "gemini-extension.json"))
-    assert not any(tl.is_manifest(p) for p in ("sub/package.json", ".claude-plugin/sub/x.json", "hooks/hooks.json"))
+    assert all(tl.is_manifest(p) for p in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "package.json"))
+    assert not any(tl.is_manifest(p) for p in ("sub/package.json", ".claude-plugin/sub/x.json", "hooks/hooks.json",
+                                               "gemini-extension.json"))  # removed by B297 (#1058)
 
 
 def test_manifest_other_change_moves_headless(repo):
@@ -617,3 +617,15 @@ def test_hook_blocks_when_the_session_start_is_unknown(repo, tmp_path):
                   json.dumps({"stop_hook_active": False, "cwd": str(repo), "transcript_path": 5})):
         r = cli(repo, "check", "--hook", stdin=stdin)
         assert json.loads(r.stdout)["decision"] == "block"
+
+
+def test_testing_md_names_every_stop_hook_silence():
+    """#1060, #919: the Stop hook paragraph of docs/testing.md names each case in which the hook stays silent."""
+    text = (SCRIPT.parents[1] / "docs" / "testing.md").read_text(encoding="utf-8")
+    para = text.split("\n## Stop hook\n", 1)[1].split("\n## ", 1)[0]
+    for phrase in ("`stop_hook_active: true`", "during an active superlite run", "`SUPERLITE_FLEET_WORKER`",
+                   "no file of a stale layer changed since the session started",
+                   "the first `timestamp` line of the Stop input's `transcript_path`",
+                   "mtime or ctime", "An unknown start keeps the gate"):
+        assert phrase in para, phrase
+    assert "gemini-extension.json" not in text
