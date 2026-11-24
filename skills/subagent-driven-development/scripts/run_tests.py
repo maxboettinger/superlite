@@ -1945,6 +1945,22 @@ def _has_shell_op(text):  # O(len) True when text holds an unquoted shell operat
         return True  # O(1)
 
 
+def remote_junit(command: str, cwd: Path) -> tuple[str, Path | None]:  # a maxapp remote command's {junit} as an in-tree report fetched back, and the local report path (#1169) | O(len)
+    if "{junit}" not in command or not is_remote_command(command):  # O(len)
+        return command, None  # O(1)
+    cp = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"], capture_output=True, text=True)  # O(1)
+    top = (cp.stdout or "").strip()  # O(1)
+    if cp.returncode != 0 or not top:  # O(1)
+        return command, None  # O(1)
+    name = f".superlite-junit-{uuid.uuid4().hex[:12]}.xml"  # O(1)
+    named = command.replace("{junit}", name)  # O(len)
+    fetched = testcmd.remote_fetch(named, name)  # O(len * m)
+    if fetched is None:  # O(1)
+        print("run_tests: WARNING: cannot add --fetch to the maxapp remote command; its JUnit report stays on the remote host, so its printed output is read", file=sys.stderr)  # O(1)
+        return named, None  # O(1)
+    return fetched, Path(top) / name  # O(1)
+
+
 def narrowed_remote(command: str, paths: list[str], tree: Path) -> str | None:  # the remote command with its pytest test paths replaced by paths; None when it cannot be rewritten safely | O(len + w)
     if not is_remote_command(command) or "$" in command or "`" in command or _has_shell_op(command):  # O(len)
         return None  # O(1)
@@ -2033,10 +2049,16 @@ def run_base_tests(a, root, tree, paths):  # the project's fast test command for
                 r = run_captured(cmd, limit=a.limit, env=child_env(), cwd=str(tree))  # O(o) + the run
             else:  # O(1)
                 command = with_derived_data(spec["command"], tree)  # O(len)
+                command, fetch_report = remote_junit(command, tree)  # a remote {junit} is an in-tree report fetched back (#1169) | O(len)
                 ran = command  # O(len)
                 env = child_env({**{k: root_superlite(str(v), root, raw=True).replace("{junit}", str(xml)) for k, v in (spec.get("env") or {}).items()},  # O(env)
                                  "SUPERLITE_DERIVED_DATA_PATH": str(trees.derived_data_path(tree))})  # O(1)
-                r = run_captured(root_superlite(command, root).replace("{junit}", str(xml)), limit=a.limit, shell=True, env=env, cwd=str(tree))  # O(o) + the run
+                try:  # O(1)
+                    r = run_captured(root_superlite(command, root).replace("{junit}", str(xml)), limit=a.limit, shell=True, env=env, cwd=str(tree))  # O(o) + the run
+                finally:  # the fetched report is read from the temp junit.xml, the tree copy goes | O(X)
+                    if fetch_report is not None and fetch_report.is_file():  # O(1)
+                        xml.write_bytes(fetch_report.read_bytes())  # O(X)
+                        fetch_report.unlink()  # O(1)
         except LimitHit as e:  # O(1)
             print(f"run_tests: --base-skips: the base run passed the {e.seconds:g} s limit", file=sys.stderr)  # O(1)
             return 2  # O(1)
@@ -2239,7 +2261,8 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
         if dests and not XCODEBUILD.search(spec["command"]):  # O(len)
             print(f"run_tests: WARNING: destinations need an xcodebuild command; ran `{spec['command']}` once", file=sys.stderr)  # O(len)
             dests = []  # O(1)
-        runs = [(d, testcmd.with_destination(sub(spec["command"]), d) or sub(spec["command"])) for d in dests] or [(None, sub(spec["command"]))]  # O(d * len)
+        rcommand, fetch_report = remote_junit(spec["command"], Path(workdir) if workdir else root)  # a remote {junit} is an in-tree report fetched back (#1169) | O(len)
+        runs = [(d, testcmd.with_destination(sub(rcommand), d) or sub(rcommand)) for d in dests] or [(None, sub(rcommand))]  # O(d * len)
         gui = gui_session.preflight([c for _, c in runs]) if spec.get("lock") is not False else None  # a macOS xcodebuild test outside the desktop session (#561) | O(d * len)
         if gui:  # O(1)
             return usage_error(a, label, gui)  # O(summary size)
@@ -2266,7 +2289,12 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
                 WARNING = f"{WARNING}; {plat}" if WARNING else plat  # O(1)
                 print(f"run_tests: WARNING: {plat}", file=sys.stderr)  # O(1)
         t0, w0 = time.monotonic(), gate.waited if gate else 0.0  # O(1)
-        results = [(d, (gate.run if gate else run_captured)(c, limit=a.limit, shell=True, env=env, cwd=workdir)) for d, c in runs]  # one run per destination, in order | O(o) + the runs
+        try:  # O(1)
+            results = [(d, (gate.run if gate else run_captured)(c, limit=a.limit, shell=True, env=env, cwd=workdir)) for d, c in runs]  # one run per destination, in order | O(o) + the runs
+        finally:  # the fetched report is read from the temp junit.xml, the tree copy goes | O(X)
+            if fetch_report is not None and fetch_report.is_file():  # O(1)
+                xml_path.write_bytes(fetch_report.read_bytes())  # O(X)
+                fetch_report.unlink()  # O(1)
         seconds = time.monotonic() - t0 - ((gate.waited - w0) if gate else 0.0)  # the admission wait is not test time | O(1)
         texts = [(d, (x.stdout or "") + (x.stderr or "")) for d, x in results]  # O(o)
         text = "".join(f"run_tests: destination {d}\n{t}" if d else t for d, t in texts)  # O(o)
