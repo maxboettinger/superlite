@@ -171,6 +171,68 @@ def read_issue(n: int) -> tuple:
     return {k: v for k, v in r.items() if k not in ("state", "pull")}, None  # O(1)
 
 
+PROBE_LIMIT = 10  # O(1) numbers a plain plan reads past the newest known one (#1148)
+LAG_TAIL = "an issue filed in the last minutes may be missing: sl backlog plan --issues <n> --add plans it"  # O(1)
+
+
+def newest_known(issues: list, data: dict, subjects: list[str]) -> int:
+    """The highest issue number the plan already knows: the listing, backlog.json and the default branch's (#N) subjects (#1148)."""
+    import backlog_intake as bi  # O(1)
+    seen: list = []  # O(1)
+
+    def add(v):
+        if isinstance(v, int) and not isinstance(v, bool):  # O(1)
+            seen.append(v)  # O(1)
+
+    def many(v):
+        for x in v if isinstance(v, list) else []:  # O(len)
+            add(x)  # O(1)
+
+    def nums(v):
+        for x in v if isinstance(v, list) else []:  # O(len)
+            add(x.get("number") if isinstance(x, dict) else None)  # O(1)
+
+    data = data if isinstance(data, dict) else {}  # O(1)
+    nums(issues)  # O(i)
+    nums(data.get("outside"))  # O(outside)
+    for b in data.get("batches") if isinstance(data.get("batches"), list) else []:  # O(b)
+        many(b.get("issues") if isinstance(b, dict) else None)  # O(issues)
+    many(data.get("admitted"))  # O(admitted)
+    many(data.get("skipped"))  # O(skipped)
+    for k in data.get("titles") if isinstance(data.get("titles"), dict) else []:  # O(titles)
+        if isinstance(k, str) and k.isascii() and k.isdigit():  # O(1)
+            add(int(k))  # O(1)
+    for s in subjects if isinstance(subjects, list) else []:  # O(subjects)
+        m = bi.TRAIL_RE.search(str(s).partition("\t")[2])  # O(len)
+        if m:  # O(1)
+            add(int(m.group(1)))  # O(1)
+    return max(seen, default=0)  # O(seen)
+
+
+def probe_new(top: int, limit: int = PROBE_LIMIT) -> tuple[list, list[str]]:
+    """Open issues top+1 .. top+limit read by number, shaped like the listing, and the lines to print (#1148).
+    Stops at the first 404; a pull request or a closed issue goes on."""
+    found: list = []  # O(1)
+    lines: list[str] = []  # O(1)
+    for n in range(top + 1, top + limit + 1):  # O(limit)
+        try:  # O(1)
+            r = _gh(["api", f"repos/{{owner}}/{{repo}}/issues/{n}", "--jq", ISSUE_JQ])  # O(network)
+        except RuntimeError as e:  # O(1)
+            if "HTTP 404" in str(e):  # O(1)
+                return found, lines  # O(1)
+            why = " ".join(str(e).split(" failed: ", 1)[-1].split())[:120] or "gh failed"  # O(1)
+            lines.append(f"listing: stopped reading by number at #{n} ({why}); {LAG_TAIL}")  # O(1)
+            return found, lines  # O(1)
+        if not isinstance(r, dict) or r.get("number") != n:  # O(1)
+            return found, lines  # O(1)
+        if r.get("pull") or str(r.get("state", "open")).lower() != "open":  # O(1)
+            continue  # O(1)
+        found.append({k: v for k, v in r.items() if k not in ("state", "pull")})  # O(1)
+        lines.append(f"listing lag: #{n} read by number (not in the open-issue list yet)")  # O(1)
+    lines.append(f"listing: read #{top + 1} to #{top + limit} by number and stopped at the {limit}-read cap; {LAG_TAIL}")  # O(1)
+    return found, lines  # O(1)
+
+
 def pinned_issues(issues: list, nums: list, missing: list | None = None) -> list:
     """The issues of nums in nums order; one the list misses is read by number (#776). A miss is added to
     missing as (number, reason); without missing the first miss raises."""
@@ -549,6 +611,9 @@ def cmd_plan(a) -> int:
     jira = jql is not None or keys is not None
     notes: list = []  # O(1)
     info = _gh(["repo", "view", "--json", "nameWithOwner,visibility,defaultBranchRef"])
+    br = info.get("defaultBranchRef") if isinstance(info, dict) else None  # O(1)
+    ref = br["name"] if isinstance(br, dict) and isinstance(br.get("name"), str) and br["name"] else "HEAD"  # O(1)
+    subjects = [] if jira else _subjects(root, ref)  # O(2000) Jira reads its subjects after the issues
     if jira:
         gone: list = []  # O(1)
         issues = jira_issues(jql, keys, gone if keys else None)  # O(i)
@@ -573,6 +638,11 @@ def cmd_plan(a) -> int:
             if gone:  # O(1)
                 lost = {g[0] for g in gone}  # O(gone)
                 pin = [n for n in pin if n not in lost]  # O(pin)
+    if not jira and pin is None and proposal is None:  # O(1) a plain GitHub plan reads issues past the lagging list by number (#1148)
+        found, plines = probe_new(newest_known(issues, d, subjects))  # O(PROBE_LIMIT * network)
+        listed = {i["number"] for i in issues}  # O(i)
+        issues = issues + [f for f in found if f["number"] not in listed]  # O(i)
+        notes += plines  # O(PROBE_LIMIT)
     carry = carry_rounds(d["outside"])  # O(outside)
     issues = sorted(issues, key=lambda i: -carry.get(i["number"], 0))  # O(i log i)
     rest = issues[ISSUE_LIMIT:]
@@ -588,9 +658,7 @@ def cmd_plan(a) -> int:
             trusted.append({"number": n, "title": i.get("title", ""), "body": _body(i.get("body"))})
         else:
             outside.append({"number": n, "title": i.get("title", ""), "author": _author(i)})
-    br = info.get("defaultBranchRef") if isinstance(info, dict) else None  # O(1)
-    ref = br["name"] if isinstance(br, dict) and isinstance(br.get("name"), str) and br["name"] else "HEAD"  # O(1)
-    subjects = _subjects(root, ref)  # O(2000)
+    subjects = _subjects(root, ref) if jira else subjects  # O(2000)
     merged = bi.merged_refs(subjects, jira)  # O(2000)
     trusted, cnotes = bi.with_comments(trusted, info.get("nameWithOwner") or "", public, jira)  # O(i * comments)
     notes += cnotes  # O(i)
@@ -600,6 +668,9 @@ def cmd_plan(a) -> int:
     if not trusted and proposal is None and (more or lines):  # O(1)
         busy = any(str(m.get("reason", "")).startswith("not planned (in progress") for m in more)  # an in-progress issue was left out (#956) | O(i)
         print("\n".join(notes + ["nothing to plan: every issue is already shipped" + (" or in progress" if busy else "")]))  # O(i)
+        return 0  # O(1)
+    if not trusted and not outside and proposal is None:  # O(1) nothing open to triage: start no worker (#1148)
+        print("\n".join(notes + ["nothing to plan: no open issue to triage"]))  # O(i)
         return 0  # O(1)
     head = subjects[0].split("\t", 1)[0] if subjects else None  # O(1)
     try:  # O(1)
@@ -620,6 +691,18 @@ def cmd_plan(a) -> int:
         if err:
             print("\n".join(err))
             return 3
+    if isinstance(prop.get("batches"), list) and not prop["batches"] and str(prop.get("status", "DONE")).startswith("DONE"):  # O(1)
+        reasons = bc.left_out_reasons(prop, {t["number"] for t in trusted})  # O(q)
+        groups: dict = {}  # O(1)
+        for t in trusted:  # O(i)
+            groups.setdefault(f"not planned (triage: {reasons[t['number']]})" if t["number"] in reasons else "not planned (triage)", []).append(bs.ref(t["number"]))  # O(1)
+        out = list(notes) + [f"{r}: {' '.join(ns)}" for r, ns in groups.items()]  # O(i)
+        if proposal is None:  # O(1)
+            why = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(prop.get("summary", ""))).split())[:300]  # O(len)
+            out.append(f"triage worker {prop.get('status', '?')}: {why or 'no summary'}")  # O(1)
+        out.append("nothing to plan: the proposal holds no batch; sl backlog skip <issue> keeps an issue out of every later plan")  # O(1)
+        print("\n".join(out))  # O(i)
+        return 0  # O(1) nothing stored
     topics = bc.normalise_topics(prop)  # O(b)
     cuts = bc.cut_lines(bc.fit_proposal(prop))  # O(q)
     known_b = frozenset(b["id"] for b in d["batches"] if b["state"] == "shipped" or add)  # O(b) only batches that survive this plan
@@ -640,13 +723,6 @@ def cmd_plan(a) -> int:
         nb = len(prop["batches"]) if isinstance(prop.get("batches"), list) else 0  # O(1)
         held = f" (the proposal holds {nb} batch{'' if nb == 1 else 'es'})"  # O(1)
         print("BLOCKED: proposal rejected\n" + "\n".join(errs[:5]) + where + ("" if proposal is not None else f"\ntriage worker {prop.get('status', '?')}: {why or 'no summary'}{held}"))
-        if nb == 0:  # O(1) an empty proposal: name the way out
-            reasons = bc.left_out_reasons(prop, {t["number"] for t in trusted})  # O(q)
-            groups: dict = {}  # O(1)
-            for t in trusted:  # O(i)
-                groups.setdefault(f"not planned (triage: {reasons[t['number']]})" if t["number"] in reasons else "not planned (triage)", []).append(bs.ref(t["number"]))  # O(1)
-            print("\n".join(f"{r}: {' '.join(ns)}" for r, ns in groups.items()))  # O(i)
-            print("nothing to plan: sl backlog skip <issue> keeps an issue out of every later plan")  # O(1)
         if topics:
             print("\n".join(topics))
         if cuts:
