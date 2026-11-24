@@ -2069,7 +2069,7 @@ def excerpt(root: Path, file: str, line: int, ctx: int = 12) -> str:  # O(B) per
     rows = []  # O(1)
     for n in range(lo, hi + 1):  # O(ctx) iterations
         mark = ">" if n == line else " "  # O(1)
-        rows.append(f"{mark}{n:>4} | {lines[n - 1][:160]}")  # O(1)
+        rows.append(f"{mark}{n:>4} | {clip_text(lines[n - 1], 160)}")  # O(1)
     return "\n".join(rows) if rows else "(empty file)"  # O(1)
 
 
@@ -2156,7 +2156,7 @@ def claimed_fix_items(entries: list[dict], changed: set[str], root: Path | None 
         agent = e.get("agent") or "unknown"  # O(1)
         items.append(Item("claimed", (3, "\uffff", file, line),  # O(1)
                           f"{file}:{line}  claimed fixed by {agent}, file unchanged since base",  # O(1)
-                          f"- [{agent}] {str(e.get('context', ''))[:200]}", file, line,  # O(1)
+                          f"- [{agent}] {clip_text(str(e.get('context', '')), 200)}", file, line,  # O(1)
                           f"pt_review claimed-fix check (tool), claim by {agent}", True))  # O(1)
     return items  # O(groups)
 
@@ -2186,7 +2186,7 @@ def incident_items(entries: list[dict]) -> list[Item]:  # O(K) total
         lines = []  # O(1)
         for e in es[:3]:  # O(1) at most 3 iterations
             tags = "/".join(str(e[k]) for k in ("kind", "resolution", "confidence", "agent") if e.get(k))  # O(1)
-            lines.append(f"- [{tags}] {str(e.get('context', ''))[:200]}")  # O(1)
+            lines.append(f"- [{tags}] {clip_text(str(e.get('context', '')), 200)}")  # O(1)
         if len(es) > 3:  # O(1)
             lines.append(f"- (+{len(es) - 3} more entries at this location)")  # O(1)
         checker, tool = _checker([str(e.get("agent") or "unknown") for e in es])  # O(entries)
@@ -2211,7 +2211,7 @@ def read_probe_failures(probes: Path) -> list[Item]:  # O(R) total
             continue  # O(1)
         file = str(r.get("file", "")).replace("\\", "/")  # O(1)
         line = int(r.get("line") or 0)  # O(1)
-        detail = str(r.get("detail") or r.get("message") or r.get("probe") or "")[:200]  # O(1)
+        detail = clip_text(str(r.get("detail") or r.get("message") or r.get("probe") or ""), 200)  # O(1)
         items.append(Item("probes", (3, str(r.get("category", "")), file, line),  # O(1)
                           f"probe {r.get('category', '?')} {r.get('status')}: {file}:{line}",  # O(1)
                           f"- {detail}" if detail else "", file, line, "probe_run (tool)", True))  # O(1)
@@ -2544,6 +2544,30 @@ def _is_diff_header(ln: str) -> bool:  # O(1) total
     return ln.startswith(("+++ ", "--- ", "@@"))  # O(1)
 
 
+BACKTICKS_RE = re.compile(r"`+")  # O(1)
+
+
+def cut_mark(n: int) -> str:  # O(1) total
+    """The marker that stands where n chars of a line were left out of the packet (#1118)."""
+    return f"[\u2026 {n} chars cut \u2026]"  # O(1)
+
+
+def clip_text(s: str, n: int) -> str:  # O(n) total
+    """s cut to its first n chars, with the cut marker when anything was cut; s itself when it fits (#1118)."""
+    return s if len(s) <= n else s[:n] + cut_mark(len(s) - n)  # O(n)
+
+
+def fence_width(lines: list[str]) -> int:  # O(chars) total
+    """Backticks a fence needs to hold these lines: one more than their longest backtick run, at least 3 (#1118)."""
+    return max(3, 1 + max((len(r) for ln in lines for r in BACKTICKS_RE.findall(ln)), default=0))  # O(chars)
+
+
+def fence(body: str, info: str = "", width: int | None = None) -> str:  # O(len(body)) total
+    """body in a backtick fence that no line of it can close (#1118); `width` overrides the computed width."""
+    w = "`" * (width or fence_width(body.splitlines()))  # O(len(body))
+    return f"{w}{info}\n{body}\n{w}"  # O(len(body))
+
+
 def _clip_pair(old: str, new: str, cap: int, ctx: int) -> tuple[str, str]:  # O(m) total
     """Both lines of a -/+ pair cut to the span where they differ, with ctx chars around it."""
     a, b = old[1:], new[1:]  # O(m)
@@ -2554,11 +2578,17 @@ def _clip_pair(old: str, new: str, cap: int, ctx: int) -> tuple[str, str]:  # O(
     s = 0  # O(1)
     while s < top - p and a[len(a) - 1 - s] == b[len(b) - 1 - s]:  # O(m) iterations
         s += 1  # O(1)
-    note = f" [line of {len(a)} chars, changed at col {p + 1}; read the file for the rest]"  # O(1)
 
     def cut(body: str, mark: str) -> str:  # O(m)
         end = len(body) - s  # O(1)
-        return mark + "\u2026" + body[max(0, p - ctx):p] + body[p:end][:cap] + body[end:end + ctx] + "\u2026" + note  # O(m)
+        lo, hi = max(0, p - ctx), min(len(body), end + ctx)  # O(1)
+        span = body[p:end]  # O(m)
+        if len(span) > cap:  # O(1)
+            keep = cap // 2  # O(1)
+            span = span[:keep] + cut_mark(len(span) - cap) + span[len(span) - (cap - keep):]  # O(cap)
+        note = f" [line of {len(body)} chars, changed at col {p + 1}; read the file for the rest]"  # O(1)
+        return (mark + (cut_mark(lo) if lo else "") + body[lo:p] + span + body[end:hi]  # O(m)
+                + (cut_mark(len(body) - hi) if hi < len(body) else "") + note)  # O(1)
     return cut(a, old[0]), cut(b, new[0])  # O(m)
 
 
@@ -2624,15 +2654,16 @@ def _file_cap(f: str, per_file: int, n_lines: int) -> int:  # O(m) total
     return n_lines if _is_hook(f) else per_file  # hooks are uncapped, the token budget limits them | O(m)
 
 
-def _overhead(f: str, n_lines: int, per_file: int) -> int:  # O(m) total
+def _overhead(f: str, lines: list[str], per_file: int) -> int:  # O(m) total
     """Chars a shown file costs besides its diff lines: heading, fences, joins and the longest truncation note."""
+    n_lines = len(lines)  # O(1)
     note = f"(truncated: {_file_cap(f, per_file, n_lines)} of {n_lines} diff lines shown, per-file cap; read {f} in full)"  # O(m)
-    return len(f"### {f}\n```diff\n") + len("\n```") + len(note) + 2  # O(m)
+    return len(f"### {f}\n") + 2 * fence_width(lines) + len("diff\n") + 1 + len(note) + 2  # O(m)
 
 
 def excerpt_need(diffs: list[tuple[str, list[str]]], per_file: int = EXCERPT_FILE_LINES) -> int:  # O(X) total
     """Chars the excerpt section takes when every changed file shows its hunks up to its per-file cap."""
-    return sum(_overhead(f, len(lines), per_file) + sum(len(ln) + 1 for ln in lines[:_file_cap(f, per_file, len(lines))])  # O(X)
+    return sum(_overhead(f, lines, per_file) + sum(len(ln) + 1 for ln in lines[:_file_cap(f, per_file, len(lines))])  # O(X)
                for f, lines in diffs)  # O(F)
 
 
@@ -2645,7 +2676,7 @@ def _allocate(diffs: list[tuple[str, list[str]]], per_file: int, budget: int | N
     def grow(f: str, lines: list[str], upto: int) -> None:  # O(upto)
         nonlocal used  # O(1)
         while take[f] < upto:  # O(upto) iterations
-            c = len(lines[take[f]]) + 1 + (_overhead(f, len(lines), per_file) if take[f] == 0 else 0)  # O(m)
+            c = len(lines[take[f]]) + 1 + (_overhead(f, lines, per_file) if take[f] == 0 else 0)  # O(m)
             if budget is not None and used + c > budget:  # O(1)
                 return  # O(1)
             used += c  # O(1)
@@ -2674,7 +2705,7 @@ def render_excerpts(changed: list[str], diffs: list[tuple[str, list[str]]], per_
             n = take[f]  # O(1)
             if not n:  # O(1)
                 continue  # O(1)
-            out.append(f"### {f}\n```diff\n" + "\n".join(lines[:n]) + "\n```")  # O(n)
+            out.append(f"### {f}\n" + fence("\n".join(lines[:n]), "diff", fence_width(lines)))  # O(n)
             if n < len(lines):  # O(1)
                 why = "per-file" if n == _file_cap(f, per_file, len(lines)) else "size"  # O(1)
                 out.append(f"(truncated: {n} of {len(lines)} diff lines shown, {why} cap; read {f} in full)")  # the final reviewer may read this file | O(1)
@@ -3025,7 +3056,7 @@ def _run_label(r: dict) -> str:  # O(1)
 
 
 def _run_counts(r: dict) -> str:  # O(1)
-    err = f"; error: {str(r['error'])[:120]}" if r.get("error") else ""  # O(1)
+    err = f"; error: {clip_text(str(r['error']), 120)}" if r.get("error") else ""  # O(1)
     return f"{r.get('passed', 0)} passed, {r.get('failed', 0)} failed, {r.get('skipped', 0)} skipped{err}"  # O(1)
 
 
@@ -3044,7 +3075,7 @@ def read_test_summary(path: Path, root: Path | None = None, changed: set[str] | 
     if not d.get("error"):  # a summary without `error` reads as before | O(1)
         rows, nfail = _summary_rows(d, root, changed, base_skips)  # O(F*(B + d))
         return "\n".join(rows), nfail  # O(1)
-    err = str(d["error"])[:200]  # O(1)
+    err = clip_text(str(d["error"]), 200)  # O(1)
     if killed(d):  # O(1)
         rows, nfail = [f"- killed run, no result: {err}"], 0  # O(1)
     else:  # O(1)
@@ -3106,7 +3137,7 @@ def render_item(root: Path, it: Item, shown: set[tuple[str, int]], idx: str) -> 
             out.append("(excerpt shown with the item for the same location)")  # O(1)
         else:  # O(1)
             shown.add(key)  # O(1)
-            out.append("```\n" + excerpt(root, it.file, it.line) + "\n```")  # O(1)
+            out.append(fence(excerpt(root, it.file, it.line)))  # O(1)
     return "\n".join(out) + "\n"  # O(1)
 
 
@@ -3368,7 +3399,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
             continue  # O(1)
         seen_loc.add(loc)  # O(1)
         shown_old += 1  # O(1)
-        tests_text += f"\n- OUTDATED incident: {e.get('file')}:{e.get('line')} {str(e.get('context', ''))[:120]} ({why} changed after it)"  # O(1)
+        tests_text += f"\n- OUTDATED incident: {e.get('file')}:{e.get('line')} {clip_text(str(e.get('context', '')), 120)} ({why} changed after it)"  # O(1)
     n_open = sum(counts.values()) + (1 if nfail else 0)  # O(1)
     fast = n_open == 0 and not inline  # an inline build had no reviewer, so nothing is verified yet (#130) | O(1)
     tool_only = not fast and not inline and not nfail and all(i.tool for i in items)  # every open item is a tool check, none an agent finding or a red test (#12) | O(I)
@@ -3478,7 +3509,7 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
     def tail_of(excerpts: str) -> list[str]:  # O(sum of text sizes)
         return ["## 4. Test summary", tests_text, "",  # O(1)
                 "## 5. Cross-package seams (calls from one package into another)", seam_text, "",  # O(1)
-                "## 6. Diff stat", "```\n" + diff + "\n```", "",  # O(1)
+                "## 6. Diff stat", fence(diff), "",  # O(1)
                 "## 7. Review Focus", focus, "",  # O(1)
                 *render,  # O(1)
                 "## 8. Source excerpts (changed hunks of the hot-spot files)", excerpts, ""]  # O(1)
