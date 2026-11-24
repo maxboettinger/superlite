@@ -991,6 +991,7 @@ else
     '- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, rm a file or folder git does not track and no task Owns, and write or rm a git-ignored path no task Owns.' \
     "- An inline build (the run's plan holds exactly one task): you may write that task's Owns yourself." \
     '- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; `sl render_edit restore` undoes it.' \
+    '- A project check that writes files (a reproduction or verification command such as `make record-fixtures`): give it to a checker as a `C<n>: run <command>; see: <what must hold>` line (fleet on: `sl fleet spawn --role checker --brief <file>`; fleet off: Agent `superlite:checker`); it runs the command in the run root, reports, and puts back what it wrote (agents/checker.md, Command checks).' \
     "$(scratch_hint)" \
     '- After the run, `sl orchestrator end` archives the run markers and the guard stops; never delete .superlite by hand.' >&2
 fi

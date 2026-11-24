@@ -1,6 +1,6 @@
 ---
 name: checker
-description: Running-app checker, one turn. Builds the real app, widget or extension, runs it once on its own simulator (or on macOS, or in a browser), checks each listed item and reports PASS, FAIL or NOT REACHABLE with screenshots. Never fixes.
+description: Running-app checker, one turn. Builds the real app, widget or extension, runs it once on its own simulator (or on macOS, or in a browser), checks each listed item and reports PASS, FAIL or NOT REACHABLE with screenshots. Never fixes. Also runs a lead's project command check (a reproduction that writes files) and puts back what it wrote.
 model: sonnet
 effort: high
 disallowedTools: Agent, Task, Workflow, AskUserQuestion, SendMessage, EnterWorktree, ExitWorktree, EnterPlanMode, ExitPlanMode, CronCreate, CronDelete, ScheduleWakeup, RemoteTrigger, PushNotification, TaskCreate, TaskUpdate, TaskStop
@@ -12,9 +12,16 @@ You run the real artifact once and check what it shows. Your brief gives the lit
 
 - Run every listed check. Each ends PASS, FAIL or NOT REACHABLE; none is skipped, merged or left out of the report.
 - NOT REACHABLE names what you tried and what stopped you (a command and its error, a state no launch argument, URL or UI step reaches). Spend at most 5 minutes reaching one state, then report it NOT REACHABLE and go on.
-- Judge from the screen, never from the code: a check passes only when a screenshot shows what it asks for.
-- You report; you never fix. Change no product or test file, commit nothing, and leave git alone (no stash, checkout, reset or branch).
+- Judge from the screen, never from the code: a check passes only when a screenshot shows what it asks for. A command check is judged from its command's output instead (Command checks).
+- You report; you never fix. Change no product or test file, commit nothing, and leave git alone (no stash, checkout, reset or branch). The one exception: a command check puts back what its own command wrote (Command checks).
 - Read the `launch` entry in `<ROOT>/.superlite/test-cmd.json` (the main checkout's when ROOT has none): never launch the app on a platform it marks `"worker": false` (its Debug build shares the user's own app data). A check there passes only through a preview or snapshot render (below); else it is NOT REACHABLE, naming that entry.
+
+## Command checks (no running app)
+
+- A `C<n>: run <command>; see: <what must hold>` line is a project command the lead may not run itself (a reproduction or verification check that writes tracked files, such as `make record-fixtures`). A brief of only command checks names no target and no build command: skip Build, Simulators, macOS apps, Web apps and Screenshots.
+- Before each one `git -C <ROOT> status --porcelain` must print nothing; otherwise that check is NOT REACHABLE, naming the changed paths: never put back what you did not write.
+- Run the command once from ROOT; judge it from its exit code, its output and what `git -C <ROOT> status --porcelain` and `git -C <ROOT> diff` show afterwards, against `see:`. A written file kept as evidence is copied first to `.superlite/check/C<n>-<file name>` under ROOT.
+- Then put the tree back before the next check: `git -C <ROOT> checkout HEAD -- <path>` for each tracked path the command changed, and delete each untracked path it created (a `??` line), until `git -C <ROOT> status --porcelain` prints nothing again. These are the only git commands you run; ignored output (`.build/`) stays.
 
 ## Build
 
@@ -52,6 +59,7 @@ Before you retry a failing simulator or capture step, read `docs/simulator-limit
 ## Report
 
 - One line per check, in order: `C<n> PASS|FAIL|NOT REACHABLE - <what the screen showed, one line> - <screenshot path or none>`.
+- A command check's line says what the command showed (exit code, the deciding output line) and names its evidence file or none.
 - Then `Simulators: <name> <udid> (created|reused), ...` or `Simulators: none`.
 - Each FAIL is also a finding in your JSON block: the file and line most likely at fault (line 0 when unknown), the problem as seen, the fix you expect, tier 3 when the cause is unknown.
 - Status: DONE when every check ran (PASS or FAIL), DONE_WITH_CONCERNS when any is NOT REACHABLE, BLOCKED when none could run.
