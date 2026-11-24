@@ -16,7 +16,7 @@ vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo
 `not_code` in (a) is a list of globs of paths that are not code (read by not_code_globs, returned as spec["not_code"]).
 `cwd` in (a) is the folder, relative to the project root (`.` is the root), that run_tests runs `setup` and the test command in (run_tests.run_folder checks it; unset: the `.maxapp` package folder, else the root); resolve returns it as written as spec["cwd"], `""` when unset, so `sl testcmd` prints it.
 `{only_testing}` expands (to `--only <Target>/<Suite>` pairs in a `maxapp test` command) to one shell-quoted -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing); the target comes from Xcode target membership and Package.swift test targets, else the folder name; a path in no test target runs the unfiltered `test` command.
-Library: remote_at, is_remote_command, remote_test_file (the maxapp remote form of test_file for a maxapp remote test, #1147), remote_note, resolve, unfiltered_paths (the --fast paths resolve would widen to the unfiltered `test` command, so run_tests can skip them, #1119), file_slot_note (a {file} typo for {files} in a config's test or test_file, said once per process), propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, select_affected (the test files a change touches, by changed file, name, related template, Swift module, test-map and mention; a shared-setup change selects everything), pytest_testpaths, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit), xcsift_summary (the `summary` object's int `passed_tests`, `failed_tests` and `skipped_tests` and the `failed_tests` entries of xcsift's JSON, when no raw xcodebuild lines were printed; summed over every summary block in the output, a block that counted tests keeps only errors with a line, #1076). Stdlib only.
+Library: remote_at, is_remote_command, remote_test_file (the maxapp remote form of test_file for a maxapp remote test, #1147), remote_fetch (a shell command with `--fetch <path>` after its `maxapp remote` words, #1169), remote_note, resolve, unfiltered_paths (the --fast paths resolve would widen to the unfiltered `test` command, so run_tests can skip them, #1119), file_slot_note (a {file} typo for {files} in a config's test or test_file, said once per process), propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, select_affected (the test files a change touches, by changed file, name, related template, Swift module, test-map and mention; a shared-setup change selects everything), pytest_testpaths, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit), xcsift_summary (the `summary` object's int `passed_tests`, `failed_tests` and `skipped_tests` and the `failed_tests` entries of xcsift's JSON, when no raw xcodebuild lines were printed; summed over every summary block in the output, a block that counted tests keeps only errors with a line, #1076). Stdlib only.
 """
 # Complexity notation:
 #   m = marker files checked, f = files walked for the Python test-file scan (bounded), o = output lines
@@ -993,6 +993,29 @@ def remote_test_file(test, test_file):  # the maxapp remote form of test_file fo
     steps = [p.strip() for p in parts[0::2][:-1]]  # O(len)
     setup = " && ".join(steps) + " && " if ops and all(o == "&&" for o in ops) else ""  # O(len)
     return shlex.join([*words[:i], words[i], "remote", *kept, "--kind", "file", setup + test_file])  # O(len)
+
+
+def remote_fetch(command, path):  # the shell command with `--fetch path` right after its `maxapp remote` words, as written; None when it has none or they cannot be located (#1169) | O(len * m)
+    try:  # O(1)
+        words = shlex.split(command)  # O(len)
+    except ValueError:  # O(1)
+        return None  # O(1)
+    i = remote_at(words)  # O(w)
+    if i < 0:  # O(1)
+        return None  # O(1)
+    j = i + 2  # O(1)
+    while j < len(words) and (words[j] in REMOTE_VALUE_OPTS or words[j] in REMOTE_FLAGS):  # O(w)
+        if words[j] == "--fetch" and j + 1 < len(words) and words[j + 1] == path:  # O(1)
+            return command  # O(1)
+        j += 2 if words[j] in REMOTE_VALUE_OPTS else 1  # O(1)
+    for m in re.finditer(r"(?<!\S)remote(?!\S)", command):  # O(len)
+        try:  # O(1)
+            head = shlex.split(command[:m.end()])  # O(len)
+        except ValueError:  # O(1)
+            continue  # O(1)
+        if head == words[:i + 2]:  # O(w)
+            return command[:m.end()] + " --fetch " + shlex.quote(path) + command[m.end():]  # O(len)
+    return None  # O(1)
 
 
 def remote_note(root) -> str:  # words an existing config's remote test with a local test_file (#1147) | O(m + f)
