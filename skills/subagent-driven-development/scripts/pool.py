@@ -13,8 +13,9 @@ For an in-process agent (not Herdr) `sync` also sets `baseline_k` once: the cont
 `add` records `session` (the session id), so a later session can tell an in-process agent that is gone.
 `prune` drops agents that no longer exist and prints one `removed ID (reason)` line per agent, a `kept ID (reason)`
 line for one it cannot judge, then a summary: a fleet worker is gone when fleet.json says stopped or Herdr no longer
-lists it (kept while Herdr is unreachable); an in-process agent is gone when its `session` is not this session
-(kept when it has none).
+lists it (kept while Herdr is unreachable); a remote fleet worker (`machine` on its pool or fleet.json record) runs on
+another machine's Herdr, so only fleet.json saying stopped makes it gone (#1065); an in-process agent is gone when its
+`session` is not this session (kept when it has none).
 An agent matches a stop when agent_id equals its id, else when the transcript is `agent-<id>.jsonl`.
 """
 
@@ -82,15 +83,22 @@ def _busy_part(ag):  # O(len current)
     return f"; was busy with {','.join(cur)}" if ag.get("busy") and cur else ""  # O(len current)
 
 
+def _remote(ag, w):  # O(1)
+    """True when the pool record `ag` or its fleet.json record `w` names the machine the worker runs on."""
+    return bool(ag.get("machine") or w.get("machine"))  # O(1)
+
+
 def prune(data, workers, sid, live):  # O(a)
     """Drop agents that no longer exist from data["agents"] in place. -> (removed, kept): lists of (id, reason);
-    `kept` holds the agents it could not judge. workers: {wid: {"name", "state"}}; live: Herdr agent names or None."""
+    `kept` holds the agents it could not judge. workers: {wid: {"name", "state", "machine"}}; live: Herdr agent names or None."""
     removed, kept, keep = [], [], []  # O(1)
     for ag in data.get("agents") or []:  # O(a) iterations
         aid, w, why = ag.get("id"), workers.get(ag.get("id")), None  # O(1)
         if w is not None:  # a fleet worker | O(1)
             if w.get("state") == "stopped":  # O(1)
                 why = "fleet worker stopped"  # O(1)
+            elif _remote(ag, w):  # its agent lives on another machine's Herdr: fleet.json alone judges it (#1065) | O(1)
+                pass  # O(1)
             elif live is None:  # O(1)
                 kept.append((aid, "Herdr unreachable"))  # O(1)
             elif w.get("name") not in live:  # O(1)
@@ -120,7 +128,7 @@ def herdr_names():  # O(a)
 
 
 def _workers(sd):  # O(w)
-    """{wid: {"name", "state"}} of fleet.json; {} without fleet_state (it needs fcntl) and the no-op lock."""
+    """{wid: {"name", "state", "machine"}} of fleet.json; {} without fleet_state (it needs fcntl) and the no-op lock."""
     try:  # O(1)
         import contextlib  # O(1)
         import fleet_state  # O(1)
@@ -128,7 +136,8 @@ def _workers(sd):  # O(w)
         return {}, contextlib.nullcontext()  # O(1)
     ws = fleet_state.load(sd).get("workers")  # O(w)
     ws = ws if isinstance(ws, dict) else {}  # O(1)
-    return {wid: {"name": fleet_state.name_of(sd, wid, w), "state": w.get("state")} for wid, w in ws.items() if isinstance(w, dict)}, fleet_state.locked(sd)  # O(w)
+    return {wid: {"name": fleet_state.name_of(sd, wid, w), "state": w.get("state"), "machine": w.get("machine")}
+            for wid, w in ws.items() if isinstance(w, dict)}, fleet_state.locked(sd)  # O(w)
 
 
 def _count(n):  # O(1)
@@ -147,7 +156,8 @@ def prune_file(path):  # O(a + w)
         return [orchestrator.not_pruned_line(sd, other)]  # O(d)
     workers, lock = _workers(sd)  # O(w)
     live = None  # O(1)
-    if any(workers.get(ag.get("id")) not in (None, {}) and workers[ag["id"]].get("state") != "stopped" for ag in load(p).get("agents") or []):  # O(a)
+    if any(workers.get(ag.get("id")) not in (None, {}) and workers[ag["id"]].get("state") != "stopped"
+           and not _remote(ag, workers[ag["id"]]) for ag in load(p).get("agents") or []):  # only a live local worker needs Herdr | O(a)
         live = herdr_names()  # O(a)
     with lock:  # O(1)
         workers = _workers(sd)[0]  # reread under the lock: fleet.py may have changed it meanwhile | O(w)
