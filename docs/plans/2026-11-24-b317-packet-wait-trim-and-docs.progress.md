@@ -1,0 +1,24 @@
+- start a52dcef03da25d6d54e8d506636c4d5619c6ba16
+- unblocked: dispatched T1 T2 T3 T4 at 14:17:45; waiting on fixes: none
+- tests fast passed=0 failed=3 skipped=0 seconds=0.9
+- tests fast passed=0 failed=2 skipped=0 seconds=1.1
+- tests fast passed=1 failed=1 skipped=0 seconds=0.3
+- tests fast passed=0 failed=1 skipped=0 seconds=0.2
+- tests fast passed=2 failed=0 skipped=0 seconds=0.2
+- tests fast passed=1 failed=0 skipped=0 seconds=0.2
+- tests fast passed=24 failed=2 skipped=0 seconds=17.0
+- tests fast passed=513 failed=4 skipped=0 seconds=61.3
+- tests fast passed=597 failed=0 skipped=0 seconds=119.1
+- tests fast passed=515 failed=2 skipped=0 seconds=58.3
+- commit T1 10bb044a00 wait JSON prints each fact once
+- commit T3 f99329db14 tools.md rows for 1068 1069 1085
+- commit T4 ccc6aea593 hooks.md bullets for 1069 1070
+- tests fast passed=517 failed=0 skipped=0 seconds=54.8
+- commit T2 5e0b4d9325 packet stat rows and Cut line trims
+- Ruling: T2 also commits tests/scripts/test_packet_inline.py - T2's new stat row format changes two row assertions in test_packet_inline.py (untracked and empty-file rows); no batch owns the file
+- tests fast passed=57 failed=0 skipped=0 seconds=25.4
+- tests fast passed=1114 failed=0 skipped=0 seconds=169.4
+- tests full passed=14029 failed=1 skipped=12 seconds=334.5
+- tests fast passed=12 failed=0 skipped=0 seconds=0.8
+- commit T3 48d08ef5c2 tools.md rows for 1068 1069 1085
+- tests full passed=14030 failed=0 skipped=12 seconds=332.5
