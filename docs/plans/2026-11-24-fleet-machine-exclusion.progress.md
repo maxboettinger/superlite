@@ -1,0 +1,11 @@
+- start 39983c5de55f5e69099581373752efd2cf95c2cb
+- unblocked: dispatched T1 at 13:59:33; waiting on fixes: none
+- tests fast passed=0 failed=12 skipped=0 seconds=0.8
+- tests fast passed=41 failed=0 skipped=0 seconds=1.5
+- commit T1 8bc3600d38 placement reads the project's excluded machines
+- tests fast passed=41 failed=0 skipped=0 seconds=1.5
+- tests fast passed=2 failed=6 skipped=0 seconds=0.5
+- tests fast passed=23 failed=0 skipped=0 seconds=0.5
+- commit T2 c8226eabf9 spawn refuses an excluded machine; placement shows the list
+- tests fast passed=8 failed=0 skipped=0 seconds=0.3
+- tests full passed=14016 failed=0 skipped=12 seconds=365.4

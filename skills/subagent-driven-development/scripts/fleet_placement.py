@@ -6,6 +6,7 @@
 a remote scores its room minus its live workers minus a margin (`remote_margin` of machine.json, an int, default 2), local scores its room minus its live workers, ties go local.
 `skip(sd, label, why)` keeps a machine out of placement for some minutes; `set_mode(sd, "local"|"spread")` is the `placement` key of fleet.json.
 A failure here never raises: it means local.
+A project keeps machines out of its fleet with `.superlite/placement.json` `{"exclude": ["<label>", ...]}` (the project's and, from a linked worktree, the main checkout's; a malformed file keeps every worker local) (#1096).
 """
 # Complexity notation:
 # w = workers, m = machines, k = keys of a json file
@@ -178,6 +179,61 @@ def _swift(project):  # O(entries)
     return _json(p / ".superlite" / "test-cmd.json").get("language") == "swift"  # O(k)
 
 
+def config_files(project):  # O(1): the project's placement.json, then the main checkout's when project is a linked worktree
+    p = Path(project)  # O(1)
+    out = [p / ".superlite" / "placement.json"]  # O(1)
+    try:  # O(1)
+        r = subprocess.run(["git", "-C", str(p), "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, timeout=10)  # O(1) bounded
+    except (OSError, subprocess.SubprocessError):  # O(1)
+        return out  # O(1)
+    if r.returncode != 0 or not r.stdout.strip():  # O(1)
+        return out  # O(1)
+    main = Path(r.stdout.strip()).parent  # O(1)
+    if main.resolve() != p.resolve():  # O(1)
+        out.append(main / ".superlite" / "placement.json")  # O(1)
+    return out  # O(1)
+
+
+def excluded(project):  # O(f * k): (excluded names, config files that exist, first error or None)
+    names, files, err = set(), [], None  # O(1)
+    for path in config_files(project):  # O(f)
+        if not path.exists():  # O(1)
+            continue  # O(1)
+        files.append(path)  # O(1)
+        try:  # O(1)
+            data = json.loads(path.read_text(encoding="utf-8"))  # O(k)
+        except OSError:  # O(1)
+            err = err or f"{path}: unreadable"  # O(1)
+            continue  # O(1)
+        except ValueError:  # O(1)
+            err = err or f"{path}: not valid JSON"  # O(1)
+            continue  # O(1)
+        if not isinstance(data, dict):  # O(1)
+            err = err or f"{path}: not a JSON object"  # O(1)
+            continue  # O(1)
+        items = data.get("exclude", [])  # O(1)
+        if not isinstance(items, list) or not all(isinstance(i, str) and i.strip() for i in items):  # O(k)
+            err = err or f"{path}: exclude must be a list of machine names"  # O(1)
+            continue  # O(1)
+        names |= {i.strip().lower() for i in items}  # O(k)
+    return names, files, err  # O(1)
+
+
+def is_excluded(label, names):  # O(n)
+    return label.strip().lower().split(".")[0] in {n.split(".")[0] for n in names}  # O(n)
+
+
+def machine_refusal(project, machine):  # O(f * k): why an explicit --machine is refused, or None
+    if not machine or machine == "local":  # O(1)
+        return None  # O(1)
+    names, files, err = excluded(project)  # O(f * k)
+    if err:  # O(1)
+        return f"error: {err}; fix it before a remote spawn (#1096)"  # O(1)
+    if is_excluded(machine, names):  # O(n)
+        return f"error: machine {machine} is excluded from this project's fleet by {', '.join(str(f) for f in files)}; drop --machine or pass --machine local (#1096)"  # O(f)
+    return None  # O(1)
+
+
 def _live(sd):  # O(w): live workers per machine, None key = local
     out = {}  # O(1)
     for w in fs.load(sd).get("workers", {}).values():  # O(w)
@@ -190,6 +246,10 @@ def choose(sd, role, project, now=None):  # O(w + m)
     try:  # O(1)
         if role not in ROLES or not enabled(sd) or _swift(project):  # O(entries)
             return None  # O(1)
+        names, _files, err = excluded(project)  # O(f * k)
+        if err:  # O(1)
+            print(f"placement: {err}; every worker of this project stays local (#1096)", file=sys.stderr)  # O(1)
+            return None  # O(1)
         now = time.time() if now is None else now  # O(1)
         rm, live, skips = room(sd, now=now), _live(sd), _skips(sd)  # O(w + m)
         saved = {m.get("label") for m in hc.machines() if m.get("enabled")} if len(rm) > 1 else set()  # O(m)
@@ -198,6 +258,8 @@ def choose(sd, role, project, now=None):  # O(w + m)
         margin = _margin()  # O(k)
         for label, info in rm.items():  # O(m)
             if label == "local" or label not in saved or info.get("state") != "ready" or not isinstance(info.get("room"), (int, float)):  # O(1)
+                continue  # O(1)
+            if is_excluded(label, names):  # O(n)
                 continue  # O(1)
             until = (skips.get(label) or {}).get("until")  # O(1)
             if isinstance(until, (int, float)) and until > now:  # O(1)
