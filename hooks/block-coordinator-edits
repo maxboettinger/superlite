@@ -20,7 +20,8 @@
 #     report under <state folder>/fleet/reports/). A writer's names spawn --role writer --brief; the brief's Output: line names its one file. Other agents (Explore, general-purpose) fall through.
 #     Reads the run's own fleet.json: from a linked worktree its .superlite, not a binding's folder in another checkout;
 #     a fleet another session turned on (owner_session, owner_pid) is skipped unless that session is still bound there.
-#     The message names the state folder as PLAN for a build without a plan.
+#     The message names the state folder as PLAN for a build without a plan; a session's private folder (under
+#     <superlite home>/sessions/) is never named: a worker spawned with it starts outside the project (#1072).
 # The .superlite folder is the session's own (hooks/superlite-state.sh): its binding, else the launch
 # directory's unless another session owns that one.
 # Who judges what: the path of an Edit, Write or NotebookEdit call is judged here (project_code). A Bash or PowerShell
@@ -491,12 +492,18 @@ if [ "$tool" = Agent ] || [ "$tool" = Task ]; then
         again="It is blocked on every call while fleet is on: do not retry it."
         fread=" Fleet state read: $FSD0/fleet.json."
         [ "$FSD" = "$FSD0" ] || fread=" Fleet state read: $FSD0/fleet.json, moved to $FSD/fleet.json."
+        norm "$FSD"; pfsd="$NORM"; norm "${SUPERLITE_HOME:-$HOME/.superlite}/sessions"; psess="$NORM"
+        planhint_r="PLAN is the plan file, or $FSD before a plan exists."; planhint_w="PLAN is the plan file, or $FSD for a build without a plan."
+        if [[ $pfsd == "$psess"/* ]]; then
+          planhint_r="PLAN is the plan file, never $FSD: that is this session's private state folder, so a worker spawned with it starts in ${FSD%/*}, outside the project, where it cannot read the project and the brief check refuses project paths (#1072); before a plan exists run sl fleet off --plan $FSD and repeat the Agent call."
+          planhint_w="$planhint_r"
+        fi
         if [ "$frole" = research ]; then
-          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $FSD/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $FSD/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $FSD/fleet/reports/<name>.md. PLAN is the plan file, or $FSD before a plan exists. sl fleet off goes back to in-process agents.$fread" >&2
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Research path (fleet.md), one worker per prompt: write the prompt to $FSD/briefs/<name>.md; sl fleet spawn --role research --plan PLAN prints Wn; sl fleet send Wn --brief $FSD/briefs/<name>.md --plan PLAN; sl fleet wait Wn --plan PLAN (up to 9 min: Bash timeout 600000); the answer is in $FSD/fleet/reports/<name>.md. $planhint_r sl fleet off goes back to in-process agents.$fread" >&2
         elif [ "$frole" = writer ]; then
-          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role writer --brief <abs brief file> --plan PLAN (fleet.md); the brief's Output: line names the one file the writer may write. PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents.$fread" >&2
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role writer --brief <abs brief file> --plan PLAN (fleet.md); the brief's Output: line names the one file the writer may write. $planhint_w sl fleet off goes back to in-process agents.$fread" >&2
         else
-          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). PLAN is the plan file, or $FSD for a build without a plan. sl fleet off goes back to in-process agents.$fread" >&2
+          printf '%s\n' "Blocked: fleet is on, so $REPLY runs as a fleet worker, not an in-process Agent call. $again Use: sl fleet spawn --role $frole --plan PLAN, then sl fleet send Wn --brief <abs brief> --plan PLAN (fleet.md). $planhint_w sl fleet off goes back to in-process agents.$fread" >&2
         fi
         tel_gate block fleet "$tool_name" "$REPLY"
         exit 2
