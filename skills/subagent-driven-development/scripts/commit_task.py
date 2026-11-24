@@ -58,6 +58,7 @@ on stderr and a `workaround` incident `Tn: shared test adjusted` (resolution `ac
 (8) A shared test that a busy fixer/reviewer worker's brief names (`busy_briefs`; not the calling worker's own) is left uncommitted: `left uncommitted (edited by busy W7 (label); commit_task Tn again once it is done): F`; a task left with nothing fails `nothing to commit; held for busy W7: F`.
 (9) A modified shared test is also held while another busy editing worker (fleet.json: role implementer or unset, fixer, package-reviewer, writer; label not naming Tn; not the caller) runs: `left uncommitted (changed while busy W3 (T6) runs; commit_task Tn again once it is done): F` (several: `... W3 (T6), W7 (x) run; ... once they are done`), unless Tn's newest fleet report lists it in `files` or the calling worker's `sent` time is not later than the file's mtime.
 (10) The `owned by` note prints once at the end of the call, only for a file still differing from the newest checkpoint (a later task of the call may have taken it). A file the task is ruled to commit (`--claim`, earlier `--also`) is never held for a running sibling. A task whose only changes are held files fails `nothing to commit; held for ...` instead of `no change since`. Without --plan the session run's plan (stable.json, pool.json, plan.md of the state folder) is used before .superlite/plan.md.
+(11) A changed file a busy package-reviewer's brief scope covers (its `Files in scope:` line through nt.owns_match, else any mention in a brief without that line; not the caller's own) is left uncommitted while it differs from the newest checkpoint, --also and Wave 0 files too (#1097): `left uncommitted (in the review scope of busy W7 (review-T1,T2); commit_task Tn again once it is done): F`; a task left with nothing fails `nothing to commit; held for busy W7: F`. busy_briefs reads only busy fixer, package-reviewer and writer workers (never research or final-reviewer: their briefs name files they do not edit) and finds a brief by the worker's stored `brief` path, then briefs/<label>.md, then the label with commas as dashes.
 New tests, deletions and source files still block; T0 never takes shared tests.
 An owned file a checkpoint of this plan holds that git status no longer lists (back to its HEAD content, or a new file deleted) is staged again when it differs from the newest checkpoint; a restored one prints `restored F (back to its HEAD content)` on stderr.
 Stdlib only.
@@ -726,7 +727,10 @@ def wave0_stubs(plan):  # O(1) file read
 PROBE_FILE = re.compile(r"(^|/)tests/regression/(test_probe_[^/]+\.py|_probe_adapter\.py)$")  # O(1)
 
 
-def busy_briefs(sd, me):  # O(w + brief size) file reads; {worker id: (task label, brief text)} of busy fixer/reviewer workers
+BRIEF_ROLES = ("fixer", "package-reviewer", "writer")  # the editing roles whose briefs hold files (not implementer, lead, research, final-reviewer) | O(1)
+
+
+def busy_briefs(sd, me, roles=None):  # O(w + brief size) file reads; {worker id: (task label, brief text)} of busy fixer/package-reviewer/writer workers (only `roles` of them when given)
     import fleet_state  # O(1) lazy
     out = {}  # O(1)
     try:  # an unreadable fleet.json holds nothing | O(1)
@@ -735,12 +739,30 @@ def busy_briefs(sd, me):  # O(w + brief size) file reads; {worker id: (task labe
             role, label = w.get("role"), w.get("task")  # O(1)
             if w.get("state") != "busy" or wid == me or not role or role in ("implementer", "lead") or not label:  # O(1)
                 continue  # O(1)
-            brief = Path(sd) / "briefs" / f"{label}.md"  # O(1)
-            if brief.is_file():  # O(1) stat
+            if role not in BRIEF_ROLES or (roles is not None and role not in roles):  # read-only roles (research, final-reviewer) hold nothing: their briefs name files they never edit | O(1)
+                continue  # O(1)
+            stored = w.get("brief")  # O(1)
+            paths = ([Path(stored)] if isinstance(stored, str) and stored else []) + [Path(sd) / "briefs" / f"{label}.md", Path(sd) / "briefs" / f"{str(label).replace(',', '-')}.md"]  # O(1)
+            brief = next((p for p in paths if p.is_file()), None)  # O(1) stats
+            if brief is not None:  # O(1)
                 out[wid] = (label, brief.read_text(encoding="utf-8", errors="replace"))  # O(brief size)
     except (OSError, AttributeError, TypeError):  # O(1)
         return {}  # O(1)
     return out  # O(1)
+
+
+def review_scope(text):  # O(len text); the entries of the `Files in scope:` line, None without that line
+    m = re.search(r"^\s*Files in scope:(.*)$", text, re.M)  # O(len text)
+    if not m:  # O(1)
+        return None  # O(1)
+    return [e for e in (x.strip(" `\t") for x in m.group(1).split(",")) if e]  # O(len line)
+
+
+def in_review_scope(path, text):  # O(len text + e*f)
+    entries = review_scope(text)  # O(len text)
+    if entries is None:  # a hand-written brief: any mention counts | O(1)
+        return brief_names(text, path)  # O(len text)
+    return nt.owns_match(path, entries)  # O(e)
 
 
 EDITOR_ROLES = ("", "implementer", "fixer", "package-reviewer", "writer")  # busy workers that edit files | O(1)
@@ -1035,6 +1057,21 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
         sib = [t for t in info if any(t in ids for ids in held.values())]  # plan order | O(n*m)
         files = ", ".join(sorted(held))  # O(m log m)
         note_once(a, f"left uncommitted (shared with running {', '.join(sib)}; commit_task {tid} again once it is done): {files}")  # O(1)
+    sd_r = getattr(a, "sd", None)  # O(1)
+    revs = busy_briefs(sd_r, os.environ.get("SUPERLITE_FLEET_WORKER"), roles=("package-reviewer",)) if mine and sd_r else {}  # O(w + brief size)
+    if revs:  # a busy package-reviewer's scope: its files may be mid-mutation (#1097) | O(1)
+        rev_who = {f: [(wid, lab) for wid, (lab, text) in sorted(revs.items()) if in_review_scope(f, text)] for f in mine}  # O(m*w*brief size)
+        rev_files = set(changed_vs_parent([f for f, w in rev_who.items() if w]) if any(rev_who.values()) else [])  # O(m) + process spawns
+        mine = [f for f in mine if f not in rev_files]  # O(m)
+        shared = [f for f in shared if f not in rev_files]  # O(m)
+        for f in sorted(rev_files):  # O(m) iterations
+            who = rev_who[f]  # O(1)
+            names = ", ".join(f"{wid} ({lab})" for wid, lab in who)  # O(w)
+            if len(who) == 1:  # O(1)
+                note_once(a, f"left uncommitted (in the review scope of busy {names}; commit_task {tid} again once it is done): {f}")  # O(w)
+            else:  # O(1)
+                note_once(a, f"left uncommitted (in the review scope of busy {names}; commit_task {tid} again once they are done): {f}")  # O(w)
+            busy_held[f] = who  # O(1)
     if not mine or ((held or busy_held) and not changed_vs_parent(mine)):  # nothing, or only held files differ from the newest checkpoint (#667) | O(m) + process spawns
         print(f"nothing to commit for {tid}", file=sys.stderr)  # O(1)
         if held:  # O(1)
