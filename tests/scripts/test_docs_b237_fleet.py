@@ -29,7 +29,7 @@ def test_fleet_names_spawn_timeout():
 
 
 def test_fleet_names_standing_note_end():
-    assert "run end: standing note" in FLEET and "--note /dev/null" in FLEET
+    assert "run end: standing note" in FLEET and "sl backlog note /dev/null" in FLEET
     src = read("backlog_run.py")
     assert "run end: standing note" in src and "sl backlog note /dev/null" in src
 

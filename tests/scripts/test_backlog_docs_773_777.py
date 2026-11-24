@@ -39,4 +39,4 @@ def test_main_rules_name_note_line():
 def test_tools_row_names_note_line():
     row = next(l for l in (ROOT / "docs/tools.md").read_text().splitlines() if l.startswith("| `backlog_run` |"))
     assert "run end: standing note" in row
-    assert "--note /dev/null" in row
+    assert "sl backlog note /dev/null" in row
