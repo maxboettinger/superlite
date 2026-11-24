@@ -1,0 +1,30 @@
+- start 295676fcb25f10f45ad7b95fcdb9498dc83aa8f0
+- unblocked: dispatched T1 at 17:08:04; waiting on fixes: none
+- tests fast passed=8 failed=0 skipped=0 seconds=0.5
+- tests fast passed=0 failed=8 skipped=0 seconds=0.2
+- tests fast passed=8 failed=0 skipped=0 seconds=0.2
+- commit T1 a6e101ef7d state helpers
+- unblocked: dispatched T2 T3 T4 at 17:09:09; waiting on fixes: none
+- tests fast passed=1 failed=7 skipped=0 seconds=0.4
+- tests fast passed=3 failed=3 skipped=0 seconds=0.3
+- tests fast passed=8 failed=0 skipped=0 seconds=0.2
+- tests fast passed=6 failed=0 skipped=0 seconds=0.3
+- tests fast passed=1 failed=4 skipped=0 seconds=0.3
+- tests fast passed=5 failed=0 skipped=0 seconds=0.2
+- tests fast passed=2374 failed=1 skipped=5 seconds=280.1
+- tests fast passed=21 failed=1 skipped=0 seconds=5.1
+- tests fast passed=3031 failed=1 skipped=5 seconds=304.0
+- tests fast passed=26 failed=1 skipped=0 seconds=5.2
+- Ruling: T3 also commits tests/scripts/test_plan_folder_668.py - test_next_tasks_default_plan pins the old cwd fallback; with SUPERLITE_STATE_DIR set the #1131 default is <state dir>/plan.md (lead's ruling)
+- tests fast passed=17 failed=0 skipped=0 seconds=0.4
+- commit T4 7b0dec37cd root defaults
+- tests fast passed=6 failed=0 skipped=0 seconds=0.3
+- tests fast passed=2375 failed=0 skipped=5 seconds=298.7
+- tests fast passed=2375 failed=0 skipped=5 seconds=299.6
+- commit T2 a75e16bbca run_tests defaults
+- commit T3 d92dcd38b0 reporting tool defaults
+- tests fast passed=6 failed=0 skipped=0 seconds=0.2
+- tests fast passed=27 failed=0 skipped=0 seconds=0.5
+- commit T2 059ed6857b run_tests defaults
+Ruling: review-T3 live worktree-sl check of the six reporting tools not run - the in-process contract tests run the real modules from a plugin cwd - a live-only path difference would stay unseen (lead's ruling)
+- tests full passed=14275 failed=0 skipped=12 seconds=358.8
