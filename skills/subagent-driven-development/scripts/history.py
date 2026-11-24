@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Persistent run history: one aggregate row per task per run, and stats derived by feature band.
 
-    history.py write  --plan P [--dir .superlite] [--run ID]   rows of this run -> history, then derive
+    history.py write  --plan P [--dir <state folder>] [--run ID]   rows of this run -> history, then derive
     history.py read   [--n 20] [--band B]                      last rows (JSON lines)
     history.py derive [--project .superlite]                   rebuild stats.json (global and project)
     history.py import FILE...                                  bench/results/*.json score files -> rows
@@ -196,8 +196,10 @@ def plan_document(plan_path):  # O(d) a plan file as given; a run folder resolve
     return found  # O(1)
 
 
-def run_rows(plan_path, sl_dir=".superlite", run_id=None) -> list:  # O(M + B + n*r)
+def run_rows(plan_path, sl_dir=None, run_id=None) -> list:  # O(M + B + n*r)
     """Rows for this run from metrics.jsonl, the plan, routing and the prime files."""
+    import state  # O(1)
+    sl_dir = state.default_dir() if sl_dir is None else sl_dir  # O(d)
     import metrics  # O(1)
     import plan_tools as pt  # O(1)
     plan_path = plan_document(plan_path)  # O(d)
@@ -237,8 +239,10 @@ def run_rows(plan_path, sl_dir=".superlite", run_id=None) -> list:  # O(M + B + 
     return rows  # O(n)
 
 
-def record_run(plan_path, sl_dir=".superlite", run_id=None) -> list:  # O(R + n*w)
+def record_run(plan_path, sl_dir=None, run_id=None) -> list:  # O(R + n*w)
     """Append this run's rows (global and project) and refresh both stats files."""
+    import state  # O(1)
+    sl_dir = state.default_dir() if sl_dir is None else sl_dir  # O(d)
     proj = Path(sl_dir) / "history.jsonl"  # O(1)
     have = read_rows(proj)  # O(R*w)
     seen = {(r.get("run"), r.get("task")) for r in have}  # O(R)
@@ -290,7 +294,7 @@ def main(argv=None):  # O(R log R)
     sub = ap.add_subparsers(dest="cmd", required=True)  # O(1)
     w = sub.add_parser("write")  # O(1)
     w.add_argument("--plan", required=True)  # O(1)
-    w.add_argument("--dir", default=".superlite")  # O(1)
+    w.add_argument("--dir", default=None, help="the .superlite folder (default: the state folder)")  # O(1)
     w.add_argument("--run")  # O(1)
     r_ = sub.add_parser("read")  # O(1)
     r_.add_argument("--n", type=int, default=20)  # O(1)

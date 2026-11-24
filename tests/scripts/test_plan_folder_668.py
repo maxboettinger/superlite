@@ -77,7 +77,7 @@ def test_orchestrator_plan_file_unchanged(run):
 
 def test_next_tasks_default_plan(run, monkeypatch, capsys):
     monkeypatch.setenv("SUPERLITE_STATE_DIR", str(run.sd))
-    assert next_tasks.default_plan() == ".superlite/plan.md"
+    assert next_tasks.default_plan() == str(run.sd / "plan.md")
     (run.sd / "stable.json").write_text(json.dumps({"plan": str(run.plan), "stable": ["T1"]}))
     assert next_tasks.default_plan() == str(run.plan)
     next_tasks.main([])

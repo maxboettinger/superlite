@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-of-build report: actual metrics next to the projected ones.
 
-    report.py --plan PLAN.md [--dir .superlite] [--full | --json]
+    report.py --plan PLAN.md [--dir <state folder>] [--full | --json]
     report.py --list [--plans docs/plans] [--root DIR]  |  --show NAME [--full] [--root DIR]
 
 --list and --show also read the runs archived in `<main checkout>/.superlite/runs/<id>/` (run_archive): --list names them after the
@@ -554,25 +554,28 @@ def experiment_text(rep) -> str:  # O(arms)
 def main(argv=None):  # O(M + B + n*(n + e))
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
     ap.add_argument("--plan", help="the plan of the build to report on")  # O(1)
-    ap.add_argument("--dir", default=".superlite", help="the .superlite folder itself")  # O(1)
+    ap.add_argument("--dir", default=None, help="the .superlite folder itself (default: the state folder)")  # O(1)
     ap.add_argument("--full", action="store_true", help="print the full report instead of the summary")  # O(1)
     ap.add_argument("--json", action="store_true")  # O(1)
     ap.add_argument("--list", action="store_true", help="list the stored reports, newest first")  # O(1)
     ap.add_argument("--show", metavar="NAME", help="print a stored build's summary (with --full: its file)")  # O(1)
-    ap.add_argument("--plans", default=str(run_archive.plans_dir(Path("."))),
+    ap.add_argument("--plans", default=None,
                     help="where the plans and their stored reports are (default: docs/superpowers/plans when it exists, else docs/plans)")  # O(1)
     ap.add_argument("--batches", action="store_true", help="print the batch cost and quality rows")  # O(1)
     ap.add_argument("--root", help="the project root holding .superlite/batch-costs.jsonl and .superlite/runs (default: the main checkout)")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    import state  # O(1)
+    a.dir = a.dir or str(state.default_dir())  # O(d)
     sys.stdout.reconfigure(encoding="utf-8")  # O(1)
     if a.batches:  # O(1)
         import backlog_state  # O(1)
         import batch_cost  # O(1)
-        rows = batch_cost.read_rows(a.root or backlog_state.main_root(Path.cwd()))  # O(file)
+        rows = batch_cost.read_rows(a.root or backlog_state.main_root(state.default_root().resolve()))  # O(file)
         sys.stdout.write(json.dumps(batches_json(rows), indent=1) + "\n" if a.json else batches_text(rows))  # O(n)
         return 0  # O(1)
     if a.list or a.show:  # O(1)
-        archive = run_archive.archive_dir(Path(a.root or Path.cwd()) / ".superlite")  # O(1)
+        a.plans = a.plans or str(run_archive.plans_dir(state.default_root()))  # O(d)
+        archive = run_archive.archive_dir(Path(a.root or state.default_root().resolve()) / ".superlite")  # O(1)
         sys.stdout.write(list_reports(a.plans, archive) if a.list else show_report(a.show, a.plans, a.full, archive))  # O(file)
         return 0  # O(1)
     if not a.plan:  # O(1)

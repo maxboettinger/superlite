@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-task records from a run's `.superlite/metrics.jsonl` (written by the capture hooks).
 
-    metrics.py [--dir .superlite] [--plan P] [--json] [--task Tn]
+    metrics.py [--dir <state folder>] [--plan P] [--json] [--task Tn]
 
 Hook lines (one JSON object per line, `t` in epoch ms):
     {"ev":"launch","t":ms,"agent_id","type","model","desc"}
@@ -683,13 +683,16 @@ def timing(rows: list, plan) -> None:  # O(n*(n + e))
 
 def main(argv=None):  # O(M + B)
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])  # O(1)
-    ap.add_argument("--dir", default=".superlite", help="the .superlite folder itself (not the project root)")  # O(1)
+    ap.add_argument("--dir", default=None, help="the .superlite folder itself (not the project root; default: the state folder)")  # O(1)
     ap.add_argument("--plan")  # O(1)
     ap.add_argument("--task")  # O(1)
     ap.add_argument("--json", action="store_true")  # O(1)
     ap.add_argument("--all", action="store_true", help="with --json: {coordinator, tasks} instead of the task list")  # O(1)
     ap.add_argument("--reconcile", metavar="STREAM_LOG", help="compare coordinator + agents against the stream log total_cost_usd")  # O(1)
     a = ap.parse_args(argv)  # O(1)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+    import state  # O(1)
+    a.dir = a.dir or str(state.default_dir())  # O(d)
     sys.stdout.reconfigure(encoding="utf-8")  # O(1)
     if a.reconcile:  # O(1)
         print(json.dumps(reconcile(a.dir, a.reconcile), indent=1))  # O(1)

@@ -56,7 +56,8 @@ def set_cmd(tmp_path, cmd):
 
 
 def run_env(tmp_path, *args, env=None):
-    e = dict(os.environ, PYTHONIOENCODING="utf-8", **(env or {}))
+    e = {k: v for k, v in os.environ.items() if k not in ("SUPERLITE_STATE_DIR", "SUPERLITE_PROJECT_DIR", "CLAUDE_PROJECT_DIR")}  # the run's folder is the tmp cwd's (#1131)
+    e.update(PYTHONIOENCODING="utf-8", **(env or {}))
     return subprocess.run([sys.executable, str(RUN_TESTS), *map(str, args)], capture_output=True, text=True, cwd=tmp_path, env=e, timeout=120)
 
 

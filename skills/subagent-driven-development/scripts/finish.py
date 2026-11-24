@@ -700,7 +700,11 @@ def _run_plan(run_sd):  # O(1) the plan file of the run folder as a string, "" w
     return str(found) if found else ""  # O(1)
 
 
-def summary(ledger, log, lint_log=DEFAULT_LINT_LOG, plan=None, sl_dir=None, end_plan=None, archive=False):  # O(R*w + I*w + C + G)
+def summary(ledger, log, lint_log=None, plan=None, sl_dir=None, end_plan=None, archive=False):  # O(R*w + I*w + C + G)
+    if lint_log is None:  # the state folder's lint log (#1131) | O(d)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
+        import state  # O(1)
+        lint_log = state.default_dir() / "lint-log.jsonl"  # O(d)
     rulings, commits, _ = read_ledger(ledger)  # O(R*w)
     plan_path = plan if plan is not None else _run_plan(Path(ledger).resolve().parent)  # "" means none | O(1)
     have = set(rulings)  # O(R)
