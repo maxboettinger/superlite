@@ -7,6 +7,10 @@ project's packages, not only superlite's. #1068: a lead worktree or task tree al
 checkout's `.venv` (main_checkout reads `.git` files, never runs git); project_cmd(root) returns the
 argv prefix: that interpreter, else `uv run --frozen --project root python` for a uv project, else ours.
 
+uv_project_env(command, root, cwd, environ): a `uv run --no-project` command that finds no Python environment
+(no VIRTUAL_ENV, no `.venv` in cwd or a parent) runs in the project's environment: rewritten to
+`--frozen --project root` for a uv project, else the main checkout's venv is exported (#1120).
+
 pytest_cmd(): command prefix that runs pytest. Uses the current interpreter when it can
 import pytest, else `uv run --no-project --with pytest python -m pytest`, else raises
 PytestUnavailable with a clear message (`sl` may have fallen back to a bare
@@ -24,6 +28,8 @@ its process tree (it runs run_tree itself); callers only ever kill the PID they 
 #   o = bytes of child stdout + stderr, a = length of the command argv, D = descendants of the child process, P = directories on PATH
 import importlib.util  # O(1)
 import os  # O(1)
+import re  # O(1)
+import shlex  # O(1)
 import shutil  # O(1)
 import signal  # O(1)
 import subprocess  # O(1)
@@ -93,6 +99,50 @@ def project_cmd(root):  # O(d + P) PATH search
     if uv and (Path(root) / "uv.lock").is_file() and (Path(root) / "pyproject.toml").is_file():  # O(1) two stats
         return [uv, "run", "--frozen", "--project", str(root), "python"]  # O(1)
     return [py]  # O(1)
+
+
+NO_PROJECT = re.compile(r"(?<!\S)--no-project(?!\S)")  # O(1)
+PROGRAM_WORD = re.compile(r"^(python|python3(\.\d+)?|pytest|py\.test)$")  # O(1)
+UV_VALUE_OPTIONS = frozenset({"--with", "--python", "-p", "--group", "--extra", "--with-requirements", "--directory", "--project", "--env-file", "--index"})  # O(1)
+
+
+def _no_project_uv(command):  # O(c) c = length of the command; True when it is `[NAME=v ...] uv run ... --no-project ... program`
+    try:  # O(1)
+        words = shlex.split(command)  # O(c)
+    except ValueError:  # unbalanced quote | O(1)
+        return False  # O(1)
+    i = 0  # O(1)
+    while i < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[i]):  # O(c)
+        i += 1  # O(1)
+    if i + 1 >= len(words) or os.path.basename(words[i]) != "uv" or words[i + 1] != "run":  # O(1)
+        return False  # O(1)
+    j = i + 2  # O(1)
+    while j < len(words):  # O(c)
+        word = words[j]  # O(1)
+        if word == "--no-project":  # O(1)
+            return True  # O(1)
+        if word == "--" or PROGRAM_WORD.match(os.path.basename(word)):  # the program word ends the uv options | O(1)
+            return False  # O(1)
+        j += 2 if word in UV_VALUE_OPTIONS else 1  # a value-taking option consumes the next word; --opt=value is one word | O(1)
+    return False  # O(1)
+
+
+def uv_project_env(command, root, cwd, environ):  # O(c + d) command parse plus stat calls up the cwd parents; never runs uv or git
+    """(command, extra environ, note) for a `uv run --no-project` command with no reachable environment (#1120); else (command, {}, "")."""  # O(1)
+    if not _no_project_uv(command) or environ.get("VIRTUAL_ENV"):  # O(c)
+        return command, {}, ""  # O(1)
+    here = Path(cwd)  # O(1)
+    if any(venv_python(folder / ".venv") for folder in (here, *here.parents)):  # O(d) uv finds a .venv in cwd or a parent
+        return command, {}, ""  # O(d)
+    base = f"uv run --no-project finds no environment from {cwd}"  # O(1)
+    if (Path(root) / "uv.lock").is_file() and (Path(root) / "pyproject.toml").is_file():  # O(1) two stats
+        flags = f"--frozen --project {shlex.quote(str(root))}"  # O(1)
+        return NO_PROJECT.sub(flags, command, count=1), {}, f"{base}; running in the project's environment: uv run {flags} (#1120)"  # O(c)
+    py = found_python(root)  # O(d)
+    if py:  # O(1)
+        venv = str(Path(py).parent.parent)  # O(1)
+        return command, {"VIRTUAL_ENV": venv}, f"{base}; using the project's environment {venv} (VIRTUAL_ENV) (#1120)"  # O(1)
+    return command, {}, f"{base} and {root} has no uv.lock; the project's own package may not import (#1120)"  # O(1)
 
 
 class PytestUnavailable(RuntimeError):  # O(1)
