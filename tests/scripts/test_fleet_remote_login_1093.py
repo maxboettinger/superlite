@@ -114,7 +114,7 @@ def test_placed_spawn_goes_local_on_logged_out_brief(world, capsys, monkeypatch)
     skips, local = [], []
     fleet.main(["on"]); capsys.readouterr()
     monkeypatch.setattr(fp, "enabled", lambda sd: True)
-    monkeypatch.setattr(fp, "choose", lambda sd, role, project, now=None: "box")
+    monkeypatch.setattr(fp, "choose", lambda sd, role, project, now=None, brief=None: "box")
     monkeypatch.setattr(fp, "skip", lambda sd, label, why, minutes=10.0, now=None: skips.append((label, why)))
     real = fleet.spawn
 
