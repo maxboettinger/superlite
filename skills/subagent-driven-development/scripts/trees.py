@@ -833,7 +833,7 @@ def main(argv=None):  # O(T) + spawns
     if plan == "":  # O(1) --plan without a value
         print(usage, file=sys.stderr)  # O(1)
         return 2  # O(1)
-    root = (state.git_root(plan) or ".") if plan else "."  # O(d)
+    root = (state.git_root(plan) or ".") if plan else state.default_root()  # O(d)
     if rest[:1] == ["clean"] and (len(rest) == 1 or rest[1] == "--module-cache-hours"):  # O(1)
         hours = None  # O(1)
         if len(rest) > 1:  # O(1)

@@ -1187,7 +1187,7 @@ def main(argv=None):  # O(L + t*(m*o)) + git spawns per task; one process for al
     a.ledger = a.ledger or str(sd / "progress.md")  # defaults follow the parsed --plan, not the session's binding | O(1)
     a.log = a.log or str(sd / "incidents.jsonl")  # O(1)
     a.pool = a.pool or str(sd / "pool.json")  # O(1)
-    root = state.git_root(a.plan) if given else None  # O(d) stat walk, no spawn
+    root = state.git_root(a.plan) if given else state.default_root()  # O(d) stat walk, no spawn; no --plan: the project root (#1131)
     if root and Path(root).resolve() != Path.cwd().resolve():  # --plan in another checkout: work there (#365) | O(1)
         a.plan, a.ledger, a.log, a.pool = (os.path.abspath(x) for x in (a.plan, a.ledger, a.log, a.pool))  # O(1)
         os.chdir(root)  # O(1)

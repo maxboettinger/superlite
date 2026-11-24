@@ -658,11 +658,10 @@ def main(argv=None):
     if plan == "":
         print(usage, file=sys.stderr)
         return 2
-    if plan:
-        import state
-        root = state.git_root(plan)
-        if root:
-            os.chdir(root)
+    import state
+    root = state.git_root(plan) if plan else state.default_root()
+    if root and Path(root) != Path("."):
+        os.chdir(root)
     cmd = rest[0] if rest else "status"
     if cmd in ("on", "off"):
         set_on(cmd == "on")
