@@ -37,7 +37,21 @@ def test_lead_brief_lists_the_note_paths_for_research(w):
     t = bb.lead_brief(B, {**CTX, "note": f"Reference: {w.other}", "worktree": str(w.wt)})
     (w.wt / ".superlite" / "briefs" / "lead.md").write_text(t)
     assert bb.research_reads(w.wt / ".superlite") == [str(w.other)]
-    assert bb.REF_READ.split("{items}")[0] in t and "--machine local" in bb.REF_READ
+    assert bb.REF_READ.split("{items}")[0] in t and "--machine local" not in bb.REF_READ and "(#1089, #1132)" in bb.REF_READ
+
+
+def test_research_reads_parses_the_pre_1132_line(w):
+    (w.wt / ".superlite" / "briefs").mkdir(parents=True)
+    (w.wt / ".superlite" / "briefs" / "lead.md").write_text("head\n" + bb.REF_READ_1089.format(items="~/github/other; /opt/x") + "\ntail\n")
+    assert bb.research_reads(w.wt / ".superlite") == [f"{w.home}/github/other", "/opt/x"]
+    assert "--machine local" in bb.REF_READ_1089
+
+
+def test_research_reads_first_line_wins(w):
+    (w.wt / ".superlite" / "briefs").mkdir(parents=True)
+    rows = [bb.REF_READ.format(items="/opt/new"), bb.REF_READ_1089.format(items="/opt/old")]
+    (w.wt / ".superlite" / "briefs" / "lead.md").write_text("\n".join(rows) + "\n")
+    assert bb.research_reads(w.wt / ".superlite") == ["/opt/new"]
 
 
 def test_start_rewrites_a_stale_lead_brief(w, monkeypatch):
