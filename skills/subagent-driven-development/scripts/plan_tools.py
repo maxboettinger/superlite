@@ -649,10 +649,19 @@ def _predict():  # O(1)
     return predict  # O(1)
 
 
-def effective_times(plan: Plan, graph: dict[str, list[str]], args, extra: dict | None = None) -> tuple[dict[str, float], dict[str, str]]:  # O(n*p) total + config I/O
+EXTRA_PARTS = (("slow_min", "slow tests"), ("suite", "existing tests"), ("review", "review rounds"))  # #1121: extra_min's parts, in NOTE order | O(1)
+
+
+def extra_parts(p: dict) -> list[str]:  # O(1)
+    """The names of the parts of a prediction's extra_min that are present (slow tests, existing tests, review rounds)."""
+    return [name for key, name in EXTRA_PARTS if p.get(key)]  # O(1)
+
+
+def effective_times(plan: Plan, graph: dict[str, list[str]], args, extra: dict | None = None, parts: dict | None = None) -> tuple[dict[str, float], dict[str, str]]:  # O(n*p) total + config I/O
     """Per-task minutes. Features present: the predictor's value wins. A stated `Est. time` is used only
     for a task with no features, or for every task with --stated. Given `extra`, it gets each predicted task's
-    suite and review minutes (the `extra_min` key, #787), which SIZE leaves out."""
+    suite, review and slow-test minutes (the `extra_min` key, #787, #1121), which SIZE leaves out. Given `parts`,
+    it gets each task's names of those parts present (extra_parts)."""
     predict = _predict()  # O(1)
     models = predict.load_models(getattr(args, "models", None))  # O(config size) file I/O
     coef = predict.load_coef(getattr(args, "coef", None))  # O(config size) file I/O
@@ -669,6 +678,8 @@ def effective_times(plan: Plan, graph: dict[str, list[str]], args, extra: dict |
             times[tid], source[tid] = p["est_time_min"], p["source"]  # O(1)
             if extra is not None:  # O(1)
                 extra[tid] = p.get("extra_min", 0.0)  # O(1)
+            if parts is not None:  # O(1)
+                parts[tid] = extra_parts(p)  # O(1)
     return times, source  # O(1)
 
 
@@ -3028,19 +3039,20 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
     if graph is not None and not find_cycle(graph):  # O(n+e) redundant, parse_taskgraph already checked
         try:  # O(1)
             ex: dict[str, float] = {}  # O(1)
-            times, _ = effective_times(plan, graph, args, extra=ex)  # O(n*p) recomputed in schedule_report
+            why: dict[str, list[str]] = {}  # O(1)
+            times, _ = effective_times(plan, graph, args, extra=ex, parts=why)  # O(n*p) recomputed in schedule_report
         except PlanError as exc:  # O(1)
             issues.append(Issue(str(exc), scope="plan"))  # O(1)
             times = None  # O(1)
         if times is not None:  # O(1)
             for t in sorted(times, key=nkey):  # O(n log n)
-                band = times[t] - ex.get(t, 0.0)  # suite and review minutes do not shrink by splitting (#787) | O(1)
+                band = times[t] - ex.get(t, 0.0)  # suite, review and slow-test minutes do not shrink by splitting (#787, #1121) | O(1)
                 if band > high_min + 1e-9:  # O(1)
                     issues.append(Issue(f"SIZE: {t} predicted {band:.1f} min > {high_min:g} max; split it along its components", [t]))  # O(1)
                 elif band < low_min - 1e-9 and t in plan.by_id:  # O(1)
                     warnings.append(f"NOTE: {t} predicted {band:.1f} min < {low_min:g}; consider merging with a related task")  # O(1)
                 if ex.get(t, 0.0) >= 1.0 - 1e-9:  # O(1)
-                    warnings.append(f"NOTE: {t} predicted {times[t]:.1f} min, {ex[t]:.1f} of it outside the size band (existing tests, review rounds); splitting does not shrink it")  # O(1)
+                    warnings.append(f"NOTE: {t} predicted {times[t]:.1f} min, {ex[t]:.1f} of it outside the size band ({', '.join(why.get(t, []))}); splitting does not shrink it")  # O(1)
             rep = schedule_report(plan, args)  # O(n*(n+e) + n*p) re-parses graph and times
             cp, ctimes = rep["critical_path"], [rep["times"][t] for t in rep["critical_path"]]  # O(n) draft tasks are not in rep
             work = sum(rep["times"].values())  # total predicted work | O(n)
