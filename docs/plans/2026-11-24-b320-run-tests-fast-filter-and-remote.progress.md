@@ -1,0 +1,27 @@
+- start e903fa87464d79a94bab615dc5c80eddf606004c
+- unblocked: dispatched T1 T2 at 15:03:39; waiting on fixes: none
+Ruling: fleet placement local for write workers - remote implementers lost finished work in B257, B270, B275 (no snapshot) - cost if wrong: slower local queue
+- tests fast passed=0 failed=10 skipped=0 seconds=0.4
+- tests fast passed=1 failed=6 skipped=0 seconds=0.3
+- tests fast passed=30 failed=0 skipped=0 seconds=0.3
+- tests fast passed=41 failed=0 skipped=0 seconds=0.4
+- commit T1 ed7eb9c41c unfiltered paths
+- commit T2 eaba1a8b8e uv project env
+- tests fast passed=51 failed=0 skipped=0 seconds=0.6
+- tests fast passed=37 failed=10 skipped=0 seconds=4.2
+- tests fast passed=47 failed=0 skipped=0 seconds=4.1
+- tests fast passed=2351 failed=4 skipped=5 seconds=272.4
+- tests fast passed=2354 failed=1 skipped=5 seconds=270.2
+- commit T3 ec8f2ca92d run_tests wiring
+Ruling: test_run_tests_run_folder_817.py::test_marker_files_are_relative_to_the_run_folder rewritten to the #1119 refusal - it reached marker_spec only through the removed unfiltered fallback - cost if wrong: marker_spec's explicit-path branch loses its only test
+- tests fast passed=66 failed=1 skipped=0 seconds=8.8
+- tests fast passed=20 failed=0 skipped=0 seconds=3.1
+- commit T3 5572c68dd1 run_tests wiring
+- Ruling: T3 also commits tests/scripts/test_run_tests_run_folder_817.py - 817 marker test rewritten to the #1119 refusal (lead's ruling)
+- tests full passed=14100 failed=0 skipped=12 seconds=567.0
+- tests fast passed=11 failed=2 skipped=0 seconds=0.3
+- tests fast passed=13 failed=0 skipped=0 seconds=0.4
+- commit T2 ad9b206b71 uv project env
+- tests fast passed=6 failed=0 skipped=0 seconds=0.6
+- commit T3 bd99f98921 run_tests wiring
+- tests full passed=14103 failed=0 skipped=12 seconds=399.9

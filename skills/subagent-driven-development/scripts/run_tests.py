@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run pytest, parse the junit XML, print one summary line.
 
+A `--fast` path that maps to no test filter (a Swift file in no test target under an `{only_testing}` or `{names}` template) is named and skipped, and a run left with no path exits 2, never the unfiltered suite (#1119); the Node `node_modules` guard looks in the run root and its parents up to the repository top, and a `uv run --no-project` test command with no Python environment runs in the project's (#1120).
+
     run_tests.py [--fast PATHS... | --full | --affected [--base REV] [--files F...]] [--log PATH] [--ledger PATH]
                  [--summary PATH] [--background] [-m EXPR]
     run_tests.py --record --passed N [--failed N] [--skipped N] [--seconds S] [--scope WORD] --command CMD   (a result run outside run_tests; mode `recorded` with its scope, default external, never the full run; report only, closes no incidents)
@@ -53,7 +55,7 @@ Put --wait last or before another flag: argparse takes a following word as its P
 A green --full run (not --task, not --fast, not --record) in a git toplevel holding `scripts/test_layers.py` also stamps the
 unit layer green (a configured test command too) (`run_tests: unit layer stamped`), from digests taken before the run, so a file changed during it stays stale; a stamp
 error prints `run_tests: unit layer not stamped: <err>` and never changes the exit code. `--record` never stamps.
-A Swift `--fast` run whose template holds `{only_testing}` maps each test file to `-only-testing:<Target>/<Suite>` (target from the project's target membership: Sources phase files, synchronized folders, Package.swift paths; then folder names); a path outside every test target runs the unfiltered `test` command instead (#398).
+A Swift `--fast` run whose template holds `{only_testing}` maps each test file to `-only-testing:<Target>/<Suite>` (target from the project's target membership: Sources phase files, synchronized folders, Package.swift paths; then folder names); a path outside every test target is named and skipped, never widened to the unfiltered `test` command (#1119, was #398).
 Every test subprocess (pytest, a test-cmd.json command and its setup) gets the environment without `SUPERLITE_FLEET_*` variables (a fleet pane's worker, role and parent dir); a test-cmd.json `env` entry still applies on top.
 A test-cmd.json `{only_testing}` placeholder in a project with no Swift files is refused before the run (exit 2, `test-cmd.json uses {only_testing}, the Xcode (Swift) placeholder, ...`, no incident; `--background` refuses in the parent).
 `--wait` ends with a stderr summary line (`tests (full): P passed, F failed`), looks once more at its deadline, and on a timeout names the live pid and the rerun command; a runner's output goes to temp files, so a child left running cannot hold the run.
@@ -1242,11 +1244,28 @@ def node_install_line(root, spec):  # O(m + f) the usage-error text for a Node r
     keys = ("dependencies", "devDependencies")  # O(1)
     if not any(isinstance(pkg.get(k), dict) and pkg[k] for k in keys):  # O(1)
         return None  # O(1)
-    if (root / "node_modules").exists() or (root / ".pnp.cjs").exists() or (root / ".pnp.js").exists():  # O(1)
+    if any((d / n).exists() for d in node_search_folders(root) for n in ("node_modules", ".pnp.cjs", ".pnp.js")):  # as Node does: the run root and its parents (#1120) | O(d)
         return None  # O(1)
     import wave0  # lazy: only a Node project needs it | O(1) module load
     lock = next((cmd for name, cmd in wave0.LOCKFILES if name != "uv.lock" and (root / name).is_file()), "npm install")  # O(1)
-    return f"node_modules missing in {root}: run {lock} first"  # O(1)
+    line = f"node_modules missing in {root}: run {lock} first"  # O(1)
+    try:  # O(1)
+        test = (testcmd.config_source(root)[0] or {}).get("test")  # O(m + f)
+    except Exception:  # an unreadable config never hides the guard | O(1)
+        test = None  # O(1)
+    if isinstance(test, str) and is_remote_command(test):  # O(len)
+        line += '; the project\'s "test" runs through maxapp remote: install here, or give "test_file" the same maxapp remote form so --fast runs there (#1120)'  # O(1)
+    return line  # O(1)
+
+
+def node_search_folders(root):  # O(d) root and its parents up to and including the nearest folder whose .git is a directory; root alone when none (#1120)
+    root = Path(root)  # O(1)
+    found = []  # O(d)
+    for folder in (root, *root.parents):  # O(d)
+        found.append(folder)  # O(1)
+        if (folder / ".git").is_dir():  # O(1) stat
+            return found  # O(1)
+    return [root]  # O(1)
 
 
 def _link_dir(src, dst):  # O(d) symlink dst to src (relative); True when the link changed
@@ -1532,6 +1551,18 @@ def free_disk(a, keep):  # O(T) + drops: reap, then gate; a removal or a low lev
 WORKER_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")  # O(1) a --worker NAME (#826)
 
 
+def drop_unfiltered(paths):  # O(p*files) (kept paths, dropped paths): a --fast path that maps to no test filter is never widened to the whole suite (#1119)
+    try:  # O(1)
+        gone = set(testcmd.unfiltered_paths(".", paths)) if has_swift(Path(".")) is not False else set()  # a project without Swift files meets the placeholder refusal instead | O(p*files)
+    except Exception:  # a crash in resolve never breaks today's run | O(1)
+        gone = set()  # O(1)
+    return [p for p in paths if p not in gone], [p for p in paths if p in gone]  # O(p)
+
+
+def unfiltered_reason(dropped):  # O(p) the refusal text for --fast paths left with nothing to run (#1119)
+    return f"--fast paths map to no test filter (in no test target): {', '.join(dropped)}; nothing to run: name a test file in a test target, or use --affected or --full (#1119)"  # O(p)
+
+
 def usage_error(a, label, reason):  # O(summary size) a usage error: stderr, zero summary, exit 2
     print(f"run_tests: {reason}", file=sys.stderr)  # O(1)
     write_summary(a.summary, label, {"passed": 0, "failed": 0, "skipped": 0, "skipped_tests": []}, [], 0.0, error=reason)  # O(1)
@@ -1686,6 +1717,11 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
                 return 2  # O(1)
             try:  # O(1)
                 fast = expand_fast_paths(fast)  # O(p)
+                kept, dropped = drop_unfiltered(fast)  # O(p*files)
+                if dropped and not kept:  # nothing spawned; the child prints the notes | O(1)
+                    print(f"run_tests: {unfiltered_reason(dropped)}", file=sys.stderr)  # O(p)
+                    return 2  # O(1)
+                fast = kept  # O(1)
                 spec = fast_spec(fast, quiet=True)  # O(m + f)
             except FileNotFoundError:  # left to the child | O(1)
                 fast, spec = [], None  # O(1)
@@ -2214,6 +2250,15 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
         gui = gui_session.preflight([c for _, c in runs]) if spec.get("lock") is not False else None  # a macOS xcodebuild test outside the desktop session (#561) | O(d * len)
         if gui:  # O(1)
             return usage_error(a, label, gui)  # O(summary size)
+        extra_env, said = {}, set()  # a `uv run --no-project` command with no environment runs in the project's (#1120) | O(1)
+        for i, (d, c) in enumerate(runs):  # O(d * len)
+            c, add, uv_note = pyrun.uv_project_env(c, anchor, workdir or root, env)  # O(len + d)
+            runs[i] = (d, c)  # O(1)
+            extra_env.update(add)  # O(1)
+            if uv_note and uv_note not in said:  # once per note | O(1)
+                said.add(uv_note)  # O(1)
+                print(f"run_tests: {uv_note}", file=sys.stderr)  # O(1)
+        env = {**env, **extra_env}  # O(env)
         marker = Path(cwd) / ".superlite-setup.done" if cwd else Path(".superlite") / "setup.done"  # setup runs once per run directory (per tree) | O(1)
         if spec["setup"] and not marker.exists():  # O(1)
             (gate.run if gate else run_captured)(sub(spec["setup"]), limit=a.limit, shell=True, env=env, cwd=workdir)  # O(o)
@@ -2716,6 +2761,17 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
             publish_summary(a)  # O(summary size)
             print("0 0 0 0.0")  # O(1)
             return 1  # O(1)
+    unmapped = []  # --fast paths in no test target, named in the summary warning (#1119) | O(1)
+    if paths and not tspec:  # O(p*files)
+        paths, unmapped = drop_unfiltered(paths)  # O(p*files)
+        for p in unmapped:  # O(p)
+            print(f"run_tests: --fast {p} is in no test target, so it maps to no test filter; skipped, never widened to the whole suite (#1119)", file=sys.stderr)  # O(1)
+        if unmapped and not paths:  # O(1)
+            return usage_error(a, label, unfiltered_reason(unmapped))  # O(summary size)
+    if unmapped:  # the summary names what was skipped | O(p)
+        global WARNING  # O(1)
+        note = f"skipped --fast paths in no test target: {', '.join(unmapped)} (#1119)"  # O(p)
+        WARNING = f"{WARNING}; {note}" if WARNING else note  # O(1)
     a.unit_snap = None if tspec else unit_snapshot(a, label)  # before the runner touches anything | O(n * size)
     try:  # a test name no Swift target declares is refused, never widened | O(m + f)
         spec = tspec or fast_spec(paths)  # .superlite/test-cmd.json, else marker files | O(m + f)
@@ -2868,8 +2924,14 @@ def run(a):  # O(X + T*d + B + F log F) + the runner + one incident append
         except pyrun.PytestUnavailable as e:  # O(1)
             return usage_error(a, label, str(e))  # the summary is written too | O(summary size)
         with full_run_gate(a, label, enabled=spec.get("lock", True) if spec else True) as gate:  # O(wait / LOCK_POLL)
+            py_env = child_env(getattr(a, "cli_env", None))  # read inside the gate: it exports the lock marker | O(env)
+            uv_cmd, uv_add, uv_note = pyrun.uv_project_env(shlex.join(cmd), Path.cwd(), Path.cwd(), py_env)  # #1120 | O(len + d)
+            if uv_note:  # O(1)
+                cmd = shlex.split(uv_cmd)  # O(len)
+                py_env = {**py_env, **uv_add}  # O(env)
+                print(f"run_tests: {uv_note}", file=sys.stderr)  # O(1)
             t0 = time.monotonic()  # O(1)
-            r = gate.run(cmd, limit=a.limit, env=child_env(getattr(a, "cli_env", None)))  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
+            r = gate.run(cmd, limit=a.limit, env=py_env)  # no SUPERLITE_FLEET_* in the pytest run (#219) | O(env)
             seconds = time.monotonic() - t0 - gate.waited  # the admission wait is not test time | O(1)
         save_output(a, shlex.join(cmd), r.returncode, r.stdout + r.stderr)  # O(o)
         has_xml = xml_path.exists() and xml_path.stat().st_size > 0  # O(1)
