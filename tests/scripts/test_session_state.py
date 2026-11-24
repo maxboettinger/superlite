@@ -375,6 +375,7 @@ def test_stale_owner_does_not_lock_out_a_new_session(repo):
 def test_session_start_exports_the_hook_session_id(tmp_path):
     env_file = tmp_path / "env.sh"
     env = dict(os.environ, CLAUDE_ENV_FILE=str(env_file), CLAUDE_PLUGIN_ROOT=str(ROOT))
+    env.pop("CLAUDE_PROJECT_DIR", None)
     r = subprocess.run([BASH, str(ROOT / "hooks" / "session-start")], input=json.dumps({"session_id": A, "source": "clear"}),
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr

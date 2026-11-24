@@ -10,6 +10,7 @@ from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parent / "fixtures"
 HOST_VARS = ("CLAUDE_CODE_SESSION_ID", "SUPERLITE_SESSION_ID", "SUPERLITE_STATE_DIR", "CLAUDE_PROJECT_DIR", "CLAUDE_ENV_FILE",
+             "SUPERLITE_PROJECT_DIR",  # the SessionStart hook exports this one (#1116)
              "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_FORK_SUBAGENT",  # the budget's agent-summary note reads these
              "SUPERLITE_FLEET_WORKER", "SUPERLITE_FLEET_AGENT",  # the SessionStart hook injects the worker note on these
              "SUPERLITE_FLEET_ROLE", "SUPERLITE_FLEET_PARENT_DIR")  # a batch lead pane exports these

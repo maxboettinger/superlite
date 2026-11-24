@@ -16,6 +16,7 @@ Resolution, the same order as the hooks (hooks/superlite-state.sh), plus step 2 
   4. ./.superlite, unless another live session owns it; then the session's private folder
      $SUPERLITE_HOME/sessions/<session id>.d/.superlite (state set before any plan, moved to the plan's folder on the
      next bind; the hooks judge paths against the launch directory meanwhile).
+A cwd inside the plugin's skills folder never yields `./.superlite` there (#1116): step 4 and a bare `--plan .superlite` use `<$CLAUDE_PROJECT_DIR or $SUPERLITE_PROJECT_DIR>/.superlite` (session-start exports the latter), else the private folder, else exit 2; an explicit plan, $SUPERLITE_STATE_DIR or bind target inside it exits 2 (`Refused`), and a binding into it is ignored.
 A bind refuses a folder another live session owns, except that a session launched in the folder's own project (launch
 directory = the .superlite's parent) takes it over when the owner's recorded launch directory (binding line 3) is
 elsewhere; an owner launched in the same directory, or an old binding without line 3, still needs `force`.
@@ -27,7 +28,7 @@ id), moves a pending gate (orchestrator.json, human-replies.jsonl) from the sess
 folder another live session owns (`force` takes it over). An owner is live while its binding points at the folder.
 Paths stay as given (absolute, symlinks not resolved, a relative path joined to $PWD), as the hooks see them. A
 binding also records $CLAUDE_PID, so the SessionStart hook moves it to the new id after /clear (same process). Bindings
-older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, linked_worktree, worktree_top, worktree_run, foreign_worktree, Foreign, for_plan, resolve, pool_path, bind, unbind, owner, live_owner, ACTIVE_MARKERS, run_markers, holds_run_state. Stdlib only.
+older than 14 days are pruned on each bind. Library: launch_dir, owner_launch_dir, own_project, git_root, plan_dir, session_id, bound, linked_worktree, worktree_top, worktree_run, foreign_worktree, Foreign, for_plan, resolve, in_plugin, session_project, Refused, PLUGIN_SKILLS, pool_path, bind, unbind, owner, live_owner, ACTIVE_MARKERS, run_markers, holds_run_state. Stdlib only.
 """
 # Complexity notation:
 #   d = depth of a path (parents walked), b = bindings in $SUPERLITE_HOME/sessions
@@ -43,6 +44,7 @@ GATE_FILES = ("orchestrator.json", "human-replies.jsonl")  # a pending gate foll
 RUN_MARKERS = ("stable.json", "prime.md", "pool.json")  # a .superlite holding one of these is a started run | O(1)
 ACTIVE_MARKERS = RUN_MARKERS + ("orchestrator.json", "inline-flow.json")  # files that show a run is active (#671) | O(1)
 RUN_STATE = ACTIVE_MARKERS + ("fleet.json", OWNER)  # a state folder holding one of these has run state (#707) | O(1)
+PLUGIN_SKILLS = Path(__file__).resolve().parents[2]  # the plugin's skills folder: no state folder lives at or below it (#1116) | O(1)
 PRUNE_S = 14 * 24 * 3600  # O(1)
 _SID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")  # a session id is also a file name | O(1)
 
@@ -58,6 +60,15 @@ class Foreign(SystemExit):  # O(1)
         super().__init__(2)  # O(1)
         self.line = (f"superlite: cwd is in worktree {top}, but the session binding names {sd}; not used. "  # O(1)
                      f"Pass --plan {top}/.superlite for this worktree's run, --plan {sd}, or set SUPERLITE_STATE_DIR")
+
+
+class Refused(SystemExit):  # O(1)
+    """A state folder inside the plugin's skills folder was asked for (exit 2, `line` says why)."""
+
+    def __init__(self, sd):  # O(1)
+        super().__init__(2)  # O(1)
+        self.line = (f"superlite: {sd} lies inside the superlite plugin ({PLUGIN_SKILLS}); no run state is created there. "  # O(1)
+                     f"Run sl from your project folder, or pass --plan <project>/.superlite")
 
 
 def home() -> Path:  # O(1)
@@ -87,6 +98,45 @@ def _abs(path) -> Path:  # O(d)
     return Path(os.path.abspath(p))  # O(d)
 
 
+def in_plugin(sd) -> bool:  # O(d)
+    """True when sd is the plugin's skills folder or lies below it (compared logical, then resolved)."""
+    p = _abs(sd)  # O(d)
+    if p == PLUGIN_SKILLS or PLUGIN_SKILLS in p.parents:  # O(d)
+        return True  # O(1)
+    rp, rs = p.resolve(), PLUGIN_SKILLS.resolve()  # O(d)
+    return rp == rs or rs in rp.parents  # O(d)
+
+
+def _refuse(sd):  # O(d)
+    e = Refused(_abs(sd))  # O(d)
+    print(e.line, file=sys.stderr)  # O(1)
+    raise e  # O(1)
+
+
+def session_project():  # O(d)
+    """The session's launch folder from $CLAUDE_PROJECT_DIR, else $SUPERLITE_PROJECT_DIR; empty, relative values and
+    folders whose `.superlite` lies in the plugin are skipped; None when neither is usable."""
+    for var in ("CLAUDE_PROJECT_DIR", "SUPERLITE_PROJECT_DIR"):  # O(1) iterations (2)
+        v = os.environ.get(var, "")  # O(1)
+        if v and os.path.isabs(v) and not in_plugin(_abs(v) / ".superlite"):  # O(d)
+            return _abs(v)  # O(d)
+    return None  # O(1)
+
+
+def _outside_plugin(sid):  # O(d)
+    """The state folder for a cwd inside the plugin: the session project's, unless another live session owns it; then the
+    private folder; without a session id Refused."""
+    proj = session_project()  # O(d)
+    if proj is not None:  # O(1)
+        cand = proj / ".superlite"  # O(1)
+        other = live_owner(cand, sid) if sid else None  # O(d)
+        if not other or _hands_over(cand, other):  # O(d)
+            return cand  # O(1)
+    if sid:  # O(1)
+        return private_dir(sid)  # O(1)
+    _refuse(_abs(".superlite"))  # O(d)
+
+
 def git_root(path):  # O(d)
     """The nearest folder at or above path holding `.git` (a directory, or a worktree's file), or None."""
     p = _abs(path)  # O(d)
@@ -99,7 +149,16 @@ def git_root(path):  # O(d)
 
 
 def plan_dir(plan_or_dir) -> Path:  # O(d)
-    """The .superlite folder for an explicit plan, review plan, project folder or .superlite folder."""
+    """The .superlite folder for an explicit plan, review plan, project folder or .superlite folder; never one inside the plugin (#1116)."""
+    if os.path.normpath(os.fspath(plan_or_dir)) == ".superlite" and in_plugin(_abs(plan_or_dir)):  # O(d)
+        return _outside_plugin(session_id())  # O(d)
+    r = _plan_dir(plan_or_dir)  # O(d)
+    if in_plugin(r):  # O(d)
+        _refuse(r)  # O(d)
+    return r  # O(1)
+
+
+def _plan_dir(plan_or_dir) -> Path:  # O(d)
     bare = os.path.normpath(os.fspath(plan_or_dir)) == ".superlite"  # the bare value walks up to the nearest run (#707) | O(1)
     p = _abs(plan_or_dir)  # O(d)
     if p.name == ".superlite":  # O(1)
@@ -224,15 +283,20 @@ def _hands_over(sd, other) -> bool:  # O(d)
     return ol is not None and _abs(ol) != _abs(sd).parent  # O(d)
 
 
-def bound(sid=None):  # O(d)
-    """The .superlite folder bound to the session, while it exists and no other session took it over; else None."""
-    sid = sid or session_id()  # O(1)
-    if not sid:  # O(1)
-        return None  # O(1)
+def _raw_bound(sid):  # O(1)
     t = _target(sid)  # O(1)
     if t is None or not t.is_dir() or owner(t) not in (None, sid):  # O(1)
         return None  # O(1)
     return t  # O(1)
+
+
+def bound(sid=None):  # O(d)
+    """The .superlite folder bound to the session, while it exists, no other session took it over and it lies outside the plugin; else None."""
+    sid = sid or session_id()  # O(1)
+    if not sid:  # O(1)
+        return None  # O(1)
+    t = _raw_bound(sid)  # O(1)
+    return None if t is None or in_plugin(t) else t  # O(d)
 
 
 def has_run(sd) -> bool:  # O(1)
@@ -309,6 +373,8 @@ def resolve(plan_or_dir=None, strict: bool = True) -> Path:  # O(d)
         return plan_dir(plan_or_dir)  # O(d)
     env = os.environ.get("SUPERLITE_STATE_DIR", "")  # O(1)
     if env:  # O(1)
+        if in_plugin(env):  # O(d)
+            _refuse(env)  # O(d)
         return _abs(env)  # O(d)
     w = worktree_run()  # O(d)
     if w is not None:  # O(1)
@@ -322,6 +388,8 @@ def resolve(plan_or_dir=None, strict: bool = True) -> Path:  # O(d)
             raise e  # O(1)
         return b  # O(1)
     sid = session_id()  # O(1)
+    if in_plugin(_abs(".superlite")):  # O(d)
+        return _outside_plugin(sid)  # O(d)
     other = live_owner(".superlite", sid) if sid else None  # O(d)
     if other and not _hands_over(".superlite", other):  # ./.superlite is another session's run | O(d)
         return private_dir(sid)  # O(1)
@@ -372,6 +440,8 @@ def bind(sd, sid=None, force=False):  # O(b + d)
     if not sid:  # O(1)
         return None  # O(1)
     sd = _abs(sd)  # O(d)
+    if in_plugin(sd):  # O(d)
+        _refuse(sd)  # O(d)
     other = live_owner(sd, sid)  # O(d)
     if other and not force and _hands_over(sd, other):  # an owner launched elsewhere hands the folder to its own project | O(d)
         other = None  # O(1)
@@ -380,7 +450,7 @@ def bind(sd, sid=None, force=False):  # O(b + d)
                     "or take it over with `sl orchestrator bind --force`")
     try:  # O(1)
         sd.mkdir(parents=True, exist_ok=True)  # O(1)
-        old = bound(sid)  # O(d)
+        old = _raw_bound(sid)  # O(1)
         if old is not None and _abs(old) != sd:  # the session moved: its pending gate comes along | O(d)
             _move_gate(old, sd)  # O(1)
             if owner(old) == sid:  # O(1)
@@ -431,6 +501,8 @@ def main(argv=None):  # O(d)
         how = "worktree run"  # O(1)
     else:  # O(1)
         how = "session binding" if bound() else "current directory"  # O(d)
+        if how == "current directory" and in_plugin(_abs(".superlite")):  # O(d)
+            how = "cwd inside the plugin; " + ("private folder" if private(sd) else "session project")  # O(d)
         top = foreign_worktree(sd) if how == "session binding" else None  # O(d)
         if top is not None:  # O(1)
             how += f"; foreign: cwd is in worktree {top}, writers refuse it"  # O(1)

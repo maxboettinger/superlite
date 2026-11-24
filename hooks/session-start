@@ -15,6 +15,14 @@ sid=""  # O(1)
 if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "$sid" ]; then  # O(1)
   printf 'export SUPERLITE_SESSION_ID=%s\n' "$sid" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true  # O(1)
 fi  # O(1)
+# The launch folder goes to Bash as SUPERLITE_PROJECT_DIR (Bash has no CLAUDE_PROJECT_DIR): an `sl` call whose cwd lies
+# inside the plugin's skills folder puts its state there, never in the plugin (#1116).
+proj="${CLAUDE_PROJECT_DIR:-}"  # O(1)
+re_proj_cwd='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]+)"'  # O(1)
+if [ -z "$proj" ] && [[ $input =~ $re_proj_cwd ]]; then proj="${BASH_REMATCH[1]}"; fi  # O(input)
+if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "$proj" ]; then  # O(1)
+  printf 'export SUPERLITE_PROJECT_DIR=%q\n' "$proj" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true  # O(1)
+fi  # O(1)
 # Telemetry (#933): one session_start line, and <sid>.start (epoch s) when absent. Fails open, prints nothing.
 re_src='"source"[[:space:]]*:[[:space:]]*"(startup|clear|compact)"'  # O(1)
 if [ -n "$sid" ] && [[ $input =~ $re_src ]]; then  # O(input)
