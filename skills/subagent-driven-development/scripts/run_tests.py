@@ -68,6 +68,7 @@ A full run (no --task, no --destination, no Tests cmd=) of a `maxapp test` or `m
 
 A Swift project with an Xcode project whose command has no xcodebuild word to rewrite and names no script reading that variable prints one `run_tests: WARNING` line per command (remembered in `.superlite/derived-data-warned.json`) (#614).
 When the disk is below the warn level the run also removes module cache entries (`ModuleCache.noindex` under the DerivedData home) untouched for 24 h and prints `module cache: removed N entries` (#614).
+A full run's platform warning (#598) reads the platforms a `maxapp test` command builds (#1076).
 Stdlib only.
 """
 # Complexity notation:
@@ -2071,6 +2072,21 @@ def chosen_destinations(a, spec, label):  # O(d) the destinations to run: --dest
     return configured if label == "full" else configured[:1]  # O(d)
 
 
+def built_platforms(root, command, dests):  # O(d + repo) the platforms a full run builds: destinations, else a maxapp test command (plain follows .maxapp test_full), else the command's own (#1076)
+    if dests:  # O(1)
+        return [p for p in dict.fromkeys(testcmd.destination_platform(d) for d in dests) if p]  # O(d)
+    plats = suite_stamp.maxapp_platforms(command)  # O(len)
+    if plats is None:  # O(1)
+        return testcmd.command_platforms(command)  # O(len)
+    if plats == ["macOS"]:  # O(1)
+        try:  # O(1)
+            if suite_stamp.test_full_ios(root) is not None:  # O(repo)
+                return ["macOS", "iOS"]  # O(1)
+        except (subprocess.CalledProcessError, OSError, ValueError):  # O(1)
+            pass  # O(1)
+    return plats  # O(1)
+
+
 def platform_warning(declared, built):  # O(d + b) the warning text for declared platforms a full run did not build, else ""
     missing = [p for p in declared if p not in built]  # O(d * b)
     if not missing:  # O(1)
@@ -2198,7 +2214,7 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
         global WARNING  # O(1)
         if label == "full":  # a full run names the declared platforms it did not build (#598) | O(entries)
             declared = testcmd.declared_platforms(root)  # O(entries)
-            built = [p for p in dict.fromkeys(testcmd.destination_platform(d) for d in dests) if p] if dests else testcmd.command_platforms(spec["command"])  # O(d)
+            built = built_platforms(root, spec["command"], dests)  # O(d)
             plat = platform_warning(declared, built)  # O(d)
             if plat:  # O(1)
                 WARNING = f"{WARNING}; {plat}" if WARNING else plat  # O(1)

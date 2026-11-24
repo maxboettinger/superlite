@@ -108,9 +108,9 @@ def test_xcsift_inside_wrapper_text():
     assert triple(r) == (1, 1, 0) and r["names"] == [RED_NAME]
 
 
-def test_xcsift_last_object_wins():
+def test_xcsift_blocks_are_summed():
     r = testcmd.xcsift_summary((GREEN + "\n" + RED).splitlines(), 1)
-    assert triple(r) == (1, 1, 0)
+    assert triple(r) == (3, 1, 0) and r["names"] == [RED_NAME]
 
 
 def test_xcsift_non_int_counts_ignored():

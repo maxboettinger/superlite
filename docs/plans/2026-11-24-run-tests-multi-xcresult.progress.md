@@ -1,0 +1,25 @@
+- start 626d1c83c70d3690a9362b837152f680c2aa114b
+- unblocked: dispatched T1 T2 at 10:31:21; waiting on fixes: none
+- Ruling: fleet placement local for this build: remote write workers lost their snapshot in B238, B243 and B272 (B301's reason) - cost if wrong: one local slot (lead's ruling)
+- tests fast passed=0 failed=6 skipped=0 seconds=2.9
+- tests fast passed=22 failed=11 skipped=0 seconds=1.2
+- tests fast passed=26 failed=0 skipped=0 seconds=6.5
+- tests fast passed=71 failed=1 skipped=0 seconds=5.7
+- commit T2 29eed9033a maxapp platforms in warning
+- commit T2 29eed9033a maxapp platforms in warning
+- Ruling: amends the plan's first ruling after T1's report (test_run_tests_fast_mapping_597::test_xcsift_build_error_red_run_lists_it_once): a block that counted tests keeps its errors[] entries whose line is above 0 (compiler errors and test-site runtime errors such as a `try!` crash at file:line, 3 of 55 measured counted-block entries) and drops those without a line (runtime log lines such as `[error] CoreData`, 52 of 55); a block's `status: failed` alone is one failure when it counted nothing or kept an error - cost if wrong: a counted block's line-less real error is not shown (lead's ruling)
+- tests fast passed=11 failed=2 skipped=0 seconds=0.5
+- tests fast passed=74 failed=0 skipped=0 seconds=4.0
+- commit T1 7fce7b3f55 xcsift blocks summed
+- commit T1 (amended ruling) 10:34:43
+- tests fast passed=100 failed=0 skipped=0 seconds=8.8
+- tests fast passed=13 failed=1 skipped=0 seconds=0.7
+- tests fast passed=72 failed=3 skipped=0 seconds=3.3
+- review T1,T2 (W3): 1 finding (plan Notes vs amended ruling on counted-block errors); ruled: keep the amended ruling, docs/tools.md text follows it (W1, T2)
+- tests fast passed=9 failed=0 skipped=0 seconds=1.2
+- commit T2 0069717e98 maxapp platforms in warning
+- commit T1 694cce6d9f xcsift blocks summed
+- commit T2 docs amendment 0069717e98; T1 recheckpoint (reviewer left one trailing blank line)
+- tests full passed=13751 failed=0 skipped=12 seconds=1028.8
+- tests full passed=13751 failed=0 skipped=12 (summary test-summary-20261124T103721-86977-053cc7.json)
+- Ruling: FR1's only finding (docs/tools.md:27 lost the exit 127/126 clause) is UNVERIFIED by findings route: its quote is not in the file and the clause is still present (grep count 1 at 626d1c83 and now); dismissed, no second round - cost if wrong: none, the text is checked (lead's ruling)
