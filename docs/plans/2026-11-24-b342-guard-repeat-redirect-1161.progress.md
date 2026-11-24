@@ -1,0 +1,5 @@
+- unblocked: dispatched T1 at 21:35:59; waiting on fixes: none
+- start 8f91add89352944b03fc68ce2bfd300268e20ac5
+- commit T1 fa127f88a3 Same-log redirect passes as housekeeping
+- tests fast passed=63 failed=0 skipped=0 seconds=5.3
+- tests full passed=14456 failed=0 skipped=12 seconds=373.9
