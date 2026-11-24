@@ -40,7 +40,7 @@ def test_step2_names_empty_plan_lines(doc):
     s = _step2(doc)
     assert f"`{EMPTY}`" in s
     assert f"`{NO_BATCH}`" in s
-    assert f"`{TRIAGE}`" in s
+    assert f"`{TRIAGE}` (a triage worker's proposal only, never `--proposal`)" in s
     assert "`BLOCKED: proposal rejected`" in s
 
 
