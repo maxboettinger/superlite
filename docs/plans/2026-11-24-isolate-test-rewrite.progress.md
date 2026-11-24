@@ -1,0 +1,14 @@
+- start 0daf27a17c4a07cb4add766ee0c469ba7d09c979
+- unblocked: dispatched T1 T2 at 09:48:57; waiting on fixes: none
+- tests fast passed=0 failed=1 skipped=0 seconds=0.0
+- tests fast passed=1 failed=0 skipped=0 seconds=0.0
+- tests fast passed=24 failed=29 skipped=0 seconds=1.5
+- tests fast passed=52 failed=1 skipped=0 seconds=1.8
+- tests fast passed=247 failed=0 skipped=0 seconds=4.9
+- Ruling: T1's task-test-run incident target is '<orig> -> <rewritten sl segment>' (the rewritten field keeps the whole command), because the plan's own test asserted '-> sl -C ' for chained forms - cost if wrong: one feedback text names only the sl segment
+- commit T1 b69ef5668e isolated test run rewrite
+- commit T2 ba099f0f55 hooks doc bullets
+- tests fast passed=57 failed=0 skipped=0 seconds=2.1
+- commit T1 f84da0c8cc isolated test run rewrite
+- tests fast passed=4 failed=0 skipped=0 seconds=20.6
+- tests full passed=13720 failed=0 skipped=12 seconds=362.6
