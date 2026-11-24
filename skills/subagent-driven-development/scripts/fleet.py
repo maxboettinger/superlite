@@ -1323,7 +1323,9 @@ def _ended_stop(sd, wid, w):  # the stop record of a busy worker's turn that end
     if w.get("state") != "busy" or w.get("role") == "layer":  # O(1)
         return None  # O(1)
     import fleet_io as fio  # noqa: E402 | O(1) lazy
-    return fio.latest_stop(sd, wid, int(w.get("sent") or 0))  # O(m + w)
+    rec = fio.latest_stop(sd, wid, int(w.get("sent") or 0))  # O(m + w)
+    kind = fio.stop_turn(rec["transcript"], rec["t"]) if rec and rec.get("transcript") else "answer"  # O(T)
+    return None if kind == "after" or (kind == "note" and fio.now_ms() - rec["t"] < fio.NOTE_MS) else rec  # a stop of an earlier turn is no answer (#1165) | O(1)
 
 
 def _report(sd, ids):  # print each worker's last report or a report by label; read-only | O(ids * file)
