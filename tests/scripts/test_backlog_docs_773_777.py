@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-NOTE = "run end: standing note from <file> (<time>, <n> lines) still goes into every later lead brief; sl backlog start --note /dev/null clears it"
+NOTE = "run end: standing note from <file> (<time>, <n> lines) still goes into every later lead brief; sl backlog note /dev/null clears it"
 
 
 def step(n):
@@ -25,7 +25,7 @@ def test_command_step5_names_note_line():
 
 def test_command_step8_clears_or_keeps_note():
     s = step(8)
-    assert '"$SL" backlog start --note /dev/null' in s
+    assert '"$SL" backlog note /dev/null' in s
     assert "standing note" in s
     assert "closing report" in s
 
@@ -33,7 +33,7 @@ def test_command_step8_clears_or_keeps_note():
 def test_main_rules_name_note_line():
     t = " ".join((ROOT / "skills/subagent-driven-development/backlog-main.md").read_text().split())
     assert NOTE in t
-    assert "--note /dev/null" in t
+    assert "backlog note /dev/null" in t
 
 
 def test_tools_row_names_note_line():
