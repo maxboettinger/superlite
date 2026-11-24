@@ -29,10 +29,10 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")  # O(1)
 _TASK_HEADING = re.compile(r"^###\s+([A-Z]{1,3}\d+[A-Za-z]?)\b(.*)$")  # O(1)
 
 
-def default_plan():  # the running run's plan file, else DEFAULT_PLAN | O(d)
+def default_plan():  # the running run's plan file, else <state folder>/plan.md (#1131) | O(d)
     st = sibling("state")  # O(1)
     found = sibling("plan_tools").run_plan(st.resolve(strict=False))  # O(d)
-    return str(found) if found else DEFAULT_PLAN  # O(1)
+    return str(found) if found else str(st.default_dir() / "plan.md")  # O(d)
 
 
 def die(msg, code=2):  # O(len msg)

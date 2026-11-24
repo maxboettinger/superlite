@@ -12,7 +12,6 @@ import time  # O(1)
 from collections import Counter  # O(1)
 from pathlib import Path  # O(1)
 
-DEFAULT_LOG = ".superlite/incidents.jsonl"  # O(1)
 KINDS = ("test-failure", "exception", "workaround", "spec-ambiguity",  # O(1)
          "assumption", "flaky", "perf", "unsure", "verified")  # O(1)
 CONFIDENCE = ("low", "medium", "high")  # O(1)
