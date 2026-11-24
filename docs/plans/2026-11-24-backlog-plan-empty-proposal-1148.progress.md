@@ -1,0 +1,16 @@
+- start dd2ce624
+- unblocked: dispatched T1 at 18:52:58; waiting on fixes: none
+- tests fast passed=10 failed=11 skipped=0 seconds=1.0
+- tests fast passed=32 failed=0 skipped=0 seconds=1.0
+- tests fast passed=32 failed=0 skipped=0 seconds=1.0
+- tests fast passed=1200 failed=2 skipped=0 seconds=31.9
+- tests fast passed=30 failed=0 skipped=0 seconds=0.8
+- tests fast passed=34 failed=0 skipped=0 seconds=1.1
+- commit T1 2ed26e0ec2 empty proposal and listing-lag reads
+- Ruling: T1 also commits tests/scripts/test_backlog_plan_source_473.py - test_rejected_plan_keeps_source built its reject from an empty DONE proposal, which #1148 makes nothing to plan; no open batch lists the file (lead's ruling)
+- T1 committed 2ed26e0; first report Red run: tests (fast): 10 passed, 11 failed
+Ruling: test_backlog_plan_source_473.py test_rejected_plan_keeps_source now rejects via NEEDS_CONTEXT and pins that an empty DONE proposal keeps the source - its old reject was an empty DONE proposal - a missed reject case
+- tests fast passed=34 failed=0 skipped=0 seconds=1.7
+- tests fast passed=11 failed=2 skipped=0 seconds=0.7
+- tests fast passed=9 failed=12 skipped=0 seconds=0.6
+- tests full passed=14383 failed=0 skipped=12 seconds=530.5
