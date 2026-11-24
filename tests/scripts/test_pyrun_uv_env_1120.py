@@ -73,7 +73,8 @@ def test_main_checkout_venv_exported(tmp_path):
     cmd, env, note = _pyrun.uv_project_env(CMD, wt, wt, {})
     assert cmd == CMD
     assert env == {"VIRTUAL_ENV": str(main / ".venv")}
-    assert note == f"uv run --no-project finds no environment from {wt}; using the project's environment {main / '.venv'} (VIRTUAL_ENV) (#1120)"
+    assert note == (f"uv run --no-project finds no environment from {wt}; using the project's environment {main / '.venv'} (VIRTUAL_ENV), "
+                    f"the main checkout's, outside {wt}; {wt} has no uv.lock for an environment of its own, so the tests may import that folder's package, not {wt}'s (#1140)")
 
 
 def test_no_lock_no_venv_note_only(tmp_path):

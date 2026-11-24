@@ -333,13 +333,15 @@ def runs_on_import(path):  # O(file size) parse and walk; True when the module-l
 
 
 def import_errors(files, roots=None, root=".", notes=None):  # O(m_py * import cost) + 1 process spawn (batched)
-    """Import every file once under the project's own environment (_pyrun.project_cmd: its interpreter, else uv run).
+    """Import every file once under the project's own environment (_pyrun.project_env: its interpreter, else uv run).
     Files no import can name are skipped, and so is a script whose top-level code runs the program (#1068); a missing
     optional dependency is a warning; a missing declared main dependency, or a uv environment that never started the
-    check, is a non-blocking environment gap (#1068). All go to notes."""
+    check, is a non-blocking environment gap (#1068); the #1140 environment note goes to notes as ("venv", "", 0, note). All go to notes."""
     if not files:  # O(1)
         return []  # O(1)
-    cmd = _pyrun.project_cmd(root)  # O(1) file lookups, never run
+    cmd, venv_note = _pyrun.project_env(root)  # O(d + P) file lookups, never run
+    if venv_note and notes is not None:  # the main checkout's environment, or the tree's own (#1140) | O(1)
+        notes.append(("venv", "", 0, venv_note))  # O(1)
     uv = len(cmd) > 1  # the uv run command | O(1)
     shown = " ".join(cmd) if uv else os.path.abspath(cmd[0])  # O(a)
     secs = import_timeout()  # O(1)
@@ -1099,6 +1101,8 @@ def commit_one(a, tid, info, own_files):  # O(m*o + py size) + git spawns (statu
                 print(f"import check skipped ({msg}): {f}", file=sys.stderr)  # O(1)
             elif kind == "env":  # O(1)
                 print(f"import warning {f}:{line} {msg}", file=sys.stderr)  # O(1)
+            elif kind == "venv":  # O(1)
+                print(f"import check: {msg}", file=sys.stderr)  # O(1)
             else:  # O(1)
                 print(f"import warning {f}:{line} {msg} (optional dependency not installed; not blocking)", file=sys.stderr)  # O(1)
     if problems:  # O(1)

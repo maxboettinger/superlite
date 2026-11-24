@@ -6,11 +6,13 @@ the `VIRTUAL_ENV` environment variable, else `sys.executable`. Checks run in it 
 project's packages, not only superlite's. #1068: a lead worktree or task tree also finds the main
 checkout's `.venv` (main_checkout reads `.git` files, never runs git); project_cmd(root) returns the
 argv prefix: that interpreter, else `uv run --frozen --project root python` for a uv project, else ours.
+project_env(root) adds a note: the main checkout's .venv picked for a linked worktree or task tree is another checkout's, so a uv project root runs in its own uv run --frozen --project root environment and any other root keeps it with a note (#1140, #1133's rule).
 
 uv_project_env(command, root, cwd, environ): a `uv run --no-project` command that finds no Python environment
 (no VIRTUAL_ENV, no `.venv` in cwd or a parent) runs in the project's environment: rewritten to
 `--frozen --project root` for a uv project, else the main checkout's venv is exported (#1120).
 A .venv it finds only above root (a worktree nested in the main checkout, a task tree) is another checkout's: a uv project root runs --frozen --project root too, any other root keeps the command with a note (#1133).
+An exported main-checkout venv says so in its note (#1140).
 
 pytest_cmd(): command prefix that runs pytest. Uses the current interpreter when it can
 import pytest, else `uv run --no-project --with pytest python -m pytest`, else raises
@@ -91,15 +93,48 @@ def project_python(root):  # O(d) found_python or sys.executable
     return found_python(root) or sys.executable  # O(d)
 
 
-def project_cmd(root):  # O(d + P) PATH search
-    """argv prefix for the project's python: the found interpreter, else uv run --frozen for a uv project (#1068), else ours."""  # O(1)
-    py = project_python(root)  # O(d)
+def other_checkout_python(root):  # O(d) the .git walk twice plus stat calls; git never runs
+    """The main checkout's .venv interpreter that found_python picks for a root in a linked worktree or task tree (its first .git up the tree is a file) with no .venv of its own: another checkout's environment (#1140); else None."""  # O(1)
+    if venv_python(Path(root) / ".venv"):  # the root's own environment | O(1)
+        return None  # O(1)
+    here = Path(root).resolve()  # O(d)
+    dot_git = next((f / ".git" for f in (here, *here.parents) if (f / ".git").exists()), None)  # O(d) stat calls
+    if dot_git is None or not dot_git.is_file():  # no repository, or the main checkout itself | O(1)
+        return None  # O(1)
+    main = main_checkout(root)  # O(d)
+    return venv_python(main / ".venv") if main is not None else None  # O(1)
+
+
+def _found_cmd(root, py):  # O(d + P) PATH search
+    """#1068's argv prefix: a found interpreter, else uv run --frozen for a uv project, else ours."""  # O(1)
     if py != sys.executable or found_python(root):  # a found interpreter that equals ours is still found | O(d)
         return [py]  # O(1)
     uv = shutil.which("uv")  # O(P) PATH search
     if uv and (Path(root) / "uv.lock").is_file() and (Path(root) / "pyproject.toml").is_file():  # O(1) two stats
         return [uv, "run", "--frozen", "--project", str(root), "python"]  # O(1)
     return [py]  # O(1)
+
+
+def project_env(root):  # O(d + P) PATH search
+    """(argv prefix, note) for the project's python: #1068's choice, except that the main checkout's .venv picked for a linked worktree or task tree is another checkout's (#1140, #1133's rule): a uv project root runs in its own uv run --frozen --project root environment, any other root keeps that interpreter with a note."""  # O(1)
+    py = project_python(root)  # O(d) read through the module: the seam tests patch
+    other = other_checkout_python(root)  # O(d)
+    if other is None or py != other:  # O(1)
+        return _found_cmd(root, py), ""  # O(d + P)
+    here = os.path.abspath(root)  # O(d)
+    base = f"{Path(other).parent.parent} is the main checkout's environment, outside {here}"  # O(1)
+    tail = f"the import check may import that folder's package, not {here}'s (#1140)"  # O(1)
+    if not ((Path(root) / "uv.lock").is_file() and (Path(root) / "pyproject.toml").is_file()):  # O(1) two stats
+        return [py], f"{base}, and {here} has no uv.lock for an environment of its own; {tail}"  # O(1)
+    uv = shutil.which("uv")  # O(P) PATH search
+    if not uv:  # O(1)
+        return [py], f"{base}, and uv is not on PATH for {here}'s own environment; {tail}"  # O(1)
+    return [uv, "run", "--frozen", "--project", str(root), "python"], f"{base}; running the import check in {here}'s own environment: uv run --frozen --project {here} (#1140)"  # O(1)
+
+
+def project_cmd(root):  # O(d + P) PATH search
+    """argv prefix for the project's python (project_env without its note)."""  # O(1)
+    return project_env(root)[0]  # O(d + P)
 
 
 def found_env(cwd):  # O(d) stat calls up the cwd parents; never runs uv
@@ -160,7 +195,10 @@ def uv_project_env(command, root, cwd, environ):  # O(c + d) command parse plus 
     py = found_python(root)  # O(d)
     if py:  # O(1)
         venv = str(Path(py).parent.parent)  # O(1)
-        return command, {"VIRTUAL_ENV": venv}, f"{base}; using the project's environment {venv} (VIRTUAL_ENV) (#1120)"  # O(1)
+        note = f"{base}; using the project's environment {venv} (VIRTUAL_ENV)"  # O(1)
+        if py == other_checkout_python(root):  # the main checkout's: its package may shadow root's (#1140) | O(d)
+            return command, {"VIRTUAL_ENV": venv}, f"{note}, the main checkout's, outside {root}; {root} has no uv.lock for an environment of its own, so the tests may import that folder's package, not {root}'s (#1140)"  # O(1)
+        return command, {"VIRTUAL_ENV": venv}, f"{note} (#1120)"  # O(1)
     return command, {}, f"{base} and {root} has no uv.lock; the project's own package may not import (#1120)"  # O(1)
 
 
