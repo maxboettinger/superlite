@@ -6,6 +6,7 @@
 a remote scores its room minus its live workers minus a margin (`remote_margin` of machine.json, an int, default 2), local scores its room minus its live workers, ties go local.
 `skip(sd, label, why)` keeps a machine out of placement for some minutes; `set_mode(sd, "local"|"spread")` is the `placement` key of fleet.json.
 A failure here never raises: it means local.
+A research worker whose brief names a path from the lead brief's research line (`backlog_brief.research_reads`) stays local; without the brief, every research worker of such a lead does (#1111).
 A project keeps machines out of its fleet with `.superlite/placement.json` `{"exclude": ["<label>", ...]}` (the project's and, from a linked worktree, the main checkout's; a malformed file keeps every worker local) (#1096).
 """
 # Complexity notation:
@@ -242,13 +243,38 @@ def _live(sd):  # O(w): live workers per machine, None key = local
     return out  # O(1)
 
 
-def choose(sd, role, project, now=None):  # O(w + m)
+def research_local(sd, project, brief=None):  # O(len + t * r): True when a research worker may need a read-only reference path only this machine has (#1111)
+    try:  # O(1)
+        import backlog_brief as bb  # noqa: PLC0415 | O(1)
+        reads = [Path(x).resolve() for x in getattr(bb, "research_reads", lambda _sd: [])(Path(sd))]  # O(r)
+    except Exception:  # O(1) a failing reader means no reads
+        reads = []  # O(1)
+    if not reads:  # O(1)
+        return False  # O(1)
+    if brief is None:  # O(1)
+        return True  # O(1)
+    try:  # O(1)
+        import fleet_io  # noqa: PLC0415 | O(1)
+        text = Path(brief).read_text(encoding="utf-8", errors="replace")  # O(len)
+        for t in fleet_io.brief_outside(text, project, sd):  # O(t)
+            p = Path(fleet_io.local_path(t, project)).resolve()  # O(len)
+            if any(p == r or r in p.parents for r in reads):  # O(r)
+                return True  # O(1)
+    except Exception:  # O(1) an unreadable brief or a failing helper means local
+        return True  # O(1)
+    return False  # O(1)
+
+
+def choose(sd, role, project, now=None, brief=None):  # O(w + m)
     try:  # O(1)
         if role not in ROLES or not enabled(sd) or _swift(project):  # O(entries)
             return None  # O(1)
         names, _files, err = excluded(project)  # O(f * k)
         if err:  # O(1)
             print(f"placement: {err}; every worker of this project stays local (#1096)", file=sys.stderr)  # O(1)
+            return None  # O(1)
+        if role == "research" and research_local(sd, project, brief):  # O(len + t * r)
+            print("placement: research worker stays local: its brief may name a read-only reference path from the lead brief's research line, which only this machine has (#1111)", file=sys.stderr)  # O(1)
             return None  # O(1)
         now = time.time() if now is None else now  # O(1)
         rm, live, skips = room(sd, now=now), _live(sd), _skips(sd)  # O(w + m)

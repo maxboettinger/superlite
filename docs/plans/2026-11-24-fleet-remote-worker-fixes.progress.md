@@ -1,0 +1,14 @@
+- start 89f6038dc7d6db0aa86d20a36fc80398602a3cac
+Ruling: fleet placement local for this run's build - #1112 (no git identity on a remote host) is still current, so a remote implementer's commit_task could fail there - cost if wrong: the build uses only this Mac's room
+- unblocked: dispatched T1 T2 T3 at 15:27:00; waiting on fixes: none
+- tests fast passed=0 failed=8 skipped=0 seconds=0.8
+- tests fast passed=1 failed=0 skipped=0 seconds=0.0
+- tests fast passed=2 failed=5 skipped=0 seconds=1.7
+- tests fast passed=70 failed=0 skipped=0 seconds=2.0
+- tests fast passed=43 failed=0 skipped=0 seconds=9.6
+- commit T1 2dd113e384 remote record carries Also-touches and git identity
+- commit T2 682c16e092 research worker with a read-only reference path stays local
+- commit T3 8919e64154 fleet docs name the three remote fixes
+- tests fast passed=43 failed=0 skipped=0 seconds=9.3
+- tests fast passed=49 failed=0 skipped=0 seconds=1.9
+- tests full passed=14101 failed=0 skipped=12 seconds=626.8
