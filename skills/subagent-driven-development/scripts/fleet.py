@@ -1138,7 +1138,7 @@ def _brief_arg(argv):  # the value of the last --brief X or --brief=X, else None
     return found  # O(1)
 
 
-def with_constraints(text, plan):  # TEXT with the plan's Global constraints appended as one section; unchanged when it has them, no plan, or none stated (#635) | O(L + len)
+def with_constraints(text, plan):  # TEXT with the plan's Global constraints appended as one section; unchanged when it has them, no plan, or none stated (#635); review and fix briefs keep it by ruling (#1059) | O(L + len)
     if plan is None or re.search(r"^#{1,4}\s+Global constraints", text, re.I | re.M):  # O(len)
         return text  # O(1)
     import plan_tools  # noqa: E402 | O(1) lazy
