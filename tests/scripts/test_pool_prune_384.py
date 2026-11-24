@@ -192,3 +192,66 @@ def test_prune_file_survives_non_dict_fleet_worker_records(tmp_path, monkeypatch
     assert lines[-1].startswith("pool:")
     (sd / "fleet.json").write_text(json.dumps({"on": True, "workers": [1]}), encoding="utf-8")
     assert pool.prune_file(str(sd / "pool.json"))[-1].startswith("pool:")
+
+
+def remote_pool(tmp_path, workers, agents):
+    sd = write_pool(tmp_path, agents)
+    (sd / "fleet.json").write_text(json.dumps({"on": True, "workers": workers}), encoding="utf-8")
+    return sd
+
+
+def test_running_remote_worker_is_kept_though_local_herdr_lacks_it():
+    """#1065: a pool record with `machine` lives on another Mac's Herdr; local Herdr names never judge it."""
+    workers = {"W5": {"name": "sl-x-w5", "state": "busy", "machine": "mxn"}}
+    data = {"agents": [agent("W5", busy=True, current="T1", machine="mxn")]}
+    removed, kept = pool.prune(data, workers, "new", {"other"})
+    assert (removed, kept) == ([], [])
+    assert [a["id"] for a in data["agents"]] == ["W5"]
+
+
+def test_running_remote_worker_is_kept_without_herdr():
+    workers = {"W5": {"name": "sl-x-w5", "state": "blocked", "machine": "mxn"}}
+    data = {"agents": [agent("W5", busy=True, current="T1", machine="mxn")]}
+    assert pool.prune(data, workers, "new", None) == ([], [])
+
+
+def test_stopped_remote_worker_is_removed():
+    workers = {"W5": {"name": "sl-x-w5", "state": "stopped", "machine": "mxn"}}
+    data = {"agents": [agent("W5", busy=True, current="T1", machine="mxn")]}
+    removed, kept = pool.prune(data, workers, "new", {"sl-x-w5"})
+    assert (removed, kept) == ([("W5", "fleet worker stopped; was busy with T1")], [])
+    assert data["agents"] == []
+
+
+def test_fleet_json_machine_marks_a_pool_record_remote():
+    workers = {"W5": {"name": "sl-x-w5", "state": "busy", "machine": "mxn"}}
+    data = {"agents": [agent("W5", busy=True, current="T1")]}
+    assert pool.prune(data, workers, "new", set()) == ([], [])
+
+
+def test_prune_file_keeps_a_running_remote_worker(tmp_path, monkeypatch):
+    sd = remote_pool(tmp_path, {"W1": {"name": "sl-a-w1", "state": "ready"},
+                                "W5": {"name": "sl-a-w5", "state": "busy", "task": "T1", "machine": "mxn"}},
+                     [agent("W1"), agent("W5", busy=True, current="T1", machine="mxn")])
+    monkeypatch.setenv("SUPERLITE_SESSION_ID", "new")
+    monkeypatch.setattr(pool, "herdr_names", lambda: set())
+    assert pool.prune_file(str(sd / "pool.json")) == ["removed W1 (fleet worker gone from Herdr)", "pool: removed 1 of 2 agents"]
+    assert ids(sd / "pool.json") == ["W5"]
+
+
+def test_prune_file_reads_machine_from_fleet_json(tmp_path, monkeypatch):
+    sd = remote_pool(tmp_path, {"W5": {"name": "sl-a-w5", "state": "busy", "task": "T1", "machine": "mxn"}},
+                     [agent("W5", busy=True, current="T1")])
+    monkeypatch.setenv("SUPERLITE_SESSION_ID", "new")
+    monkeypatch.setattr(pool, "herdr_names", lambda: set())
+    assert pool.prune_file(str(sd / "pool.json")) == ["pool: nothing to prune (1 agent)"]
+
+
+def test_prune_file_asks_herdr_not_for_remote_workers(tmp_path, monkeypatch):
+    sd = remote_pool(tmp_path, {"W5": {"name": "sl-a-w5", "state": "busy", "task": "T1", "machine": "mxn"}},
+                     [agent("W5", busy=True, current="T1", machine="mxn")])
+    monkeypatch.setenv("SUPERLITE_SESSION_ID", "new")
+    calls = []
+    monkeypatch.setattr(pool, "herdr_names", lambda: calls.append(1) or set())
+    assert pool.prune_file(str(sd / "pool.json")) == ["pool: nothing to prune (1 agent)"]
+    assert calls == []
