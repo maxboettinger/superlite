@@ -2135,8 +2135,13 @@ def _run_seg(c, st, ctx, depth):  # O(n) | one segment: nested bodies, redirects
         scr0 = dict(st.shared["scripts"])  # the recorded texts before this write drops its own (#884) | O(s)
         prior = dict(st.shared["scripts"]) if r.op == ">>" and seg.heredocs else {}  # the text this call recorded before an append (#780) | O(s)
         v = _check(tgt, c.inn, st, ctx, None, r.glob, not r.bare)  # O(d * p)
-        if v is not None and v.kind == "code" and not r.glob and len(c.inn) == 1 and c.inn[0] is not None and "$" not in tgt and "`" not in tgt:  # a literal target from one known folder | O(1)
-            ok, why = _housekeeping(v, ctx, False, write=True, wrote=before, raw=_raw(tgt, c.inn[0]))  # O(git)
+        lit = tgt  # the target as written, or its expansion when a known variable fills it (#1070) | O(1)
+        if v is not None and "$" in tgt and "`" not in tgt:  # O(p + v)
+            lit = _expand(tgt, st, ctx, True, not r.bare)  # O(p + v)
+            if "$" in lit or "`" in lit or "?" in lit or _is_glob(lit):  # a part the guard does not know stays unknown | O(p)
+                lit = tgt  # O(1)
+        if v is not None and v.kind == "code" and not r.glob and len(c.inn) == 1 and c.inn[0] is not None and "$" not in lit and "`" not in lit:  # a literal target from one known folder | O(1)
+            ok, why = _housekeeping(v, ctx, False, write=True, wrote=before, raw=_raw(lit, c.inn[0]))  # O(git)
             if ok:  # O(1)
                 v = None  # O(1)
             else:  # O(1)
@@ -2576,6 +2581,7 @@ MESSAGES = {  # O(1)
              "- New code belongs to an implementer task. You may write only docs/plans/**, docs/*/plans/**, SPEC*.md, "
              "docs/**/*.md, docs/** images (png, jpg, jpeg, gif, svg, webp), any docs.md and .superlite/**, rm a file or folder git "
              "does not track and no task Owns, and write or rm a git-ignored path no task Owns.",
+             "- Logs and command output: redirect them into {scratch}/ (for example > {scratch}/ios-test.log), or into a git-ignored folder no task Owns such as .build/, named literally or through a variable with one known value; a name built from $(...) stays unknown.",
              "- An inline build (the run's plan holds exactly one task): you may write that task's Owns yourself.",
              "- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; "
              "`sl render_edit restore` undoes it.",
@@ -2697,7 +2703,7 @@ def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every 
         if v.why:  # why the target is no housekeeping, right after the refused line | O(len)
             _err(f"Not housekeeping: {_flat(v.why, 300)}")  # O(len)
         if v.word:  # the word the guard could not resolve | O(len)
-            _err(_hint(v.word).replace("{scratch}", _scratch_hint(project, sd)))  # the way out for the cause, right before the word so the last lines stay as before | O(len)
+            _err((guard_tools.capture_hint(cmd, v.word) or _hint(v.word)).replace("{scratch}", _scratch_hint(project, sd)))  # the way out for the cause, right before the word so the last lines stay as before | O(len)
             _err(f"Unresolved word: {_flat(v.word, 500)}")  # O(len)
         if named:  # the absolute path on its own line; the last line stays `Blocked target: <rel>` as before | O(len)
             _err(f"Absolute target: {_flat(v.abs, 500)}")  # O(len)
