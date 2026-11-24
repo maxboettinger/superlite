@@ -1,0 +1,7 @@
+- start f17a795ee429ba9b9de57fd9a0d5976d97c3ea87
+- unblocked: dispatched T1 at 12:14:59; waiting on fixes: none
+- tests fast passed=58 failed=0 skipped=0 seconds=4.8
+- commit T1 1a0b1cad7c xcsift log lines dropped
+- commit T2 ffed40cd97 unittest output counted
+- tests fast passed=79 failed=0 skipped=0 seconds=9.0
+- tests full passed=13943 failed=0 skipped=12 seconds=557.7

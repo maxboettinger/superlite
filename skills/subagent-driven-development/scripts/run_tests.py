@@ -10,6 +10,7 @@ The test command comes from, in order: the project's `.superlite/test-cmd.json`,
 Every exit path leaves a summary: a usage error, an unknown task, a missing pytest, an unprepared tree or a crash (`run_tests crashed: ...`, exit 2) writes a red zero summary; `--wait` names a background run whose process died (its pid sits in `<summary>.pid`) and the log of one that timed out.
 A foreground full run also keeps its summary as `test-summary-full.json` beside the summary; no later fast, recorded or failed run overwrites it (#593). A `--fast` test file carrying a marker the project's addopts `-m` deselects runs with `-m "<marker> or (<addopts expr>)"` and says so on stderr; an explicit `-m` wins.
 A macOS `xcodebuild test` outside the desktop login session (`launchctl managername` not `Aqua`) stops before any run with an ENV-ERROR (exit 2); `SUPERLITE_GUI_CHECK=0` and `"lock": false` skip the check (#561).
+xcsift console log lines listed under errors[] never fail a run that exited 0 with no failed test: they surface as one `WARNING` (#1091); `python -m unittest` output (alone or chained with `&&`) is read for its `Ran N tests` counts and failing ids (#1092).
 A red xcodebuild run that never reached its test runner (testmanagerd) is the same ENV-ERROR stop, not a failing test (#561).
 A red pytest id in the output is placed at its file with its message and line when the file exists, else it stays `-::<id>: <message>` (B119).
 A red Swift (xcodebuild) run reports each failure at its file and line (`failure_sites`, #499); a counted `--fast` run limited to Swift files covers them, so a later green run closes those files' located failures and an uncounted run closes none.
@@ -2250,6 +2251,10 @@ def run_other(a, spec, paths, label, cwd=None, gate=None):  # one runner command
                 p = testcmd.merge_parsed([(d, testcmd.parse_output(strip_ansi(t), x.returncode)) for (d, t), (_, x) in zip(texts, results)])  # O(o)
             else:  # O(1)
                 p = testcmd.parse_output(strip_ansi(text), r.returncode)  # O(o)
+            if p.get("log_lines"):  # xcsift console log lines under errors[]: a warning, not a failure (#1091) | O(1)
+                note = f"xcsift listed {p['log_lines']} console log line(s) under errors[], not counted as failures: {p['log_line'][:120]}"  # O(len)
+                WARNING = f"{WARNING}; {note}" if WARNING else note  # O(1)
+                print(f"run_tests: WARNING: {note}", file=sys.stderr)  # O(len)
             counts = {"passed": p["passed"], "failed": p["failed"], "skipped": p["skipped"], "skipped_tests": list(p.get("skipped_names") or [])}  # O(sk)
             last = next((ln for ln in reversed(p["tail"]) if ln.strip()), "no output")  # O(1)
             files = {}  # O(1)
