@@ -19,6 +19,8 @@ import routing  # noqa: E402 | O(1)
 
 AGENTS = Path(__file__).resolve().parents[3] / "agents"  # O(1)
 SKILLS = Path(__file__).resolve().parents[2]  # O(1) the plugin's skills folder (scripts -> subagent-driven-development -> skills)
+RESEARCH_TIERS = {"1": ("sonnet", None), "sonnet": ("sonnet", None), "2": ("sonnet", "high"), "sonnet-high": ("sonnet", "high"),  # O(1) research tiers of fixing.md: tier -> (model, effort or None for the agent file's) (#1072)
+                  "3": ("opus", None), "opus": ("opus", None), "haiku": ("haiku", None)}  # O(1)
 ROLES = ("implementer", "fixer", "package-reviewer", "final-reviewer", "research", "checker", "writer")  # O(1)
 FIXER_AGENTS = {"1": "superlite:fixer-sonnet", "sonnet": "superlite:fixer-sonnet",  # O(1) tiers of fixing.md
                 "2": "superlite:fixer-sonnet-high", "sonnet-high": "superlite:fixer-sonnet-high",
@@ -69,9 +71,12 @@ def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS, ou
     `brief` makes an implementer a one-turn, pool-less worker with no prime; other roles ignore it."""
     if role not in ROLES:  # O(1)
         raise ValueError("unknown role %s; use %s" % (role, ", ".join(ROLES)))  # O(1)
-    pin = None  # the model the flags pin; None leaves it to the agent file | O(1)
+    pin = over = None  # the model the flags pin (None leaves it to the agent file) and an effort that replaces the agent file's | O(1)
     if role == "implementer":  # O(1)
         pin = tier or "sonnet"  # O(1)
+        names = sorted(set(cfg.get("tiers", {})) | {"sonnet", "haiku", "opus"})  # O(t log t)
+        if pin not in names:  # O(t)
+            raise ValueError("implementer tier must be " + ", ".join(names[:-1]) + " or " + names[-1])  # O(t)
         agent = routing.tier_agent(cfg, pin)  # O(1)
     elif role == "fixer":  # O(1)
         if tier is not None and tier not in FIXER_AGENTS:  # O(1)
@@ -79,7 +84,9 @@ def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS, ou
         agent = FIXER_AGENTS[tier or "sonnet"]  # O(1)
     elif role == "research":  # O(1)
         agent = "superlite:researcher"  # O(1)
-        pin = tier or "sonnet"  # O(1) researchers default to sonnet
+        if tier and tier not in RESEARCH_TIERS:  # O(1)
+            raise ValueError("research tier must be 1, 2, 3, sonnet, sonnet-high, opus or haiku")  # O(1)
+        pin, over = RESEARCH_TIERS[tier or "sonnet"]  # researchers default to sonnet | O(1)
     elif role == "writer":  # O(1)
         if not output:  # O(1)
             raise ValueError("writer needs an output file (the brief's Output: line)")  # O(1)
@@ -96,7 +103,7 @@ def launch(role: str, tier: str | None, cfg: dict, agents_dir: Path = AGENTS, ou
             raise ValueError(NO_TIER % role)  # O(1)
         agent = REVIEWERS[role]  # O(1)
     fm = frontmatter(agent, agents_dir)  # O(f)
-    effort = fm.get("effort") or None  # O(1)
+    effort = (over if role == "research" else None) or fm.get("effort") or None  # O(1)
     argv = ["--agent", agent] + (["--model", pin] if pin else []) + (["--effort", effort] if effort else []) + (RESEARCH_TAIL if role == "research" else TAIL)  # O(1)
     if role == "writer":  # only the one output file is writable; every other write is a dialog the fleet hook refuses | O(1)
         argv = argv[:-len(TAIL)] + ["--permission-mode", "default", "--allowedTools", "Edit(/" + Path(output).as_posix() + ")",  # O(1)

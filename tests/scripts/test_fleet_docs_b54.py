@@ -11,7 +11,7 @@ def line_starting(prefix):
 
 
 def test_research_row_defaults_to_sonnet():
-    assert "| sonnet, low (`--tier haiku\\|opus` pins another model; with fleet off the in-process researcher keeps the agent file's haiku);" in line_starting("| `research` |")
+    assert "| sonnet, low (`--tier 1\\|sonnet` the default, `2\\|sonnet-high` sonnet at high effort, `3\\|opus` opus, `haiku` haiku; any other tier exits 2; with fleet off the in-process researcher keeps the agent file's haiku);" in line_starting("| `research` |")
 
 
 def test_researcher_reach_and_plan():
