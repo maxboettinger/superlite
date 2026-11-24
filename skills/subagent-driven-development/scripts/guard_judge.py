@@ -2585,6 +2585,7 @@ MESSAGES = {  # O(1)
              "- An inline build (the run's plan holds exactly one task): you may write that task's Owns yourself.",
              "- A throwaway edit to check a render: `sl render_edit start <file>` records it and allows the edit; "
              "`sl render_edit restore` undoes it.",
+             "- A project check that writes files (a reproduction or verification command such as `make record-fixtures`): give it to a checker as a `C<n>: run <command>; see: <what must hold>` line (fleet on: `sl fleet spawn --role checker --brief <file>`; fleet off: Agent `superlite:checker`); it runs the command in the run root, reports, and puts back what it wrote (agents/checker.md, Command checks).",
              "- A throwaway script (count lines, compare outputs, time a command): write it under {scratch}/ and run it from "
              "there. The folder is git-ignored and `sl orchestrator end` removes it; a run of a script there is judged like a "
              "heredoc script, so it may read the project but not write project code. A subprocess call whose program is "
