@@ -48,6 +48,7 @@ A worker whose spawner pins GH_CONFIG_DIR (a sealed golden lead) starts with the
 `spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F lies outside the project, the run folder and the plugin skills folder, or when F (with the plan's Global constraints) or a review spawn's `--note` names an existing path outside the project, the run folder and the plugin skills folder outside fenced code blocks; system folders such as /dev and /usr do not count (#1015).
 `spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F names the worker's own report file (`<run>/fleet/reports/<label>.md` or `.json`): fleet wait overwrites it with the worker's reply (#1094).
 A session's private state folder (`<superlite home>/sessions/<sid>.d/.superlite`) spawns its workers in the launch folder's git root (`$CLAUDE_PROJECT_DIR`, else the cwd; `state.project`), and its brief check judges paths against that project (#1088).
+A machine the project's `.superlite/placement.json` excludes is never placed, and `fleet spawn --machine` naming it exits 2 (#1096).
 """
 
 # Complexity notation:
@@ -1407,6 +1408,12 @@ def _spawn_cmd(a, sd, note, output, tmo, restore):  # the gate-to-send work of `
     if a.machine and (a.package or not (a.for_dispatch or a.for_review is not None or a.brief)):  # O(1)
         print("error: --machine works with --for-dispatch, --for-review Tn or a plain spawn (--role R --brief F)", file=sys.stderr)  # O(1)
         return 2  # O(1) before any pane
+    if a.machine:  # O(1)
+        import fleet_placement  # noqa: E402 | O(1) lazy
+        why = fleet_placement.machine_refusal(state.project(sd), a.machine)  # O(f * k)
+        if why:  # O(1)
+            print(why, file=sys.stderr)  # O(1)
+            return 2  # O(1) before any pane
     if (a.for_dispatch or a.for_review is not None or a.package) and a.plan and Path(a.plan).is_dir():  # a run folder names its plan file (#508) | O(d)
         import plan_tools as pt  # noqa: E402 | O(1) lazy
         try:  # O(1)
@@ -1595,8 +1602,13 @@ def main(argv=None):  # O(w) plus command cost
             print(f"placement: {a.mode}")  # O(1)
             return 0  # O(1)
         print(f"placement: {fs.load(sd).get('placement') or 'spread'}" + ("" if fp.enabled(sd) else " (off: machine.json names no remote_room and remote_tree, or the mode is local)"))  # O(w)
+        names, files, err = fp.excluded(state.project(sd))  # O(f * k)
+        if err:  # O(1)
+            print(f"excluded: {err}; every worker of this project stays local")  # O(1)
+        elif names:  # O(1)
+            print(f"excluded: {', '.join(sorted(names))} ({', '.join(str(f) for f in files)})")  # O(n)
         for label, info in fp.room(sd).items():  # O(m)
-            print(f"{label}: {info.get('state')} room {info.get('room') if info.get('room') is not None else '?'}")  # O(1)
+            print(f"{label}: {info.get('state')} room {info.get('room') if info.get('room') is not None else '?'}" + (" (excluded)" if label != "local" and fp.is_excluded(label, names) else ""))  # O(n)
         return 0  # O(1)
     if a.cmd == "on":  # O(1)
         raw = a.accounts or os.environ.get("SUPERLITE_FLEET_ACCOUNTS", "")  # O(1) flag wins over env
