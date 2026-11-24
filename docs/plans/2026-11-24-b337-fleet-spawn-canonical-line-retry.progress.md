@@ -1,0 +1,6 @@
+- start a637ee7dcc23b8373fae85b1f01408b6cf61ab5f
+- unblocked: dispatched T1 at 19:31:04; waiting on fixes: none
+- commit T1 4825ab49d7 canonical-mode refusal retried as no shell
+- tests fast passed=32 failed=0 skipped=0 seconds=3.8
+- commit T1 e64e273f3e canonical-mode refusal retried as no shell
+- tests full passed=14411 failed=0 skipped=12 seconds=644.8
