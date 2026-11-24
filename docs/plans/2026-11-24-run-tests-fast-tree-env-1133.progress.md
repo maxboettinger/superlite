@@ -1,0 +1,7 @@
+- start 9565c9bcf940ff65df2507b53d33aeac7013ed10
+- unblocked: dispatched T1 at 16:40:01; waiting on fixes: none
+- tests fast passed=17 failed=5 skipped=0 seconds=1.0
+- tests fast passed=82 failed=0 skipped=0 seconds=15.9
+- commit T1 3972290d6b per-tree uv env for nested trees
+- tests fast passed=82 failed=0 skipped=0 seconds=15.4
+- tests full passed=14235 failed=0 skipped=12 seconds=351.2

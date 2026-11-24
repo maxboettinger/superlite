@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run pytest, parse the junit XML, print one summary line.
 
-A `--fast` path that maps to no test filter (a Swift file in no test target under an `{only_testing}` or `{names}` template) is named and skipped, and a run left with no path exits 2, never the unfiltered suite (#1119); the Node `node_modules` guard looks in the run root and its parents up to the repository top, and a `uv run --no-project` test command with no Python environment runs in the project's (#1120).
+A `--fast` path that maps to no test filter (a Swift file in no test target under an `{only_testing}` or `{names}` template) is named and skipped, and a run left with no path exits 2, never the unfiltered suite (#1119); the Node `node_modules` guard looks in the run root and its parents up to the repository top, and a `uv run --no-project` test command with no Python environment runs in the project's (#1120); one whose only environment is a .venv above the tree or project root (a worktree nested in the main checkout) runs in that root's own `uv run --frozen --project` environment (#1133).
 
     run_tests.py [--fast PATHS... | --full | --affected [--base REV] [--files F...]] [--log PATH] [--ledger PATH]
                  [--summary PATH] [--background] [-m EXPR]
