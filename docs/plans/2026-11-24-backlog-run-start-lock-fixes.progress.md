@@ -1,0 +1,28 @@
+- start e903fa87464d79a94bab615dc5c80eddf606004c
+- unblocked: dispatched T1 T2 T3 T4 at 15:03:20; waiting on fixes: none
+- tests fast passed=0 failed=4 skipped=0 seconds=0.7
+- tests fast passed=9 failed=0 skipped=0 seconds=0.3
+- tests fast passed=0 failed=6 skipped=0 seconds=0.4
+- tests fast passed=1 failed=3 skipped=0 seconds=0.2
+- tests fast passed=12 failed=3 skipped=0 seconds=0.4
+- tests fast passed=4 failed=0 skipped=0 seconds=0.2
+- tests fast passed=31 failed=0 skipped=0 seconds=0.4
+- tests fast passed=50 failed=0 skipped=0 seconds=1.2
+- commit T1 c82287a652 triage brief main_steps names Jira keys
+- commit T2 39ea6e564d ship lock queue keeps a polling waiter's place
+- commit T3 77d2fac74c backlog run waits for room at cap 0
+- commit T4 188a7840a0 sl backlog note FILE stores the note and starts nothing
+- tests fast passed=9 failed=4 skipped=0 seconds=0.4
+- tests fast passed=59 failed=0 skipped=0 seconds=1.4
+- tests fast passed=35 failed=0 skipped=0 seconds=0.5
+- tests fast passed=23 failed=2 skipped=0 seconds=0.6
+- tests fast passed=25 failed=0 skipped=0 seconds=0.5
+- commit T5 d4d0625f48 docs name sl backlog note and the room wait
+- tests fast passed=25 failed=0 skipped=0 seconds=0.4
+- tests full passed=14099 failed=1 skipped=12 seconds=666.1
+- tests fast passed=6 failed=1 skipped=0 seconds=1.0
+- tests fast passed=7 failed=0 skipped=0 seconds=1.1
+- Ruling: T5 also commits tests/scripts/test_doc_contract_parsers.py - final-review fix outside every Owns
+- commit T5 5d381ec9e0 docs name sl backlog note and the room wait
+- tests full passed=14100 failed=0 skipped=12 seconds=563.1
+- tests fast passed=4 failed=0 skipped=0 seconds=20.6
