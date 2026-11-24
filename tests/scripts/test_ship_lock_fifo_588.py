@@ -36,7 +36,7 @@ def test_dead_waiter_is_skipped(tmp_path):
     sl.acquire(p, B2, LIVE, 2000)
     sl.acquire(p, B3, LIVE, 3000)
     sl.release(p, "B1")
-    assert sl.acquire(p, B3, {"a4"}, 4000)["acquired"]
+    assert sl.acquire(p, B3, {"a4"}, 2001 + sl.LIVE_GRACE_MS)["acquired"]
 
 
 def test_unseen_waiter_expires(tmp_path):

@@ -27,7 +27,7 @@ def test_status_note_names_characters():
     note = {"text": text, "file": "/m/rules.md", "time": "T"}
     assert bs.note_line({"note": note}) == (
         "note: 2 lines (1450 of 2000 characters) from /m/rules.md (T) go into every lead brief "
-        "(sl backlog start --note FILE replaces it, an empty file clears it)")
+        "(sl backlog note FILE replaces it, an empty file clears it)")
 
 
 def test_start_note_names_characters():

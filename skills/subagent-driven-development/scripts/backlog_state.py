@@ -315,7 +315,7 @@ def note_line(data: dict):
         return None
     n = len(nt["text"].split("\n"))
     return (f"note: {n} line{'' if n == 1 else 's'} ({len(nt['text'])} of {NOTE_MAX} characters) from {nt.get('file')} ({nt.get('time')}) go into every lead brief "
-            "(sl backlog start --note FILE replaces it, an empty file clears it)")
+            "(sl backlog note FILE replaces it, an empty file clears it)")
 
 
 def park(data: dict, bid: str, reason: str) -> str:

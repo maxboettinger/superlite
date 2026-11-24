@@ -21,7 +21,7 @@ STANDING: dict = {}  # O(1) set by backlog.py's start route: note text and the o
 ROOT_DOC_RULE = ("A file your issues need outside this list is never dropped: if no open batch lists it (a shared root doc such as "
                  "CLAUDE.md, AGENTS.md or README.md too), edit it and name it in .superlite/notes.md; if another open batch lists it, "
                  "write the needed change into .superlite/notes.md as a follow-up.")  # O(1)
-NOTE_HEAD = ("Standing note from main (sl backlog start --note): follow it, and copy it into every brief and task message "
+NOTE_HEAD = ("Standing note from main (sl backlog note): follow it, and copy it into every brief and task message "
              "you give a worker:")  # O(1)
 REF_CAP = (50 * 1024 * 1024, 5000)  # O(1) bytes and files copied per note
 REF_SKIP = {".git", "node_modules", ".build", "DerivedData", ".venv", "venv", "__pycache__"}  # O(1)
@@ -480,6 +480,10 @@ def pinned_line(head, version):  # O(len)
             f"work already on the default branch{where} is not missing.")  # O(1)
 
 
+def triage_run(jira):  # O(1)
+    return TRIAGE_RUN if not jira else TRIAGE_RUN.replace('{"issues": [<n>], ', '{"issues": ["<KEY>"], ')  # O(len)
+
+
 def triage_brief(issues, ctx):  # O(i)
     read = "The bodies and each issue's latest comments are quoted" if any("comments" in i for i in issues) else "The bodies are quoted"  # O(i)
     out = ["# Triage brief",
@@ -507,7 +511,7 @@ def triage_brief(issues, ctx):  # O(i)
     pin = ctx.get("pinned")  # O(1) {"head", "version"} only when main pinned the issues (#622)
     if pin is not None:  # O(1)
         out.append(pinned_line(pin.get("head"), pin.get("version")))  # O(1)
-    out.append("Rules: " + SPEC_TRIAGE + ROOT_DOC_TRIAGE + TRIAGE_RUN + "no two batches share a file unless one depends on the other or both list it in append_only (" + APPEND_TRIAGE + "); list every repo-relative file a batch "
+    out.append("Rules: " + SPEC_TRIAGE + ROOT_DOC_TRIAGE + triage_run(jira) + "no two batches share a file unless one depends on the other or both list it in append_only (" + APPEND_TRIAGE + "); list every repo-relative file a batch "
                "touches (at least one file per batch); depends lists a batch that must ship first, only when the two batches share a file or an issue\'s text names the order, as "
                "{\"id\": \"<batch>\", \"why\": \"<the shared file, or the issue words that name the order; one line, at most 80 characters, no batch ids>\"}; "
                "plan drops a dependency with neither a shared file nor a why, since every dependency keeps a lead idle until the other batch ships; decisions lists each batch's major decisions, one "

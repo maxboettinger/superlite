@@ -4,7 +4,7 @@ import pytest
 from test_backlog_cli import bk, cli, load, bs, bl  # noqa: F401
 import backlog_brief as real_brief
 
-HELP = "  --note FILE  standing note: FILE's text (at most 2000 characters) goes into every lead brief from now on; an empty file clears it (backlog.py)"
+HELP = "  --note FILE  standing note: FILE's text (at most 2000 characters) goes into every lead brief from now on; an empty file clears it; sl backlog note FILE stores it without starting a batch (backlog.py)"
 
 
 @pytest.fixture

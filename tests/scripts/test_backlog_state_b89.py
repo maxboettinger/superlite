@@ -73,7 +73,7 @@ def test_set_note_stores_and_clears():
 def test_status_shows_note():
     note = {"text": "a\nb", "file": "/m/rules.md", "time": "T"}
     line = ("note: 2 lines (3 of 2000 characters) from /m/rules.md (T) go into every lead brief "
-            "(sl backlog start --note FILE replaces it, an empty file clears it)")
+            "(sl backlog note FILE replaces it, an empty file clears it)")
     assert bs.note_line({"note": note}) == line
     assert bs.note_line({}) is None and bs.note_line({"note": {"text": 5}}) is None
     assert bs.status_lines(data(note=note))[-1] == line
