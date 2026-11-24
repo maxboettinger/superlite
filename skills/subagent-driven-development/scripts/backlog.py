@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|run|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585); unskip <issue> and reset B [--discard] undo a skip and a started batch, --help lists every subcommand, a status with only parked batches ends with next:, decide --file takes the one answer rule (a label, or a label plus a note) and a pinned skipped issue names unskip, and plan offers sl backlog ship B done --pr N for a batch whose issues a merged PR already names (#586); a file two batches only append to (append_only) shows an overlap line without a hold, and `notes B` prints a batch's notes through ship (#602); plan --issues reads a pinned GitHub issue the lagging open-issue list misses by number, plans the found pins and prints a not-found line for the rest beside the batch table (#776)."""
+"""sl backlog: status, plan (triage worker proposes batches, or plan --proposal FILE applies a kept or repaired proposal through the same checks, no worker; over-long question texts are shortened and named; a plan clears the ship approval and lists left-out issues), decide (Max's answers; decide --print --batch cuts a lead's question like plan), skip <issue>, plan --jql/--issues reads a Jira backlog through acli, plan --issues also pins GitHub numbers (362,#433), issues an earlier cap left out are ranked first and named in the brief (#433), park <batch> --reason R; a plan refused by planned or parked batches names --reset, and status with no batch open ends with next: sl backlog plan (#369); a plan records its round, status counts the shipped batches of earlier rounds in one line and status --all lists them (#406); start|wait|run|answer and ship are routed; plan --issues X --add plans an urgent issue next to open batches and keeps running ones and the ship approval (#505); start --note FILE stores a standing note every lead brief carries (#504); tell B --text T messages a running lead (#487); decide --file records who answered (by: user, main or a per-question map, #477) and decide --approve-ship --source prompt records an approval the user's prompt gave; skip also takes an issue out of a parked batch and stops a parked batch's lead once it is empty (#506); plan accepts the triage worker's own proposal (any batch id, depends on open batches, topic case slugged and named, #583), plans one pinned issue that names tracked files without a worker, and with --add prints only the batches it added and keeps the ship approval even when no batch is open (#583, #584); plan leaves out issues already shipped (a shipped batch, or a merged subject on the default branch; a pinned one is planned anyway), reads Jira keys the search missed by key, and status refreshes OPEN markers in one tracker query (#585); unskip <issue> and reset B [--discard] undo a skip and a started batch, --help lists every subcommand, a status with only parked batches ends with next:, decide --file takes the one answer rule (a label, or a label plus a note) and a pinned skipped issue names unskip, and plan offers sl backlog ship B done --pr N for a batch whose issues a merged PR already names (#586); a file two batches only append to (append_only) shows an overlap line without a hold, and `notes B` prints a batch's notes through ship (#602); plan --issues reads a pinned GitHub issue the lagging open-issue list misses by number, plans the found pins and prints a not-found line for the rest beside the batch table (#776); decide --print --batch B falls back to B's open plan questions when B has no lead question.json (#1073)."""
 # Complexity notation: i = open issues, b = batches, q = questions
 import argparse  # O(1)
 import copy  # O(1)
@@ -766,14 +766,23 @@ def cmd_decide(a) -> int:
         except (KeyError, TypeError, ValueError) as e:
             print(f"BLOCKED: unknown batch {a.batch}" if isinstance(e, KeyError) else f"BLOCKED: {a.batch} question.json unreadable: {e}")
             return 3
+        def plan_questions() -> int:  # O(q)
+            mine = [x for x in bs.open_questions(d) if x["question"].startswith(f"{a.batch}: ")]  # O(q)
+            if not mine:  # O(1)
+                print(f"{a.batch} has no open question")  # O(1)
+                return 0  # O(1)
+            shape, steps = bc.ask_shape({"questions": mine})  # O(q)
+            print(json.dumps(shape, indent=2))  # O(q)
+            for line in steps:  # O(q)
+                print(line, file=sys.stderr)  # O(1)
+            print(BY_LINE, file=sys.stderr)  # O(1)
+            return 0  # O(1)
         if not b.get("worktree"):
-            print(f"{a.batch} has no open question")
-            return 0
+            return plan_questions()  # O(q)
         try:
             q = json.loads((Path(b["worktree"]) / ".superlite" / "question.json").read_text())
         except FileNotFoundError:
-            print(f"{a.batch} has no open question")
-            return 0
+            return plan_questions()  # O(q)
         except (KeyError, TypeError, OSError, ValueError, RecursionError) as e:
             print(f"BLOCKED: {a.batch} question.json unreadable: {e}")
             return 3
