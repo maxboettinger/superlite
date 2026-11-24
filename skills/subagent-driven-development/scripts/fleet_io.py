@@ -19,14 +19,14 @@ report once (`claim`): a worker another wait collected prints `Wn T3 already col
 
 `send`/`keys` to a stopped or dead worker exit 2 naming a fresh `sl fleet spawn`; an `agent_not_found` reply marks the worker dead; `send --brief` remembers the brief
 for the respawn. `wait` ends a busy worker whose agent herdr no longer lists (probed every 10 s) as `Wn Tn DEAD (its agent is gone; no report)`.
-`send --brief` refuses, before any prompt, a brief its worker cannot read in full: a brief file outside the project, the run folder and the plugin skills folder, or one naming such a path (fleet.outside_paths on the file, which already holds the plan's Global constraints); a lead is not checked (#1024). Quoted text (fences, the standing-note block, a finding's quote) and paths missing on this machine are text; research may name a path the lead brief's research line lists (#1089).
+`send --brief` refuses, before any prompt, a brief its worker cannot read in full: a brief file outside the project, the run folder and the plugin skills folder, or one naming such a path (fleet.outside_paths on the file, which already holds the plan's Global constraints); and a brief naming the worker's own report file (#1094, #1107); a lead is not checked (#1024). Quoted text (fences, the standing-note block, a finding's quote) and paths missing on this machine are text; research may name a path the lead brief's research line lists (#1089).
 
 `wait` prints one line per finished worker (`W1 T3 DONE findings=0 <report json>`; a layer worker: `W3 layer-headless
 GREEN exit=0 <log>` plus its last log line), `BLOCKED-UI` plus the screen for a blocked one, and `TIMEOUT W2 ...` for the
 rest. A stop record ends the wait in any Herdr state when it holds a status; one without a status on a done or idle
 pane is UNKNOWN plus the last pane lines. A stop record whose transcript reads empty, or without the status its cut `last` line holds, is re-read for READ_MS (10 s), then reported UNKNOWN (transcript unread); the cut line is never the report. Its exit code is always 0. A report is written as `<id>.md` (the text) and `<id>.json` (`fleet_report.parse`);
 a one-turn worker (fixer, reviewer, research, layer) is stopped once its status is final.
-A turn that ends without a status (stop record, or a done/idle screen) is asked once per send for its report (`W1 T3 ASKED`, `asked` in fleet.json); the next miss is UNKNOWN. Leads are never asked.
+A turn that ends without a status (stop record, or a done/idle screen) is asked once per send for its report (`W1 T3 ASKED`, `asked` in fleet.json); the next miss is UNKNOWN; a stop whose last line is a sign-in error (`fleet_remote_account.signed_out_stop`) is BLOCKED-UI with the signed-out suffix and marks a local worker's account, never asked (#1108). Leads are never asked.
 A report with concerns adds ` concerns=N` to the wait line; a report with `Not run:` lines adds ` not_run=N` (a DONE becomes DONE_WITH_CONCERNS, an APPROVED partial; research and writer reports are exempt). `send WID --brief FILE --full` asks a final-reviewer worker for a full review (exit 2 for another role or without --brief).
 `send --brief` resends the brief once when Herdr reports agent_prompt_stalled; a second stall is the error.
 `send`, `send --brief` and `send --text` resend once after a stall, and after a slow Herdr reply ("timed out waiting for app response") unless the worker already shows `working`.
@@ -54,6 +54,7 @@ from pathlib import Path  # O(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import accounts  # noqa: E402 | O(1)
+import fleet_remote_account  # noqa: E402 | O(1)
 import fleet_report  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
 import findings  # noqa: E402 | O(1)
@@ -366,7 +367,7 @@ def review_brief(sd, plan, tasks, sl_path, superlite_root, package=None):  # the
     sd = Path(sd)  # O(1)
     plan_p = Path(plan).resolve()  # O(1)
     pl = pt.Plan.load(str(plan_p))  # O(L)
-    root = state.git_root(sd) or sd.parent  # O(d)
+    root = state.project(sd)  # O(d)
     commits = ledger_commits(sd / "progress.md")  # O(lines)
     files = list(dict.fromkeys(o for t in tasks for o in pl.by_id[t].owns))  # O(k*o)
     ids = ", ".join(tasks)  # O(k)
@@ -1096,7 +1097,7 @@ def _ask(sd, wid, w, after=0):  # ask a worker whose turn ended without a report
     return True  # O(1)
 
 
-def _blocked(sd, wid, w, screen=None):  # O(s + w)
+def _blocked(sd, wid, w, screen=None, signed_out=False):  # O(s + w)
     if screen is None:  # O(1)
         with _on(w.get("machine")):  # O(1)
             screen = hc.read_screen(fs.name_of(sd, wid, w), 40, "visible")  # O(s)
@@ -1105,7 +1106,7 @@ def _blocked(sd, wid, w, screen=None):  # O(s + w)
     fs.set_state(sd, wid, "blocked", w.get("task"))  # O(w)
     task = w.get("task") or wid  # O(1)
     pane_label(sd, wid, pane_title(sd, wid, task, "BLOCKED-UI"))  # O(w)
-    why = f" (signed out: account {w.get('account')} shows the Claude Code sign-in screen; sign in there, then respawn)" if accounts.sign_in_screen(screen) else ""  # O(s)
+    why = f" (signed out: account {w.get('account')} shows the Claude Code sign-in screen; sign in there, then respawn)" if signed_out or accounts.sign_in_screen(screen) else ""  # O(s)
     print(f"{wid} {task} BLOCKED-UI {sp}{why}")  # O(1)
     for line in [x for x in screen.splitlines() if x.strip()][-5:]:  # O(s)
         print(f"  {line}")  # O(1)
@@ -1153,7 +1154,7 @@ def brief_refusal(sd, brief, role="", plan=None):  # the #1015 error line when a
     import fleet_roles  # noqa: E402 | O(1)
     fl = _fleet()  # O(1)
     sd = Path(sd)  # O(1)
-    proj = state.git_root(sd) or sd.parent  # O(1)
+    proj = state.project(sd)  # O(d)
     real = Path(brief).resolve()  # O(1)
     if not any(real == b.resolve() or b.resolve() in real.parents for b in (Path(proj), sd, Path(fleet_roles.SKILLS))):  # O(1)
         return f"error: brief {real} is outside the project, the run folder and the plugin skills folder; a worker cannot read it: move it into {sd.resolve()}/briefs/ (#1015)"  # O(1)
@@ -1275,6 +1276,12 @@ def wait(sd, ids, timeout_ms, poll_s=2.0, clock=None, any_=False, wave=False, te
             reported = rec is not None and fleet_report.parse(text, label)["status"] != "UNKNOWN"  # O(len)
             ended = rec is not None and not reported and (st in ("done", "idle") or (st not in ("working", "blocked") and now - seen[wid]["first"] >= SETTLE_MS))  # O(1)
             if reported or ended:  # a stop record ends the wait in any herdr state once it holds a status | O(1)
+                if ended and fleet_remote_account.signed_out_stop(rec):  # a sign-in error ends the turn: BLOCKED-UI, never an ask (#1108) | O(l)
+                    if not w.get("machine"):  # O(1)
+                        _fleet().mark_signed_out(sd, w.get("account") or "")  # O(w)
+                    results.append(_blocked(sd, wid, w, signed_out=True))  # O(s + w)
+                    pending.remove(wid)  # O(w)
+                    continue  # O(1)
                 if ended and _ask(sd, wid, w, rec["t"]):  # asked once: the worker is busy again | O(w + len)
                     seen.pop(wid, None)  # O(1)
                     changed.pop(wid, None)  # O(1)
@@ -1412,6 +1419,10 @@ def main(argv=None):  # O(wait)
                 print(f"error: --full is for a final-reviewer worker ({a.wid} is {role})", file=sys.stderr)  # O(1)
                 return 2  # O(1)
             why = brief_refusal(sd, a.brief, role)  # before any prompt (#1024) | O(file)
+            if why:  # O(1)
+                print(why, file=sys.stderr)  # O(1)
+                return 2  # O(1)
+            why = _fleet().report_refusal(sd, a.brief, a.label or Path(a.brief).stem, state.project(sd)) if role != "lead" else None  # O(file)
             if why:  # O(1)
                 print(why, file=sys.stderr)  # O(1)
                 return 2  # O(1)

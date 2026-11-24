@@ -1,0 +1,15 @@
+- start e903fa87464d79a94bab615dc5c80eddf606004c
+- unblocked: dispatched T1 T2 at 15:00:25; waiting on fixes: none
+- tests fast passed=3 failed=6 skipped=0 seconds=0.7
+- tests fast passed=48 failed=0 skipped=0 seconds=0.7
+- tests fast passed=8 failed=1 skipped=0 seconds=0.4
+- tests fast passed=3 failed=0 skipped=0 seconds=0.2
+- tests fast passed=3 failed=0 skipped=0 seconds=0.2
+- tests fast passed=1 failed=2 skipped=0 seconds=0.2
+- tests fast passed=76 failed=0 skipped=1 seconds=1.3
+- commit T1 6fa0f25b3b send, review and wait rules in fleet_io
+- commit T2 b2fbe93bbf spawn's note check and a private folder's rules
+- tests fast passed=1 failed=0 skipped=0 seconds=0.0
+- tests fast passed=18 failed=0 skipped=0 seconds=0.4
+- commit T3 d68597ec58 fleet docs for the three rules
+- tests full passed=14094 failed=0 skipped=12 seconds=754.6
