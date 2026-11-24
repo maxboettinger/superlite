@@ -1927,25 +1927,13 @@ def base_skips(a):  # --base-skips: the full run's skipped ids run at the base c
 
 
 PYTEST_VALUE_OPTS = frozenset("-k -m -p -o -c -n -W -r --deselect --ignore --ignore-glob --rootdir --confcutdir --basetemp --junitxml --junit-xml --junit-prefix --maxfail --tb --durations --durations-min --log-level --log-file --log-file-level --log-cli-level --log-format --log-date-format --log-cli-format --cov --cov-report --cov-config --timeout --dist --import-mode --capture --override-ini --color --code-highlight --pastebin --maxprocesses --max-worker-restart --tx --rsyncdir --report-log --reruns --reruns-delay --randomly-seed --doctest-glob".split())  # O(1) pytest options that take the next word
-REMOTE_VALUE_OPTS = frozenset(("--host", "--timeout", "--kind", "--fetch"))  # O(1) maxapp remote options that take the next word
-REMOTE_FLAGS = frozenset(("--no-cache",))  # O(1)
 SHELL_OPS = frozenset("();<>|&")  # O(1)
 
 
-def _remote_at(words):  # O(w) index of `maxapp` in a `maxapp remote` command's words (after NAME=value words), else -1
-    i = 0  # O(1)
-    while i < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[i]):  # O(w)
-        i += 1  # O(1)
-    if i + 1 < len(words) and posixpath.basename(words[i]) == "maxapp" and words[i + 1] == "remote":  # O(1)
-        return i  # O(1)
-    return -1  # O(1)
-
-
-def is_remote_command(command: str) -> bool:  # True for a `maxapp remote ...` command: the full run went to another host | O(len)
-    try:  # O(1)
-        return _remote_at(shlex.split(command)) >= 0  # O(len)
-    except ValueError:  # O(1)
-        return False  # O(1)
+REMOTE_VALUE_OPTS = testcmd.REMOTE_VALUE_OPTS  # O(1) moved to testcmd (#1147)
+REMOTE_FLAGS = testcmd.REMOTE_FLAGS  # O(1)
+_remote_at = testcmd.remote_at  # O(1)
+is_remote_command = testcmd.is_remote_command  # O(1)
 
 
 def _has_shell_op(text):  # O(len) True when text holds an unquoted shell operator (or a quoted operator-only word)

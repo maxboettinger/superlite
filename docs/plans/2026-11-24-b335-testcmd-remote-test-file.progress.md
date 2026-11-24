@@ -1,0 +1,10 @@
+- start dd2ce624af6ed62ee7c441c41e8c5afa0005c93d
+- unblocked: dispatched T1 at 18:52:39; waiting on fixes: none
+- tests fast passed=3 failed=12 skipped=0 seconds=0.6
+- tests fast passed=49 failed=0 skipped=0 seconds=4.6
+- tests fast passed=39 failed=0 skipped=0 seconds=3.5
+- commit T1 bc2d392c54 remote test_file form in testcmd
+- tests fast passed=15 failed=1 skipped=0 seconds=0.5
+- tests fast passed=16 failed=0 skipped=0 seconds=0.4
+- commit T1 bc51970266 remote test_file form in testcmd
+- tests full passed=14386 failed=0 skipped=12 seconds=504.7

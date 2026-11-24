@@ -3,7 +3,7 @@
 
     testcmd.py [--fast PATHS...] [--root .]      print the resolved command as JSON
     testcmd.py --propose [--root .] [--shared] [--plan P]   print the proposed project test command, its target file and whether it exists
-    testcmd.py --write [--test CMD] [--test-file T] [--language L] [--root .] [--shared] [--plan P]   write the proposal to .superlite/test-cmd.json
+    testcmd.py --write [--test CMD] [--test-file T] [--language L] [--root .] [--shared] [--plan P]   write the proposal to .superlite/test-cmd.json (a maxapp remote test gets a maxapp remote test_file)
 The write target is the root's own .superlite/test-cmd.json; --shared writes the main checkout's instead, --plan P writes the run folder of plan P (and, without --root, takes its project as root).
 
 Order: (a0) a `.maxapp` file (`package` and `package_scheme` keys, `maxapp` on PATH) resolves to `maxapp test` below (a) and (a2), above (a3); (a) `.superlite/test-cmd.json` {"language","test","test_file","junit","setup","related"} (JSON; `test_file` is a template
@@ -16,7 +16,7 @@ vitest is a dependency, jest-junit's reporter when jest-junit is), go.mod, Cargo
 `not_code` in (a) is a list of globs of paths that are not code (read by not_code_globs, returned as spec["not_code"]).
 `cwd` in (a) is the folder, relative to the project root (`.` is the root), that run_tests runs `setup` and the test command in (run_tests.run_folder checks it; unset: the `.maxapp` package folder, else the root); resolve returns it as written as spec["cwd"], `""` when unset, so `sl testcmd` prints it.
 `{only_testing}` expands (to `--only <Target>/<Suite>` pairs in a `maxapp test` command) to one shell-quoted -only-testing:<Target>/<Suite> per suite the test files declare (XCTest and Swift Testing); the target comes from Xcode target membership and Package.swift test targets, else the folder name; a path in no test target runs the unfiltered `test` command.
-Library: resolve, unfiltered_paths (the --fast paths resolve would widen to the unfiltered `test` command, so run_tests can skip them, #1119), file_slot_note (a {file} typo for {files} in a config's test or test_file, said once per process), propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, select_affected (the test files a change touches, by changed file, name, related template, Swift module, test-map and mention; a shared-setup change selects everything), pytest_testpaths, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit), xcsift_summary (the `summary` object's int `passed_tests`, `failed_tests` and `skipped_tests` and the `failed_tests` entries of xcsift's JSON, when no raw xcodebuild lines were printed; summed over every summary block in the output, a block that counted tests keeps only errors with a line, #1076). Stdlib only.
+Library: remote_at, is_remote_command, remote_test_file (the maxapp remote form of test_file for a maxapp remote test, #1147), remote_note, resolve, unfiltered_paths (the --fast paths resolve would widen to the unfiltered `test` command, so run_tests can skip them, #1119), file_slot_note (a {file} typo for {files} in a config's test or test_file, said once per process), propose, config_target, write_config, resolve_related, swift_types, swift_suites (comments and string contents blanked first by strip_swift), swift_target_map, owning_test_target, only_testing, is_test_path, select_affected (the test files a change touches, by changed file, name, related template, Swift module, test-map and mention; a shared-setup change selects everything), pytest_testpaths, task_command, verify_paths, unrunnable, parse_output (best-effort counts and failing names without JUnit), xcsift_summary (the `summary` object's int `passed_tests`, `failed_tests` and `skipped_tests` and the `failed_tests` entries of xcsift's JSON, when no raw xcodebuild lines were printed; summed over every summary block in the output, a block that counted tests keeps only errors with a line, #1076). Stdlib only.
 """
 # Complexity notation:
 #   m = marker files checked, f = files walked for the Python test-file scan (bounded), o = output lines
@@ -934,6 +934,75 @@ def detect_maxapp(root: Path):  # `maxapp test` when .maxapp holds package and p
 
 def is_maxapp_command(command: str) -> bool:  # a segment starting with the maxapp word followed by test | O(len)
     return bool(MAXAPP_TEST.search(command or ""))  # O(len)
+
+
+REMOTE_VALUE_OPTS = frozenset(("--host", "--timeout", "--kind", "--fetch"))  # O(1) maxapp remote options that take the next word
+REMOTE_FLAGS = frozenset(("--no-cache",))  # O(1)
+
+
+def remote_at(words):  # O(w) index of `maxapp` in a `maxapp remote` command's words (after NAME=value words), else -1
+    i = 0  # O(1)
+    while i < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[i]):  # O(w)
+        i += 1  # O(1)
+    if i + 1 < len(words) and posixpath.basename(words[i]) == "maxapp" and words[i + 1] == "remote":  # O(1)
+        return i  # O(1)
+    return -1  # O(1)
+
+
+def is_remote_command(command: str) -> bool:  # True for a `maxapp remote ...` command: the full run went to another host | O(len)
+    try:  # O(1)
+        return remote_at(shlex.split(command)) >= 0  # O(len)
+    except ValueError:  # O(1)
+        return False  # O(1)
+
+
+def remote_test_file(test, test_file):  # the maxapp remote form of test_file for a maxapp remote test, else None (#1147) | O(len)
+    if not (isinstance(test, str) and isinstance(test_file, str) and test and test_file):  # O(1)
+        return None  # O(1)
+    if is_remote_command(test_file):  # O(len)
+        return None  # O(len)
+    try:  # O(1)
+        words = shlex.split(test)  # O(len)
+    except ValueError:  # O(1)
+        return None  # O(1)
+    i = remote_at(words)  # O(w)
+    if i < 0:  # O(1)
+        return None  # O(1)
+    kept: list[str] = []  # O(1)
+    j = i + 2  # O(1)
+    while j < len(words):  # O(w)
+        w = words[j]  # O(1)
+        if w in REMOTE_VALUE_OPTS:  # O(1)
+            if j + 1 >= len(words):  # O(1)
+                return None  # O(1)
+            if w in ("--host", "--timeout"):  # O(1)
+                kept += [w, words[j + 1]]  # O(1)
+            j += 2  # O(1)
+        elif w in REMOTE_FLAGS:  # O(1)
+            kept.append(w)  # O(1)
+            j += 1  # O(1)
+        else:  # O(1)
+            j += 1 if w == "--" else 0  # O(1)
+            break  # O(1)
+    rest = words[j:]  # O(w)
+    if not rest:  # no command after the options: maxapp remote runs the .maxapp `ci` key, so only the file form is added | O(1)
+        return shlex.join([*words[:i], words[i], "remote", *kept, "--kind", "file", test_file])  # O(len)
+    snippet = rest[0] if len(rest) == 1 else shlex.join(rest)  # O(len)
+    parts = _segments(snippet)  # O(len)
+    ops = parts[1::2]  # O(len)
+    steps = [p.strip() for p in parts[0::2][:-1]]  # O(len)
+    setup = " && ".join(steps) + " && " if ops and all(o == "&&" for o in ops) else ""  # O(len)
+    return shlex.join([*words[:i], words[i], "remote", *kept, "--kind", "file", setup + test_file])  # O(len)
+
+
+def remote_note(root) -> str:  # words an existing config's remote test with a local test_file (#1147) | O(m + f)
+    cfg, src, origin = config_source(Path(root))  # O(m + f)
+    if not isinstance(cfg, dict) or src not in ("test-cmd.json", "user"):  # O(1)
+        return ""  # O(1)
+    form = remote_test_file(cfg.get("test"), cfg.get("test_file"))  # O(len)
+    if form is None:  # O(1)
+        return ""  # O(1)
+    return f'{origin}: "test" runs through maxapp remote but "test_file" runs on this machine, so run_tests --fast runs here; to run it there too, set "test_file" to: {form}'  # O(1)
 
 
 def not_code_globs(cfg) -> list[str]:  # the config's "not_code" globs; anything but a list of strings is ignored with a note | O(g)
@@ -1914,12 +1983,18 @@ def main(argv=None):  # O(m + f)
         prop, target = propose(root), config_target(root, a.shared, a.plan)  # O(m + f)
         print(json.dumps({"proposal": prop["config"] if prop else None, "from": prop["from"] if prop else None,
                           "target": target.as_posix(), "exists": target.exists()}))  # O(1)
+        rnote = remote_note(root)  # O(m + f)
+        if rnote:  # O(1)
+            print(f"testcmd: {rnote}", file=sys.stderr)  # O(1)
         return 0  # O(1)
     if a.write:  # O(1)
         _, source, origin = config_source(root)  # O(m + f)
         target = config_target(root, a.shared, a.plan)  # O(d)
         if source == "test-cmd.json":  # O(1)
             print(f"testcmd: {origin} already sets the test command; nothing written", file=sys.stderr)  # O(1)
+            rnote = remote_note(root)  # O(m + f)
+            if rnote:  # O(1)
+                print(f"testcmd: {rnote}", file=sys.stderr)  # O(1)
             return 2  # O(1)
         if target.exists():  # O(1)
             print(f"testcmd: {target.as_posix()} exists; nothing written", file=sys.stderr)  # O(1)
@@ -1937,6 +2012,10 @@ def main(argv=None):  # O(m + f)
             cfg["test_file"] = a.test_file  # O(1)
         if a.language:  # O(1)
             cfg["language"] = a.language  # O(1)
+        form = remote_test_file(cfg.get("test"), cfg.get("test_file"))  # O(len)
+        if form:  # O(1)
+            cfg["test_file"] = form  # O(1)
+            print(f'testcmd: "test" runs through maxapp remote, so "test_file" does too: {form}', file=sys.stderr)  # O(1)
         if not cfg.get("test"):  # O(1)
             print("testcmd: nothing to write: no project test script, Makefile test target or marker file found; pass --test CMD", file=sys.stderr)  # O(1)
             return 1  # O(1)
@@ -1962,6 +2041,9 @@ def main(argv=None):  # O(m + f)
         note = seed_note(root)  # O(file)
         if note:  # O(1)
             print(f"testcmd: {note}", file=sys.stderr)  # O(1)
+        rnote = remote_note(root)  # O(m + f)
+        if rnote:  # O(1)
+            print(f"testcmd: {rnote}", file=sys.stderr)  # O(1)
     except UnknownTestName as e:  # O(1)
         print(f"testcmd: {e}", file=sys.stderr)  # O(1)
         return 2  # O(1)
