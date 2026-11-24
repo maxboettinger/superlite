@@ -5,7 +5,7 @@ Lock file `<superlite home>/locks/ship-<repo slug>.lock` = {batch, lead, agent, 
 operation holds an flock on `<lock>.guard`. A lock is stale when its agent is known and not live, or when it is older
 than 2 hours. An unreadable, broken or symlinked lock is read as holder `?` (never followed, never released).
 Waiters: `<lock>.queue` (JSON list of {batch, lead, agent, time, seen}) serves them first come first served (#588):
-a free lock goes to the queue head only; a waiter whose agent is gone, or unseen for 10 minutes, is dropped; a broken
+a free lock goes to the queue head only; a waiter whose agent Herdr no longer lists and that is unseen for 2 minutes, or any waiter unseen for 10 minutes, is dropped; a broken
 queue file reads empty; `release` also drops the batch's entry.
 Library: lock_path, acquire, release, holder. Stdlib only.
 """
@@ -21,6 +21,7 @@ from pathlib import Path  # O(1)
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 STALE_MS = 2 * 3600 * 1000  # O(1)
 QUEUE_STALE_MS = 600000  # a waiter unseen this long leaves the queue | O(1)
+LIVE_GRACE_MS = 120000  # a waiter unseen this long and missing from the Herdr agent list leaves the queue | O(1)
 
 
 def lock_path(repo, home=None):  # O(len(repo))
@@ -97,8 +98,8 @@ def _prune(q, holder_batch, live, now_ms):  # O(q)
     for e in q:  # O(q)
         agent = e.get("agent")  # O(1)
         seen = e.get("seen")  # O(1)
-        if agent not in (None, "?") and live is not None and agent not in live:  # O(1)
-            continue  # O(1) its agent is gone
+        if agent not in (None, "?") and live is not None and agent not in live and (not isinstance(seen, int) or now_ms - seen > LIVE_GRACE_MS):  # O(1)
+            continue  # O(1) its agent is gone and it stopped polling
         if not isinstance(seen, int) or now_ms - seen > QUEUE_STALE_MS or e.get("batch") == holder_batch:  # O(1)
             continue  # O(1)
         keep.append(e)  # O(1)
