@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "skills" / "subagent-driven-development" / "script
 
 import guard_judge  # noqa: E402
 from guard_judge import judge  # noqa: E402
+import guard_tools  # noqa: E402
 
 SL = str(ROOT / "skills" / "subagent-driven-development" / "scripts" / "sl")
 GIT_ENV = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE")}
@@ -93,8 +94,14 @@ def test_eval_block_names_print_then_run(proj, monkeypatch, capsys):
     cmd = f"W=$({SL} run_tests --full --background 2>&1 | grep '^wait:' | sed 's/^wait: //'); eval \"$W\""
     rc, err = _block(proj, cmd, monkeypatch, capsys)
     assert rc == 2
-    assert err[-3] == guard_judge.EVAL_HINT
+    assert err[-3] == guard_tools.RUN_TESTS_CAPTURE_HINT  # a wait line captured from sl run_tests output names the no-capture form (#1069)
     assert err[-2].startswith("Unresolved word: eval ")
+
+
+def test_eval_of_an_unknown_text_keeps_the_eval_hint(proj, monkeypatch, capsys):
+    rc, err = _block(proj, 'W=$(printf x); eval "$W"', monkeypatch, capsys)
+    assert rc == 2
+    assert err[-3] == guard_judge.EVAL_HINT
 
 
 def test_loop_built_list_names_the_also_form(proj, monkeypatch, capsys):

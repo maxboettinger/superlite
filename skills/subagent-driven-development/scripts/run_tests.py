@@ -1642,7 +1642,7 @@ def main(argv=None):  # O(X + T*d + B + F log F) + pytest run + one incident app
     a.started = time.time()  # before the runner reads any code: the summary's `started` (#101) | O(1)
     cwd = Path.cwd().resolve()  # O(1)
     a.cwd = cwd  # for the missing-path message, before to_root moves us | O(1)
-    root = project_root(cwd) if a.wait_path is None else None  # --wait paths are absolute | O(d)
+    root = project_root(cwd) if not a.wait_path else None  # --wait PATH is absolute; a bare --wait finds the shared pointer from the checkout root | O(d)
     if root is not None and root != cwd:  # O(1)
         to_root(a, argv, cwd, root)  # O(len argv + p)
     if a.base_skips:  # O(1)
