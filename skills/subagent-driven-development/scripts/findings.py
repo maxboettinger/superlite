@@ -424,7 +424,7 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str, also: list[str
           superlite_root: str | None = None, notes: list[str] | None = None) -> list[str]:
     """Write one fixer brief per owning task; return the `fixer ...` lines in plan task order."""
     sd = Path(sd).resolve()  # O(d)
-    root = Path(state.git_root(sd) or sd.parent)  # the project root, as fleet.py does | O(d)
+    root = Path(state.project(sd))  # the project root, as fleet.py takes it | O(d)
     plan = Path(plan).resolve()  # O(d)
     tasks = pt.Plan.load(str(plan)).tasks  # O(C+L)
     if not tasks:  # O(1)

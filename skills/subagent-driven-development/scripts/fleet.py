@@ -46,8 +46,10 @@ While the budget is paused (spend above the cap), every `spawn` that names a `--
 A remote dispatch write worker gets its pool.json entry, busy on its task, and `--for-dispatch` re-adds a lost one and drops a taskless one first, so a task is never sent twice (#1057).
 A worker whose spawner pins GH_CONFIG_DIR (a sealed golden lead) starts with the lead's `--settings <state>/gh-seal-settings.json` and `--plugin-dir <this checkout>` (#1049).
 `spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F lies outside the project, the run folder and the plugin skills folder, or when F (with the plan's Global constraints) or a review spawn's `--note` names an existing path outside the project, the run folder and the plugin skills folder outside fenced code blocks; system folders such as /dev and /usr do not count (#1015).
+The brief and note checks read quoted text as text (fenced blocks, the standing-note block, a finding's quote) and skip paths missing on this machine (`fleet_io.brief_outside`, #1089, #1107).
 `spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F names the worker's own report file (`<run>/fleet/reports/<label>.md` or `.json`): fleet wait overwrites it with the worker's reply (#1094).
 A session's private state folder (`<superlite home>/sessions/<sid>.d/.superlite`) spawns its workers in the launch folder's git root (`$CLAUDE_PROJECT_DIR`, else the cwd; `state.project`), and its brief check judges paths against that project (#1088).
+A private state folder outside the project gets `Read(//<sd>/**)` (and `Edit(//<sd>/**)` for every role but writer and research) in the worker's one --allowedTools list instead of `--add-dir`, so Claude Code shows no trust dialog for it (#1117).
 A machine the project's `.superlite/placement.json` excludes is never placed, and `fleet spawn --machine` naming it exits 2 (#1096).
 """
 
@@ -205,6 +207,26 @@ def outside_paths(text, project, sd, skills=None):  # path tokens of TEXT that e
         if any(real == b or b in real.parents for b in bases):  # O(1)
             continue  # O(1)
         out.append(tok)  # O(1)
+    return out  # O(1)
+
+
+def state_rules(argv, sd, role):  # a copy of argv with Read (and, but for writer and research, Edit) rules for the state folder SD in its one --allowedTools list (#1117) | O(n)
+    base = "Read(/" + Path(sd).as_posix() + "/**)"  # O(1)
+    rules = [base] if role in ("writer", "research") else [base, "Edit(/" + Path(sd).as_posix() + "/**)"]  # O(1)
+    out = list(argv)  # O(n)
+    new = [r for r in rules if r not in out]  # O(n)
+    if not new:  # O(1)
+        return out  # O(1)
+    if "--allowedTools" in out:  # the list ends at the next argument that starts with -- | O(n)
+        i = out.index("--allowedTools") + 1  # O(n)
+        while i < len(out) and not out[i].startswith("--"):  # O(n)
+            i += 1  # O(1)
+        out[i:i] = new  # O(n)
+    elif "--disallowedTools" in out:  # O(n)
+        i = out.index("--disallowedTools")  # O(n)
+        out[i:i] = ["--allowedTools", *new]  # O(n)
+    else:  # O(1)
+        out += ["--allowedTools", *new]  # O(1)
     return out  # O(1)
 
 
@@ -674,7 +696,10 @@ def _spawn(sd, plan, tier, project, cfg, env, role, after, output=None, brief=Fa
     try:  # a state dir outside the project (a worktree run) is not readable by default | O(1)
         sd.resolve().relative_to(Path(project).resolve())  # O(len)
     except ValueError:  # O(1)
-        argv += ["--add-dir", str(sd.resolve())]  # O(1)
+        if state.private(sd):  # a private folder gets rules, so Claude Code shows no trust dialog (#1117) | O(d)
+            argv = state_rules(argv, sd.resolve(), role)  # O(n)
+        else:  # O(1)
+            argv += ["--add-dir", str(sd.resolve())]  # O(1)
     record = {"name": name, "account": account, "agent": agent, "tier": tier or model, "model": model, "state": "starting", "task": None, "role": role, "one_turn": launch["one_turn"],  # O(1)
               "run_config": rcfg["id"], "launch": {"argv": argv, "env": wenv, "cwd": cwd}}
     if solo:  # O(1)
@@ -1731,7 +1756,7 @@ def main(argv=None):  # O(w) plus command cost
                 print(f"error: note not found: {Path(a.note).resolve()}", file=sys.stderr)  # O(1)
                 return 2  # O(1)
             note = Path(a.note).read_text(encoding="utf-8")  # O(file)
-            bad = outside_paths(note, state.project(sd), sd)  # O(file)
+            bad = importlib.import_module("fleet_io").brief_outside(note, state.project(sd), sd)  # O(file)
             if bad:  # O(1)
                 print(outside_error("note", Path(a.note).resolve(), bad, sd), file=sys.stderr)  # O(1)
                 return 2  # O(1)
