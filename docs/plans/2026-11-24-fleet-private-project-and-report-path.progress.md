@@ -1,0 +1,12 @@
+- start f7a89d09442ca1469a1472a364210dd0ed6ade67
+- unblocked: dispatched T1 T2 at 13:09:50; waiting on fixes: none
+- tests fast passed=0 failed=8 skipped=0 seconds=0.9
+- tests fast passed=8 failed=0 skipped=0 seconds=0.4
+- commit T1 926dcadcc7 state.project and fleet's project
+- commit T2 f10e64b763 the Agent-block hook names a private folder as PLAN again
+- tests fast passed=1 failed=9 skipped=0 seconds=0.3
+- tests fast passed=10 failed=0 skipped=0 seconds=0.3
+- commit T3 cb6f65fedb spawn refuses a brief naming its own report file
+- tests fast passed=18 failed=0 skipped=0 seconds=0.3
+- tests fast passed=4 failed=0 skipped=0 seconds=21.7
+- tests full passed=13974 failed=0 skipped=12 seconds=462.8
