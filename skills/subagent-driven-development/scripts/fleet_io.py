@@ -142,14 +142,23 @@ def steps_runs(steps):  # what a task's Steps line runs beyond its FAIL/PASS run
     return out  # O(1)
 
 
-def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + k*s)
+def claimed_files(ledger, tasks):  # the files the run's ledger rules to TASKS (`Ruling: Tn also commits F - why`), ledger order | O(c)
+    import commit_task as ct  # noqa: E402 | lazy | O(1)
+    return [f for f, t in ct.also_owned(ledger).items() if t in tasks]  # O(c)
+
+
+CLAIMED_NOTE = "(ruled to this task in the run's ledger by commit_task --claim or --also; commit_task commits them with this task)"  # O(1)
+
+
+def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet", ledger=None):  # O(n + k*s)
     plan = Path(plan).resolve()  # O(1)
     pl = pt.Plan.load(str(plan))  # O(L)
     mine = [pl.by_id[t] for t in tasks]  # O(k)
     ids = ", ".join(tasks)  # O(k)
     owns = [o for t in mine for o in t.owns]  # O(k*o)
     also = list(dict.fromkeys(f for t in mine if not t.repo for f in taskmod.also_touches(t) if f not in owns))  # O(k*block) Also-touches files, editable
-    others = list(dict.fromkeys(o for t in pl.tasks if t.id not in tasks for o in t.owns if o not in owns and o not in also))  # O(n*o*k) own files are never off limits, repeats dropped
+    claimed = [f for f in claimed_files(ledger, tasks) if f not in owns and f not in also] if ledger else []  # O(c + o)
+    others = list(dict.fromkeys(o for t in pl.tasks if t.id not in tasks for o in t.owns if o not in owns and o not in also and o not in claimed))  # O(n*o*k) own files are never off limits, repeats dropped
     ext = mine[0].repo if len(mine) == 1 else None  # dispatch never batches an external task | O(k*s)
     root_line = [] if ext else [f"ROOT={pt.stable_root(str(plan)).resolve().as_posix()}"]  # the run root, as build_prime.with_root writes it | O(d)
     out = [f"# Task{'s' if len(tasks) > 1 else ''} {ids}", "", f"SUPERLITE={superlite_root}", f"PLAN={plan}", *root_line, f"sl (type it literally in every command): {sl_path}"]  # O(1)
@@ -159,7 +168,7 @@ def task_message(plan, tasks, sl_path, superlite_root, tier="sonnet"):  # O(n + 
         out += ["Your task text: " + " and ".join(f"`{sl_path} task {t} --plan {plan}`" for t in tasks)]  # O(k)
     own_line = f"Owns (relative to the task's tree of {ext['root']}): {', '.join(mine[0].written_owns)}" if ext else f"Owns: {', '.join(owns)}"  # O(o)
     dont = "Do not touch: (nothing else is owned)" if not others else f"Do not touch: {', '.join(others)}" if tier == "haiku" else f"Do not touch: any other file ({len(others)} files belong to other tasks; the prime's task list names their owners)"  # O(n*o)
-    out += [own_line] + ([taskmod.also_line(also)] if also else []) + [dont]  # O(n*o)
+    out += [own_line] + ([taskmod.also_line(also)] if also else []) + ([f"Also edit (claimed): {', '.join(claimed)} {CLAIMED_NOTE}"] if claimed else []) + [dont]  # O(n*o)
     cmds = {t.id: testcmd.task_command(t.field_text("tests")) for t in mine} if not ext else {}  # O(k*s)
     tail = ", then run the printed `wait:` line in the foreground."  # O(1)
 
@@ -744,7 +753,7 @@ def send(sd, plan, wid, tasks, sl_path, superlite_root):  # O(w + n + k*s)
         _tel_dispatch(sd, wid, ",".join(tasks), tasks)  # O(k + w)
         return ",".join(tasks)  # O(k)
     tier = data["workers"][wid].get("tier", "sonnet")  # O(1)
-    msg = task_message(plan, tasks, sl_path, superlite_root, tier)  # O(n + k*s)
+    msg = task_message(plan, tasks, sl_path, superlite_root, tier, ledger=sd / "progress.md")  # O(n + k*s + c)
     sent = now_ms()  # O(1)
     with _on(data["workers"][wid].get("machine")):  # O(1)
         _prompt(fs.name_of(sd, wid, data["workers"][wid]), msg)  # O(len msg)
@@ -1148,24 +1157,34 @@ def brief_outside(text, project, sd, role=""):  # outside paths TEXT names that 
     return out  # O(1)
 
 
-def brief_refusal(sd, brief, role="", plan=None):  # the #1015 error line when a worker of ROLE could not read BRIEF in full (file outside, or a named outside path), else None; a lead is never checked (#1024); PLAN: the plan whose Global constraints spawn adds before it sends (#635, #1027) | O(file)
+def _brief_bad(sd, real, plan, role=""):  # the outside paths BRIEF (read at REAL, plus PLAN's Global constraints) names, role as brief_outside | O(file)
+    sd = Path(sd)  # O(1)
+    text = real.read_text(encoding="utf-8")  # O(file)
+    if plan is not None:  # O(1)
+        try:  # O(1)
+            text = _fleet().with_constraints(text, plan)  # O(L + len)
+        except Exception:  # noqa: BLE001 | a constraints error leaves the brief text alone | O(1)
+            pass  # O(1)
+    return brief_outside(text, state.project(sd), sd, role)  # O(len)
+
+
+def brief_reads(sd, brief, plan=None):  # the existing outside paths BRIEF (with PLAN's Global constraints) names, strict, no role | O(file)
+    return _brief_bad(sd, Path(brief).resolve(), plan)  # O(file)
+
+
+def brief_refusal(sd, brief, role="", plan=None, local=False):  # the #1015 error line when a worker of ROLE could not read BRIEF in full (file outside, or a named outside path), else None; a lead is never checked (#1024); PLAN: the plan whose Global constraints spawn adds before it sends (#635, #1027); a LOCAL research worker may name outside paths (#1158) | O(file)
     if role == "lead":  # O(1)
         return None  # O(1)
     import fleet_roles  # noqa: E402 | O(1)
-    fl = _fleet()  # O(1)
     sd = Path(sd)  # O(1)
     proj = state.project(sd)  # O(d)
     real = Path(brief).resolve()  # O(1)
     if not any(real == b.resolve() or b.resolve() in real.parents for b in (Path(proj), sd, Path(fleet_roles.SKILLS))):  # O(1)
         return f"error: brief {real} is outside the project, the run folder and the plugin skills folder; a worker cannot read it: move it into {sd.resolve()}/briefs/ (#1015)"  # O(1)
-    text = real.read_text(encoding="utf-8")  # O(file)
-    if plan is not None:  # O(1)
-        try:  # O(1)
-            text = fl.with_constraints(text, plan)  # O(L + len)
-        except Exception:  # noqa: BLE001 | a constraints error leaves the brief text alone | O(1)
-            pass  # O(1)
-    bad = brief_outside(text, proj, sd, role)  # O(len)
-    return fl.outside_error("brief", real, bad, sd.resolve()) if bad else None  # O(1)
+    if role == "research" and local:  # O(1)
+        return None  # O(1)
+    bad = _brief_bad(sd, real, plan, role)  # O(file)
+    return _fleet().outside_error("brief", real, bad, sd.resolve()) if bad else None  # O(1)
 
 
 def _refusal(sd, wid):  # why a send or keys to WID is refused (a stopped or dead worker), else None; an unknown worker is None | O(w)
@@ -1418,7 +1437,7 @@ def main(argv=None):  # O(wait)
             if a.full and role != "final-reviewer":  # before any prompt | O(1)
                 print(f"error: --full is for a final-reviewer worker ({a.wid} is {role})", file=sys.stderr)  # O(1)
                 return 2  # O(1)
-            why = brief_refusal(sd, a.brief, role)  # before any prompt (#1024) | O(file)
+            why = brief_refusal(sd, a.brief, role, local=machine_of(sd, a.wid) is None)  # before any prompt (#1024) | O(file)
             if why:  # O(1)
                 print(why, file=sys.stderr)  # O(1)
                 return 2  # O(1)

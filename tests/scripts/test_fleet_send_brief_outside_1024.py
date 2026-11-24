@@ -46,10 +46,19 @@ def test_send_refuses_brief_file_outside(world, capsys, tmp_path):
     assert prompts(world) == []
 
 
-@pytest.mark.parametrize("role", ["implementer", "fixer", "research", "writer", "checker", "package-reviewer", "final-reviewer"])
+@pytest.mark.parametrize("role", ["implementer", "fixer", "writer", "checker", "package-reviewer", "final-reviewer"])
 def test_every_worker_role_but_lead_is_checked(world, capsys, tmp_path, role):
     other = _other(tmp_path)
     setw(world, "W1", role=role)
+    b = _brief(world, f"Read {other}/spec.md.\nOutput: out.md\n")
+    assert io.main(["send", "W1", "--brief", str(b)]) == 2
+    assert f"{other}/spec.md; {TAIL}" in capsys.readouterr().err
+    assert prompts(world) == []
+
+
+def test_remote_research_worker_is_still_checked(world, capsys, tmp_path):
+    other = _other(tmp_path)
+    setw(world, "W1", role="research", machine="mxn")
     b = _brief(world, f"Read {other}/spec.md.\nOutput: out.md\n")
     assert io.main(["send", "W1", "--brief", str(b)]) == 2
     assert f"{other}/spec.md; {TAIL}" in capsys.readouterr().err

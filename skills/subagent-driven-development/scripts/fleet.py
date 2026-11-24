@@ -45,7 +45,7 @@ While the budget is paused (spend above the cap), every `spawn` that names a `--
 `spawn --role writer --brief F` needs an `Output: <file>` line in F: the writer may write only that file, inside the project or the run folder (#604).
 A remote dispatch write worker gets its pool.json entry, busy on its task, and `--for-dispatch` re-adds a lost one and drops a taskless one first, so a task is never sent twice (#1057).
 A worker whose spawner pins GH_CONFIG_DIR (a sealed golden lead) starts with the lead's `--settings <state>/gh-seal-settings.json` and `--plugin-dir <this checkout>` (#1049).
-`spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F lies outside the project, the run folder and the plugin skills folder, or when F (with the plan's Global constraints) or a review spawn's `--note` names an existing path outside the project, the run folder and the plugin skills folder outside fenced code blocks; system folders such as /dev and /usr do not count (#1015).
+`spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F lies outside the project, the run folder and the plugin skills folder, or when F (with the plan's Global constraints) or a review spawn's `--note` names an existing path outside the project, the run folder and the plugin skills folder outside fenced code blocks; system folders such as /dev and /usr do not count (#1015). A research worker on this machine may name any existing outside path; a remote one keeps the check; spawn keeps such a worker here (#1158).
 The brief and note checks read quoted text as text (fenced blocks, the standing-note block, a finding's quote) and skip paths missing on this machine (`fleet_io.brief_outside`, #1089, #1107).
 `spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F names the worker's own report file (`<run>/fleet/reports/<label>.md` or `.json`): fleet wait overwrites it with the worker's reply (#1094).
 A session's private state folder (`<superlite home>/sessions/<sid>.d/.superlite`) spawns its workers in the launch folder's git root (`$CLAUDE_PROJECT_DIR`, else the cwd; `state.project`), and its brief check judges paths against that project (#1088).
@@ -1787,10 +1787,20 @@ def main(argv=None):  # O(w) plus command cost
                     plan = orchestrator.plan_file(sd, a.plan)  # O(L)
                 except Exception:  # noqa: BLE001 | no readable plan: the brief alone is checked | O(1)
                     plan = None  # O(1)
-                why = importlib.import_module("fleet_io").brief_refusal(sd, a.brief, a.role, plan=plan)  # O(file)
+                fio = importlib.import_module("fleet_io")  # O(1)
+                local = a.role == "research" and a.machine in (None, "local")  # a remote research worker lacks the path (#1158) | O(1)
+                why = fio.brief_refusal(sd, a.brief, a.role, plan=plan, local=local)  # O(file)
                 if why:  # O(1)
                     print(why, file=sys.stderr)  # O(1)
                     return 2  # O(1)
+                if local and a.machine is None and fio.brief_reads(sd, a.brief, plan=plan):  # pin it to this machine (#1158) | O(file)
+                    a.machine = "local"  # O(1)
+                    try:  # O(1)
+                        import fleet_placement as fp  # noqa: E402 | O(1) lazy
+                        if fp.enabled(sd):  # O(w)
+                            print("placement: research worker stays local: its brief names paths outside the project that only this machine has (#1158)", file=sys.stderr)  # O(1)
+                    except Exception:  # noqa: BLE001 | no line | O(1)
+                        pass  # O(1)
                 why = report_refusal(sd, a.brief, a.label or Path(a.brief).stem, state.project(sd))  # O(file)
                 if why:  # O(1)
                     print(why, file=sys.stderr)  # O(1)

@@ -1,0 +1,17 @@
+- start 8f91add89352944b03fc68ce2bfd300268e20ac5
+- unblocked: dispatched T1 at 21:36:42; waiting on fixes: none
+- commit T1 bfd9939525 fleet_io claims and local research check
+- unblocked: dispatched T2 T3 at 21:38:32; waiting on fixes: none
+- tests fast passed=26 failed=0 skipped=0 seconds=0.7
+- tests fast passed=1 failed=3 skipped=0 seconds=1.6
+- tests fast passed=13 failed=0 skipped=0 seconds=2.7
+- commit T2 9eeffb3ae0 spawn side of research reads
+- commit T3 9246d050a7 remote claims and implementer rule
+- tests fast passed=33 failed=0 skipped=0 seconds=0.5
+- tests fast passed=13 failed=0 skipped=0 seconds=2.6
+- tests fast passed=5 failed=1 skipped=0 seconds=1.5
+- tests fast passed=37 failed=0 skipped=0 seconds=9.5
+- commit T3 5ab5f37298 remote claims and implementer rule
+- Ruling: T3 also commits skills/subagent-driven-development/scripts/fleet_remote_collect.py - F-T3-1: remote collect accepts ledger claims made after the spawn (#1156)
+- tests full passed=14461 failed=0 skipped=12 seconds=347.2
+- tests full passed=14463 failed=0 skipped=12 seconds=389.6
