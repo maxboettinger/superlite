@@ -8,6 +8,8 @@ checkout's `.venv` (main_checkout reads `.git` files, never runs git); project_c
 argv prefix: that interpreter, else `uv run --frozen --project root python` for a uv project, else ours.
 project_env(root) adds a note: the main checkout's .venv picked for a linked worktree or task tree is another checkout's, so a uv project root runs in its own uv run --frozen --project root environment and any other root keeps it with a note (#1140, #1133's rule).
 
+own_python(root) is project_python for callers that need an interpreter path (pt_review, probe_run): the main checkout's .venv picked for a linked worktree or task tree makes a uv project root sync its own .venv once (uv sync --frozen --project root, memo and lock per process) and use it; any other root, no uv or a failed sync keeps it with a note. tree_python(root, prog) prints that note to stderr once and returns the path (#1145).
+
 uv_project_env(command, root, cwd, environ): a `uv run --no-project` command that finds no Python environment
 (no VIRTUAL_ENV, no `.venv` in cwd or a parent) runs in the project's environment: rewritten to
 `--frozen --project root` for a uv project, else the main checkout's venv is exported (#1120).
@@ -37,6 +39,7 @@ import shutil  # O(1)
 import signal  # O(1)
 import subprocess  # O(1)
 import sys  # O(1)
+import threading  # O(1)
 from pathlib import Path  # O(1)
 
 
@@ -135,6 +138,62 @@ def project_env(root):  # O(d + P) PATH search
 def project_cmd(root):  # O(d + P) PATH search
     """argv prefix for the project's python (project_env without its note)."""  # O(1)
     return project_env(root)[0]  # O(d + P)
+
+
+SYNC_TIMEOUT = 300  # O(1) seconds one `uv sync` may take (#1145)
+_SYNCED = {}  # O(1) resolved root -> (interpreter, note) of the one uv sync this process ran for it (#1145)
+_SYNC_LOCK = threading.Lock()  # O(1) parallel probe workers wait for one sync, never start a second
+_NOTED = set()  # O(1) notes tree_python printed already
+
+
+def _sync_own_env(uv, root, py, base, tail):  # O(o) + one uv sync process, at most SYNC_TIMEOUT s
+    """Run `uv sync --frozen --project root` in root; (root/.venv's interpreter, note), or (py, a note naming why) when it fails (#1145)."""  # O(1)
+    here = os.path.abspath(root)  # O(d)
+    env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}  # the sync writes root/.venv, no other venv | O(env)
+    try:  # O(1)
+        r = run_tree([uv, "sync", "--frozen", "--project", str(root)], timeout=SYNC_TIMEOUT, cwd=str(root), env=env,  # O(o) + process spawn
+                     capture_output=True, text=True, encoding="utf-8", errors="replace")  # O(1)
+        lines = (r.stderr or r.stdout or "").strip().splitlines()  # O(o)
+        why = "" if r.returncode == 0 else (lines[-1].strip() if lines else f"exit {r.returncode}")  # O(1) uv's last line names the error
+    except subprocess.TimeoutExpired:  # O(1)
+        why = f"timed out after {SYNC_TIMEOUT} s"  # O(1)
+    except OSError as e:  # uv vanished or is not runnable | O(1)
+        why = str(e)  # O(1)
+    own = None if why else venv_python(Path(root) / ".venv")  # O(1)
+    if own:  # O(1)
+        return own, f"{base}; synced {here}'s own environment once: uv sync --frozen --project {here} (#1145)"  # O(1)
+    why = why or f"{os.path.join(here, '.venv')} holds no interpreter after the sync"  # O(1)
+    return py, f"{base}; uv sync --frozen --project {here} failed: {why[:200]}; {tail}"  # O(1)
+
+
+def own_python(root):  # O(d + P) stat calls and a PATH search; at most one uv sync per root per process
+    """(interpreter, note) for callers that need an interpreter path (pt_review, probe_run; #1145): project_python's pick, except that the main checkout's .venv picked for a linked worktree or task tree is another checkout's (#1140's rule): a uv project root syncs its own .venv once (uv sync --frozen --project root) and uses it; a root without uv.lock, no uv on PATH or a failed sync keeps that interpreter with a note."""  # O(1)
+    py = project_python(root)  # O(d) read through the module: the seam tests patch
+    other = other_checkout_python(root)  # O(d)
+    if other is None or py != other:  # O(1)
+        return py, ""  # O(1)
+    here = os.path.abspath(root)  # O(d)
+    base = f"{Path(other).parent.parent} is the main checkout's environment, outside {here}"  # O(1)
+    tail = f"this check may import that folder's package, not {here}'s (#1145)"  # O(1)
+    if not ((Path(root) / "uv.lock").is_file() and (Path(root) / "pyproject.toml").is_file()):  # O(1) two stats
+        return py, f"{base}, and {here} has no uv.lock for an environment of its own; {tail}"  # O(1)
+    uv = shutil.which("uv")  # O(P) PATH search
+    if not uv:  # O(1)
+        return py, f"{base}, and uv is not on PATH for {here}'s own environment; {tail}"  # O(1)
+    key = str(Path(root).resolve())  # O(d)
+    with _SYNC_LOCK:  # O(1) one sync per root, also with parallel callers
+        if key not in _SYNCED:  # O(1)
+            _SYNCED[key] = _sync_own_env(uv, root, py, base, tail)  # O(o) + one uv sync process
+        return _SYNCED[key]  # O(1)
+
+
+def tree_python(root, prog):  # O(d + P) plus own_python's one sync
+    """own_python's interpreter; its note goes to stderr as `<prog>: <note>`, once per process."""  # O(1)
+    py, note = own_python(root)  # O(d + P)
+    if note and note not in _NOTED:  # O(1)
+        _NOTED.add(note)  # O(1)
+        print(f"{prog}: {note}", file=sys.stderr)  # O(1)
+    return py  # O(1)
 
 
 def found_env(cwd):  # O(d) stat calls up the cwd parents; never runs uv
