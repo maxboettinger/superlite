@@ -1,0 +1,5 @@
+- start 74e5d33e9da22422e86e3e9a3ca58ca50dbe33cf
+- unblocked: dispatched T1 at 20:19:35; waiting on fixes: none
+- commit T1 75cb5d8c88 re-route keeps tier and id
+- tests fast passed=26 failed=0 skipped=0 seconds=1.1
+- tests full passed=14429 failed=0 skipped=12 seconds=607.9

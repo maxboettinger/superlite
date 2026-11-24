@@ -22,7 +22,8 @@ touches; a task brief says a hidden checkpoint leaves files modified in `git sta
 
 A finding of an `FR...` report needs a `quote` (the line it rests on): `screen` checks it against the file (a moved quote
 corrects the line), drops one that is not there (`UNVERIFIED ...` on stderr), merges findings with one fingerprint at the
-highest tier, drops a dismissed fingerprint (`DISMISSED ...`) and raises a repeat of an earlier routed finding by one tier.
+highest tier, drops a dismissed fingerprint (`DISMISSED ...`) and raises a finding a new report repeats by one tier (`repeat of <id>`), while a re-route of a report already routed for it
+(to add `--also` files) keeps its id and tier.
 Every screened finding is a row of `<sd>/findings.jsonl`. The briefs hold the project corrections after the standing note.
 
     findings.py dismiss FP --ruling TEXT --plan P     record that finding FP is not a defect (ledger row + progress ruling)
@@ -34,6 +35,7 @@ Library: route, screen, standing_note, main. Stdlib only.
 # Complexity notation:
 #   r = reports, k = findings overall, n = plan tasks, o = owned paths overall, f = files in <sd>/fixes and <sd>/briefs
 import argparse  # O(1)
+import hashlib  # O(1)
 import json  # O(1)
 import os  # O(1)
 import re  # O(1)
@@ -151,13 +153,19 @@ def one_line(s) -> str:  # O(s)
     return " ".join(str(s).split())  # O(s)
 
 
+def report_src(label: str, items) -> str:  # a report's source: its label and a hash of its findings list | O(k)
+    blob = json.dumps(items if isinstance(items, list) else [], sort_keys=True, ensure_ascii=False)  # O(k)
+    return f"{label}@{hashlib.sha256(blob.encode('utf-8')).hexdigest()[:12]}"  # O(k)
+
+
 def collect(reports: list[str], root: Path) -> list[dict]:  # O(r + k log k)
     """Findings of all reports, normalized and deduped on (file, line, problem); the first report wins."""
-    seen, out = set(), []  # O(1)
+    seen, out, kept = set(), [], {}  # O(1)
     for rp in reports:  # O(r) iterations
         data = load_report(rp)  # O(file)
         label = str(data.get("label") or Path(rp).stem)  # O(1)
         items = data.get("findings")  # O(1)
+        src = report_src(label, items)  # O(k_r)
         for it in items if isinstance(items, list) else []:  # O(k_r) iterations
             if not isinstance(it, dict) or not it.get("file"):  # O(1)
                 continue  # O(1)
@@ -171,11 +179,14 @@ def collect(reports: list[str], root: Path) -> list[dict]:  # O(r + k log k)
                 tier = 1  # O(1)
             f = {"file": rel(it["file"], root), "line": line, "problem": one_line(it.get("problem", "")),  # O(s)
                  "fix": one_line(it.get("fix", "")), "tier": tier, "label": label,  # O(s)
-                 "quote": one_line(it.get("quote") or "")}  # O(s)
+                 "quote": one_line(it.get("quote") or ""), "srcs": [src]}  # O(s)
             key = (f["file"], f["line"], f["problem"])  # O(1)
             if key not in seen:  # O(1)
                 seen.add(key)  # O(1)
                 out.append(f)  # O(1)
+                kept[key] = f  # O(1)
+            elif src not in kept[key]["srcs"]:  # O(1)
+                kept[key]["srcs"].append(src)  # O(1)
     return out  # O(1)
 
 
@@ -386,6 +397,7 @@ def _screen(found: list[dict], root: Path, rows: list[dict]) -> tuple[list[dict]
         if f["fp"] in merged:  # O(1)
             kept = merged[f["fp"]]  # O(1)
             kept["tier"] = max(kept["tier"], f["tier"])  # O(1)
+            kept["srcs"] = [*(kept.get("srcs") or []), *(s for s in (f.get("srcs") or []) if s not in (kept.get("srcs") or []))]  # O(s)
             for key in ("problem", "fix"):  # a different second defect or fix is kept, not lost | O(1)
                 extra = str(f.get(key) or "")  # O(s)
                 if extra and extra not in str(kept.get(key) or ""):  # O(s)
@@ -398,7 +410,15 @@ def _screen(found: list[dict], root: Path, rows: list[dict]) -> tuple[list[dict]
         if old and old.get("state") == "dismissed":  # O(1)
             notes.append(f"DISMISSED {f['fp']} {f['file']}:{f['line']} - {f['problem']} (ruled: {old.get('ruling', '')})")  # O(1)
             continue  # O(1)
-        if old:  # a repeat: one tier up, at most 3 | O(1)
+        seen = {s for r in rows if r.get("fp") == f["fp"] and r.get("state") == "routed" for s in (r.get("srcs") or [])}  # O(r)
+        if old and f.get("srcs") and set(f["srcs"]) <= seen and old.get("id"):  # a re-route of a routed report: id and tier kept (#1155) | O(k)
+            f["id"] = old["id"]  # O(1)
+            try:  # O(1)
+                f["tier"] = max(f["tier"], int(old.get("tier") or 1))  # O(1)
+            except (TypeError, ValueError):  # O(1)
+                pass  # O(1)
+            f["repeat"] = old.get("repeat") or ""  # O(1)
+        elif old:  # a repeat: one tier up, at most 3 | O(1)
             try:  # O(1)
                 f["tier"] = min(3, max(f["tier"], int(old.get("tier") or 1) + 1))  # O(1)
             except (TypeError, ValueError):  # O(1)
@@ -417,7 +437,7 @@ def screen(found: list[dict], root: Path, sd: Path) -> tuple[list[dict], list[st
 def _row(f: dict, rnd: int, state: str) -> dict:  # one ledger row | O(1)
     return {"round": rnd, "id": f.get("id", ""), "fp": f.get("fp") or fc.fingerprint(f["file"], f.get("quote", ""), f["problem"]),  # O(q)
             "file": f["file"], "line": f["line"], "problem": f["problem"], "tier": f["tier"], "label": f["label"],  # O(1)
-            "state": state, "reason": f.get("reason", "")}  # O(1)
+            "state": state, "reason": f.get("reason", ""), "srcs": list(f.get("srcs") or [])}  # O(1)
 
 
 def route(sd: Path, plan: Path, reports: list[str], sl_path: str, also: list[str] | None = None,  # O(r + k log k + n*o + f)
@@ -483,7 +503,7 @@ def route(sd: Path, plan: Path, reports: list[str], sl_path: str, also: list[str
         if not items:  # O(1)
             continue  # O(1)
         n = last_n(sd, tid)  # O(f)
-        for i, f in enumerate(items, n + 1):  # O(k_t) iterations
+        for i, f in enumerate([f for f in items if not f.get("id")], n + 1):  # O(k_t) iterations
             f["id"] = f"F-{tid}-{i}"  # O(1)
         tier = max(f["tier"] for f in items)  # O(k_t)
         brief = sd / "briefs" / f"fix-{items[0]['id']}.md"  # O(1)
