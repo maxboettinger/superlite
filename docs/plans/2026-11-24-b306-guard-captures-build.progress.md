@@ -1,0 +1,19 @@
+- start 0daf27a17c4a07cb4add766ee0c469ba7d09c979
+- unblocked: dispatched T2 T3 at 09:49:32; waiting on fixes: none
+- tests fast passed=0 failed=10 skipped=0 seconds=0.5
+- tests fast passed=0 failed=7 skipped=0 seconds=1.3
+- tests fast passed=10 failed=0 skipped=0 seconds=0.3
+- tests fast passed=19 failed=0 skipped=0 seconds=5.5
+- tests fast passed=45 failed=0 skipped=0 seconds=0.5
+- commit T2 50b75a06fb capture hint helper
+- commit T3 c3e44053e4 route --send and bare wait
+- tests fast passed=10 failed=0 skipped=0 seconds=0.2
+- tests fast passed=4 failed=6 skipped=0 seconds=0.8
+- tests fast passed=0 failed=1 skipped=0 seconds=0.4
+- tests fast passed=308 failed=1 skipped=0 seconds=13.5
+- tests fast passed=19 failed=0 skipped=0 seconds=4.8
+- tests fast passed=41 failed=1 skipped=0 seconds=2.5
+- tests fast passed=310 failed=0 skipped=0 seconds=13.1
+- commit T1 3ca68b979b guard: variable log targets and hint wiring
+- tests fast passed=310 failed=0 skipped=0 seconds=13.6
+- tests full passed=13726 failed=0 skipped=12 seconds=420.6
