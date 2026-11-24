@@ -1,0 +1,18 @@
+- start 9565c9bcf940ff65df2507b53d33aeac7013ed10
+- unblocked: dispatched T1 T2 T3 at 16:36:20; waiting on fixes: none
+- tests fast passed=15 failed=3 skipped=0 seconds=0.7
+- tests fast passed=5 failed=3 skipped=0 seconds=0.4
+- tests fast passed=23 failed=3 skipped=0 seconds=0.5
+- tests fast passed=26 failed=0 skipped=0 seconds=0.5
+- tests fast passed=33 failed=0 skipped=0 seconds=1.3
+- tests fast passed=0 failed=3 skipped=0 seconds=0.2
+- tests fast passed=3 failed=0 skipped=0 seconds=0.2
+- commit T1 ff13fd1351 plain spawn hands placement the brief
+- commit T2 9b37f0c37e research line drops the machine flag
+- commit T3 7a2c1e4e25 docs drop the machine flag for research
+- tests full passed=14230 failed=1 skipped=12 seconds=362.6
+- tests fast passed=9 failed=1 skipped=0 seconds=1.4
+- tests fast passed=10 failed=0 skipped=0 seconds=1.5
+- Ruling: T3 also commits tests/scripts/test_fleet_remote_login_1093.py - final-review fix outside every Owns
+- commit T3 5df109eca2 docs drop the machine flag for research
+- tests full passed=14231 failed=0 skipped=12 seconds=372.2
