@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import fleet_remote as fr  # noqa: E402 | O(1)
 import herdr_client as hc  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
+import fleet_io as fio  # noqa: E402 | O(1)
 import remote_apply  # noqa: E402 | O(1)
 
 
@@ -79,6 +80,13 @@ def _allowed(project, start, sha, owns):  # owns plus every changed path under t
     except (OSError, subprocess.SubprocessError):  # O(1)
         return list(owns)  # O(1)
     return [*owns, *(x for x in out.split("\0") if x.startswith("tests/regression/"))]  # O(f)
+
+
+def _owns(sd, rec, owns):  # owns plus the ledger's claims for the worker's task ids, made before or after the spawn (#1156) | O(c * o)
+    if owns is None:  # O(1)
+        return None  # O(1)
+    tasks = [t.strip() for t in str(rec.get("task") or rec.get("last_task") or "").split(",") if t.strip()]  # a batch label T1,T2 gives each id | O(k)
+    return [*owns, *(c for c in fio.claimed_files(sd / "progress.md", tasks) if c not in owns)]  # O(c * o)
 
 
 def _result(text):  # (sha or None, reason) once the output ends in an `exit N` line, None while it is incomplete | O(B)
@@ -159,7 +167,7 @@ def collect(sd, wid, report, sync=False):  # O(m + f)
     if sha != snap:  # O(1)
         return _blocked(report, f"fetched {sha} but the stop record names {snap}")  # O(1)
     try:  # O(1)
-        res = remote_apply.apply(project, remote["start"], sha, _allowed(project, remote["start"], sha, remote.get("owns")))  # O(f)
+        res = remote_apply.apply(project, remote["start"], sha, _allowed(project, remote["start"], sha, _owns(sd, rec, remote.get("owns"))))  # O(f)
     except (RuntimeError, OSError) as e:  # O(1)
         return _blocked(report, f"cannot apply {wid}'s work: {e}")  # O(1)
     if res["conflicts"]:  # O(1)

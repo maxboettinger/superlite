@@ -79,7 +79,7 @@ def test_spawn_refuses_brief_naming_outside_path(world, capsys, tmp_path):
     other = _other(tmp_path)
     brief = _brief(world, f"Read {other}/spec.md.\n")
     n = len(world.fh.calls)
-    assert fleet.main(["spawn", "--role", "research", "--brief", str(brief), "--plan", str(world.sd)]) == 2
+    assert fleet.main(["spawn", "--role", "implementer", "--brief", str(brief), "--plan", str(world.sd)]) == 2
     err = capsys.readouterr().err
     assert f"error: brief {brief.resolve()} names paths outside the project, the run folder and the plugin skills folder: {other}/spec.md; {TAIL}" in err
     assert len(world.fh.calls) == n
@@ -112,7 +112,7 @@ def test_global_constraints_are_checked_too(world, capsys, tmp_path):
     plan = make_plan(world.proj, [{"id": "T1", "owns": "src/a.py"}], header=f"\nGlobal constraints:\n- The spec is {other}/spec.md.\n")
     brief = _brief(world, "Answer the question.\n")
     n = len(world.fh.calls)
-    assert fleet.main(["spawn", "--role", "research", "--brief", str(brief), "--plan", str(plan)]) == 2
+    assert fleet.main(["spawn", "--role", "implementer", "--brief", str(brief), "--plan", str(plan)]) == 2
     assert f"{other}/spec.md; {TAIL}" in capsys.readouterr().err
     assert len(world.fh.calls) == n
 
@@ -169,7 +169,7 @@ def test_spawn_calls_fleet_io_brief_refusal(world, capsys, monkeypatch):
     fleet.main(["on"])
     import fleet_io
     seen = []
-    def stub(sd, brief, role="", plan=None):
+    def stub(sd, brief, role="", plan=None, local=False):
         seen.append((str(sd), str(brief), role, plan))
         return "error: stub refusal (#1027)"
     monkeypatch.setattr(fleet_io, "brief_refusal", stub)
@@ -193,6 +193,6 @@ def test_brief_and_constraint_paths_share_one_line(world, capsys, tmp_path):
     other = _other(tmp_path); (other / "notes.md").write_text("n")
     plan = make_plan(world.proj, [{"id": "T1", "owns": "src/a.py"}], header=f"\nGlobal constraints:\n- The spec is {other}/spec.md.\n")
     brief = _brief(world, f"Read {other}/notes.md.\n")
-    assert fleet.main(["spawn", "--role", "research", "--brief", str(brief), "--plan", str(plan)]) == 2
+    assert fleet.main(["spawn", "--role", "implementer", "--brief", str(brief), "--plan", str(plan)]) == 2
     assert f"the plugin skills folder: {other}/notes.md, {other}/spec.md; {TAIL}" in capsys.readouterr().err
     assert brief.read_text() == f"Read {other}/notes.md.\n"
