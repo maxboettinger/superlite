@@ -10,6 +10,7 @@ argv prefix: that interpreter, else `uv run --frozen --project root python` for 
 uv_project_env(command, root, cwd, environ): a `uv run --no-project` command that finds no Python environment
 (no VIRTUAL_ENV, no `.venv` in cwd or a parent) runs in the project's environment: rewritten to
 `--frozen --project root` for a uv project, else the main checkout's venv is exported (#1120).
+A .venv it finds only above root (a worktree nested in the main checkout, a task tree) is another checkout's: a uv project root runs --frozen --project root too, any other root keeps the command with a note (#1133).
 
 pytest_cmd(): command prefix that runs pytest. Uses the current interpreter when it can
 import pytest, else `uv run --no-project --with pytest python -m pytest`, else raises
@@ -101,6 +102,18 @@ def project_cmd(root):  # O(d + P) PATH search
     return [py]  # O(1)
 
 
+def found_env(cwd):  # O(d) stat calls up the cwd parents; never runs uv
+    """The first folder from cwd up whose .venv holds an interpreter (the one `uv run --no-project` uses), else None."""  # O(1)
+    here = Path(os.path.abspath(cwd))  # O(d) absolute, unresolved: notes keep the caller's spelling
+    return next((folder for folder in (here, *here.parents) if venv_python(folder / ".venv")), None)  # O(d)
+
+
+def inside(folder, root):  # O(d) two resolves
+    """True when folder is root or lies below it, both resolved (a symlinked spelling of the root counts)."""  # O(1)
+    top, here = Path(root).resolve(), Path(folder).resolve()  # O(d)
+    return here == top or top in here.parents  # O(d)
+
+
 NO_PROJECT = re.compile(r"(?<!\S)--no-project(?!\S)")  # O(1)
 PROGRAM_WORD = re.compile(r"^(python|python3(\.\d+)?|pytest|py\.test)$")  # O(1)
 UV_VALUE_OPTIONS = frozenset({"--with", "--python", "-p", "--group", "--extra", "--with-requirements", "--directory", "--project", "--env-file", "--index"})  # O(1)
@@ -128,15 +141,21 @@ def _no_project_uv(command):  # O(c) c = length of the command; True when it is 
 
 
 def uv_project_env(command, root, cwd, environ):  # O(c + d) command parse plus stat calls up the cwd parents; never runs uv or git
-    """(command, extra environ, note) for a `uv run --no-project` command with no reachable environment (#1120); else (command, {}, "")."""  # O(1)
+    """(command, extra environ, note) for a `uv run --no-project` command whose environment is missing (#1120) or another checkout's (#1133); else (command, {}, "")."""  # O(1)
     if not _no_project_uv(command) or environ.get("VIRTUAL_ENV"):  # O(c)
         return command, {}, ""  # O(1)
-    here = Path(cwd)  # O(1)
-    if any(venv_python(folder / ".venv") for folder in (here, *here.parents)):  # O(d) uv finds a .venv in cwd or a parent
-        return command, {}, ""  # O(d)
+    uv_project = (Path(root) / "uv.lock").is_file() and (Path(root) / "pyproject.toml").is_file()  # O(1) two stats
+    flags = f"--frozen --project {shlex.quote(str(root))}"  # O(1)
+    folder = found_env(cwd)  # O(d) the environment uv would use
+    if folder is not None:  # O(1)
+        if inside(folder, root):  # the root's or its run folder's own environment | O(d)
+            return command, {}, ""  # O(1)
+        base = f"uv run --no-project would use {folder / '.venv'}, which lies outside {root}"  # another checkout's: a nested worktree or tree (#1133) | O(1)
+        if uv_project:  # O(1)
+            return NO_PROJECT.sub(flags, command, count=1), {}, f"{base}; running in {root}'s own environment: uv run {flags} (#1133)"  # O(c)
+        return command, {}, f"{base}, and {root} has no uv.lock for an environment of its own; the tests may import that folder's package, not {root}'s (#1133)"  # O(1)
     base = f"uv run --no-project finds no environment from {cwd}"  # O(1)
-    if (Path(root) / "uv.lock").is_file() and (Path(root) / "pyproject.toml").is_file():  # O(1) two stats
-        flags = f"--frozen --project {shlex.quote(str(root))}"  # O(1)
+    if uv_project:  # O(1)
         return NO_PROJECT.sub(flags, command, count=1), {}, f"{base}; running in the project's environment: uv run {flags} (#1120)"  # O(c)
     py = found_python(root)  # O(d)
     if py:  # O(1)

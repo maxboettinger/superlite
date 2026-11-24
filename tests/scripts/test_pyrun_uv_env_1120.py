@@ -51,11 +51,14 @@ def test_virtual_env_set_leaves_command(tmp_path):
     assert _pyrun.uv_project_env(CMD, root, root, {"VIRTUAL_ENV": "/v"}) == (CMD, {}, "")
 
 
-def test_parent_venv_leaves_command(tmp_path):
+def test_parent_venv_runs_project_env(tmp_path):
     touch(tmp_path / "m", ".venv/bin/python")
     wt = tmp_path / "m" / "wt"
     uv_project(wt)
-    assert _pyrun.uv_project_env(CMD, wt, wt, {}) == (CMD, {}, "")
+    cmd, env, note = _pyrun.uv_project_env(CMD, wt, wt, {})
+    assert cmd == f"uv run --frozen --project {wt} --with pytest python -m pytest a.py -q"
+    assert env == {}
+    assert note.endswith("(#1133)")
 
 
 def test_main_checkout_venv_exported(tmp_path):
