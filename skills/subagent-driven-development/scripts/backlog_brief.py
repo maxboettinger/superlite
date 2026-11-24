@@ -27,19 +27,21 @@ REF_CAP = (50 * 1024 * 1024, 5000)  # O(1) bytes and files copied per note
 REF_SKIP = {".git", "node_modules", ".build", "DerivedData", ".venv", "venv", "__pycache__"}  # O(1)
 REF_COPIED = "Standing note: {n} outside path(s) copied into {ref}/; the note above names the copies, read-only references (#1067)."  # O(1)
 REF_SKIPPED = "Standing note: not copied, so a worker cannot read them; keep them out of worker briefs: {items} (#1067)."  # O(1)
-REF_READ = "Standing note: a research worker may read these outside paths read-only; name them in its brief and spawn it with --machine local, since a remote machine lacks them: {items} (#1089)."  # O(1)
+REF_READ = "Standing note: a research worker may read these outside paths read-only; name them in its brief; fleet spawn keeps a research worker whose brief names one on this machine, since a remote machine lacks them: {items} (#1089, #1132)."  # O(1)
+REF_READ_1089 = "Standing note: a research worker may read these outside paths read-only; name them in its brief and spawn it with --machine local, since a remote machine lacks them: {items} (#1089)."  # O(1) parsing only: the line a lead brief written before #1132 holds
 
 
-def research_reads(sd):  # the outside paths the lead brief's REF_READ line lists for research (#1089) | O(brief)
-    head, tail = REF_READ.split("{items}")  # O(1)
+def research_reads(sd):  # the outside paths the lead brief's REF_READ or REF_READ_1089 line lists for research (#1089, #1132) | O(brief)
     try:  # O(1)
         rows = (Path(sd) / "briefs" / "lead.md").read_text(encoding="utf-8", errors="replace").splitlines()  # O(brief)
     except OSError:  # O(1)
         return []  # O(1)
+    splits = [fmt.split("{items}") for fmt in (REF_READ, REF_READ_1089)]  # O(1)
     for ln in rows:  # O(rows)
-        if ln.startswith(head) and ln.endswith(tail) and len(ln) >= len(head) + len(tail):  # O(len)
-            mid = ln[len(head):len(ln) - len(tail)]  # O(len)
-            return [os.path.normpath(os.path.expanduser(t)) for t in mid.split("; ") if t]  # O(t)
+        for head, tail in splits:  # O(1)
+            if ln.startswith(head) and ln.endswith(tail) and len(ln) >= len(head) + len(tail):  # O(len)
+                mid = ln[len(head):len(ln) - len(tail)]  # O(len)
+                return [os.path.normpath(os.path.expanduser(t)) for t in mid.split("; ") if t]  # O(t)
     return []  # O(1)
 
 
