@@ -1,6 +1,6 @@
 {
   "name": "superlite",
-  "version": "1.5.328",
+  "version": "1.5.329",
   "description": "Superlite skills and runtime bootstrap for coding agents",
   "type": "module",
   "author": "CWogu",
