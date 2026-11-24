@@ -50,19 +50,60 @@ tel_gate() {
   return 0
 }
 
+# find_py [nocache]: the Python 3.10+ that runs the judge, into PY (an array; empty when none is found), the way
+# skills/subagent-driven-development/scripts/sl finds it: $SUPERLITE_PYTHON (no version check), else the interpreter
+# sl cached for this PATH, working directory and VIRTUAL_ENV (the same file) and only while it is the file `command -v
+# python3` or `command -v python` finds (a planted cache names another), else the first of python3, python,
+# `py -3` and `uv run --no-project python` that is 3.10+, whose real path is cached for the next call. `nocache` skips
+# the cached interpreter (it lies outside the project, so the model may have planted a fake there) and rewrites it.
+find_py() {
+  local cache_dir="${SUPERLITE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/superlite}" cache cached="" ckey="" key exe cand
+  local -a c
+  cache="$cache_dir/python"; key="${PATH}|${PWD}|${VIRTUAL_ENV:-}"
+  PY=()
+  if [ -n "${SUPERLITE_PYTHON:-}" ]; then
+    if [ -f "$SUPERLITE_PYTHON" ]; then PY=("$SUPERLITE_PYTHON"); else read -r -a PY <<< "$SUPERLITE_PYTHON"; fi
+    { [ -x "${PY[0]:-}" ] || command -v "${PY[0]:-}" >/dev/null 2>&1; } && return 0
+    PY=()
+  fi
+  if [ "${1:-}" != nocache ] && [ -f "$cache" ]; then
+    { IFS= read -r cached; IFS= read -r ckey; } < "$cache" 2>/dev/null || true
+    if [ -n "$cached" ] && [ "$ckey" = "$key" ] && [ -x "$cached" ]; then
+      for cand in python3 python; do   # trusted only when it is the interpreter this PATH finds (same file, links followed)
+        exe="$(command -v "$cand" 2>/dev/null)" && [ -n "$exe" ] && [ "$cached" -ef "$exe" ] && { PY=("$cached"); return 0; }
+      done
+    fi
+  fi
+  for cand in python3 python "py -3" "uv run --no-project python"; do
+    read -r -a c <<< "$cand"
+    command -v "${c[0]}" >/dev/null 2>&1 || continue
+    exe="$("${c[@]}" -c 'import sys; sys.exit(1) if sys.version_info < (3, 10) else print(sys.executable.replace("\\", "/"))' 2>/dev/null)" || continue
+    [ -n "$exe" ] || continue
+    if [ -x "$exe" ]; then
+      if mkdir -p "$cache_dir" 2>/dev/null; then
+        printf '%s\n%s\n' "$exe" "$key" > "$cache.$$" 2>/dev/null && mv -f "$cache.$$" "$cache" 2>/dev/null
+      fi
+      PY=("$exe")
+    else PY=("${c[@]}")
+    fi
+    return 0
+  done
+  return 1
+}
+
 # bl_scan CMD: the shell words of the Bash command CMD, quotes and backslashes removed, into BLW (a $'\001'
 # between simple commands); the quoted text and heredoc bodies into BLT (text only) or BLS (text that may run:
 # an assignment's quoted value, an unquoted-delimiter heredoc body holding $( or a backtick). A $( or backtick
 # opens its own words, inside double quotes too. BLLONG=1 when a line is over 4096 characters (the scan stops).
 # Per BLT entry j: BLTC[j] the index of its simple command (the number of separators before it), BLTN[j]=1 inside
-# $( ) or backticks, BLTK[j] its description for the block line. Per command c: BLO[c]=1 when it redirects its stdout
+# $( ) or backticks, BLTQ[j]=1 for a heredoc with a quoted delimiter (0 for quoted text), BLTK[j] its description for the block line. Per command c: BLO[c]=1 when it redirects its stdout
 # to a file, BLF[c] those targets (newline-ended).
 # Bash builtins only; one line at a time, so no step copies the whole command.
 bl_scan() {
   local LC_ALL=C
   local rest="$1" ln n i c d w="" wt="" wa=0 mt="" stk="" m dl dq ds j seg cmp body k more=1 sc=0 tg=0 fd bn tk
   local -a dep=() pd=() pq=() pt=() pc=() pn=()
-  BLW=(); BLT=(); BLS=(); BLLONG=0; BLTC=(); BLTN=(); BLTK=(); BLO=(); BLF=(); BLCN=()
+  BLW=(); BLT=(); BLTQ=(); BLS=(); BLLONG=0; BLTC=(); BLTN=(); BLTK=(); BLO=(); BLF=(); BLCN=()
   bl_emit() {
     if [ "$wa" = 1 ]; then
       BLW[${#BLW[@]}]="$w"
@@ -70,7 +111,7 @@ bl_scan() {
       if [ "$tg" = 1 ]; then BLF[sc]="${BLF[sc]}$w"$'\n'; tg=0; fi
       if [[ $w =~ ^[A-Za-z_][A-Za-z0-9_]*\+?= ]]; then BLS[${#BLS[@]}]="${w#*=}"   # the whole value, escaped spaces too
       elif [ -n "$wt" ]; then
-        j=${#BLT[@]}; BLT[j]="$wt"; BLTC[j]=$sc; bn=0; [[ $stk == *[SB]* ]] && bn=1; BLTN[j]=$bn
+        j=${#BLT[@]}; BLT[j]="$wt"; BLTC[j]=$sc; bn=0; [[ $stk == *[SB]* ]] && bn=1; BLTN[j]=$bn; BLTQ[j]=0
         tk="${wt:0:60}"; BLTK[j]="the quoted text \"${tk//$'\n'/ }\""
       fi
     fi
@@ -195,7 +236,7 @@ bl_scan() {
         body+="$ln"$'\n'
       done
       if [ "${pq[k]}" = 0 ] && [[ $body == *'$('* || $body == *'`'* ]]; then BLS[${#BLS[@]}]="$body"
-      else j=${#BLT[@]}; BLT[j]="$body"; BLTC[j]=${pc[k]}; BLTN[j]=${pn[k]}; BLTK[j]="the heredoc <<${pd[k]}"; fi
+      else j=${#BLT[@]}; BLT[j]="$body"; BLTC[j]=${pc[k]}; BLTN[j]=${pn[k]}; BLTQ[j]=${pq[k]}; BLTK[j]="the heredoc <<${pd[k]}"; fi
     done
     pd=(); pq=(); pt=(); pc=(); pn=()
   done
@@ -210,7 +251,7 @@ bl_scan() {
 bl_judge() {
   local k nx v b cp rw run=0 envw=0 envs=0 t re='backlog(\.py)?[[:space:]]+(decide|answer|start|plan)([^[:alnum:]_-]|$)'
   local c=0 cwd=0 cenv=0 cens=0 hasmake=0 frw="" j wd why re_as='^[A-Za-z_][A-Za-z0-9_]*\+?='
-  local -a CW=() CA=() CR=() CRW=()
+  local -a CW=() CWP=() CA=() CR=() CRW=()
   BLWHY=""
   bl_scan "$1"
   [ "$BLLONG" = 1 ] && return 0
@@ -229,7 +270,7 @@ bl_judge() {
     if [ "$cwd" = 0 ]; then   # the command word: after reserved words and NAME=value assignments
       case "$v" in
         then|do|else|elif|if|while|until|'{'|'!'|time) ;;
-        *) if [[ ! $v =~ $re_as ]]; then CW[c]="$b"; cwd=1; fi ;;
+        *) if [[ ! $v =~ $re_as ]]; then CW[c]="$b"; CWP[c]="$v"; cwd=1; fi ;;
       esac
     else CA[c]+="$v"$'\n'; fi
     rw=""
@@ -262,6 +303,7 @@ bl_judge() {
       BLHIT="${BASH_REMATCH[2]}"
       bl_data "$j" "$hasmake"; wd=$?
       [ "$wd" = 0 ] && continue
+      bl_py "$j" "$hasmake" && continue   # #1142: a lone Python's program, the words only in its strings and comments
       [ "$run" = 1 ] || [ "$wd" = 2 ] || continue   # no runner word: only a written file the call runs counts
       shopt -u nocasematch
       c="${BLTC[j]}"
@@ -313,6 +355,55 @@ bl_data() {
   return 0
 }
 
+# bl_py J HASMAKE: succeeds when BLT entry J (in bl_judge's scope) is a quoted heredoc that a lone Python runs as its
+# program (#1142; not in $( ), command word python*/pypy*, args only -, harmless flags or its stdout targets, no other
+# runner in the call) and guard_judge.py --py-data says its code holds the backlog words only in strings and comments.
+# Any doubt, error, missing Python or judge, or missing `guard: ok NONCE` line fails (the block stands).
+bl_py() {
+  local j="$1" c w nonce judge out c2 re_cw='^(python|pypy)[0-9.]*$' re_fl='^-[BEIOSbdqsuv]+$'
+  c="${BLTC[j]}"
+  [ "${BLTQ[j]}" = 1 ] && [ "${BLTN[j]}" != 1 ] && [ "$2" = 0 ] || return 1
+  [ "$envw" = 1 ] && [ "$envs" = 1 ] && return 1
+  [[ ${CW[c]-} =~ $re_cw ]] || return 1
+  while IFS= read -r w; do
+    [ -z "$w" ] && continue
+    [ "$w" = - ] && continue
+    [[ $w =~ $re_fl ]] && continue
+    [[ $'\n'"${BLF[c]-}" == *$'\n'"$w"$'\n'* ]] && continue
+    return 1
+  done <<< "${CA[c]-}"
+  # a stdout target the program may fill with a script another command runs: only plain files count (bl_data rule 4)
+  while IFS= read -r w; do
+    [ -z "$w" ] && continue
+    case "$w" in
+      *'$'*|*'`'*|*'*'*|*'?'*|*'['*) return 1 ;;
+      /dev/null) continue ;;
+      /dev/*|/proc/*) return 1 ;;
+    esac
+    for ((c2 = 0; c2 <= BLNC; c2++)); do
+      [ "$c2" = "$c" ] && continue
+      [ "${CW[c2]-}" = "${w##*/}" ] && return 1
+      [[ ${CA[c2]-} == *"${w##*/}"* ]] && return 1
+    done
+  done <<< "${BLF[c]-}"
+  for ((c2 = 0; c2 <= BLNC; c2++)); do
+    [ "$c2" = "$c" ] && continue
+    [ "${CR[c2]-}" = 1 ] && return 1
+    # a relative path run (./f.sh, bin/x) or a variable command word runs a file the program may have built
+    w="${CWP[c2]-}"
+    [[ $w == */* && $w != /* ]] && return 1
+    [[ $w == \$* ]] && return 1
+    # another command named like a file the program writes (`open('f.sh','w')` then `./f.sh`) runs that file
+    w="${CW[c2]-}"; w="${w##*/}"
+    [ -n "$w" ] && [[ ${BLT[j]} == *"$w'"* || ${BLT[j]} == *"$w\""* ]] && return 1
+  done
+  judge="${BASH_SOURCE[0]%/*}/../skills/subagent-driven-development/scripts/guard_judge.py"
+  [ -f "$judge" ] && find_py || return 1
+  nonce="$RANDOM$RANDOM$$$RANDOM"
+  out="$(printf '%s' "${BLT[j]}" | SUPERLITE_GUARD_NONCE="$nonce" "${PY[@]}" -I -X utf8 -W ignore "$judge" --py-data 2>/dev/null)"
+  [ $? = 0 ] && [[ $out == *"guard: ok $nonce"* ]]
+}
+
 # Fleet session (any role, a lead too; the env is the session's, so a command's `env -u` cannot change it): `sl backlog
 # decide|answer|start|plan` is Max's main session only. A raw match on the hook JSON comes first (quotes and backslashes
 # dropped, `backlog[.py]` then the subcommand): no match falls through at once. A Bash match is then judged on its
@@ -320,7 +411,8 @@ bl_data() {
 # env -u ... sl, python3 .../backlog.py, $( ) or backticks, quoted words); text that a heredoc or a quoted argument only
 # writes passes, unless the command can run it (a shell, eval, an interpreter, xargs, ssh, env -S, a variable). PowerShell,
 # a Bash call without a readable command and a line over 4096 characters keep the raw match. Only a fleet session pays
-# for it (builtin string work, no spawn); the idle coordinator path is untouched.
+# for it (builtin string work, no spawn); the idle coordinator path is untouched. #1142: a quoted heredoc that a lone
+# Python runs as its program is data when its code holds the words only in strings and comments (bl_py, one judge spawn).
 if [ -n "${SUPERLITE_FLEET_WORKER:-}" ]; then
   re_bl_tool='"tool_name"[[:space:]]*:[[:space:]]*"(Bash|PowerShell|Monitor)"'
   if [[ $input =~ $re_bl_tool ]]; then
@@ -718,47 +810,6 @@ guard_error() {
   w="${w//[[:cntrl:]]/ }"; w="${w//[\"\\]/}"
   printf '{"kind":"guard-error","agent":"coordinator","tool":"%s","target":"%s"}\n' "$tool_name" "$w" \
     >> "$sd/incidents.jsonl" 2>/dev/null
-}
-
-# find_py [nocache]: the Python 3.10+ that runs the judge, into PY (an array; empty when none is found), the way
-# skills/subagent-driven-development/scripts/sl finds it: $SUPERLITE_PYTHON (no version check), else the interpreter
-# sl cached for this PATH, working directory and VIRTUAL_ENV (the same file) and only while it is the file `command -v
-# python3` or `command -v python` finds (a planted cache names another), else the first of python3, python,
-# `py -3` and `uv run --no-project python` that is 3.10+, whose real path is cached for the next call. `nocache` skips
-# the cached interpreter (it lies outside the project, so the model may have planted a fake there) and rewrites it.
-find_py() {
-  local cache_dir="${SUPERLITE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/superlite}" cache cached="" ckey="" key exe cand
-  local -a c
-  cache="$cache_dir/python"; key="${PATH}|${PWD}|${VIRTUAL_ENV:-}"
-  PY=()
-  if [ -n "${SUPERLITE_PYTHON:-}" ]; then
-    if [ -f "$SUPERLITE_PYTHON" ]; then PY=("$SUPERLITE_PYTHON"); else read -r -a PY <<< "$SUPERLITE_PYTHON"; fi
-    { [ -x "${PY[0]:-}" ] || command -v "${PY[0]:-}" >/dev/null 2>&1; } && return 0
-    PY=()
-  fi
-  if [ "${1:-}" != nocache ] && [ -f "$cache" ]; then
-    { IFS= read -r cached; IFS= read -r ckey; } < "$cache" 2>/dev/null || true
-    if [ -n "$cached" ] && [ "$ckey" = "$key" ] && [ -x "$cached" ]; then
-      for cand in python3 python; do   # trusted only when it is the interpreter this PATH finds (same file, links followed)
-        exe="$(command -v "$cand" 2>/dev/null)" && [ -n "$exe" ] && [ "$cached" -ef "$exe" ] && { PY=("$cached"); return 0; }
-      done
-    fi
-  fi
-  for cand in python3 python "py -3" "uv run --no-project python"; do
-    read -r -a c <<< "$cand"
-    command -v "${c[0]}" >/dev/null 2>&1 || continue
-    exe="$("${c[@]}" -c 'import sys; sys.exit(1) if sys.version_info < (3, 10) else print(sys.executable.replace("\\", "/"))' 2>/dev/null)" || continue
-    [ -n "$exe" ] || continue
-    if [ -x "$exe" ]; then
-      if mkdir -p "$cache_dir" 2>/dev/null; then
-        printf '%s\n%s\n' "$exe" "$key" > "$cache.$$" 2>/dev/null && mv -f "$cache.$$" "$cache" 2>/dev/null
-      fi
-      PY=("$exe")
-    else PY=("${c[@]}")
-    fi
-    return 0
-  done
-  return 1
 }
 
 # scratch_hint: the message line that names the coordinator's throwaway-script folder (#690): project-relative when the

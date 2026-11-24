@@ -2661,7 +2661,30 @@ def _ack():  # O(1) | the allow line the hook waits for: an exit 0 without it wa
     print("guard: ok" + (" " + nonce if nonce else ""))  # O(1)
 
 
+_PY_BL = re.compile(r"backlog(\.py)?\s+(decide|answer|start|plan)(?![A-Za-z0-9_-])", re.I)  # O(1)
+
+
+def py_data(code):  # O(len(code)) | #1142: True when a Python program holds the backlog words only in string literals and comments and cannot run text
+    masked = guard_tools._mask(code)  # O(len(code))
+    if masked is None or any(r.search(masked) for r in guard_tools._RUNS_TEXT):  # O(len(code))
+        return False  # O(1)
+    return not _PY_BL.search(masked.replace("\\", "").replace('"', "").replace("'", ""))  # O(len(code))
+
+
+def _py_data_main():  # O(len) | --py-data: the program on stdin; exit 0 and the ack only for data, any error or doubt is 1
+    try:  # O(1)
+        ok = py_data(sys.stdin.read())  # O(len)
+    except Exception:  # noqa: BLE001  O(1)
+        return 1  # O(1)
+    if ok:  # O(1)
+        _ack()  # O(1)
+        return 0  # O(1)
+    return 1  # O(1)
+
+
 def main(argv=None):  # O(s * n * d) | hook entry: 2 blocks, 0 passes and every internal error
+    if (sys.argv[1:] if argv is None else argv) == ["--py-data"]:  # O(1)
+        return _py_data_main()  # O(len)
     try:  # O(1)
         mode, project, sd, owns = _args(sys.argv[1:] if argv is None else argv)  # O(a)
     except (ValueError, StopIteration):  # O(1)
