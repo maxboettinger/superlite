@@ -1532,6 +1532,7 @@ def probe_issues(plan: Plan) -> list:  # O(L*s + n*q)
 SWIFT_SKIP = {".build", ".git", ".superlite", "node_modules"}  # O(1)
 SWIFT_CALLS = (".target(", ".executableTarget(", ".testTarget(", ".macro(")  # O(1)
 SWIFT_DECL = re.compile(r"^\s*(?:(?:public|open|internal|private|fileprivate|final|indirect)\s+)*(?:struct|class|enum|actor|protocol|typealias)\s+([A-Z]\w*)")  # O(1)
+SWIFT_FILE_ONLY = re.compile(r"\b(?:private|fileprivate)\s")  # O(1) | a SWIFT_DECL match's modifier that hides the type from every other file (#1166)
 
 
 class _Deps(set):  # O(1) a set that remembers the manifest order for messages
@@ -1649,6 +1650,8 @@ def swift_targets(root: Path) -> dict[str, dict]:  # O(F + M*s) F = folders walk
                             deps.add(m.group(2))  # O(1)
                             deps.order.append(m.group(2))  # O(1)
                     found[nm.group(1)] = {"dir": Path(cur) / (pm.group(1) if pm else f"{kind}/{nm.group(1)}"), "deps": deps, "manifest": rel}  # O(1)
+                    if kind == "Tests":  # no target may depend on a test target (#1166) | O(1)
+                        found[nm.group(1)]["test"] = True  # O(1)
     return found  # O(1)
 
 
@@ -1737,12 +1740,12 @@ def swift_import_issues(plan: Plan, root: Path) -> list[str]:  # O(T*d + files*s
     mods: dict[str, set[str]] = {}  # O(1)
     gen: dict[str, set[str]] = {}  # O(1) | declared type name -> its generic clause's names
     for name, t in targets.items():  # O(T) iterations
-        if not t["dir"].is_dir():  # O(1)
+        if t.get("test") or not t["dir"].is_dir():  # a test target's types resolve no other target's seam (#1166) | O(1)
             continue  # O(1)
         for f in sorted(t["dir"].rglob("*.swift")):  # O(files) iterations
             for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():  # O(lines) iterations
                 m = SWIFT_DECL.match(ln)  # O(s)
-                if m and not ln.lstrip().startswith("//"):  # O(1)
+                if m and not ln.lstrip().startswith("//") and not SWIFT_FILE_ONLY.search(m.group(0)):  # O(s)
                     mods.setdefault(m.group(1), set()).add(name)  # O(1)
                     gen.setdefault(m.group(1), set()).update(swift_generic_params(ln))  # O(s)
     for t in plan.tasks:  # O(n) iterations

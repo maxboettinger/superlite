@@ -1,4 +1,4 @@
-"""Plan lint import check gaps (#457): acyclic_siblings, custom contracts, no tomllib, tsconfig."""
+"""Plan lint import check gaps (#457): acyclic_siblings, custom contracts, no tomllib, tsconfig; Swift declarations no other target can see (#1166)."""
 from __future__ import annotations
 
 import importlib.util
@@ -282,3 +282,63 @@ def test_tsconfig_bom_is_read(tmp_path):
     (tmp_path / "packages/web").mkdir(parents=True, exist_ok=True)
     (tmp_path / "packages/web/tsconfig.json").write_bytes(b'\xef\xbb\xbf{"references": [{"path": "../core"}]}')
     assert allows(tmp_path)["@shop/web"]["names"] == ["@shop/core"]
+
+
+SWIFT_MANIFEST = '''// swift-tools-version: 5.9
+import PackageDescription
+let package = Package(
+    name: "Kit",
+    targets: [
+        .target(name: "Core"),
+        .target(name: "Lake"),
+        .target(name: "Features", dependencies: ["Core"]),
+        .testTarget(name: "CoreTests", dependencies: ["Core"]),
+    ]
+)
+'''
+CLOCK_ITEM = "start(clock: any Clock<Duration>) -> Ticker"
+
+
+def swift_kit(root: Path, decls: dict[str, str]):
+    write(root / "Packages/Kit/Package.swift", SWIFT_MANIFEST)
+    write(root / "Packages/Kit/Sources/Core/Ticker.swift", "public struct Ticker {}\n")
+    write(root / "Packages/Kit/Sources/Features/Runner.swift", "")
+    for rel, text in decls.items():
+        write(root / "Packages/Kit" / rel, text)
+    return plan_in(root, "Packages/Kit/Sources/Core/Ticker.swift", "Packages/Kit/Sources/Features/Runner.swift", CLOCK_ITEM)
+
+
+def test_swift_private_test_double_never_resolves_a_stdlib_name(tmp_path):
+    plan = swift_kit(tmp_path, {"Tests/CoreTests/TurnTimelineTests.swift":
+                                "import Testing\n\nprivate final class Clock: @unchecked Sendable {\n    var now = 0\n}\n"})
+    assert plan_tools.swift_import_issues(plan, tmp_path) == []
+
+
+def test_swift_test_target_type_never_resolves(tmp_path):
+    plan = swift_kit(tmp_path, {"Tests/CoreTests/Fakes.swift": "final class Clock {}\nstruct Duration {}\n"})
+    assert plan_tools.swift_import_issues(plan, tmp_path) == []
+
+
+def test_swift_file_private_source_type_never_resolves(tmp_path):
+    plan = swift_kit(tmp_path, {"Sources/Lake/Hidden.swift": "fileprivate struct Duration {}\n    private enum Clock {}\n"})
+    assert plan_tools.swift_import_issues(plan, tmp_path) == []
+
+
+def test_swift_visible_source_type_still_warns(tmp_path):
+    plan = swift_kit(tmp_path, {"Sources/Lake/Duration.swift": "public struct Duration {}\n"})
+    assert plan_tools.swift_import_issues(plan, tmp_path) == [
+        f"WARNING: IMPORT: T2 consumes {CLOCK_ITEM} from T1, but Duration is declared in Lake, "
+        "which target Features may not import (Packages/Kit/Package.swift) dependencies: Core"]
+
+
+def test_swift_declared_in_needs_the_exact_name(tmp_path):
+    plan = swift_kit(tmp_path, {"Sources/Lake/Clocks.swift": "public struct ClockTests {}\nstruct ClockedNow {}\nenum Clock_ {}\n"})
+    assert plan_tools.swift_import_issues(plan, tmp_path) == []
+
+
+def test_swift_targets_marks_only_test_targets(tmp_path):
+    write(tmp_path / "Packages/Kit/Package.swift", SWIFT_MANIFEST)
+    t = plan_tools.swift_targets(tmp_path)
+    assert t["CoreTests"]["test"] is True
+    assert [n for n, v in t.items() if v.get("test")] == ["CoreTests"]
+    assert set(t["Features"]) == {"dir", "deps", "manifest"}
