@@ -1,6 +1,7 @@
 """#1068: commit_task's import check: a missing declared dependency is an environment gap, a uv environment
 that never starts the check is one too, and a standalone script's top-level code never runs."""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -138,7 +139,7 @@ def test_script_inside_a_package_is_skipped(tmp_path):
 
 def test_uv_command_runs_the_check(tmp_path, monkeypatch):
     seen = {}
-    monkeypatch.setattr(_pyrun, "project_cmd", uv_cmd)
+    monkeypatch.setattr(_pyrun, "project_env", lambda root: (uv_cmd(root), ""))
 
     def fake_run(cmd, *a, **k):
         seen["cmd"], seen["env"] = cmd, k.get("env") or {}
@@ -151,7 +152,7 @@ def test_uv_command_runs_the_check(tmp_path, monkeypatch):
 
 
 def test_uv_environment_that_never_starts_is_a_gap(tmp_path, monkeypatch):
-    monkeypatch.setattr(_pyrun, "project_cmd", uv_cmd)
+    monkeypatch.setattr(_pyrun, "project_env", lambda root: (uv_cmd(root), ""))
 
     def slow(cmd, *a, **k):
         raise subprocess.TimeoutExpired(cmd, k.get("timeout"), output="", stderr="Resolved 40 packages")
@@ -165,7 +166,7 @@ def test_uv_environment_that_never_starts_is_a_gap(tmp_path, monkeypatch):
 
 
 def test_uv_environment_that_fails_to_build_is_a_gap(tmp_path, monkeypatch):
-    monkeypatch.setattr(_pyrun, "project_cmd", uv_cmd)
+    monkeypatch.setattr(_pyrun, "project_env", lambda root: (uv_cmd(root), ""))
     monkeypatch.setattr(commit_task.subprocess, "run", lambda cmd, *a, **k: subprocess.CompletedProcess(
         cmd, 2, "", "error: Failed to fetch: `https://pypi.org/simple/fastapi/`\n"))
     notes = []
@@ -175,7 +176,7 @@ def test_uv_environment_that_fails_to_build_is_a_gap(tmp_path, monkeypatch):
 
 
 def test_uv_check_that_started_and_blocked_still_names_the_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(_pyrun, "project_cmd", uv_cmd)
+    monkeypatch.setattr(_pyrun, "project_env", lambda root: (uv_cmd(root), ""))
 
     def slow(cmd, *a, **k):
         raise subprocess.TimeoutExpired(cmd, 7, output="@import-check app/a.py\n@import-check app/b.py\n", stderr="")
@@ -189,7 +190,7 @@ def test_uv_check_that_started_and_blocked_still_names_the_file(tmp_path, monkey
 
 
 def test_interpreter_crash_without_uv_still_blocks(tmp_path, monkeypatch):
-    monkeypatch.setattr(_pyrun, "project_cmd", lambda root: ["/x/venv/bin/python"])
+    monkeypatch.setattr(_pyrun, "project_env", lambda root: (["/x/venv/bin/python"], ""))
     monkeypatch.setattr(commit_task.subprocess, "run", lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 1, "", "boom"))
     notes = []
     errs = commit_task.import_errors(["app/a.py"], [], root=tmp_path, notes=notes)
@@ -214,3 +215,84 @@ def test_commit_goes_through_an_environment_gap_and_skips_a_script(tmp_path):
     assert len(warn) == 1 and warn[0].endswith(GAP)
     log = repo / ".superlite" / "incidents.jsonl"
     assert "fastapi_absent_xyz" not in (log.read_text(encoding="utf-8") if log.exists() else "")
+
+
+WHERE_LIB = "packages/lib/src"
+FAKE_UV = r'''
+import os
+import sys
+
+args = sys.argv[1:]
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "uv-args.txt"), "w") as f:
+    f.write("\n".join(args))
+i = args.index("python")
+os.execv(sys.executable, [sys.executable, *args[i + 1:]])
+'''
+
+
+def editable_main(tmp_path):
+    """A main checkout whose real .venv holds an editable-install .pth naming main's packages/lib/src, and a worktree nested in it."""
+    main = tmp_path.resolve() / "main"
+    write(main, f"{WHERE_LIB}/where1140/__init__.py", "WHERE = 'main'\n")
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(main / ".venv")], check=True, capture_output=True)
+    site = next((main / ".venv" / "lib").glob("python3*/site-packages"))
+    (site / "where1140.pth").write_text(str(main / WHERE_LIB) + "\n")
+    gitdir = main / ".git" / "worktrees" / "wt"
+    gitdir.mkdir(parents=True)
+    (gitdir / "commondir").write_text("../..\n")
+    wt = main / ".claude" / "worktrees" / "wt"
+    wt.mkdir(parents=True)
+    (wt / ".git").write_text(f"gitdir: {gitdir}\n")
+    write(wt, f"{WHERE_LIB}/where1140/__init__.py", "WHERE = 'tree'\n")
+    write(wt, f"{WHERE_LIB}/where1140/only_tree.py", "from where1140 import WHERE\n\nassert WHERE == 'tree', WHERE\n")
+    return main, wt
+
+
+def fake_uv(tmp_path, monkeypatch):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "fake_uv.py").write_text(FAKE_UV)
+    uv = bindir / "uv"
+    uv.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bindir / "fake_uv.py"}" "$@"\n')
+    uv.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    return bindir / "uv-args.txt"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="posix sh script and venv layout")
+def test_import_check_in_a_nested_worktree_imports_the_worktree_code(tmp_path, monkeypatch):
+    main, wt = editable_main(tmp_path)
+    write(wt, "uv.lock", "")
+    write(wt, "pyproject.toml", "[project]\nname = 'where1140'\n")
+    args = fake_uv(tmp_path, monkeypatch)
+    notes = []
+    errs = commit_task.import_errors([f"{WHERE_LIB}/where1140/only_tree.py"], [WHERE_LIB], root=wt, notes=notes)
+    assert errs == []
+    assert notes == [("venv", "", 0, f"{main / '.venv'} is the main checkout's environment, outside {wt}; "
+                      f"running the import check in {wt}'s own environment: uv run --frozen --project {wt} (#1140)")]
+    assert args.read_text().splitlines()[:5] == ["run", "--frozen", "--project", str(wt), "python"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="posix venv layout")
+def test_import_check_without_uv_lock_names_the_main_env(tmp_path, monkeypatch):
+    main, wt = editable_main(tmp_path)
+    notes = []
+    errs = commit_task.import_errors([f"{WHERE_LIB}/where1140/only_tree.py"], [WHERE_LIB], root=wt, notes=notes)
+    assert [e[:2] for e in errs] == [(f"{WHERE_LIB}/where1140/only_tree.py", 0)]
+    assert notes[0] == ("venv", "", 0, f"{main / '.venv'} is the main checkout's environment, outside {wt}, and {wt} has no uv.lock "
+                        f"for an environment of its own; the import check may import that folder's package, not {wt}'s (#1140)")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="posix symlink")
+def test_commit_in_a_linked_worktree_prints_the_venv_note(tmp_path):
+    repo = repo_with(tmp_path, task(1, ["app/a.py"]))
+    py = repo / ".venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.symlink_to(sys.executable)
+    wt = tmp_path / "wt"
+    git(repo, "worktree", "add", "-q", str(wt))
+    write(wt, "app/a.py", "X = 1\n")
+    r = commit(wt, "T1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    head = f"import check: {repo.resolve() / '.venv'} is the main checkout's environment, outside {wt.resolve()}, and {wt.resolve()} has no uv.lock"
+    assert sum(ln.startswith(head) for ln in r.stderr.splitlines()) == 1, r.stderr

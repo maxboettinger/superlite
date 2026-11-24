@@ -1,0 +1,16 @@
+- start f424822185cc1b7a5b6b34650ea2fd97f4fcd37b
+- unblocked: dispatched T1 at 17:49:19; waiting on fixes: none
+- tests fast passed=40 failed=19 skipped=0 seconds=1.4
+- tests fast passed=112 failed=0 skipped=0 seconds=3.9
+- commit T1 619e24b7a7 per-tree env for the import check and export
+- tests fast passed=0 failed=4 skipped=0 seconds=0.3
+- tests fast passed=570 failed=3 skipped=0 seconds=5.9
+- tests fast passed=572 failed=1 skipped=0 seconds=5.7
+- tests fast passed=1057 failed=1 skipped=1 seconds=150.5
+- commit T2 375d6ca84f tools.md rows for 1140 and 1141
+- tests fast passed=5 failed=1 skipped=0 seconds=0.3
+- tests fast passed=6 failed=0 skipped=0 seconds=0.3
+- Ruling: T2 also commits tests/scripts/test_docs_tools_1087.py - final-review fix outside every Owns
+- commit T2 7a96d9b499 tools.md rows for 1140 and 1141
+- tests full passed=14311 failed=0 skipped=12 seconds=320.9
+Ruling: no package review for T2 (docs only; its two style findings and the #1087 pin went to fixer F-T2-1); FR1 covered the docs - B331 precedent - cost if wrong: a doc wording slip
