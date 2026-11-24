@@ -1,0 +1,21 @@
+- start e903fa87464d79a94bab615dc5c80eddf606004c
+- unblocked: dispatched T1 T2 T3 at 15:04:53; waiting on fixes: none
+- tests fast passed=1 failed=3 skipped=0 seconds=0.7
+- tests fast passed=7 failed=0 skipped=0 seconds=0.5
+- tests fast passed=0 failed=14 skipped=0 seconds=0.3
+- tests fast passed=55 failed=0 skipped=0 seconds=3.7
+- tests fast passed=1 failed=2 skipped=0 seconds=0.3
+- tests fast passed=91 failed=1 skipped=0 seconds=3.9
+- tests fast passed=66 failed=0 skipped=0 seconds=3.7
+- commit T1 8da230ee62 state never resolves into the plugin
+- commit T2 b08f7aab46 build_prime writes the plan's run folder
+- commit T3 84cf72fb6a session-start exports the launch folder
+- tests fast passed=99 failed=0 skipped=0 seconds=4.2
+- commit T1 d740508e59 state never resolves into the plugin
+- commit T2 b1eeb5bc0a build_prime writes the plan's run folder
+- tests full passed=14096 failed=0 skipped=12 seconds=563.0
+- tests fast passed=2 failed=1 skipped=0 seconds=0.3
+- tests fast passed=69 failed=0 skipped=0 seconds=3.7
+- commit T3 5817037b71 session-start exports the launch folder
+- Ruling: T3 also commits tests/scripts/_fixtures.py - HOST_VARS drops SUPERLITE_PROJECT_DIR (#1116)
+- tests full passed=14096 failed=0 skipped=12 seconds=627.3

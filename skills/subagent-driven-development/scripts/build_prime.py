@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the shared agent prime: byte-identical for the same inputs.
 
-    build_prime.py --plan P [--spec S --sections "1,3,5"] [--out .superlite/prime.md] [--tier haiku] [--prime full|slim|mini]
+    build_prime.py --plan P [--spec S --sections "1,3,5"] [--out <plan's .superlite>/prime.md] [--tier haiku] [--prime full|slim|mini]
 
 The prime kind is the tier's `prime` value in config/routing.json (sonnet: `slim`), or `--prime`:
   slim  rules, the plan header (title through **Spec:**), Global constraints, and per stable task its title, Owns,
@@ -11,6 +11,8 @@ The prime kind is the tier's `prime` value in config/routing.json (sonnet: `slim
   mini  (haiku) into .superlite/prime-haiku.md: constraints, stub spec and the interfaces of that tier's tasks.
 
 `--plan` may be the run folder: stable.json, pool.json or plan.md names the plan file, else exit 2 (#508).
+Without --out the prime goes to the plan's run folder (`state.plan_dir` of --plan, the folder `fleet spawn --plan` reads),
+never to the cwd (#1116).
 A plan header line `**Read first:** a, b` and the test-cmd.json list `read_first` put a `## Read first`
 section into every prime kind: files each agent reads in full before its first task.
 Prints `sha256 size`. No timestamps; CRLF becomes LF, trailing spaces are
@@ -428,7 +430,7 @@ def main(argv=None):  # O(B + H^2 + out)
     ap.add_argument("--plan", required=True)  # O(1)
     ap.add_argument("--spec")  # O(1)
     ap.add_argument("--sections", default="")  # O(1)
-    ap.add_argument("--out", default=DEFAULT_OUT)  # O(1)
+    ap.add_argument("--out")  # default: the plan's run folder | O(1)
     ap.add_argument("--tier", default="sonnet", help="tier whose prime to build; its kind is the `prime` value in config/routing.json "  # O(1)
                     "(sonnet: slim, haiku: mini)")
     ap.add_argument("--prime", choices=PRIME_KINDS, help="override the tier's prime kind (full = whole plan + the --sections spec text)")  # O(1)
@@ -436,8 +438,9 @@ def main(argv=None):  # O(B + H^2 + out)
     a = ap.parse_args(argv)  # O(1)
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
     import orchestrator  # O(1)
+    import state  # O(1)
+    given = a.plan  # the value as passed: its run folder is where the prime goes (#1116) | O(1)
     if Path(a.plan).is_dir():  # a run folder names its plan file (#508) | O(d)
-        import state  # O(1)
         found = orchestrator.plan_file(state.plan_dir(a.plan))  # O(file)
         if found is None:  # O(1)
             die(f"--plan {a.plan} is a run folder with no plan file (stable.json, pool.json or plan.md name none); pass the plan file")  # O(1)
@@ -449,16 +452,18 @@ def main(argv=None):  # O(B + H^2 + out)
     if wanted and not a.spec:  # O(1)
         die("--sections needs --spec")  # O(1)
     kind = a.prime or prime_kind(a.tier)  # O(file)
+    base = Path(a.out).parent if a.out else state.plan_dir(given)  # O(d)
     if not a.prime and kind != "mini":  # a lane build: the next big enough one takes a pending experiment (#53) | O(L)
         import experiment  # O(1)
-        claim = experiment.claim(a.plan, Path(a.out).parent)  # O(L + f)
+        claim = experiment.claim(a.plan, base)  # O(L + f)
         if claim:  # O(1)
             kind = claim.get("prime") if claim.get("prime") in ("full", "slim") else kind  # O(1)
             print(f"experiment {claim.get('id')}: this run uses --prime {kind}"  # O(1)
                   + (f" and --batch {claim['batch']} (dispatch applies it)" if claim.get("batch") else ""), file=sys.stderr)
     mini = kind == "mini"  # O(1)
     import plan_tools as pt  # O(1)
-    out = Path(MINI_OUT if mini and a.out == DEFAULT_OUT else a.out)  # O(1)
+    out = (Path(MINI_OUT if mini and a.out == DEFAULT_OUT else a.out) if a.out  # O(1)
+           else base / ("prime-haiku.md" if mini else "prime.md"))  # O(1)
     sd = out.parent  # the note lives in <sd>/briefs/lead.md | O(1)
     writes = []  # (path, bytes, label) | O(1)
     try:  # O(1)
