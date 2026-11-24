@@ -43,6 +43,7 @@ While the budget is paused (spend above the cap), every `spawn` that names a `--
 `sl fleet restore` re-launches every worker and lead of the run after a Herdr restart, each resuming its own Claude session; `status` names it after a worker found dead (#577).
 `spawn --for-review|--package ... --note FILE` appends FILE to the generated review brief under `## Coordinator notes` (#604).
 `spawn --role writer --brief F` needs an `Output: <file>` line in F: the writer may write only that file, inside the project or the run folder (#604).
+A remote dispatch write worker gets its pool.json entry, busy on its task, and `--for-dispatch` re-adds a lost one and drops a taskless one first, so a task is never sent twice (#1057).
 A worker whose spawner pins GH_CONFIG_DIR (a sealed golden lead) starts with the lead's `--settings <state>/gh-seal-settings.json` and `--plugin-dir <this checkout>` (#1049).
 `spawn --brief F` (every role but lead) refuses with exit 2 before any pane when F lies outside the project, the run folder and the plugin skills folder, or when F (with the plan's Global constraints) or a review spawn's `--note` names an existing path outside the project, the run folder and the plugin skills folder outside fenced code blocks; system folders such as /dev and /usr do not count (#1015).
 """
@@ -306,13 +307,40 @@ def _launch_line(sd, wid, agent, model, account, pane):  # O(1)
         f.write(json.dumps(line) + "\n")  # O(1)
 
 
-def _register_pool(sd, wid, tier, account):  # O(w)
+def _register_pool(sd, wid, tier, account, current=None, machine=None):  # O(w)
     with fs.locked(sd):  # two parallel spawns must not drop each other's entry; callers hold no fs lock here | O(1) plus wait
         p = Path(sd) / "pool.json"  # O(1)
         data = pool.load(p)  # O(w)
-        ag = pool.add(data, wid, tier)  # O(w)
-        ag.update({"backend": "herdr", "account": account})  # O(1)
+        ag = pool.add(data, wid, tier, current)  # O(w)
+        ag.update({"backend": "herdr", "account": account, **({"machine": machine} if machine else {})})  # O(1)
         pool.save(p, data)  # O(w)
+
+
+def _sync_remote_pool(sd):  # O(w): -> (added ids, dropped ids) of this run's remote implementers' pool entries (#1057)
+    sd = Path(sd)  # O(1)
+    added, dropped = [], []  # O(1)
+    with fs.locked(sd):  # O(1) plus wait
+        mine = {}  # O(1)
+        for wid, w in fs.workers(sd).items():  # O(w) iterations
+            if w.get("machine") and w.get("role", "implementer") == "implementer":  # O(1)
+                if Path(w.get("state_dir") or sd / "remote" / wid).resolve() == (sd / "remote" / wid).resolve():  # O(1)
+                    mine[wid] = w  # O(1)
+        if not mine:  # O(1)
+            return added, dropped  # O(1)
+        p = sd / "pool.json"  # O(1)
+        data = pool.load(p)  # O(w)
+        for ag in list(data.get("agents") or []):  # O(w) iterations
+            if ag.get("id") in mine and not pool.currents(ag):  # a remote write worker takes one task; commit_task cleared it | O(1)
+                pool.remove(data, ag["id"])  # O(w)
+                dropped.append(ag["id"])  # O(1)
+        for wid, w in mine.items():  # O(w) iterations
+            if w.get("state") in ("busy", "blocked") and w.get("task") and pool.find(data, wid) is None:  # O(w)
+                ag = pool.add(data, wid, w.get("tier") or "sonnet", w["task"])  # O(w)
+                ag.update({"backend": "herdr", "account": w.get("account"), "machine": w["machine"]})  # O(1)
+                added.append(wid)  # O(1)
+        if added or dropped:  # O(1)
+            pool.save(p, data)  # O(w)
+    return added, dropped  # O(1)
 
 
 def _pool_drop(sd, wid):  # O(w); caller already holds fs.locked(sd)
@@ -506,7 +534,10 @@ def spawn(sd, plan, tier, project, cfg=None, env=None, role="implementer", over=
     if machine:  # a worker on a saved Herdr machine: its own gates and life, no local machine gate | O(1)
         import fleet_remote_worker as frw  # noqa: E402 | O(1) lazy: it imports this module
         rkw = {**({"task": task, "plan": str(plan)} if task else {}), **({"brief": remote_brief} if remote_brief else {})}  # a write worker's task or brief; a research worker passes none | O(1)
-        return frw.spawn(sd, role, tier, project, machine, cfg, **rkw)  # O(w) plus remote calls
+        w = frw.spawn(sd, role, tier, project, machine, cfg, **rkw)  # O(w) plus remote calls
+        if task and role == "implementer":  # a dispatch write worker is busy on its task from the start, like a local one (#1057) | O(1)
+            _register_pool(sd, w["id"], tier, w.get("account"), current=task, machine=machine)  # O(w)
+        return w  # O(1)
     rank = 0 if role in ("package-reviewer", "final-reviewer") else 1  # a waiting review goes before a waiting implementer (#902) | O(1)
     busy = ml.gate(f"fleet spawn ({role})", machine_wait, over, rank=rank, bounds=bounds, run_workers=(lambda: live_workers(sd)) if bounds else None)  # the first attempt only; the retry below is the same spawn | O(wait)
     if busy:  # O(1)
@@ -828,6 +859,7 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0, machine=None
     shut = orchestrator.require(plan, "dispatch")  # human mode waits for approval, as `dispatch` | O(file)
     if shut:  # O(1)
         return shut  # O(1)
+    _sync_remote_pool(sd)  # O(w): a pruned remote entry back, a taskless one out (#1057)
     pp = sd / "pool.json"  # O(1)
     if pp.exists():  # a worker's baseline is what it held at READY; read outside the lock, written under it | O(w)
         found = {}  # O(1)
@@ -846,7 +878,7 @@ def for_dispatch(sd, plan, project, over=False, machine_wait=100.0, machine=None
     lines, evict = dp.run(plan, pp, sd / "progress.md", cap=sys.maxsize)  # every ready task goes out, no cap of 10 | O(dispatch)
     dp.render([], evict)  # the `evict=` lines on stderr; the dispatch lines themselves become the worker lines below | O(a)
     sl, root = str(fio.HERE / "sl"), str(fio.HERE.parents[2])  # O(1)
-    if machine:  # remote write workers: one fresh worker per task, never a reused one; the local pool is left alone | O(R)
+    if machine:  # remote write workers: one fresh worker per task, never a reused one; each gets a pool entry busy on its task (#1057) | O(R)
         return _dispatch_machine(sd, plan, project, machine, lines, sl, fio)  # O(R * (spawn + send))
     state_of = {k: v.get("state") for k, v in fs.workers(sd).items()}  # O(w)
     ids = [k for k in evict if state_of.get(k) == "ready"]  # an evicted busy worker finishes its task | O(w)

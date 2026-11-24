@@ -1,0 +1,9 @@
+- start 1384af78a3f204bef229065f424b4dbe710199c8
+- unblocked: dispatched T1 at 08:24:18; waiting on fixes: none
+- Ruling: fleet placement local for this build: remote write workers lost their snapshot in B238, B243 and B272, and a remote T1 would itself hit #1057 - cost if wrong: one local slot (lead's ruling)
+- tests fast passed=13 failed=4 skipped=0 seconds=1.0
+- tests fast passed=116 failed=0 skipped=0 seconds=8.6
+- tests fast passed=65 failed=0 skipped=0 seconds=4.1
+- commit T1 c880935649 remote dispatch worker in pool.json
+- tests fast passed=116 failed=0 skipped=0 seconds=8.2
+- tests full passed=13686 failed=0 skipped=12 seconds=374.2
