@@ -33,15 +33,44 @@ def _line(v: object, hi: int, lo: int) -> bool:
     return isinstance(v, str) and lo <= len(v) <= hi and not any(ord(c) < 32 or ord(c) == 127 for c in v)  # O(len)
 
 
-def check_step(obj: object, where: str, issues: list | None = None) -> tuple:
-    """A step a lead cannot run (#674): (clean step, []) or (None, errors). Unknown keys are dropped."""
+def _step_keys(got: object, where: str, issues: list, keys: dict) -> tuple:
+    """Jira-source step issues (#1095): (matched keys, None) or (None, error); None error text means the generic message."""
+    have = [keys[n] for n in issues if n in keys]  # O(issues)
+    if not isinstance(got, list) or not got:  # O(1)
+        return None, None  # O(1)
+    out: list[str] = []  # O(1)
+    for it in got:  # O(items * issues)
+        if isinstance(it, str):  # O(1)
+            if it.upper() not in have:  # O(issues)
+                return None, f"{where} issues: {it.upper()} is not one of this batch's issues ({', '.join(have)})"  # O(issues)
+            out.append(it.upper())  # O(1)
+        elif isinstance(it, int) and not isinstance(it, bool):  # O(1)
+            hit = [k for k in have if k.rsplit("-", 1)[-1] == str(it)]  # O(issues)
+            if not hit:  # O(1)
+                return None, f"{where} issues: {it} matches no Jira key of this batch ({', '.join(have)})"  # O(issues)
+            if len(hit) > 1:  # O(1)
+                return None, f"{where} issues: {it} matches {' and '.join(hit)}; write the key"  # O(issues)
+            out.append(hit[0])  # O(1)
+        else:
+            return None, None  # O(1)
+    return list(dict.fromkeys(out)), None  # O(items)
+
+
+def check_step(obj: object, where: str, issues: list | None = None, keys: dict | None = None) -> tuple:
+    """A step a lead cannot run (#674): (clean step, []) or (None, errors). Unknown keys are dropped. With keys (stand-in -> Jira key, #1095) step issues are batch keys or numbers matching one."""
     if not isinstance(obj, dict):  # O(1)
         return None, [f"{where}: not an object"]
     errs: list[str] = []
     out: dict = {}
     if issues is not None:
         got = obj.get("issues")
-        if (not isinstance(got, list) or not got or not all(isinstance(i, int) and not isinstance(i, bool) and i in issues for i in got)):  # O(len * issues)
+        if keys is not None:  # O(1)
+            ks, why = _step_keys(got, where, issues, keys)  # O(items * issues)
+            if ks is None:  # O(1)
+                errs.append(why or f"{where} issues: a non-empty list of this batch's issues")  # O(1)
+            else:
+                out["issues"] = ks  # O(1)
+        elif (not isinstance(got, list) or not got or not all(isinstance(i, int) and not isinstance(i, bool) and i in issues for i in got)):  # O(len * issues)
             errs.append(f"{where} issues: a non-empty list of this batch's issues")
         else:
             out["issues"] = got
@@ -326,7 +355,7 @@ def _reach(batches: list[dict]) -> dict:
     return out
 
 
-def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> tuple[list[dict], list[str]]:
+def check_proposal(obj: dict, known: set, batches: frozenset = frozenset(), keys: dict | None = None) -> tuple[list[dict], list[str]]:
     if not isinstance(obj, dict) or not isinstance(obj.get("batches"), list):  # O(1)
         return [], ["proposal: not an object with batches"]
     raw = obj["batches"]
@@ -404,7 +433,7 @@ def check_proposal(obj: dict, known: set, batches: frozenset = frozenset()) -> t
             steps = []
         scl = []
         for k, st in enumerate(steps, 1):
-            c, bad = check_step(st, f"{bid} main_steps {k}", sorted(set(issues)))
+            c, bad = check_step(st, f"{bid} main_steps {k}", sorted(set(issues)), keys)
             errs.extend(bad)
             if c:
                 scl.append(c)

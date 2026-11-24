@@ -625,7 +625,7 @@ def cmd_plan(a) -> int:
     known_b = frozenset(b["id"] for b in d["batches"] if b["state"] == "shipped" or add)  # O(b) only batches that survive this plan
     if jira:
         cp, back = _key_proposal(prop, [t["number"] for t in trusted])
-        batches, errs = bc.check_proposal(cp, set(range(1, len(trusted) + 1)), known_b)
+        batches, errs = bc.check_proposal(cp, set(range(1, len(trusted) + 1)), known_b, keys=back)
         errs = [re.sub(r"(?:(?<=unknown issue )|^)#(\d+)(?= is in |$)", lambda m: back.get(int(m.group(1)), m.group(0)), e).replace("list of numbers", "list of Jira keys") for e in errs]  # O(errs)
     else:
         batches, errs = bc.check_proposal(prop, {t["number"] for t in trusted}, known_b)
