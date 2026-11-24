@@ -19,7 +19,7 @@ report once (`claim`): a worker another wait collected prints `Wn T3 already col
 
 `send`/`keys` to a stopped or dead worker exit 2 naming a fresh `sl fleet spawn`; an `agent_not_found` reply marks the worker dead; `send --brief` remembers the brief
 for the respawn. `wait` ends a busy worker whose agent herdr no longer lists (probed every 10 s) as `Wn Tn DEAD (its agent is gone; no report)`.
-`send --brief` refuses, before any prompt, a brief its worker cannot read in full: a brief file outside the project, the run folder and the plugin skills folder, or one naming such a path (fleet.outside_paths on the file, which already holds the plan's Global constraints); a lead is not checked (#1024).
+`send --brief` refuses, before any prompt, a brief its worker cannot read in full: a brief file outside the project, the run folder and the plugin skills folder, or one naming such a path (fleet.outside_paths on the file, which already holds the plan's Global constraints); a lead is not checked (#1024). Quoted text (fences, the standing-note block, a finding's quote) and paths missing on this machine are text; research may name a path the lead brief's research line lists (#1089).
 
 `wait` prints one line per finished worker (`W1 T3 DONE findings=0 <report json>`; a layer worker: `W3 layer-headless
 GREEN exit=0 <log>` plus its last log line), `BLOCKED-UI` plus the screen for a blocked one, and `TIMEOUT W2 ...` for the
@@ -44,6 +44,7 @@ import contextlib  # O(1)
 import importlib  # O(1)
 import io as _io  # O(1)
 import json  # O(1)
+import os  # O(1)
 import re  # O(1)
 import shlex  # O(1)
 import sys  # O(1)
@@ -55,6 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # O(1)
 import accounts  # noqa: E402 | O(1)
 import fleet_report  # noqa: E402 | O(1)
 import fleet_state as fs  # noqa: E402 | O(1)
+import findings  # noqa: E402 | O(1)
 import herdr_client as hc  # noqa: E402 | O(1)
 import metrics as mx  # noqa: E402 | O(1)
 import next_tasks as nt  # noqa: E402 | O(1)
@@ -1128,6 +1130,23 @@ def _fleet():  # the fleet module, loaded on demand | O(1)
     return importlib.import_module("fleet")  # O(1)
 
 
+def local_path(tok, project):  # TOK as fleet.outside_paths resolves it: expanduser, a leading ../ joined to PROJECT, normpath, a leading // collapsed | O(len)
+    p = os.path.expanduser(tok)  # O(len)
+    if p.startswith("../"):  # O(1)
+        p = os.path.join(str(project), p)  # O(len)
+    p = os.path.normpath(p)  # O(len)
+    return "/" + p.lstrip("/") if p.startswith("//") else p  # O(len)
+
+
+def brief_outside(text, project, sd, role=""):  # outside paths TEXT names that exist on this machine, quoted text read as text; research may name the lead brief's research-line paths (#1089) | O(len + t)
+    out = [t for t in _fleet().outside_paths(findings.unquoted(text), project, sd) if os.path.exists(local_path(t, project))]  # O(len + t)
+    if role == "research" and out:  # O(1)
+        import backlog_brief as bb  # noqa: E402 | lazy | O(1)
+        reads = [Path(x).resolve() for x in getattr(bb, "research_reads", lambda _sd: [])(Path(sd))]  # research_reads is T2's; absent means no reads | O(r)
+        out = [t for t in out if not any(Path(local_path(t, project)).resolve() == b or b in Path(local_path(t, project)).resolve().parents for b in reads)]  # O(t*r)
+    return out  # O(1)
+
+
 def brief_refusal(sd, brief, role="", plan=None):  # the #1015 error line when a worker of ROLE could not read BRIEF in full (file outside, or a named outside path), else None; a lead is never checked (#1024); PLAN: the plan whose Global constraints spawn adds before it sends (#635, #1027) | O(file)
     if role == "lead":  # O(1)
         return None  # O(1)
@@ -1144,7 +1163,7 @@ def brief_refusal(sd, brief, role="", plan=None):  # the #1015 error line when a
             text = fl.with_constraints(text, plan)  # O(L + len)
         except Exception:  # noqa: BLE001 | a constraints error leaves the brief text alone | O(1)
             pass  # O(1)
-    bad = fl.outside_paths(text, proj, sd)  # O(len)
+    bad = brief_outside(text, proj, sd, role)  # O(len)
     return fl.outside_error("brief", real, bad, sd.resolve()) if bad else None  # O(1)
 
 

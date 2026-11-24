@@ -2858,6 +2858,18 @@ def lint_plan(plan: Plan, args) -> tuple[list[str], list[str]]:  # O(n^2*k*s + e
                 owner = [t.id for t in plan.tasks if t.line <= i + 1 <= t.line + t.text.count("\n") + 1]  # O(n)
                 issues.append(Issue(f"placeholder {label} at line {i + 1}", owner, "task" if owner else "plan"))  # O(1)
 
+    if plan.path:  # a plan built from text has no project to measure against (#1086) | O(1)
+        import fleet_io  # noqa: E402 | lazy | O(1)
+        oroot = stable_root(str(plan.path))  # O(d)
+        seen: set[str] = set()  # O(1)
+        for i, ln in enumerate(plan.lines):  # O(L) iterations
+            if plan.fenced[i]:  # O(1)
+                continue  # O(1)
+            for tok in fleet_io.brief_outside(ln, oroot, oroot / ".superlite"):  # O(s)
+                if tok not in seen:  # O(1)
+                    seen.add(tok)  # O(1)
+                    warnings.append(f"WARNING: OUTSIDE: line {i + 1} names a path outside the project: {tok}; plan text reaches worker briefs (Global constraints, the review packet) and the #1015 check refuses it there: copy the file into {oroot / '.superlite'}/briefs/ and name the copy, or drop the path (#1086)")  # O(1)
+
     for t in plan.tasks:  # O(n) iterations
         if not t.has_features and t.stated_time is None:  # O(k*s)
             warnings.append(f"WARNING: {t.id} has no features (Components, LOC owned, Tests) and no Est. time; "  # O(1)

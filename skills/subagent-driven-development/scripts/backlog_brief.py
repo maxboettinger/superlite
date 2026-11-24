@@ -27,6 +27,20 @@ REF_CAP = (50 * 1024 * 1024, 5000)  # O(1) bytes and files copied per note
 REF_SKIP = {".git", "node_modules", ".build", "DerivedData", ".venv", "venv", "__pycache__"}  # O(1)
 REF_COPIED = "Standing note: {n} outside path(s) copied into {ref}/; the note above names the copies, read-only references (#1067)."  # O(1)
 REF_SKIPPED = "Standing note: not copied, so a worker cannot read them; keep them out of worker briefs: {items} (#1067)."  # O(1)
+REF_READ = "Standing note: a research worker may read these outside paths read-only; name them in its brief and spawn it with --machine local, since a remote machine lacks them: {items} (#1089)."  # O(1)
+
+
+def research_reads(sd):  # the outside paths the lead brief's REF_READ line lists for research (#1089) | O(brief)
+    head, tail = REF_READ.split("{items}")  # O(1)
+    try:  # O(1)
+        rows = (Path(sd) / "briefs" / "lead.md").read_text(encoding="utf-8", errors="replace").splitlines()  # O(brief)
+    except OSError:  # O(1)
+        return []  # O(1)
+    for ln in rows:  # O(rows)
+        if ln.startswith(head) and ln.endswith(tail) and len(ln) >= len(head) + len(tail):  # O(len)
+            mid = ln[len(head):len(ln) - len(tail)]  # O(len)
+            return [os.path.normpath(os.path.expanduser(t)) for t in mid.split("; ") if t]  # O(t)
+    return []  # O(1)
 
 
 def _raise(e):  # os.walk onerror: an unreadable folder fails the copy instead of being skipped | O(1)
@@ -73,7 +87,7 @@ def note_refs(note, wt):  # copy the outside paths NOTE names into WT/.superlite
     ref = sd / "briefs" / "ref"  # O(1)
     home = os.path.normpath(os.path.expanduser("~"))  # O(1)
     wtr = wt.resolve()  # O(1)
-    mapped, skipped, copied = {}, [], []  # O(1)
+    mapped, skipped, copied, readable = {}, [], [], []  # O(1)
     nbytes = nfiles = 0  # O(1)
     for tok in fleet.outside_paths(note, wt, sd):  # O(t)
         p = os.path.expanduser(tok)  # O(len)
@@ -85,10 +99,10 @@ def note_refs(note, wt):  # copy the outside paths NOTE names into WT/.superlite
         dest = ref / (p[len(home):].lstrip("/") if p.startswith(home + "/") else p.lstrip("/"))  # O(len)
         if any(p == c or p.startswith(c.rstrip("/") + "/") for c in copied) and dest.exists():  # O(t)
             mapped[tok] = dest  # O(1)
+            readable.append(tok)  # O(1)
             continue  # O(1)
         if not os.path.exists(p):  # O(1)
-            skipped.append((tok, "missing"))  # O(1)
-            continue  # O(1)
+            continue  # a missing path is text (#1089) | O(1)
         real = Path(p).resolve()  # O(len)
         if real == wtr or real in wtr.parents:  # O(1)
             skipped.append((tok, "holds the worktree"))  # O(1)
@@ -98,6 +112,7 @@ def note_refs(note, wt):  # copy the outside paths NOTE names into WT/.superlite
             size = sum(os.path.getsize(os.path.join(p, r) if r else p) for r in rels)  # O(files)
             if nbytes + size > REF_CAP[0] or nfiles + len(rels) > REF_CAP[1]:  # O(1)
                 skipped.append((tok, "over the copy cap"))  # O(1)
+                readable.append(tok)  # O(1)
                 continue  # O(1)
             dest.mkdir(parents=True, exist_ok=True) if not rels else None  # an empty folder still gets its copy | O(1)
             for r in rels:  # O(files)
@@ -111,6 +126,7 @@ def note_refs(note, wt):  # copy the outside paths NOTE names into WT/.superlite
         nfiles += len(rels)  # O(1)
         copied.append(p)  # O(1)
         mapped[tok] = dest  # O(1)
+        readable.append(tok)  # O(1)
 
     def sub(m):  # O(len)
         tok = m.group(1).rstrip("./")  # O(len)
@@ -123,6 +139,8 @@ def note_refs(note, wt):  # copy the outside paths NOTE names into WT/.superlite
         lines.append(REF_COPIED.format(n=len(mapped), ref=ref))  # O(1)
     if skipped:  # O(1)
         lines.append(REF_SKIPPED.format(items="; ".join(f"{t} ({why})" for t, why in skipped)))  # O(t)
+    if readable:  # O(1)
+        lines.append(REF_READ.format(items="; ".join(readable)))  # O(t)
     return note, lines  # O(1)
 
 

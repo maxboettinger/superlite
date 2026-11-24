@@ -217,6 +217,24 @@ def standing_note(sd: Path) -> list[str]:  # O(file)
     return []  # O(1)
 
 
+QUOTE_SPAN = re.compile(r" quote: `.*`(?=(?: fp: \S+)?$)", re.M)  # a finding's quote span, up to its fp or the line end | O(1)
+
+
+def unquoted(text: str) -> str:  # TEXT with the standing-note block and each finding's quote span blanked, line count kept (#1089) | O(len)
+    import backlog_brief as bb  # lazy, as standing_note above | O(1)
+    out, in_note = [], False  # O(1)
+    for ln in text.split("\n"):  # O(len) iterations
+        if ln.strip() == bb.NOTE_HEAD:  # O(len)
+            in_note = True  # O(1)
+            out.append("")  # O(1)
+        elif in_note and ln.startswith("    "):  # O(1)
+            out.append("")  # O(1)
+        else:  # O(1)
+            in_note = False  # O(1)
+            out.append(ln)  # O(1)
+    return QUOTE_SPAN.sub(" quote: ``", "\n".join(out))  # O(len)
+
+
 def task_cmd(task) -> str | None:  # the task's **Tests:** cmd= command, or None | O(len)
     field = getattr(task, "field_text", None)  # O(1)
     return testcmd.task_command(field("tests")) if field else None  # O(len)
