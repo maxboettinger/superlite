@@ -3,11 +3,11 @@
 # (pytest, npm test, npx vitest|jest, go test, cargo test, dotnet test, ...) into a background
 # `sl run_tests --full`, or `sl run_tests --fast <files>` when the raw command names test/source paths.
 # Subagents (agent_id) and fleet workers (SUPERLITE_FLEET_WORKER): bare full-suite runners are DENIED (exit 2), and so is a
-# run of the project's own test command (.superlite/test-cmd.json) on an isolate stack (language swift, go, rust or
-# csharp: a sibling's half-edit breaks a shared build); the message gives `sl run_tests --fast <files> --task <Tn>`,
-# the task read from pool.json. A collect-only run (--collect-only, --co) lists tests without running them and passes for
-# everyone, unrewritten. A worker's run of exactly its own task's `**Tests:** cmd=` (read from the plan, stable.json "plan" or
-# .superlite/plan.md) is rewritten to `sl run_tests --fast --task Tn --background` (Bash only; rule own-tests-cmd). Other subagent calls are untouched.
+# run of the project's own test command (.superlite/test-cmd.json) on an isolate stack (swift, go, rust, csharp: a sibling's
+# half-edit breaks a shared build). A collect-only run (--collect-only, --co) passes for everyone, unrewritten. Bash only (Monitor never rewrites),
+# rewritten to `sl -C <root> run_tests --task Tn --background`: a worker's run of exactly its plan task's `**Tests:** cmd=` (rule own-tests-cmd),
+# or, for a plan task without cmd=, one run of the "test" command with plain arguments as `-- <args>` (rule task-test-run). Any other
+# run is denied, the message naming the form for that worker (task, own cmd=, or no task: a reviewer or fixer); `<runner> --help` passes.
 # Commands that already contain run_tests, and sessions without a run marker (stable.json,
 # prime.md or pool.json in the state folder) are untouched. Chained commands keep their other work: only the test segment
 # is replaced, separators stay, and the whole command then runs in the background. Anything ambiguous
@@ -201,6 +201,9 @@ fi
 root="${root//\\//}"
 sl_base="bash \"$root/skills/subagent-driven-development/scripts/sl\" run_tests"
 sl="$sl_base --full"
+# sl_run: the rewritten call; -C names the run root so a run from a subfolder or a task tree reaches the run's own .superlite.
+if [[ $root_n == *[\"\$\`\\]* ]]; then sl_run="$sl_base"
+else sl_run="bash \"$root/skills/subagent-driven-development/scripts/sl\" -C \"$root_n\" run_tests"; fi
 
 # A test segment: optional env assignments and runner prefix, then a known runner.
 re_test='^[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]*[[:space:]]+)*((uv|poetry|pipenv|pdm|hatch)[[:space:]]+run[[:space:]]+)?(((python[0-9.]*|py)([[:space:]]+-[0-9]+)?[[:space:]]+-m[[:space:]]+)?(pytest|py\.test|unittest)|((npm|pnpm|yarn|bun)[[:space:]]+(run[[:space:]]+)?test)|((npx|pnpm[[:space:]]+(exec|dlx)|bunx|yarn)[[:space:]]+(--no-install[[:space:]]+)?(vitest|jest))|(vitest|jest)|(go|cargo|dotnet)[[:space:]]+test)([[:space:]]|$)'
@@ -308,7 +311,7 @@ current_task() {
 # stripped) into REPLY (empty if the plan, the task or the cmd= is missing).
 task_tests_cmd() {
   local pf="$sd/plan.md" l in=0 re re_h re_t='^\*\*Tests:\*\*.*[[:space:]]cmd=(.*)$' sj
-  REPLY=""
+  REPLY=""; task_in_plan=""
   [[ $1 =~ ^[A-Za-z0-9_.-]+$ ]] || return 0
   if [ -f "$sd/stable.json" ]; then
     read -r -d '' sj < "$sd/stable.json"
@@ -319,12 +322,13 @@ task_tests_cmd() {
     fi
   fi
   [ -r "$pf" ] || return 0
+  task_in_plan=0
   re_h='^###[[:space:]]+'"$1"'([[:space:]:.]|$)'
   while IFS= read -r l || [ -n "$l" ]; do
     l="${l//$'\r'/}"
     if [[ $l == "### "* ]]; then
       [ "$in" = 1 ] && return 0
-      [[ $l =~ $re_h ]] && in=1
+      [[ $l =~ $re_h ]] && { in=1; task_in_plan=1; }
       continue
     fi
     if [ "$in" = 1 ] && [[ $l =~ $re_t ]]; then
@@ -422,34 +426,65 @@ deny_subagent_full() {
 }
 
 deny_isolate() {
-  local t="${cmd:0:400}" task="$1"; t="${t//[\"\\$'\n\r\t']/ }"
+  local t="${cmd:0:400}" reason="" wk="" tcs="${tc:0:80}"; t="${t//[\"\\$'\n\r\t']/ }"
   t="${t//$ph1/>&}"; t="${t//$ph2/&>}"
+  if [ "$kind" = task ] && [ -z "$own_cmd" ]; then
+    if [ "$tool" != Bash ]; then reason='a Monitor call is never rewritten; make it a Bash call'
+    elif [ -z "$task_in_plan" ]; then reason="no readable plan names $iso_task"
+    elif [ "$quote_cut" = 1 ]; then reason='a quote spans a separator'
+    elif [ "$runs" -gt 1 ]; then reason='more than one test run in one command'
+    else
+      case "$first_state" in
+        nottc) reason="not the test-cmd.json \"test\" command ($tcs) with plain arguments" ;;
+        unsafe) reason='an argument holds a quoted space, $(, <(, >( or a backtick' ;;
+        noargs) reason='no runner arguments (a bare run is the whole suite)' ;;
+      esac
+    fi
+  fi
   tel_gate deny isolated-test-run "$tool" "$t"
   printf '{"kind":"rule-block","agent":"subagent","tool":"%s","target":"isolated test run: %s","rule":"isolated-test-run","cwd":"%s"}\n' "$tool" "$t" "$cwdv" \
     >> "$sd/incidents.jsonl" 2>/dev/null
   printf '%s\n' \
-    'Blocked: this project'"'"'s tests build one shared tree, where another agent'"'"'s half-edit breaks the run, so a raw run of its test command is not allowed here.' \
-    "Run only your own test files in your task's tree: use $sl_base --fast <test files> --task ${task:-<Tn>} --background"' (extra tool arguments go after `--`: `-- <args>`), then `sl run_tests --wait`.' >&2
-  [ -n "$own_cmd" ] && printf '%s\n' "Your task's own **Tests:** cmd= (exactly: $own_cmd) is rewritten to that run, so run it as written." >&2
+    'Blocked: this project'"'"'s tests build one shared tree, where another agent'"'"'s half-edit breaks the run, so a raw run of its test command is not allowed here.' >&2
+  if [ "$kind" = task ] && [ -z "$own_cmd" ]; then
+    printf '%s\n' "Run it in your task's tree: $sl_base --task $iso_task --background -- <args>"' (runner arguments after `--`), then `sl run_tests --wait`; named test files or Suite names: '"$sl_base --fast <test files> --task $iso_task --background." >&2
+    [ -n "$reason" ] && printf '%s\n' "Not rewritten: $reason." >&2
+  elif [ "$kind" = task ]; then
+    printf '%s\n' "Run your task's own **Tests:** cmd= as written (exactly: $own_cmd): it is rewritten to $sl_base --task $iso_task --background; with --task, run_tests runs only that command. Then \`sl run_tests --wait\`." >&2
+    [ "$tool" != Bash ] && printf '%s\n' "A Monitor call is never rewritten; make it a Bash call." >&2
+  else
+    if [ "$has_agent" = 1 ]; then
+      wk=" --worker <name>"; [[ $wid =~ ^[A-Za-z0-9_-]{1,64}$ ]] && wk=" --worker $wid"
+    fi
+    printf '%s\n' "You have no plan task (a reviewer or fixer): run $sl_base --fast <test files or Suite names>$wk --background in your own worker tree (runner arguments after \`--\`: \`-- <args>\`), then \`sl run_tests --wait\`." >&2
+  fi
   exit 2
 }
 
 # Subagents and fleet workers (top-level sessions with SUPERLITE_FLEET_WORKER): on an isolate stack deny the project's
 # test command; deny a bare full-suite runner; leave everything else untouched.
 if [ "$has_agent" = 1 ] || [ -n "$fleet_worker" ]; then
-  iso=0
+  iso=0; iso_task=""; wid=""; tc=""; tc_ok=0; task_in_plan=""
   load_project_runner
   if [ "${#pp[@]}" -gt 0 ] && isolate_stack; then
     iso=1
     if [ "$has_agent" = 1 ]; then jstr agent_id; else REPLY="$fleet_worker"; fi
-    current_task "$REPLY"; iso_task="$REPLY"
+    wid="$REPLY"
+    current_task "$wid"; iso_task="$REPLY"
+    re='"test"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
+    if [[ $tcj =~ $re ]]; then
+      tc="${BASH_REMATCH[1]}"; tc="${tc#"${tc%%[![:space:]]*}"}"; tc="${tc%"${tc##*[![:space:]]}"}"
+      re_tcbad="[{}\"'\$\`\\\\|;&<>]"
+      [ -n "$tc" ] && ! [[ $tc =~ $re_tcbad ]] && tc_ok=1
+    fi
   fi
-  own_cmd=""; own_task=""; wrote=0; wout=""
-  if [ "$tool" = Bash ] && [ "$iso" = 1 ]; then   # only an isolate stack blocks the project command
-    if [ "$has_agent" = 1 ]; then jstr agent_id; else REPLY="$fleet_worker"; fi
-    current_task "$REPLY"; own_task="$REPLY"
-    if [ -n "$own_task" ]; then task_tests_cmd "$own_task"; own_cmd="$REPLY"; fi
-  fi
+  own_cmd=""; wrote=0; wout=""
+  if [ -n "$iso_task" ]; then task_tests_cmd "$iso_task"; own_cmd="$REPLY"; fi   # Bash and Monitor (Monitor never rewrites)
+  kind=none
+  [ -n "$iso_task" ] && [ "$task_in_plan" != 0 ] && kind=task
+  [ "$kind" = task ] || own_cmd=""
+  # runs: counted project-runner runs; pend: a runner segment to deny unless it is rewritten; first_state/cand_*: the first one.
+  quote_cut=0; runs=0; pend=0; first_state=""; cand=0; cand_pre=""; cand_sep=""; cand_args=""; wpost=""; rule=own-tests-cmd
   _dq='"'; _sq="'"
   _rest="$cmd"; _last=0; _sep=""
   dir_start
@@ -457,22 +492,57 @@ if [ "$has_agent" = 1 ] || [ -n "$fleet_worker" ]; then
     if [[ $_rest =~ $re_seg ]]; then _seg="${BASH_REMATCH[1]}"; _sep="${BASH_REMATCH[2]}"; _rest="${BASH_REMATCH[3]}"; _last=0
     else _seg="$_rest"; _sep=""; _last=1; fi
     _q="${_seg//[^\"]/}"; _q2="${_seg//[^\']/}"
-    if [ $(( ${#_q} % 2 )) = 1 ] || [ $(( ${#_q2} % 2 )) = 1 ]; then exit 0; fi   # quote spans a separator
+    if [ $(( ${#_q} % 2 )) = 1 ] || [ $(( ${#_q2} % 2 )) = 1 ]; then   # quote spans a separator: pass, unless a raw runner segment is already pending
+      [ "$pend" = 1 ] || exit 0
+      quote_cut=1; deny_isolate
+    fi
     dir_step "$_seg"
     _own=0
-    if [ -n "$own_cmd" ] && ! seg_out "$_seg"; then   # exactly the task's own cmd=, redirect 2>&1 allowed
+    if [ -n "$own_cmd" ] && [ "$tool" = Bash ] && ! seg_out "$_seg"; then   # exactly the task's own cmd=, redirect 2>&1 allowed
       _t="${_seg#"${_seg%%[![:space:]]*}"}"; _t="${_t%"${_t##*[![:space:]]}"}"
       _t="${_t%"2${ph1}1"}"; _t="${_t%"${_t##*[![:space:]]}"}"
       [ "$_t" = "$own_cmd" ] && _own=1
     fi
     if [ "$_own" = 1 ]; then
-      wout="$wout $sl_base --fast --task $own_task --background $_sep"; wrote=1
+      wout="$wout $sl_run --task $iso_task --background $_sep"; wrote=1
       [ "$_last" = 1 ] && break
       continue
     fi
-    wout="$wout$_seg$_sep"
+    _cand_now=0
     if ! seg_out "$_seg"; then   # a run outside the plan root is not ours to judge
-      [ "$iso" = 1 ] && project_hit "$_seg" seg && deny_isolate "$iso_task"
+      if [ "$iso" = 1 ] && ! [[ " $_seg " == *[[:space:]]--help[[:space:]]* ]]; then   # `<runner> --help` is no run
+        project_hit "$_seg" loop && runs=$((runs+1))
+        if project_hit "$_seg" seg; then
+          pend=1
+          if [ -z "$first_state" ]; then
+            _t="${_seg#"${_seg%%[![:space:]]*}"}"
+            first_state=nottc
+            if [ "$tc_ok" = 1 ] && { [ "$_t" = "$tc" ] || [[ $_t == "$tc"[[:blank:]]* ]]; }; then
+              first_state=ok; _ws=(); _kept=(); _skip=0
+              read -r -a _ws <<< "${_t#"$tc"}"
+              for _w in "${_ws[@]}"; do
+                _qq="${_w//[^\"]/}"; _q1="${_w//[^\']/}"
+                if [ $(( ${#_qq} % 2 )) = 1 ] || [ $(( ${#_q1} % 2 )) = 1 ] || [[ $_w == *'`'* || $_w == *'$('* || $_w == *'<('* || $_w == *'>('* ]]; then
+                  first_state=unsafe; break
+                fi
+              done
+              if [ "$first_state" = ok ]; then
+                for _w in "${_ws[@]}"; do
+                  if [ "$_skip" = 1 ]; then _skip=0; continue; fi
+                  if [[ $_w =~ $re_redir_op ]]; then _skip=1; continue; fi
+                  [[ $_w =~ $re_redir_glued ]] && continue
+                  _kept+=("$_w")
+                done
+                if [ "${#_kept[@]}" = 0 ]; then first_state=noargs
+                elif [ "$tool" = Bash ] && [ "$kind" = task ] && [ "$task_in_plan" = 1 ] && [ -z "$own_cmd" ]; then
+                  printf -v cand_args '%s ' "${_kept[@]}"; cand_args="${cand_args% }"
+                  cand=1; cand_pre="$wout"; cand_sep="$_sep"; _cand_now=1
+                fi
+              fi
+            fi
+          fi
+        fi
+      fi
       if [[ $_seg =~ $re_test ]]; then
         files_from_seg "$_seg"
         if [ -z "$REPLY" ]; then   # a quoted path ("my test.py") is a path; a quoted flag value (-m "not slow") is not
@@ -482,19 +552,37 @@ if [ "$has_agent" = 1 ] || [ -n "$fleet_worker" ]; then
         [ -z "$REPLY" ] && ! [[ $_seg =~ $re_co ]] && deny_subagent_full
       fi
     fi
+    wout="$wout$_seg$_sep"
+    [ "$cand" = 1 ] && [ "$_cand_now" = 0 ] && wpost="$wpost$_seg$_sep"
     [ "$_last" = 1 ] && break
   done
+  if [ "$pend" = 1 ]; then
+    if [ "$cand" = 1 ] && [ "$runs" = 1 ]; then
+      segnew=" $sl_run --task $iso_task --background -- $cand_args "
+      wout="$cand_pre$segnew$cand_sep$wpost"; wrote=1; rule=task-test-run
+    else
+      deny_isolate
+    fi
+  fi
   [ "$wrote" = 1 ] || exit 0
   wout="${wout//$ph1/>&}"; wout="${wout//$ph2/&>}"
   orig="${cmd//$ph1/>&}"; orig="${orig//$ph2/&>}"; orig="${orig//[[:cntrl:]]/ }"; orig="${orig:0:200}"
   short="${wout//"bash \"$root/skills/subagent-driven-development/scripts/sl\""/sl}"
   short="${short//[[:cntrl:]]/ }"; short="${short#"${short%%[![:space:]]*}"}"; short="${short%"${short##*[![:space:]]}"}"; short="${short:0:200}"
-  tel_gate rewrite own-tests-cmd "$tool" "$orig -> $short"
-  esc orig; esc short
-  printf '{"kind":"rule-rewrite","agent":"subagent","tool":"%s","target":"%s -> %s","rule":"own-tests-cmd","cwd":"%s","command":"%s","rewritten":"%s"}\n' \
-    "$tool" "$orig" "$short" "$cwdv" "$orig" "$short" >> "$sd/incidents.jsonl" 2>/dev/null
+  tgt="$short"
+  if [ "$rule" = task-test-run ]; then   # the target names the rewritten call, not the whole command
+    tgt="${segnew//"bash \"$root/skills/subagent-driven-development/scripts/sl\""/sl}"; tgt="${tgt//$ph1/>&}"; tgt="${tgt//$ph2/&>}"
+    tgt="${tgt//[[:cntrl:]]/ }"; tgt="${tgt#"${tgt%%[![:space:]]*}"}"; tgt="${tgt%"${tgt##*[![:space:]]}"}"; tgt="${tgt:0:200}"
+    ctx='your raw test run rewritten to a background sl run_tests --task '"$iso_task"' -- <args> in your task'"'"'s tree; wait for it with `sl run_tests --wait`'
+  else
+    ctx='your task'"'"'s own Tests cmd= rewritten to a background sl run_tests --task '"$iso_task"'; wait for it with `sl run_tests --wait`'
+  fi
+  tel_gate rewrite "$rule" "$tool" "$orig -> $tgt"
+  esc orig; esc short; esc tgt
+  printf '{"kind":"rule-rewrite","agent":"subagent","tool":"%s","target":"%s -> %s","rule":"%s","cwd":"%s","command":"%s","rewritten":"%s"}\n' \
+    "$tool" "$orig" "$tgt" "$rule" "$cwdv" "$orig" "$short" >> "$sd/incidents.jsonl" 2>/dev/null
   esc wout
-  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"'"$wout"'"},"additionalContext":"your task'"'"'s own Tests cmd= rewritten to a background sl run_tests --fast --task '"$own_task"'; wait for it with `sl run_tests --wait`"}}'
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"'"$wout"'"},"additionalContext":"'"$ctx"'"}}'
   exit 0
 fi
 
