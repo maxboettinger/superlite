@@ -68,11 +68,11 @@ def test_empty_proposal_names_reasons_and_skip(lo, capsys):
     lo.left_out = [{"issues": [1], "reason": "needs a human"}]
     rc, out = cli(capsys, "plan")
     lines = out.splitlines()
-    assert rc == 3
+    assert rc == 0
     assert "not planned (triage: needs a human): #1" in lines
     assert "not planned (triage): #2" in lines
-    assert "nothing to plan: sl backlog skip <issue> keeps an issue out of every later plan" in lines
-    assert "(the proposal holds 0 batches)" in next(x for x in lines if x.startswith("triage worker"))
+    assert lines[-1] == "nothing to plan: the proposal holds no batch; sl backlog skip <issue> keeps an issue out of every later plan"
+    assert next(x for x in lines if x.startswith("triage worker")) == "triage worker DONE: x"
 
 
 def test_reject_line_counts_batches(lo, capsys):

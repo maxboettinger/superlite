@@ -94,8 +94,11 @@ def test_max_batches_sets_cap(bk, capsys):
 
 def test_rejected_plan_keeps_source(jk, capsys):
     assert cli(capsys, "plan", "--jql", "Q")[0] == 0
-    jk.batches = []
+    jk.batches, jk.status = [], "NEEDS_CONTEXT"
     assert cli(capsys, "plan", "--reset", "--github")[0] == 3
+    assert source(jk) == {"tracker": "jira", "jql": "Q"}
+    jk.batches, jk.status = [], "DONE"
+    assert cli(capsys, "plan", "--reset", "--github")[0] == 0
     assert source(jk) == {"tracker": "jira", "jql": "Q"}
 
 
