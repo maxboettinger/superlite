@@ -54,8 +54,12 @@ def test_diff_stat_and_excerpts_show_only_task_files(ff_repo, pt_review, which):
 def test_diff_stat_without_moved_run_file_matches_git(ff_repo, pt_review):
     """#109: the stat is built from --numstat; with no run file the merge changed it reads as git's own --stat."""
     repo, _ = ff_repo
-    native = git(repo, "diff", "--stat", *pt_review.diff_range(repo, "HEAD"))
-    assert pt_review.git_diff_stat(repo, "HEAD").strip() == native  # the helper strips the leading space
+    rng = pt_review.diff_range(repo, "HEAD")
+    lines = [x.strip() for x in pt_review.git_diff_stat(repo, "HEAD").splitlines()]
+    for row in git(repo, "diff", "--numstat", *rng).splitlines():
+        a, d, path = row.split("\t", 2)
+        assert f"{path} | +{a} -{d}" in lines
+    assert lines[-1] == git(repo, "diff", "--shortstat", *rng).strip()
 
 
 @pytest.fixture()
@@ -99,7 +103,7 @@ def test_diff_stat_counts_only_run_lines_of_merged_owned_file(ff_shared, pt_revi
     repo, start = ff_shared
     stat = pt_review.git_diff_stat(repo, "HEAD" if which == "HEAD" else start)
     rows = {ln.split("|")[0].strip(): ln.split("|")[1].strip() for ln in stat.splitlines() if "|" in ln}
-    assert rows == {"src/a.py": "2 ++", "src/b.py": "3 +++"}
+    assert rows == {"src/a.py": "+2 -0", "src/b.py": "+3 -0"}
     assert stat.splitlines()[-1].strip() == "2 files changed, 5 insertions(+)"
 
 

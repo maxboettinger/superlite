@@ -71,8 +71,7 @@ def test_must_read_line_names_cut_code(proj):
     change(proj, ["src/big.py"], 400)
     _, t = packet(proj, "--max-tokens", "1500")
     lines = t.splitlines()
-    i = next(k for k, x in enumerate(lines) if x.startswith("Cut to fit the size cap:"))
-    assert lines[i + 1] == "Read in full before your verdict (section 8 cut their diff; one Read each): src/big.py"
+    assert "Read in full before your verdict (section 8 cut their diff; one Read each): src/big.py" in lines
     (proj / ".superlite" / "test-summary.json").write_text(json.dumps(
         {"passed": 2, "failed": 1, "skipped": 0, "seconds": 1.0, "mode": "full",
          "failures": ["tests/test_big.py::test_x: bad"], "skipped_tests": [], "files": {"tests/test_big.py": [2, 1]}}),
@@ -80,8 +79,7 @@ def test_must_read_line_names_cut_code(proj):
     _, t = packet(proj, "--max-tokens", "1500")
     lines = t.splitlines()
     assert lines[0] == "# Review packet: REVIEW REQUIRED"
-    i = next(k for k, x in enumerate(lines) if x.startswith("Cut to fit the size cap:"))
-    assert lines[i + 1].startswith("Read in full before your verdict")
+    assert any(x.startswith("Read in full before your verdict") for x in lines)
 
 
 def test_uncut_packet_stays_fast(proj):

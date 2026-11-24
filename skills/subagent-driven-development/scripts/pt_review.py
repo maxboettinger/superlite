@@ -2420,9 +2420,6 @@ def _head_side(root: Path, base: str, cp: str | None, moved: set[str]) -> frozen
     return frozenset(f for f in moved if f not in run or ahead.get(f, 1 << 30) <= run[f])  # O(F)
 
 
-STAT_BAR = 50  # O(1) widest +/- bar of one diff stat row
-
-
 def _numstat(out: str) -> dict[str, tuple[int, int] | None]:  # O(X) total
     """`git diff --numstat` output as {path: (added, deleted)}, None for a binary file."""
     rows: dict[str, tuple[int, int] | None] = {}  # O(1)
@@ -2433,22 +2430,14 @@ def _numstat(out: str) -> dict[str, tuple[int, int] | None]:  # O(X) total
     return rows  # O(1)
 
 
-def _format_stat(rows: dict[str, tuple[int, int] | None]) -> str:  # O(F log F + F*STAT_BAR) total
-    """Rows in `git diff --stat` layout, ` path | n ++--` with bars scaled to STAT_BAR, then git's summary line."""
+def _format_stat(rows: dict[str, tuple[int, int] | None]) -> str:  # O(F log F) total
+    """Rows ` path | +A -D` (` path | Bin` for a binary file), no padding or bars, then git's summary line (#1085)."""
     if not rows:  # O(1)
         return ""  # O(1)
-    nums = [a + d for a, d in (v for v in rows.values() if v)]  # O(F)
-    top = max(nums, default=0)  # O(F)
-    w = max(len(f) for f in rows)  # O(F)
-    k = max([len(str(n)) for n in nums] + ([3] if None in rows.values() else []))  # width of the count or "Bin" | O(F)
     out: list[str] = []  # O(1)
     for f in sorted(rows):  # O(F log F) sort + O(F) iterations
         v = rows[f]  # O(1)
-        if v is None:  # O(1)
-            out.append(f" {f:<{w}} | {'Bin':>{k}}")  # O(m)
-            continue  # O(1)
-        a, d = ((n * STAT_BAR + top - 1) // top for n in v) if top > STAT_BAR else v  # ceil keeps a nonzero side visible | O(1)
-        out.append(f" {f:<{w}} | {sum(v):>{k}} {'+' * a}{'-' * d}".rstrip())  # O(m + STAT_BAR)
+        out.append(f" {f} | Bin" if v is None else f" {f} | +{v[0]} -{v[1]}")  # O(m)
     ins = sum(v[0] for v in rows.values() if v)  # O(F)
     dels = sum(v[1] for v in rows.values() if v)  # O(F)
     summary = [f"{len(rows)} file{'s' * (len(rows) != 1)} changed"]  # O(1)
@@ -3224,6 +3213,23 @@ def cut_files(text: str) -> set[str]:  # O(len(text)) total
     return out  # O(1)
 
 
+def head_cut_entries(cuts: list[str], must_read: list[str]) -> list[str]:  # O(cuts + F) total
+    """The head's Cut entries: other entries in order, the `section 8 truncated: ` files merged into one entry at the
+    first one's place, without the files the `Read in full` line already names (#1085)."""
+    pre = "section 8 truncated: "  # O(1)
+    files = [c[len(pre):] for c in cuts if c.startswith(pre) and c[len(pre):] not in must_read]  # O(cuts * F)
+    out: list[str] = []  # O(1)
+    placed = False  # O(1)
+    for c in cuts:  # O(cuts) iterations
+        if not c.startswith(pre):  # O(1)
+            out.append(c)  # O(1)
+        elif not placed:  # O(1)
+            placed = True  # O(1)
+            if files:  # O(1)
+                out.append(pre + ", ".join(files))  # O(F)
+    return out  # O(1)
+
+
 def cut_code_files(text: str) -> list[str]:  # O(len(text) + F log F) total
     """Changed code files a rendered excerpt section cuts: `cut_files` without test files and `.md` files, sorted (#819)."""
     return sorted(f for f in cut_files(text) if not is_test_path(f) and not f.endswith(".md"))  # O(F log F)
@@ -3536,7 +3542,8 @@ def cmd_packet(a: argparse.Namespace) -> int:  # O(S*B + I*B + I log I) + git/py
                   "Nothing is open, but section 8 cut the diff of changed code files: read each file the `Read in full` line above names, "  # O(1)
                   "then review it; the fast path does not apply." if x.startswith("Nothing is open:") else x)  # O(1)
                  for i, x in enumerate(parts)]  # O(parts)
-    cut_line = (f"Cut to fit the size cap: {'; '.join(cuts)}" if cuts else None)  # O(cuts)
+    head_cuts = head_cut_entries(cuts, cut_code)  # O(cuts * F)
+    cut_line = (f"Cut to fit the size cap: {'; '.join(head_cuts)}" if head_cuts else None)  # O(cuts)
     if cut_code:  # O(1)
         cut_line = (cut_line + "\n" if cut_line else "") + ("Read in full before your verdict (section 8 cut their diff; one Read each): "  # O(1)
                                                             + ", ".join(cut_code))  # O(F)

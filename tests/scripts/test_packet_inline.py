@@ -84,7 +84,7 @@ def test_inline_marks_the_contract_check_not_run(repo):
 def test_inline_lists_untracked_files_in_the_stat(repo):
     (repo / "a" / "new.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
     stat = section(inline(repo), "## 6. Diff stat")
-    assert re.search(r"^ a/new\.py +\| 2 \+\+$", stat, re.M)
+    assert re.search(r"^ a/new\.py +\| \+2 -0$", stat, re.M)
     assert "2 files changed" in stat
 
 
@@ -181,7 +181,7 @@ def test_inline_shows_a_binary_untracked_file_as_bin(repo):
 
 def test_inline_counts_an_empty_untracked_file(repo):
     (repo / "a" / "empty.py").write_text("", encoding="utf-8")
-    assert re.search(r"^ a/empty\.py +\| 0$", stat_of(repo), re.M)
+    assert re.search(r"^ a/empty\.py +\| \+0 -0$", stat_of(repo), re.M)
 
 
 def test_inline_leaves_out_an_untracked_nested_repo(repo):
