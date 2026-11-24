@@ -1,0 +1,17 @@
+- unblocked: dispatched T1 T2 at 09:44:13; waiting on fixes: none
+- start 0daf27a17c4a07cb4add766ee0c469ba7d09c979
+- tests fast passed=3 failed=3 skipped=0 seconds=0.6
+- tests fast passed=70 failed=0 skipped=0 seconds=1.3
+- tests fast passed=9 failed=15 skipped=0 seconds=0.4
+- tests fast passed=89 failed=1 skipped=0 seconds=1.2
+- tests fast passed=74 failed=0 skipped=0 seconds=0.8
+- commit T2 152e2eee1d private folder PLAN hint
+- commit T1 c541e3e37a research and implementer tiers
+- Ruling: T1 also commits tests/scripts/test_fleet_research_docs_b43.py - docs/fleet.md research row now names the 1/2/3 tiers; the b43 pin of the old cell text moves to the new text (no open batch owns it)
+- tests fast passed=141 failed=0 skipped=0 seconds=1.5
+- tests full passed=13725 failed=1 skipped=12 seconds=404.5
+- tests fast passed=32 failed=0 skipped=0 seconds=1.0
+- commit T1 445f3e35d2 research and implementer tiers
+- Ruling: T1 also commits tests/scripts/test_fleet_docs_b54.py - docs pin of the research row follows T1's new text (#1072)
+- tests fast passed=4 failed=0 skipped=0 seconds=19.1
+- tests full passed=13726 failed=0 skipped=12 seconds=455.8
