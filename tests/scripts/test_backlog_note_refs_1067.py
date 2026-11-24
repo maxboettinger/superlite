@@ -28,14 +28,14 @@ def test_file_is_copied_and_the_note_names_the_copy(w):
     note, lines = bb.note_refs(f"Read {w.other}/docs/spec.md first.", w.wt)
     copy = w.ref / "github" / "other" / "docs" / "spec.md"
     assert copy.read_text() == "spec\n" and note == f"Read {copy} first."
-    assert lines == [bb.REF_COPIED.format(n=1, ref=w.ref)]
+    assert lines == [bb.REF_COPIED.format(n=1, ref=w.ref), bb.REF_READ.format(items=f"{w.other}/docs/spec.md")]
 
 
 def test_tilde_folder_is_copied_with_its_files(w):
     note, lines = bb.note_refs("Reference repo: ~/github/other (read-only).", w.wt)
     dest = w.ref / "github" / "other"
     assert (dest / "docs" / "spec.md").read_text() == "spec\n" and (dest / "README.md").read_text() == "readme\n"
-    assert note == f"Reference repo: {dest} (read-only)." and lines == [bb.REF_COPIED.format(n=1, ref=w.ref)]
+    assert note == f"Reference repo: {dest} (read-only)." and lines == [bb.REF_COPIED.format(n=1, ref=w.ref), bb.REF_READ.format(items="~/github/other")]
 
 
 def test_git_folder_copies_listed_files_only(w):
@@ -69,8 +69,9 @@ def test_missing_capped_and_enclosing_paths_are_named_not_copied(w, monkeypatch)
     text = f"Write {w.other}/new.md; read {w.other}/docs/spec.md and {w.other}/README.md; all of {w.tmp}."
     note, lines = bb.note_refs(text, w.wt)
     assert note == f"Write {w.other}/new.md; read {w.ref}/github/other/docs/spec.md and {w.other}/README.md; all of {w.tmp}."
-    items = f"{w.other}/new.md (missing); {w.other}/README.md (over the copy cap); {w.tmp} (holds the worktree)"
-    assert lines == [bb.REF_COPIED.format(n=1, ref=w.ref), bb.REF_SKIPPED.format(items=items)]
+    items = f"{w.other}/README.md (over the copy cap); {w.tmp} (holds the worktree)"
+    assert lines == [bb.REF_COPIED.format(n=1, ref=w.ref), bb.REF_SKIPPED.format(items=items),
+                     bb.REF_READ.format(items=f"{w.other}/docs/spec.md; {w.other}/README.md")]
     assert not (w.ref / "github" / "other" / "README.md").exists()
 
 
@@ -146,7 +147,7 @@ def test_walk_stops_once_the_file_cap_is_passed(w, monkeypatch):
     monkeypatch.setattr(os, "walk", spy)
     note, lines = bb.note_refs(f"See {w.other}.", w.wt)
     assert len(walked) <= 6 and note == f"See {w.other}."
-    assert lines == [bb.REF_SKIPPED.format(items=f"{w.other} (over the copy cap)")]
+    assert lines == [bb.REF_SKIPPED.format(items=f"{w.other} (over the copy cap)"), bb.REF_READ.format(items=str(w.other))]
 
 
 def _git_repo(d, *paths):
@@ -180,4 +181,4 @@ def test_git_listing_over_the_cap_stops_checking_files_early(w, monkeypatch):
         monkeypatch.setattr(os, fn, spy)
     note, lines = bb.note_refs(f"See {w.other}.", w.wt)
     assert len(seen) <= 5 and note == f"See {w.other}."
-    assert lines == [bb.REF_SKIPPED.format(items=f"{w.other} (over the copy cap)")]
+    assert lines == [bb.REF_SKIPPED.format(items=f"{w.other} (over the copy cap)"), bb.REF_READ.format(items=str(w.other))]

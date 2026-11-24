@@ -1,0 +1,27 @@
+- start f7a89d09442ca1469a1472a364210dd0ed6ade67
+- unblocked: dispatched T1 T2 at 13:13:52; waiting on fixes: none
+Ruling: [scope] docs/fleet.md also owned by B315's running plan; B313 adds one bullet and resolves a rebase conflict at ship by keeping both sides - lead's ruling - cost: one rebase
+- tests fast passed=0 failed=9 skipped=0 seconds=0.5
+- tests fast passed=1 failed=5 skipped=0 seconds=0.4
+- tests fast passed=59 failed=3 skipped=0 seconds=1.2
+- tests fast passed=62 failed=0 skipped=0 seconds=1.0
+- tests fast passed=19 failed=4 skipped=0 seconds=0.9
+- tests fast passed=23 failed=0 skipped=0 seconds=0.9
+- commit T1 bc2bd214c8 check reads quoted text as text
+- commit T2 b05b0d53de note copies and research reads
+- tests fast passed=1 failed=2 skipped=0 seconds=0.9
+- tests fast passed=68 failed=0 skipped=0 seconds=1.9
+- tests fast passed=3 failed=0 skipped=0 seconds=1.3
+- tests fast passed=1179 failed=0 skipped=0 seconds=126.6
+Ruling: review-T1,T2's unrun 'worktree sl live checks' is ruled out - the full suite and the final review cover the same code - cost: none
+- commit T3 24f3c28bb1 plan lint warns on outside paths
+- tests fast passed=0 failed=2 skipped=0 seconds=0.4
+- tests fast passed=2 failed=0 skipped=0 seconds=0.4
+- tests fast passed=1181 failed=0 skipped=0 seconds=98.1
+- commit T4 1316138d0d docs name the rules
+- tests fast passed=2 failed=0 skipped=0 seconds=0.2
+- tests full passed=13977 failed=1 skipped=12 seconds=441.9
+- tests fast passed=1 failed=1 skipped=0 seconds=0.2
+- tests fast passed=8 failed=0 skipped=0 seconds=0.2
+- commit T4 e8950cda70 docs name the rules
+- tests full passed=13978 failed=0 skipped=12 seconds=499.1
